@@ -38,10 +38,16 @@ class ModuleArchitectureTest {
     );
 
     @Test
-    void modulesHaveExplicitBoundariesAndNoForbiddenDependencies() {
+    void modulesHaveExplicitBoundariesAndNoForbiddenDependencies() throws ClassNotFoundException {
         ApplicationModules modules = ApplicationModules.of(SoftwareFactoryApplication.class);
 
         modules.verify();
+
+        org.springframework.modulith.ApplicationModule identityAnnotation = Class.forName(
+                "com.mightyoung.softwarefactory.identity.package-info")
+                .getAnnotation(org.springframework.modulith.ApplicationModule.class);
+        assertThat(identityAnnotation).isNotNull();
+        assertThat(identityAnnotation.allowedDependencies()).isEmpty();
 
         Set<String> actual = modules.stream()
                 .map(ApplicationModule::getDisplayName)

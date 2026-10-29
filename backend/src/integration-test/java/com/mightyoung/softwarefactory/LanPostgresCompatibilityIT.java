@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.session.FindByIndexNameSessionRepository;
+import org.springframework.dao.DataAccessException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -22,12 +23,14 @@ import org.springframework.session.Session;
 
 import javax.sql.DataSource;
 import java.net.URI;
+import java.sql.SQLException;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @ActiveProfiles("lan-postgres-compatibility")
@@ -215,11 +218,10 @@ class LanPostgresCompatibilityIT {
             assertThat(readTenantProbeCount(tenantB, keyA)).isZero();
             assertThat(jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)).isZero();
 
-            assertThatThrownBy(() -> insertTenantProbe(tenantA, tenantB, crossTenantInsertKey))
-                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertRlsRejected("cross-tenant INSERT",
+                    () -> insertTenantProbe(tenantA, tenantB, crossTenantInsertKey));
             assertThat(readTenantProbeCount(tenantB, crossTenantInsertKey)).isZero();
-            assertThatThrownBy(() -> updateTenantProbeTenant(tenantA, tenantB, keyA))
-                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertRlsRejected("cross-tenant UPDATE", () -> updateTenantProbeTenant(tenantA, tenantB, keyA));
             assertThat(readTenantProbeCount(tenantA, keyA)).isEqualTo(1);
             assertThat(readTenantProbeCount(tenantB, keyA)).isZero();
         } finally {
@@ -261,6 +263,15 @@ class LanPostgresCompatibilityIT {
 
     private void setTenantContext(String tenantId) {
         jdbc.queryForObject("select set_config('app.tenant_id', ?, true)", String.class, tenantId);
+    }
+
+    private static void assertRlsRejected(String operationName, Runnable operation) {
+        Throwable failure = catchThrowable(operation::run);
+        assertThat(failure).as(operationName).isInstanceOf(DataAccessException.class);
+        Throwable databaseCause = ((DataAccessException) failure).getMostSpecificCause();
+        assertThat(databaseCause).as("%s database cause", operationName)
+                .isInstanceOfSatisfying(SQLException.class, exception ->
+                        assertThat(exception.getSQLState()).isEqualTo("42501"));
     }
 
     private static <S extends Session> String persistProbeSession(FindByIndexNameSessionRepository<S> repository) {
