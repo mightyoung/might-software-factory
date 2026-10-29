@@ -255,3 +255,9 @@ file_id复用file_object；空间中的WORKSHOP关联既有workshop实体，不�
 大屏首次bootstrap一次取得当前授权范围内layout、map发布版本、设备点位和widget定义等静态/低变元数据；不包括所有应用配置或所有设备细节。响应带configVersion/mapVersion/permissionVersion，版本失效或权限变化后只刷新受影响部分。设备权限收缩必须清理旧点位，不能因为静态缓存而继续展示。
 
 动态alarm/readings/stats按实时性分组由同一页面查询协调器调度，状态快照+增量推送与有界轮询可组合，去重、安全key缓存、有界并发、独立partial failure及新鲜度标记。一次HTTP不等于一条SQL；不全量拉全屏或等待最慢组件，静态bootstrap不混入高频全量时序。详见capacity-and-query-budget.md。
+
+## Three.js最终选型补充 — 2026-10-29
+
+用户已明确选定Three.js作为3D渲染引擎，不再是引擎候选；不自写底层渲染器，不整搬附件E3。采用受约束SceneJSON描述参数化轻量厂区，必要时配合优化GLB异形资产；stable deviceId/objectId与渲染instance映射独立，React页面状态和renderer生命周期隔离。卫星图仅为建模参考，不默认全球GIS；Cesium仅未来确有地理需求时评估。React Three Fiber（R3F）仅可选封装，尚未选定，不能标为用户决定。
+
+2D地图仍为保底；选定Three.js不等于已实现全3D或已达性能。200并发、50路分析、16路显示仍待测，不购买地图、不复制许可不明的附件实现、不编码或部署。

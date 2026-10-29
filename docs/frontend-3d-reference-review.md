@@ -48,3 +48,9 @@
 - https://threejs.org/manual/pages/optimize-lots-of-objects.html
 旧 /manual/en/optimize-lots-of-objects.html 返回 404，已通过官方索引找到当前 /manual/pages/ 路径。
 
+
+## Three.js最终选型补充 — 2026-10-29
+
+用户已明确选定Three.js作为3D渲染引擎，不再是引擎候选；不自写底层渲染器，不整搬附件E3。采用受约束SceneJSON描述参数化轻量厂区，必要时配合优化GLB异形资产；stable deviceId/objectId与渲染instance映射独立，React页面状态和renderer生命周期隔离。卫星图仅为建模参考，不默认全球GIS；Cesium仅未来确有地理需求时评估。React Three Fiber（R3F）仅可选封装，尚未选定，不能标为用户决定。
+
+2D地图仍为保底；选定Three.js不等于已实现全3D或已达性能。200并发、50路分析、16路显示仍待测，不购买地图、不复制许可不明的附件实现、不编码或部署。

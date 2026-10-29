@@ -89,3 +89,9 @@ MinIO官方开源仓库已归档；Camunda7 CE停止后续维护；Camunda8生�
 ## ADR022 设备地图与通用大屏
 
 设备单一事实、地图引用点位，多层图片地图版本发布；物理空间/地图坐标/视频ROI分开。三厂厂商API/SDK/ONVIF/RTSP适配按实际型号固件和许可，未宣称已兼容。大屏受控dataset/metric/widget与模板插槽，非任意BI/SQL脚本；统一页面查询和WS快照增量恢复。地图内嵌视频和点开小窗同时支持，共享授权会话引用计数，总活跃16路预算。[详细设计](device-map-dashboard.md)。
+
+## Three.js最终选型补充 — 2026-10-29
+
+用户已明确选定Three.js作为3D渲染引擎，不再是引擎候选；不自写底层渲染器，不整搬附件E3。采用受约束SceneJSON描述参数化轻量厂区，必要时配合优化GLB异形资产；stable deviceId/objectId与渲染instance映射独立，React页面状态和renderer生命周期隔离。卫星图仅为建模参考，不默认全球GIS；Cesium仅未来确有地理需求时评估。React Three Fiber（R3F）仅可选封装，尚未选定，不能标为用户决定。
+
+2D地图仍为保底；选定Three.js不等于已实现全3D或已达性能。200并发、50路分析、16路显示仍待测，不购买地图、不复制许可不明的附件实现、不编码或部署。
