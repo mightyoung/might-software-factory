@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+  flyway:
+    locations: classpath:db/p0
+    clean-disabled: true
+  session:
+    store-type: jdbc
+    jdbc:
+      initialize-schema: always
+
+flowable:
+  database-schema-update: true
+  async-executor-activate: false
+  async-history-executor-activate: false

@@ -16,6 +16,7 @@
 | 010 | 代码配置台账后测试发布 | 不在线改schema即时生效；列表表单详情共配置 | 用户确认 |
 | 011 | 电脑浏览器优先 | 手机与触屏专用验收后置，桌面键盘可达仍保留 | 用户确认 |
 | 012 | 最小登录bootstrap+按需加载 | 不全量加载应用配置/字典/用户，性能预算须实测 | 用户确认要求，工程预算待测 |
+| 023 | Flowable BOM与Spring版本对齐 | Flowable 8 BOM以Boot 4.0.2为基准，会把Framework 7.0.3/Security 7.0.2带入Boot 4.1.2图；本地架构测试以`NoSuchMethodError`实证混装。将Boot 4.1.2所管理的Framework 7.0.10与Security 7.1.2 BOM置于Modulith/Flowable BOM之前，使其优先管理版本；保留Boot 4.1.2、Modulith 2.1.1、Flowable 8.0.0。重对齐后两项本地测试通过。此版本对齐不构成Flowable对Boot 4.1.2的厂商支持声明；PG启动/事务/job仍需LAN集成验收 | 本地构建/模块检查通过；外部数据库门禁未执行 |
 
 ## 延期且不默认引入
 
