@@ -245,7 +245,7 @@ Server -> authorized replay OR RESYNC_REQUIRED; never guess missing state
 
 ## 15 与全局基线的命名协调
 
-本文非带版本的/api路径为早期领域草案，当前统一/api/v1/v1前缀；页面批查询唯一正式入口POST /api/v1/page-queries。地图HTTP版本revision映射为全局expectedVersion/If-Match乐观锁令牌；map_version.version、screen_version.version是不可变内容版号，不能当聚合并发令牌。
+本文非带版本的/api路径为早期领域草案，当前统一/api/v1前缀；页面批查询唯一正式入口POST /api/v1/page-queries。地图HTTP版本revision映射为全局expectedVersion/If-Match乐观锁令牌；map_version.version、screen_version.version是不可变内容版号，不能当聚合并发令牌。
 
 文中outbox指公共Spring Modulith持久事件注册/同事务待投递机制，不另建重复总线。WS订阅seq是授权流内递增序号，与domain_event.eventId、SQL分页nextCursor及traceId不同；订阅断档从持久事实快照重建。alarm_episode字段与条件转换唯一规范见[逻辑schema：报警维度](logical-schema.md#报警维度规范)，确认不能清除ACTIVE条件。
 
