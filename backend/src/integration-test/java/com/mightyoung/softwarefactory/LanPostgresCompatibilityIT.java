@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @ActiveProfiles("lan-postgres-compatibility")
-@Import(P0FailingProjectionDelegate.class)
+@Import(P0FailingProjectionDelegateConfiguration.class)
 class LanPostgresCompatibilityIT {
 
     private static final String CONFIRMATION_PREFIX = "I_UNDERSTAND_THIS_IS_A_DISPOSABLE_DB:";
@@ -64,6 +64,7 @@ class LanPostgresCompatibilityIT {
     @Autowired private ManagementService managementService;
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired private FindByIndexNameSessionRepository<?> sessionRepository;
+    @Autowired private P0FailingProjectionDelegate projectionDelegate;
 
     @DynamicPropertySource
     static void lanPostgresProperties(DynamicPropertyRegistry properties) {
@@ -164,7 +165,8 @@ class LanPostgresCompatibilityIT {
 
         Job retryable = managementService.moveTimerToExecutableJob(timer.getId());
         assertThatThrownBy(() -> managementService.executeJob(retryable.getId()))
-                .isInstanceOf(RuntimeException.class);
+                .hasRootCauseInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
+        assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(3);
 
         assertThat(jdbc.queryForObject(
                 "select count(*) from p0_finding_projection where process_instance_id = ?",
@@ -177,13 +179,14 @@ class LanPostgresCompatibilityIT {
                 Integer.class, process.getId() + ":%")).isZero();
         assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
                 .isNotNull();
-        long visibleRetryOrFailureJobs = managementService.createJobQuery()
+        Job executableAfterFailure = managementService.createJobQuery()
                 .processInstanceId(process.getId())
-                .count()
-                + managementService.createDeadLetterJobQuery()
+                .singleResult();
+        assertThat(executableAfterFailure).isNotNull();
+        assertThat(executableAfterFailure.getRetries()).isPositive();
+        assertThat(managementService.createDeadLetterJobQuery()
                 .processInstanceId(process.getId())
-                .count();
-        assertThat(visibleRetryOrFailureJobs).isEqualTo(1);
+                .count()).isZero();
     }
 
     @Test
@@ -196,26 +199,68 @@ class LanPostgresCompatibilityIT {
         assertThat(bypassesRls).isFalse();
 
         String suffix = UUID.randomUUID().toString();
-        insertTenantProbe("tenant-a", "a-" + suffix);
-        insertTenantProbe("tenant-b", "b-" + suffix);
+        String tenantA = "tenant-a-" + suffix;
+        String tenantB = "tenant-b-" + suffix;
+        String keyA = "a-" + suffix;
+        String keyB = "b-" + suffix;
+        String crossTenantInsertKey = "cross-insert-" + suffix;
 
-        assertThat(readTenantProbeCount("tenant-a")).isEqualTo(1);
-        assertThat(readTenantProbeCount("tenant-b")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)).isZero();
+        try {
+            insertTenantProbe(tenantA, tenantA, keyA);
+            insertTenantProbe(tenantB, tenantB, keyB);
+
+            assertThat(readTenantProbeCount(tenantA, keyA)).isEqualTo(1);
+            assertThat(readTenantProbeCount(tenantB, keyB)).isEqualTo(1);
+            assertThat(readTenantProbeCount(tenantA, keyB)).isZero();
+            assertThat(readTenantProbeCount(tenantB, keyA)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)).isZero();
+
+            assertThatThrownBy(() -> insertTenantProbe(tenantA, tenantB, crossTenantInsertKey))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(readTenantProbeCount(tenantB, crossTenantInsertKey)).isZero();
+            assertThatThrownBy(() -> updateTenantProbeTenant(tenantA, tenantB, keyA))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(readTenantProbeCount(tenantA, keyA)).isEqualTo(1);
+            assertThat(readTenantProbeCount(tenantB, keyA)).isZero();
+        } finally {
+            deleteTenantProbe(tenantA, keyA);
+            deleteTenantProbe(tenantB, keyB);
+            deleteTenantProbe(tenantB, crossTenantInsertKey);
+        }
     }
 
-    private void insertTenantProbe(String tenantId, String key) {
+    private void insertTenantProbe(String contextTenantId, String rowTenantId, String key) {
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-            jdbc.queryForObject("select set_config('app.tenant_id', ?, true)", String.class, tenantId);
-            jdbc.update("insert into p0_tenant_probe (tenant_id, item_key) values (?, ?)", tenantId, key);
+            setTenantContext(contextTenantId);
+            jdbc.update("insert into p0_tenant_probe (tenant_id, item_key) values (?, ?)", rowTenantId, key);
         });
     }
 
-    private int readTenantProbeCount(String tenantId) {
-        return new TransactionTemplate(transactionManager).execute(status -> {
-            jdbc.queryForObject("select set_config('app.tenant_id', ?, true)", String.class, tenantId);
-            return jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class);
+    private void updateTenantProbeTenant(String contextTenantId, String rowTenantId, String key) {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            setTenantContext(contextTenantId);
+            jdbc.update("update p0_tenant_probe set tenant_id = ? where tenant_id = ? and item_key = ?",
+                    rowTenantId, contextTenantId, key);
         });
+    }
+
+    private int readTenantProbeCount(String contextTenantId, String key) {
+        return new TransactionTemplate(transactionManager).execute(status -> {
+            setTenantContext(contextTenantId);
+            return jdbc.queryForObject("select count(*) from p0_tenant_probe where item_key = ?",
+                    Integer.class, key);
+        });
+    }
+
+    private void deleteTenantProbe(String contextTenantId, String key) {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            setTenantContext(contextTenantId);
+            jdbc.update("delete from p0_tenant_probe where tenant_id = ? and item_key = ?", contextTenantId, key);
+        });
+    }
+
+    private void setTenantContext(String tenantId) {
+        jdbc.queryForObject("select set_config('app.tenant_id', ?, true)", String.class, tenantId);
     }
 
     private static <S extends Session> String persistProbeSession(FindByIndexNameSessionRepository<S> repository) {
@@ -277,7 +322,7 @@ class LanPostgresCompatibilityIT {
                     throw new IllegalStateException("Credentials must be supplied separately from LAN_PG_JDBC_URL");
                 }
                 if (host == null || host.isBlank() || isLoopbackLiteral(host) || path == null || path.length() < 2) {
-                    throw new IllegalStateException("LAN_PG_JDBC_URL must point to a non-loopback PostgreSQL host and named database");
+                    throw new IllegalStateException("LAN_PG_JDBC_URL must name a PostgreSQL host and database; literal loopback hosts are rejected");
                 }
                 String database = path.substring(1);
                 String expected = requiredFrom(environment, "LAN_PG_TEST_DATABASE_NAME");
