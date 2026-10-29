@@ -43,7 +43,7 @@
 |MapPlacement|id,map_version_id,target_type,target_id,x,y,rotation,label_override,style_key；target为设备/空间/业务对象，重复视图只引用同target；x/y是图像原始像素，发布校验边界|
 |MapHotspot|id,map_version_id,polygon,child_map_id,target_spatial_node_id；显式下钻链接，禁止循环/越权，区域多边形不冒充视频ROI|
 |DeviceStatusProjection|device_id,source_id,connectivity,quality,last_event_at,received_at,state_version；是源状态投影，不落每个地图点副本|
-|AlarmEpisode|复用事件中心episode/rule/object/source/version；condition(ACTIVE/RECOVERED/UNKNOWN)、acknowledged_at/by、suppression独立字段，防止单enum误把确认当恢复|
+|AlarmEpisode|复用事件中心episode/rule/object/source/version；字段与约束引用[逻辑schema报警维度](logical-schema.md#报警维度规范)，不另定义枚举|
 
 地图版本换图必须产生新版本。单纯等比缩放可显式变换坐标并预览确认；图片内容/边界改变不能盲按比例复制。每个迁移点保留旧版本坐标、变换说明与确认人；未确认点不在新发布图假装准确。前端按原图尺寸、contain留白、缩放平移变换显示并做点击反算，地图坐标与视频框坐标各自使用版本。
 
@@ -57,12 +57,12 @@
 
 ## 5 API草案与权限
 
-- GET /api/spatial-nodes?parentId=…；POST/PATCH节点需配置权限和revision。
-- POST /api/maps；POST /api/maps/{id}/versions（受控文件assetRef）；PUT /api/map-versions/{v}/placements；POST /api/map-versions/{v}/validate；POST …/publish。发布检查全部目标存在、有权、坐标与层级无环；If-Match防并发覆盖。
-- GET /api/maps/{id}/view?version=published 返回地图元数据、有权点位、热点和快照标识；不返回secret/RTSP URL。
-- GET /api/devices/{id}/overview 返回按权限裁剪的设备/source/状态/责任/业务链接；资产编辑、设备接入配置、看直播、看回放、看证据、确认报警分别授权。
-- POST /api/media-sessions {sourceId,purpose,profile} 返回短时受限播放会话、过期时间和浏览器协议。媒体网关保存源凭据；日志脱敏；关闭/超时释放会话；网关未部署时明示不可用，不令Java/Mac临时转码。
-- POST /api/alarm-episodes/{id}/acknowledgements {reason,expectedVersion} 需幂等键；不提供把ACK等同恢复的API。PTZ等写设备命令不属首期只读大屏。
+- GET /api/v1/spatial-nodes?parentId=…；POST/PATCH节点需配置权限和revision。
+- POST /api/v1/maps；POST /api/v1/maps/{id}/versions（受控文件assetRef）；PUT /api/v1/map-versions/{v}/placements；POST /api/v1/map-versions/{v}/validate；POST …/publish。发布检查全部目标存在、有权、坐标与层级无环；If-Match防并发覆盖。
+- GET /api/v1/maps/{id}/view?version=published 返回地图元数据、有权点位、热点和快照标识；不返回secret/RTSP URL。
+- GET /api/v1/devices/{id}/overview 返回按权限裁剪的设备/source/状态/责任/业务链接；资产编辑、设备接入配置、看直播、看回放、看证据、确认报警分别授权。
+- POST /api/v1/media-sessions {sourceId,purpose,profile} 返回短时受限播放会话、过期时间和浏览器协议。媒体网关保存源凭据；日志脱敏；关闭/超时释放会话；网关未部署时明示不可用，不令Java/Mac临时转码。
+- POST /api/v1/alarm-episodes/{id}/acknowledgements {reason,expectedVersion} 需幂等键；不提供把ACK等同恢复的API。PTZ等写设备命令不属首期只读大屏。
 
 所有读/写/聚合/媒体会话使用服务器认证租户上下文和行级权限，不能相信body tenantId。图片文件、缩略图和深链同样鉴权；屏幕浏览权不自动给予设备凭据/所有台账数据权。
 
@@ -108,7 +108,7 @@ COUNT_RECORDS以台账主记录为粒度，明细条数另指标；多表关系�
 
 ## 8 大屏查询、刷新、发布边界
 
-GET /api/dashboard-components 和 /api/datasets/{key}/capabilities 返回当前用户可选能力；POST /api/dashboard-queries 批量查询已注册QuerySpec；返回queryId,metricVersion,grain,timezone,asOf,dataWatermark,status,rows,units,partialReason。客户端可显示旧数据但必须标stale，不能混作实时。
+GET /api/v1/dashboard-components 和 /api/v1/datasets/{key}/capabilities 返回当前用户可选能力；POST /api/v1/page-queries 批量编排已注册QuerySpec（唯一页面查询入口，契约见[接口与触发第7节](interfaces-and-triggers.md#7-页面查询契约扩展)）；返回queryId,metricVersion,grain,timezone,asOf,dataWatermark,status,rows,units,partialReason。客户端可显示旧数据但必须标stale，不能混作实时。
 
 服务端先执行行/字段/租户权限再聚合，图表点击下钻到同口径有权台账，不先聚全量后靠前端过滤。缓存key含tenant、有效数据范围/授权指纹及permissionVersion、dataset/metric/config版本、时间边界、过滤/粒度；不能只按dashboardId缓存跨用户结果。权限撤销失效并清理浏览器已展示敏感数据。
 
@@ -120,7 +120,7 @@ GET /api/dashboard-components 和 /api/datasets/{key}/capabilities 返回当前�
 
 1. 同一设备两图打点只计一个设备；多级下钻/返回、删除/迁移引用、跨租户热点及循环校验；无授权子图不泄露计数。
 2. 地图换图分辨率、留白缩放、平移、旋转下点位/点击正确；内容变更未经确认点位不发布；地图ROI/视频ROI不混用。
-3. 报警ACTIVE→ACK仍报警；恢复独立；断流UNKNOWN不绿；颜色之外文字图标可理解，减少动画可用；上级聚合去重。
+3. 报警ACTIVE确认后condition仍为ACTIVE；恢复独立；断流UNKNOWN不绿；颜色之外文字图标可理解，减少动画可用；上级聚合去重。
 4. WebSocket快照竞态、重复/乱序/缺口、过期游标、epoch变化、权限撤销、注销、慢客户端、重连风暴均无越权/无静默状态错误。
 5. RTSP凭据/源地址不进浏览器或日志；播放令牌过期、观看撤权、图片鉴权、接口SSRF和错误协议被阻断。
 6. 每厂实际型号/固件/SDK许可与能力逐项验证；无法下载的官方接口只标未知。未接入媒体层时Java和地图可工作但不伪报直播成功。
@@ -190,7 +190,7 @@ compile(authenticatedSession, QuerySpec):
 
 浏览器不可提交原始SQL、表名、任意APIURL、回调函数或ECharts formatter脚本；只发受限QuerySpec。SQL生成采用服务器受控构造器/参数，不把客户端字段拼进SQL。注册计算指标也要校验依赖字段权限；涉及跨记录推断的敏感指标可另设指标权限。总数统计与明细分页服从同一授权范围；高基数分类拒绝或按已注册TopN规则并列“其他”，不暗中截断假装完整。
 
-GET /api/dashboard-widgets/{id}/items?nextCursor=…只对当前发布widget允许的查询提供滚动/轮播页面。分页游标签名绑定tenant、授权版本、widgetVersion/queryHash、稳定排序最后值、asOf及expiry；排序包含唯一ID。权限/配置变化返回需重置而不是沿旧游标跨范围。新内容插入通过新快照开始刷新，不让自动滚动页不断重复/跳跃。客户端最多保留设定窗口，滚过页释放资源。
+GET /api/v1/dashboard-widgets/{id}/items?nextCursor=…只对当前发布widget允许的查询提供滚动/轮播页面。分页游标签名绑定tenant、授权版本、widgetVersion/queryHash、稳定排序最后值、asOf及expiry；排序包含唯一ID。权限/配置变化返回需重置而不是沿旧游标跨范围。新内容插入通过新快照开始刷新，不让自动滚动页不断重复/跳跃。客户端最多保留设定窗口，滚过页释放资源。
 
 轮播返回recordId、fileId、imageDimensions、caption（转义）、鉴权thumbnail session/reference；文件服务重新确认记录+附件权限后给短期签名读取URL或同源认证读取。签名不含源摄像头密码，不能随意给任意fileId签名；禁第三方URL直接拉图，受控附件处理链才允许展示。签名过期可一次合并刷新会话，撤权则停止展示并清除缓存；重要敏感图优先经可撤销代理避免不可即时吊销的长URL。前端只预加载当前/下一个少量图，原图按需，防止台账大量图片拖垮内存。
 
@@ -221,7 +221,7 @@ Server -> authorized replay OR RESYNC_REQUIRED; never guess missing state
 
 ## 13 最新收口：页面查询编排与200活动用户
 
-用户正式目标增加至少200并发活动用户，不等于200 QPS；详见 [容量与页面查询预算](capacity-and-query-budget.md)，本节补大屏边界。上文 /api/dashboard-queries 是组件查询领域入口草案，实现统一接入 **POST /api/v1/page-queries**，请求 pageKey/queryVersion/filters/widgetRequests；不并存第二套绕过编排/权限的任意查询入口。
+用户正式目标增加至少200并发活动用户，不等于200 QPS；详见 [容量与页面查询预算](capacity-and-query-budget.md)，本节补大屏边界。页面查询统一接入 **POST /api/v1/page-queries**，请求 pageKey/queryVersion/filters/widgetRequests；不并存第二套绕过编排/权限的任意查询入口。
 
 页面查询协调中间层收集当前可见widget需求→校验组件版本和受控query→归一时间窗口/过滤/字段/指标→按租户、授权范围指纹及policyVersion、dataset/schema/metric版本生成queryKey→同key singleflight与短TTL缓存→按成本/优先级分组调度→分组件返回成功/部分/失败。不是将全页所有表拼一条巨SQL，不因最慢图表阻塞地图和数字卡。仅真正相同授权语义可合并；不同scope或不同聚合粒度不得强行复用结果。200用户共享权限也仍需会话有效性检查。
 
@@ -245,9 +245,9 @@ Server -> authorized replay OR RESYNC_REQUIRED; never guess missing state
 
 ## 15 与全局基线的命名协调
 
-本文非带版本的/api路径为早期领域草案，当前统一/api/v1前缀；页面批查询唯一正式入口POST /api/v1/page-queries。地图HTTP版本revision映射为全局expectedVersion/If-Match乐观锁令牌；map_version.version、screen_version.version是不可变内容版号，不能当聚合并发令牌。
+本文非带版本的/api路径为早期领域草案，当前统一/api/v1/v1前缀；页面批查询唯一正式入口POST /api/v1/page-queries。地图HTTP版本revision映射为全局expectedVersion/If-Match乐观锁令牌；map_version.version、screen_version.version是不可变内容版号，不能当聚合并发令牌。
 
-文中outbox指公共Spring Modulith持久事件注册/同事务待投递机制，不另建重复总线。WS订阅seq是授权流内递增序号，与domain_event.eventId、SQL分页nextCursor及traceId不同；订阅断档从持久事实快照重建。alarm_episode现行采用condition与ack/suppression独立维度，旧概念表的ACKNOWLEDGED仅表示历史展示概念，不得据此清除ACTIVE条件。
+文中outbox指公共Spring Modulith持久事件注册/同事务待投递机制，不另建重复总线。WS订阅seq是授权流内递增序号，与domain_event.eventId、SQL分页nextCursor及traceId不同；订阅断档从持久事实快照重建。alarm_episode字段与条件转换唯一规范见[逻辑schema：报警维度](logical-schema.md#报警维度规范)，确认不能清除ACTIVE条件。
 
 file_id复用file_object；空间中的WORKSHOP关联既有workshop实体，不再建立独立同名工房真相。spatial_node作为位置层级，workshop/production_line实体保留业务职责；映射表以tenant+spatial_node_id+business_id约束唯一。business_object_ref属于受控多态资源，不能凭UUID声明有跨所有业务表的SQL FK，须用注册资源解析器/发布校验和一致性巡检；设备/空间/source等明确类型引用使用真实tenant复合FK。
 

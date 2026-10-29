@@ -78,7 +78,7 @@
 |domain_event|event_id,type,subject_type,subject_id,occurred_at,received_at,payload_schema,payload,causation_id?,correlation_id,root_event_id,depth int,origin_system,actor_id?,rule_version?|event_id租户唯一，深度非负；来源与台账动作结果分离|
 |trigger_rule_version|key,revision,source_type,condition_ast,action_specs,limits,status|AST类型校验；动作注册白名单，不SQL/脚本|
 |trigger_execution|rule_version_id,event_id,action_key,ordinal,state,payload_hash,result_ref?|UNIQUE(tenant,rule_version,event_id,action_key,ordinal)|
-|alarm_episode|rule_version_id,object_id,region_id?,condition_key,state,first_seen,last_seen,recovered_at?,count bigint|活动identity hash+tenant部分唯一，允许恢复后新周期|
+|alarm_episode|rule_version_id,object_id,region_id?,condition_key,condition,acknowledged_at?,acknowledged_by?,suppressed_until?,suppression_reason?,first_seen,last_seen,recovered_at?,count bigint|活动identity hash+tenant部分唯一，允许恢复后新周期|
 |notification_delivery|event_id,recipient_id,channel,state,attempt,provider_ref?,last_error?|UNIQUE(tenant,event_id,recipient_id,channel)，UNKNOWN可查单|
 |tracking_identity|source_id,stream_session_id,local_track_id,first_seen,last_seen|组合唯一；global_reid_candidate另表有证据/模型/修正历史|
 
@@ -113,4 +113,7 @@
 审计、事件、规则/流程历史、证据版本不随聚合级联；只读归档/保留期清理也需记录。外部提供者结果ID另以provider_id命名空间唯一，不能假设不同算法resultId全球唯一。设备/环节期限关联增加UNIQUE(tenant,stage,equipment,valid_from)，并核有效期重叠策略。
 
 ## 8 地图大屏扩展与现行命名
-新增spatial_node、map_definition/map_version/map_placement/map_hotspot/map_video_overlay、screen_definition/screen_version/screen_widget、dataset_registration/metric_registration及发布审计的字段约束见[设备地图大屏第10至15节](device-map-dashboard.md)。复用equipment/data_source/region_version/domain_event/file_object，禁止复制资产、视频ROI和报警事实。报警当前拆condition(ACTIVE/RECOVERED/UNKNOWN等)与acknowledged_at/by、suppression，不以ACK清除报警。最初简表state仅是概念摘要。
+新增spatial_node、map_definition/map_version/map_placement/map_hotspot/map_video_overlay、screen_definition/screen_version/screen_widget、dataset_registration/metric_registration及发布审计的字段约束见[设备地图大屏第10至15节](device-map-dashboard.md)。复用equipment/data_source/region_version/domain_event/file_object，禁止复制资产、视频ROI和报警事实。报警字段按下述唯一维度规范。
+
+## 报警维度规范
+alarm_episode.condition为PENDING/ACTIVE/RECOVERED/UNKNOWN，非空；ACKNOWLEDGED和SUPPRESSED不再是condition值。acknowledged_at与acknowledged_by同时为空或同时非空，成员引用使用tenant复合FK；确认动作不改condition。suppressed_until与suppression_reason同时为空或同时非空；抑制仅控制已声明通知/显示策略，不删除事实或伪造恢复。恢复只由有效恢复证据驱动，数据断流转UNKNOWN而非RECOVERED；恢复时间必须与恢复事件关联。condition=RECOVERED时recovered_at非空，其他当前条件不写新的恢复时间，历史变化由事件保留。活动identity唯一约束覆盖PENDING/ACTIVE/UNKNOWN，抑制或确认不释放唯一键；恢复后可新开episode。旧单enum数据迁移必须按历史证据拆维度，缺恢复证据的ACK不得迁成RECOVERED；迁移回填和负例测试后才切读。

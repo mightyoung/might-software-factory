@@ -51,3 +51,6 @@ MacBook Air仅Java管理后台；PG/Redis在局域网，地址版本库名和专
 ## 业务需求与场景 v1.0 — 2026-10-29
 
 按用户要求新增角色—目标—触发—步骤—结果—例外—验收说明，BR-001至BR-012稳定追踪。明确用户已定/助手细化/待真实材料及设计验收映射；仅文档，不修改业务代码，不冒称实际厂区/合规/容量。
+
+## 现行规范归一化 — 2026-10-29
+基于0fad59a文档审阅，就地撤销旧Redis绝对排除、报警单enum与旧dashboard查询路由，统一为框架可选/当前LAN、condition与确认抑制分离、/api/v1/page-queries。单仓库规范归README、环境归test-environment、Three.js归device-map-dashboard，重复正文改索引；历史全文保留Git版本，不再作为并列现行指令。盘点移日期附录，验证状态集中基线表；P0从待授权更正为已授权、结果待证据。Flowable运行权威保持不变，补timer/callback同事务投影、失配冻结与授权修复验收；finding_transition仍不可变历史。未删多租户、外接算法、业务范围及BR需求ID；未新增功能、未更改代码或宣称测试通过。
