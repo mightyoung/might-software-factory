@@ -63,13 +63,12 @@ describe("隐患台账分页与详情", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "详情" })[0]);
 
     expect(await screen.findByRole("heading", { name: "隐患详情" })).toBeInTheDocument();
-    expect(screen.getByText("待一人确认")).toBeInTheDocument();
-    expect(screen.getByText("待专业评估")).toBeInTheDocument();
-    expect(screen.getByText(/审批与派单均为本地演示/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "确认发现" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "退回补充" })).toBeDisabled();
-
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
+    expect(within(detail).getByText("待一人确认")).toBeInTheDocument();
+    expect(within(detail).getByText("待专业评估")).toBeInTheDocument();
+    expect(within(detail).getByText(/审批与派单均为本地演示/)).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "确认发现" })).toBeDisabled();
+    expect(within(detail).getByRole("button", { name: "退回补充" })).toBeDisabled();
     expect(within(detail).getByText("一人确认")).toBeInTheDocument();
   });
 });
