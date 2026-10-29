@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { act, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FindingsLedger } from "./FindingsLedger";
 import { syntheticFindings, type FindingLedgerAdapter } from "../../adapters/findingLedger";
 import type { FindingRecord } from "../../domain/finding";
