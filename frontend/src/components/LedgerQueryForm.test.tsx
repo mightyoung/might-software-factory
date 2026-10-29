@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyQuery, type LedgerSchema, type QueryValue, type QueryValues } from "../domain/ledger";
 import { findingLedgerSchema } from "../features/findings/schema";
 import { LedgerQueryForm } from "./LedgerQueryForm";
@@ -40,18 +40,20 @@ const referenceSchema: LedgerSchema<DemoReferenceRecord> = {
   recordKey: () => "demo",
 };
 
-function ReferenceHarness() {
+function ReferenceHarness({ onSearch = () => undefined }: { onSearch?: () => void } = {}) {
   const [values, setValues] = useState<QueryValues>(() => createEmptyQuery(referenceSchema.queryFields));
   return (
     <LedgerQueryForm
       schema={referenceSchema}
       values={values}
       onChange={(key, value: QueryValue) => setValues((current) => ({ ...current, [key]: value }))}
-      onSearch={() => undefined}
+      onSearch={onSearch}
       onReset={() => setValues(createEmptyQuery(referenceSchema.queryFields))}
     />
   );
 }
+
+afterEach(cleanup);
 
 describe("通用台账查询表单", () => {
   it("按字段类型生成输入、选择器和日期区间，重置会清空全部条件", () => {
@@ -90,4 +92,16 @@ describe("通用台账查询表单", () => {
     expect(department).toHaveValue("demo-org-a");
     expect(screen.getByRole("option", { name: "演示部门 A" })).toHaveValue("demo-org-a");
   });
+  it("允许小数数值条件通过真实表单提交校验", () => {
+    let submitCount = 0;
+    render(<ReferenceHarness onSearch={() => { submitCount += 1; }} />);
+    const number = screen.getByRole("spinbutton", { name: "最小数值" });
+    fireEvent.change(number, { target: { value: "4.5" } });
+
+    expect(number).toHaveAttribute("step", "any");
+    expect((number as HTMLInputElement).validity.stepMismatch).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    expect(submitCount).toBe(1);
+  });
+
 });

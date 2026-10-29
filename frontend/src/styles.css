@@ -698,6 +698,18 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.table-error {
+  display: flex;
+  flex: 1;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  color: #8b4b46;
+  font-size: 12px;
+}
+
 .table-footer {
   display: flex;
   align-items: center;
@@ -807,6 +819,20 @@ select:focus-visible {
 .detail-state {
   color: #77859a;
   font-size: 12px;
+}
+
+.detail-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 0;
+  color: #8b4b46;
+  font-size: 12px;
+}
+
+.detail-error p {
+  margin: 0;
 }
 
 .detail-section {
@@ -1047,10 +1073,14 @@ select:focus-visible {
 
 @media (max-width: 1280px) {
   .ledger-layout.ledger-with-detail {
-    display: block;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .ledger-layout.ledger-with-detail .ledger-main {
+    min-height: 0;
+    overflow-y: auto;
     padding-right: 25px;
   }
 

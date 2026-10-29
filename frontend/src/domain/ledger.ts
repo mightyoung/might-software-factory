@@ -35,6 +35,7 @@ export interface NumberQueryField<T> {
   label: string;
   kind: "number";
   operator: "equals" | "atLeast" | "atMost";
+  step?: number | "any";
   read: (record: T) => number | null;
 }
 

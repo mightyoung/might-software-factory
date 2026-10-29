@@ -34,19 +34,32 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detail, setDetail] = useState<FindingRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(false);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
 
   useEffect(() => {
     let current = true;
     setLoading(true);
-    adapter.list({ query: appliedQuery, page: { index: pageIndex, size: pageSize }, view }).then((result) => {
-      if (!current) return;
-      setPage(result);
-      setPageIndex(result.page.index);
-      setLoading(false);
-    });
+    setListError(false);
+    void Promise.resolve()
+      .then(() => adapter.list({ query: appliedQuery, page: { index: pageIndex, size: pageSize }, view }))
+      .then((result) => {
+        if (!current) return;
+        setPage(result);
+        setPageIndex(result.page.index);
+      })
+      .catch(() => {
+        if (!current) return;
+        setListError(true);
+      })
+      .finally(() => {
+        if (!current) return;
+        setLoading(false);
+      });
     return () => {
       current = false;
     };
@@ -56,22 +69,34 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
     let current = true;
     if (!selectedFindingId) {
       setDetail(null);
+      setDetailError(false);
       setDetailLoading(false);
       return () => {
         current = false;
       };
     }
     setDetail(null);
+    setDetailError(false);
     setDetailLoading(true);
-    adapter.get(selectedFindingId).then((record) => {
-      if (!current) return;
-      setDetail(record);
-      setDetailLoading(false);
-    });
+    void Promise.resolve()
+      .then(() => adapter.get(selectedFindingId))
+      .then((record) => {
+        if (!current) return;
+        setDetail(record);
+      })
+      .catch(() => {
+        if (!current) return;
+        setDetail(null);
+        setDetailError(true);
+      })
+      .finally(() => {
+        if (!current) return;
+        setDetailLoading(false);
+      });
     return () => {
       current = false;
     };
-  }, [adapter, selectedFindingId]);
+  }, [adapter, detailRefreshKey, selectedFindingId]);
 
   function updateQuery(key: string, value: QueryValue) {
     setQuery((current) => ({ ...current, [key]: value }));
@@ -143,7 +168,15 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
 
         <div className="table-frame" aria-busy={loading}>
           {loading && <div className="table-loading" role="status">正在加载演示记录…</div>}
-          {!loading && (
+          {!loading && listError && (
+            <div className="table-error" role="alert">
+              <span>暂时无法加载隐患记录。</span>
+              <button type="button" className="button button-subtle" onClick={() => setRefreshKey((value) => value + 1)}>
+                重试加载
+              </button>
+            </div>
+          )}
+          {!loading && !listError && (
             <LedgerTable
               columns={findingLedgerSchema.columns}
               rows={page.items}
@@ -156,6 +189,7 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
           )}
         </div>
 
+        {!listError && (
         <div className="table-footer">
           <span>共 {page.total} 条演示记录</span>
           <div className="pagination-controls">
@@ -183,13 +217,16 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
             </button>
           </div>
         </div>
+        )}
       </section>
 
       {selectedFindingId && (
         <FindingDetails
           finding={detail}
           loading={detailLoading}
+          error={detailError}
           onClose={() => navigate(path)}
+          onRetry={() => setDetailRefreshKey((value) => value + 1)}
         />
       )}
     </div>

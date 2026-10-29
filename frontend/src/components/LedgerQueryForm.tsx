@@ -61,6 +61,7 @@ function QueryFieldControl<T>({
         <span>{field.label}</span>
         <input
           type="number"
+          step={field.step ?? "any"}
           value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(field.key, event.currentTarget.value)}
         />

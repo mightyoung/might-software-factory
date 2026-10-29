@@ -9,10 +9,12 @@ import {
 interface FindingDetailsProps {
   finding: FindingRecord | null;
   loading: boolean;
+  error: boolean;
   onClose: () => void;
+  onRetry: () => void;
 }
 
-export function FindingDetails({ finding, loading, onClose }: FindingDetailsProps) {
+export function FindingDetails({ finding, loading, error, onClose, onRetry }: FindingDetailsProps) {
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
       <div className="detail-heading">
@@ -25,9 +27,17 @@ export function FindingDetails({ finding, loading, onClose }: FindingDetailsProp
         </button>
       </div>
 
-      {loading && <p className="detail-state">正在读取演示记录…</p>}
-      {!loading && !finding && <p className="detail-state">没有找到这条演示记录。</p>}
-      {finding && (
+      {loading && <p className="detail-state" role="status">正在读取演示记录…</p>}
+      {!loading && error && (
+        <div className="detail-error" role="alert">
+          <p>暂时无法读取隐患详情。</p>
+          <button type="button" className="button button-subtle" onClick={onRetry}>
+            重试读取
+          </button>
+        </div>
+      )}
+      {!loading && !error && !finding && <p className="detail-state">没有找到这条演示记录。</p>}
+      {finding && !error && (
         <>
           <section className="detail-section">
             <h3>基本信息</h3>
