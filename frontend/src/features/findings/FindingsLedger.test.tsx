@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { FindingsLedger } from "./FindingsLedger";
+
+afterEach(cleanup);
 
 describe("隐患台账分页与详情", () => {
   it("查询按字段生成条件，重置会恢复全部演示记录", async () => {
