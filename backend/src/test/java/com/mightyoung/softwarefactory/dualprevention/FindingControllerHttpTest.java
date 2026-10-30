@@ -20,7 +20,9 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -253,6 +255,23 @@ class FindingControllerHttpTest {
     static class TestDependencies {
         @Bean TestFindingRepository testFindingRepository() { return new TestFindingRepository(); }
         @Bean TestReadAccessPolicy testReadAccessPolicy() { return new TestReadAccessPolicy(); }
+        @Bean AuthenticationProvider localPasswordAuthenticationProvider() {
+            return new AuthenticationProvider() {
+                @Override
+                public Authentication authenticate(Authentication authentication) {
+                    return UsernamePasswordAuthenticationToken.authenticated(
+                            VerifiedSessionPrincipalTestFixture.create(ACTOR_ID,
+                                    UUID.fromString("11000000-0000-0000-0000-000000000001"),
+                                    TENANT_A, MEMBER_ID, 0L, 0L), null, List.of());
+                }
+
+                @Override
+                public boolean supports(Class<?> authentication) {
+                    return authentication.getName().equals(
+                            "com.mightyoung.softwarefactory.identity.LocalPasswordAuthenticationToken");
+                }
+            };
+        }
     }
 
     static final class TestFindingRepository implements FindingRepository {
