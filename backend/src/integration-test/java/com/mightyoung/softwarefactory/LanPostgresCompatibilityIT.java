@@ -9,6 +9,7 @@ import org.flowable.job.api.Job;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.dao.DataAccessException;
 import org.springframework.test.context.ActiveProfiles;
@@ -20,6 +21,9 @@ import org.jooq.DSLContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.springframework.session.Session;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Assumptions;
+import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
 import java.net.URI;
@@ -59,6 +63,7 @@ class LanPostgresCompatibilityIT {
             """;
 
     @Autowired private DataSource dataSource;
+    @Autowired private HikariDataSource hikariDataSource;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private DSLContext dsl;
     @Autowired private ProcessEngine processEngine;
@@ -68,6 +73,14 @@ class LanPostgresCompatibilityIT {
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired private FindByIndexNameSessionRepository<?> sessionRepository;
     @Autowired private P0FailingProjectionDelegate projectionDelegate;
+
+    @BeforeEach
+    void constrainPoolAfterDatabaseInitializationToExerciseConnectionReuse() {
+        assertThat(hikariDataSource.getHikariPoolMXBean().getActiveConnections()).isZero();
+        hikariDataSource.setMaximumPoolSize(1);
+        hikariDataSource.getHikariPoolMXBean().softEvictConnections();
+        assertThat(hikariDataSource.getMaximumPoolSize()).isEqualTo(1);
+    }
 
     @DynamicPropertySource
     static void lanPostgresProperties(DynamicPropertyRegistry properties) {
@@ -84,7 +97,10 @@ class LanPostgresCompatibilityIT {
 
         ProcessEngineConfigurationImpl engineConfiguration =
                 (ProcessEngineConfigurationImpl) processEngine.getProcessEngineConfiguration();
-        assertThat(engineConfiguration.getDataSource()).isSameAs(dataSource);
+        assertThat(engineConfiguration.getDataSource())
+                .isInstanceOf(TransactionAwareDataSourceProxy.class);
+        assertThat(((TransactionAwareDataSourceProxy) engineConfiguration.getDataSource())
+                .getTargetDataSource()).isSameAs(dataSource);
         assertThat(engineConfiguration).isInstanceOf(org.flowable.spring.SpringProcessEngineConfiguration.class);
         assertThat(((org.flowable.spring.SpringProcessEngineConfiguration) engineConfiguration)
                 .getTransactionManager()).isSameAs(transactionManager);
@@ -166,8 +182,9 @@ class LanPostgresCompatibilityIT {
                 .singleResult();
         assertThat(timer).isNotNull();
 
-        Job retryable = managementService.moveTimerToExecutableJob(timer.getId());
-        assertThatThrownBy(() -> managementService.executeJob(retryable.getId()))
+        Job firstAttempt = managementService.moveTimerToExecutableJob(timer.getId());
+        assertThat(firstAttempt.getRetries()).isPositive();
+        assertThatThrownBy(() -> managementService.executeJob(firstAttempt.getId()))
                 .hasRootCauseInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
         assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(3);
 
@@ -190,6 +207,22 @@ class LanPostgresCompatibilityIT {
         assertThat(managementService.createDeadLetterJobQuery()
                 .processInstanceId(process.getId())
                 .count()).isZero();
+        managementService.executeJob(executableAfterFailure.getId());
+
+        assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(6);
+        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
+                .isNull();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from p0_finding_projection where process_instance_id = ?",
+                Integer.class, process.getId())).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from p0_finding_transition where process_instance_id = ?",
+                Integer.class, process.getId())).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "select count(*) from p0_outbox where event_key like ?",
+                Integer.class, process.getId() + ":%")).isEqualTo(1);
+        assertThat(managementService.createJobQuery().processInstanceId(process.getId()).count()).isZero();
+        assertThat(managementService.createDeadLetterJobQuery().processInstanceId(process.getId()).count()).isZero();
     }
 
     @Test
@@ -199,7 +232,8 @@ class LanPostgresCompatibilityIT {
                 from pg_roles
                 where rolname = current_user
                 """, Boolean.class);
-        assertThat(bypassesRls).isFalse();
+        Assumptions.assumeFalse(bypassesRls,
+                "RLS isolation requires a non-superuser PostgreSQL role without BYPASSRLS");
 
         String suffix = UUID.randomUUID().toString();
         String tenantA = "tenant-a-" + suffix;

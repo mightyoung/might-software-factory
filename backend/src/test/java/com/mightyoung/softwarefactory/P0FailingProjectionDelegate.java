@@ -12,6 +12,7 @@ public class P0FailingProjectionDelegate implements JavaDelegate {
 
     private final JdbcTemplate jdbc;
     private final ConcurrentMap<String, AtomicInteger> successfulWrites = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicInteger> executions = new ConcurrentHashMap<>();
 
     public P0FailingProjectionDelegate(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -20,13 +21,16 @@ public class P0FailingProjectionDelegate implements JavaDelegate {
     @Override
     public void execute(DelegateExecution execution) {
         String processInstanceId = execution.getProcessInstanceId();
+        int attempt = executions.computeIfAbsent(processInstanceId, ignored -> new AtomicInteger()).incrementAndGet();
         write(processInstanceId, "insert into p0_finding_projection values (?, ?, ?, ?)",
                 processInstanceId, "tenant-a", "SAFETY_CONFIRM_PENDING", 2L);
         write(processInstanceId, "insert into p0_finding_transition values (?, ?)",
                 processInstanceId, "timer-1");
         write(processInstanceId, "insert into p0_outbox values (?, ?)",
                 processInstanceId + ":timer-1", "TIMER_TRIGGERED");
-        throw new ProjectionWriteFailure();
+        if (attempt == 1) {
+            throw new ProjectionWriteFailure();
+        }
     }
 
     int successfulWriteStatementsFor(String processInstanceId) {

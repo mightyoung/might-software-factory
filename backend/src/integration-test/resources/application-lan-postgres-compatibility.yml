@@ -1,11 +1,17 @@
 spring:
   datasource:
     hikari:
-      maximum-pool-size: 1
+      # Allow startup migration/schema initializers to run before the test reduces the
+      # pool to one connection for tenant-context reuse assertions.
+      maximum-pool-size: 2
       minimum-idle: 1
   flyway:
     locations: classpath:db/p0
     clean-disabled: true
+    # This profile is gated to a disposable integration database. A failed prior startup
+    # can leave Flowable tables behind before this probe migration has run.
+    baseline-on-migrate: true
+    baseline-version: 0
   session:
     store-type: jdbc
     jdbc:
