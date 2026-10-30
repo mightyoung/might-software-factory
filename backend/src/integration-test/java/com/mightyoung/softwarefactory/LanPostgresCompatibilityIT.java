@@ -91,6 +91,22 @@ class LanPostgresCompatibilityIT {
     }
 
     @Test
+    void appRoleTargetRejectsUrlDifferentFromDedicatedGate() {
+        String testDatabase = "might_software_factory_test";
+        java.util.Map<String, String> misconfiguredEnvironment = java.util.Map.of(
+                "LAN_PG_JDBC_URL", "jdbc:postgresql://192.0.2.10:5432/" + testDatabase,
+                "LAN_PG_USERNAME", "test-operator",
+                "LAN_PG_PASSWORD", "not-used-by-this-test",
+                "LAN_PG_TEST_DATABASE_NAME", testDatabase,
+                "LAN_PG_DEDICATED_TEST_DB_ACK", CONFIRMATION_PREFIX + testDatabase,
+                "LAN_PG_TEST_JDBC_URL", "jdbc:postgresql://192.0.2.10:5432/might_software_factory_dev");
+
+        assertThatThrownBy(() -> DatabaseTarget.forAppRole(misconfiguredEnvironment))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("LAN_PG_TEST_JDBC_URL must match the URL accepted by the disposable-test database gate");
+    }
+
+    @Test
     void selectedFrameworksShareTheConfiguredPostgresConnectionAndSpringTransactionManager() {
         assertThatCode(() -> dsl.fetchValue("select 1", Integer.class))
                 .doesNotThrowAnyException();
@@ -233,7 +249,8 @@ class LanPostgresCompatibilityIT {
     @Test
     void tenantRlsBlocksCrossTenantRowsAndTransactionLocalSettingDoesNotLeakThroughThePool() {
         HikariConfig appPoolConfig = new HikariConfig();
-        appPoolConfig.setJdbcUrl(required("LAN_PG_TEST_JDBC_URL"));
+        DatabaseTarget appTarget = DatabaseTarget.forAppRole(System.getenv());
+        appPoolConfig.setJdbcUrl(appTarget.jdbcUrl());
         appPoolConfig.setUsername(required("LAN_PG_APP_USERNAME"));
         appPoolConfig.setPassword(required("LAN_PG_APP_PASSWORD"));
         appPoolConfig.setMaximumPoolSize(1);
@@ -245,6 +262,8 @@ class LanPostgresCompatibilityIT {
             TransactionTemplate appTransaction = new TransactionTemplate(
                     new org.springframework.jdbc.datasource.DataSourceTransactionManager(appDataSource));
 
+            assertThat(appJdbc.queryForObject("select current_database()", String.class))
+                    .isEqualTo(appTarget.databaseName());
             assertThat(appJdbc.queryForObject("select current_user = session_user and session_user = ?",
                     Boolean.class, required("LAN_PG_APP_USERNAME"))).isTrue();
             assertThat(appJdbc.queryForObject("""
@@ -338,6 +357,7 @@ class LanPostgresCompatibilityIT {
                 deleteTenantProbe(appJdbc, appTransaction, tenantB, keyB);
                 deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantInsertKey);
                 deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantUpdatedKey);
+                assertThat(jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)).isZero();
             }
         }
     }
@@ -475,6 +495,16 @@ class LanPostgresCompatibilityIT {
         private DatabaseTarget(String jdbcUrl, String databaseName) {
             this.jdbcUrl = jdbcUrl;
             this.databaseName = databaseName;
+        }
+
+        static DatabaseTarget forAppRole(java.util.Map<String, String> environment) {
+            DatabaseTarget acceptedTarget = fromEnvironment(environment);
+            String appRoleUrl = requiredFrom(environment, "LAN_PG_TEST_JDBC_URL");
+            if (!acceptedTarget.jdbcUrl().equals(appRoleUrl)) {
+                throw new IllegalStateException(
+                        "LAN_PG_TEST_JDBC_URL must match the URL accepted by the disposable-test database gate");
+            }
+            return acceptedTarget;
         }
 
         static DatabaseTarget fromEnvironment(java.util.Map<String, String> environment) {
