@@ -47,6 +47,12 @@
 |分页列表|`POST /api/v1/entities/finding/query`|请求 `filterAST/sort/page.number/size/fields`；响应 `data.items`、`data.page.number/size/total/pageCount`、`meta`|
 |详情|`GET /api/v1/entities/finding/{id}`|`data` 为 finding v1 字段；`meta`|
 
+### 已封存整改证据内容
+
+`GET /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-items/{evidenceItemId}/content` 返回附件流。请求只包含 finding、轮次和 evidence item ID；服务端重新解析当前 finding 读取授权、已封存 submission 快照、当前 file link 撤销状态与 READY 文件状态，再按快照里的 receipt ID 校验信任上下文，并从固定 `storageVersion` 读取。请求不接受 file ID、对象键、路径或版本参数。快照缺失、未封存、链接已撤销或越出当前组织范围时统一隐藏为 404；可信回执或存储版本不可用时返回 503。响应使用 `application/octet-stream`、`attachment`、`no-store` 和 `nosniff`。
+
+本地文件 adapter 默认未启用。只有显式配置私有根目录及至少 256 位的 receipt HMAC 密钥和 key ID 才创建；部署必须预先提供仅服务账户可访问的 POSIX 私有目录和 `.receipt-registry` 子目录，adapter 会校验权限并拒绝不支持 POSIX 权限的文件系统；应用不会创建或扫描根目录。固定版本 `.blob` 必须是 regular file 且没有 POSIX 写权限。路径由服务端派生为 `root/{tenant UUID}/{file UUID}/{storageVersion}.blob`。核验签发只在业务事务外散列文件并写入 HMAC 回执；业务事务只查现存回执。读取端对返回前的固定版本内容执行摘要校验，单个文件最大 64 MiB、进程内总缓冲预算也是 64 MiB，预算耗尽时 fail-closed。测试使用临时目录里的合成文件，不设置运行配置，不触碰用户文件。该实现没有上传/扫描器，没有执行 V6，也没有实际 PG18 或部署根目录验收。
+
 列表使用接口基线定义的实体级注册查询路径 `/api/v1/entities/{key}/query`。这不是大屏/页面批量查询协调器；后者唯一入口仍是 `/api/v1/page-queries`，其 pageKey、widget 请求拆分、预算、缓存和渐进结果本阶段均未实现。
 
 字段 key 是 `id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影为 `id, code, discoveredAt, grade, state, roundNo`；`description` 可读但不可筛选或排序。请求体和返回投影都不包括租户/组织控制列。
