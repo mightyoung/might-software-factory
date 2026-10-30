@@ -1,0 +1,437 @@
+openapi: 3.1.0
+info:
+  title: Might Software Factory Finding Ledger API
+  version: 1.0.0
+  description: >-
+    Read-only list and detail contract for the finding ledger. This repository branch contains
+    local handlers which fail closed. A PostgreSQL 15.4 integration probe verified the finding
+    migration, RLS, list/detail reads, and SELECT-only runtime grant in the dedicated test database.
+    This does not configure production identity or authorization and is not a production-ready endpoint.
+x-implementation-status: local-handlers-fail-closed
+x-runtime-blockers:
+  - no production login or trusted session-principal issuer is configured
+  - persisted finding authorization is implemented, but denies by default when required identity, membership, role, or scope data is missing or ineligible
+  - the V3 identity and authorization migration has not been applied to any database
+  - runtime SELECT access to the V3 identity and authorization tables has not been granted
+  - the V2 finding migration has only been applied to might_software_factory_test; production and development databases are not verified
+  - the SELECT-only finding runtime grant has only been applied to the existing low-privilege role in might_software_factory_test
+  - tenant application entitlement checks, grant-source registration and revocation handling, and production role and permission data management are not implemented
+x-tenant-context: >-
+  The active tenant and member must come from a verified server session and current membership.
+  No request body or header may supply tenant_id. Apply tenant and authorized data-scope predicates
+  before counting, sorting, pagination, or detail lookup.
+x-pagination-semantics: >-
+  This ledger uses one-based offset pages. total is the exact number of rows after tenant and
+  data-scope predicates and requested filters are applied but before page slicing. pageCount =
+  ceil(total / size); pageCount is 0 when total is 0. If a safe exact count
+  cannot be produced, fail the request rather than returning a placeholder zero. The response
+  never includes nextCursor for this offset contract.
+x-finding-default-sort:
+  - field: discoveredAt
+    direction: DESC
+  - field: id
+    direction: ASC
+servers:
+  - url: /
+paths:
+  /api/v1/entities/finding/schema:
+    get:
+      operationId: getFindingEntitySchema
+      summary: Read the caller's effective finding schema
+      description: >-
+        Requires the caller's authenticated session and finding read permission. Version 1 grants
+        the registered finding fields as one read bundle; row-level data scope is still enforced.
+        This schema is not a global access grant.
+      security:
+        - sessionCookieAuth: []
+      responses:
+        '200':
+          description: Effective finding schema and API metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindingEntitySchemaResponse'
+        '401':
+          description: AUTH_REQUIRED; the session is missing, expired, or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '403':
+          description: ACTION_DENIED; the caller cannot read the finding entity in this context.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+  /api/v1/entities/finding/query:
+    post:
+      operationId: queryFindings
+      summary: Read one page of authorized finding summaries
+      description: >-
+        Read-only operation. Requires an authenticated session and the entity's registered read
+        action. Server-side tenant and data-scope predicates are applied before the exact total
+        count and page are computed. The server always includes id in each item and appends id ASC
+        as a stable tie-breaker when it is not already in the requested sort. Tenant identity is
+        never read from the request body or headers.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - in: header
+          name: X-XSRF-TOKEN
+          required: true
+          description: >-
+            CSRF token paired with the same-origin XSRF-TOKEN cookie issued by the authenticated
+            server. The session cookie is Secure, HttpOnly, and SameSite according to deployment
+            policy; browser clients send credentials with same-origin requests.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindingQueryRequest'
+      responses:
+        '200':
+          description: A page and exact authorized total for the current query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindingListResponse'
+        '400':
+          description: Invalid page, filter, sort, or projection request.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_REQUIRED; the session is missing, expired, or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '403':
+          description: ACTION_DENIED; permission or CSRF validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '404':
+          description: RESOURCE_NOT_VISIBLE; the entity is unavailable in the current context.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '429':
+          description: RATE_LIMITED; retry only after the server-provided Retry-After interval.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+        '503':
+          description: DEPENDENCY_UNAVAILABLE; the read could not be completed safely.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+  /api/v1/entities/finding/{id}:
+    get:
+      operationId: getFindingDetail
+      summary: Read one finding visible to the current member
+      description: >-
+        Requires an authenticated session and entity read permission. A missing identifier and an
+        identifier outside the caller's tenant or data scope both return the same 404 response.
+        Fields not in the caller's effective finding schema are omitted.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          description: Stable finding UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Finding detail and API metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FindingDetailResponse'
+        '401':
+          description: AUTH_REQUIRED; the session is missing, expired, or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '403':
+          description: ACTION_DENIED; the caller cannot read finding details in this context.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '404':
+          description: RESOURCE_NOT_VISIBLE; a nonexistent finding and a finding outside the caller's data scope share this response.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    sessionCookieAuth:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: >-
+        Server-issued Spring Session cookie. It authenticates the caller but never selects a tenant.
+  schemas:
+    FindingQueryRequest:
+      allOf:
+        - $ref: 'entity-query.yaml#/components/schemas/EntityQueryRequest'
+        - type: object
+          properties:
+            page:
+              $ref: '#/components/schemas/FindingOffsetPageRequest'
+    FindingOffsetPageRequest:
+      type: object
+      additionalProperties: false
+      required: [number]
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          description: One-based page number. The requested offset may not exceed 10000 rows.
+    FindingEntitySchema:
+      type: object
+      additionalProperties: false
+      required: [key, schemaVersion, idField, defaultFields, fields]
+      properties:
+        key:
+          type: string
+          const: finding
+        schemaVersion:
+          type: string
+          const: '1'
+        idField:
+          type: string
+          const: id
+        defaultFields:
+          type: array
+          const: [id, code, discoveredAt, grade, state, roundNo]
+          items:
+            type: string
+        fields:
+          type: object
+          additionalProperties: false
+          required: [id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+          properties:
+            id:
+              $ref: '#/components/schemas/UuidField'
+            code:
+              $ref: '#/components/schemas/CodeField'
+            description:
+              $ref: '#/components/schemas/DescriptionField'
+            discoveredAt:
+              $ref: '#/components/schemas/DateTimeField'
+            sourceEventId:
+              $ref: '#/components/schemas/NullableUuidField'
+            riskId:
+              $ref: '#/components/schemas/NullableUuidField'
+            grade:
+              $ref: '#/components/schemas/FindingGradeField'
+            state:
+              $ref: '#/components/schemas/FindingStateField'
+            roundNo:
+              $ref: '#/components/schemas/NumberField'
+            version:
+              $ref: '#/components/schemas/NumberField'
+            createdAt:
+              $ref: '#/components/schemas/DateTimeField'
+            updatedAt:
+              $ref: '#/components/schemas/DateTimeField'
+    UuidField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: UUID }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, IN] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    NullableUuidField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: UUID }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { type: array, items: { enum: [EQ, IN, IS_NULL, IS_NOT_NULL] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    CodeField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: TEXT }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, CONTAINS] }, uniqueItems: true }
+        maxLength: { const: 64 }
+        enumValues: { const: [] }
+    DescriptionField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: TEXT }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+      description: >-
+        Description is readable but is not filterable or sortable in schema version 1. maxLength 0
+        does not constrain stored text; it represents the absence of text filter input.
+    DateTimeField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: DATETIME }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, GT, GTE, LT, LTE, BETWEEN] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    NumberField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: NUMBER }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, GT, GTE, LT, LTE, BETWEEN] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    FindingGradeField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, IN] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues:
+          type: array
+          const: [UNKNOWN, GENERAL, MAJOR]
+          items: { type: string }
+    FindingStateField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: true }
+        operators: { type: array, items: { enum: [EQ, IN] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues:
+          type: array
+          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED]
+          items: { type: string }
+    FindingListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [items, page]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/FindingListItem'
+            page:
+              $ref: '#/components/schemas/FindingPageMetadata'
+        meta:
+          $ref: 'entity-query.yaml#/components/schemas/Metadata'
+    FindingListItem:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+        discoveredAt: { type: string, format: date-time }
+        sourceEventId: { type: [string, 'null'], format: uuid }
+        riskId: { type: [string, 'null'], format: uuid }
+        grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED] }
+        roundNo: { type: integer }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FindingPageMetadata:
+      type: object
+      additionalProperties: false
+      required: [number, size, total, pageCount]
+      properties:
+        number: { type: integer, minimum: 1 }
+        size: { type: integer, enum: [20, 50, 100] }
+        total: { type: integer, minimum: 0 }
+        pageCount: { type: integer, minimum: 0 }
+    FindingDetailResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/FindingDetail'
+        meta:
+          $ref: 'entity-query.yaml#/components/schemas/Metadata'
+    FindingDetail:
+      type: object
+      additionalProperties: false
+      required: [id, code, description, discoveredAt, grade, state, roundNo, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+        discoveredAt: { type: string, format: date-time }
+        sourceEventId: { type: [string, 'null'], format: uuid }
+        riskId: { type: [string, 'null'], format: uuid }
+        grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED] }
+        roundNo: { type: integer }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FindingEntitySchemaResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/FindingEntitySchema'
+        meta:
+          $ref: 'entity-query.yaml#/components/schemas/Metadata'

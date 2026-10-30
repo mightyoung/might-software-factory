@@ -21,6 +21,7 @@ class ModuleArchitectureTest {
             "Workflow",
             "Support services",
             "Audit and operations",
+            "File evidence access",
             "Dual-prevention business sample"
     );
 
@@ -33,8 +34,10 @@ class ModuleArchitectureTest {
             "Workflow", Set.of("Authorization", "Identity and authentication", "Tenancy"),
             "Support services", Set.of("Authorization", "Tenancy"),
             "Audit and operations", Set.of("Authorization", "Identity and authentication", "Tenancy"),
+            "File evidence access", Set.of(),
             "Dual-prevention business sample", Set.of(
-                    "Audit and operations", "Authorization", "Directory", "Support services", "Tenancy", "Workflow")
+                    "Application registry", "Audit and operations", "Authorization", "Directory",
+                    "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")
     );
 
     @Test
@@ -48,6 +51,14 @@ class ModuleArchitectureTest {
                 .getAnnotation(org.springframework.modulith.ApplicationModule.class);
         assertThat(identityAnnotation).isNotNull();
         assertThat(identityAnnotation.allowedDependencies()).isEmpty();
+
+        org.springframework.modulith.ApplicationModule dualPreventionAnnotation = Class.forName(
+                "com.mightyoung.softwarefactory.dualprevention.package-info")
+                .getAnnotation(org.springframework.modulith.ApplicationModule.class);
+        assertThat(dualPreventionAnnotation).isNotNull();
+        assertThat(dualPreventionAnnotation.allowedDependencies())
+                .contains("applicationregistry::query")
+                .doesNotContain("applicationregistry");
 
         Set<String> actual = modules.stream()
                 .map(ApplicationModule::getDisplayName)
