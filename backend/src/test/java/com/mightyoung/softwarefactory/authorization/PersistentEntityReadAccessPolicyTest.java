@@ -46,6 +46,25 @@ class PersistentEntityReadAccessPolicyTest {
     }
 
     @Test
+    void rejectsSessionsWhoseActorIsNotAnActiveHumanPrincipalBoundToTheSessionAccount() {
+        for (FindingReadAuthorizationSnapshot identity : Set.of(
+                principalSnapshot(ACTOR_ID, ACCOUNT_ID, "HUMAN", "DISABLED", "ACTIVE", "ACTIVE", "ACTIVE",
+                        17L, 23L, Set.of(ORG_ID)),
+                principalSnapshot(ACTOR_ID, ACCOUNT_ID, "SERVICE", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE",
+                        17L, 23L, Set.of(ORG_ID)),
+                principalSnapshot(UUID.fromString("10000000-0000-0000-0000-000000000099"), ACCOUNT_ID,
+                        "HUMAN", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of(ORG_ID)),
+                principalSnapshot(ACTOR_ID, UUID.fromString("11000000-0000-0000-0000-000000000099"),
+                        "HUMAN", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of(ORG_ID)))) {
+            PersistentEntityReadAuthorizationRepository repository = (context, permissionCode) ->
+                    Optional.of(identity);
+
+            assertThat(new PersistentEntityReadAccessPolicy(repository)
+                    .resolveEntityReadGrant(session, "finding")).isEmpty();
+        }
+    }
+
+    @Test
     void rejectsSessionsWhoseTenantOrMemberAuthorizationEpochIsStale() {
         for (FindingReadAuthorizationSnapshot identity : Set.of(
                 snapshot("ACTIVE", "ACTIVE", "ACTIVE", 18L, 23L, Set.of(ORG_ID)),
@@ -88,7 +107,16 @@ class PersistentEntityReadAccessPolicyTest {
     private static FindingReadAuthorizationSnapshot snapshot(
             String accountStatus, String tenantStatus, String memberStatus,
             long tenantAuthEpoch, long memberAuthEpoch, Set<UUID> organizations) {
+        return principalSnapshot(ACTOR_ID, ACCOUNT_ID, "HUMAN", "ACTIVE", accountStatus, tenantStatus,
+                memberStatus, tenantAuthEpoch, memberAuthEpoch, organizations);
+    }
+
+    private static FindingReadAuthorizationSnapshot principalSnapshot(
+            UUID principalId, UUID principalAccountId, String principalKind, String principalStatus,
+            String accountStatus, String tenantStatus, String memberStatus,
+            long tenantAuthEpoch, long memberAuthEpoch, Set<UUID> organizations) {
         return new FindingReadAuthorizationSnapshot(
+                principalId, principalAccountId, principalKind, principalStatus,
                 accountStatus, tenantStatus, memberStatus, tenantAuthEpoch, memberAuthEpoch, organizations);
     }
 }

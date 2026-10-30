@@ -7,10 +7,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.authentication.AuthenticationProvider;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -20,12 +18,23 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.core.GrantedAuthority;
+import org.springframework.http.ResponseEntity;
+import com.mightyoung.softwarefactory.authorization.EntityReadAccessPolicy;
+import com.mightyoung.softwarefactory.authorization.EntityReadGrant;
+import com.mightyoung.softwarefactory.authorization.FindingReadAuthorizationSnapshot;
+import com.mightyoung.softwarefactory.authorization.PersistentEntityReadAccessPolicy;
+import com.mightyoung.softwarefactory.authorization.PersistentEntityReadAuthorizationRepository;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -44,6 +53,7 @@ class IdentityAuthenticationHttpTest {
     private static final String LOGIN_PATH = "/api/v1/auth/login";
     private static final String LOGOUT_PATH = "/api/v1/auth/logout";
     private static final String CONTEXT_PATH = "/api/v1/test/auth-context";
+    private static final String FINDING_READ_PATH = "/api/v1/test/finding-read";
     private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID ACCOUNT_ID = UUID.fromString("11000000-0000-0000-0000-000000000001");
     private static final UUID TENANT_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
@@ -52,6 +62,9 @@ class IdentityAuthenticationHttpTest {
 
     @Autowired
     private MockMvc mvc;
+
+    @Autowired
+    private AuthorizationSnapshotState authorizationSnapshotState;
 
     @Test
     void csrfBootstrapIsPublicAndIssuesTheDoubleSubmitCookie() throws Exception {
@@ -93,12 +106,70 @@ class IdentityAuthenticationHttpTest {
     }
 
     @Test
+    void disabledPrincipalRevokesFindingReadFromAnAlreadyIssuedSession() throws Exception {
+        MockHttpSession session = loginAndReturnSession();
+
+        mvc.perform(get(FINDING_READ_PATH).session(session))
+                .andExpect(status().isOk());
+
+        authorizationSnapshotState.snapshot.set(snapshot("DISABLED", "HUMAN", ACTOR_ID, ACCOUNT_ID));
+
+        mvc.perform(get(FINDING_READ_PATH).session(session))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void principalAccountMismatchRevokesFindingReadFromAnAlreadyIssuedSession() throws Exception {
+        MockHttpSession session = loginAndReturnSession();
+
+        authorizationSnapshotState.snapshot.set(snapshot("ACTIVE", "HUMAN", ACTOR_ID,
+                UUID.fromString("11000000-0000-0000-0000-000000000099")));
+
+        mvc.perform(get(FINDING_READ_PATH).session(session))
+                .andExpect(status().isForbidden());
+    }
+
+    private MockHttpSession loginAndReturnSession() throws Exception {
+        MvcResult login = mvc.perform(post(LOGIN_PATH)
+                        .with(validCsrf())
+                        .contentType("application/json")
+                        .content("{\"loginKey\":\"operator-1\",\"password\":\"synthetic-pass\",\"tenantCode\":\"north-plant\"}"))
+                .andExpect(status().isNoContent())
+                .andReturn();
+        return (MockHttpSession) login.getRequest().getSession(false);
+    }
+
+    @Test
     void loginRequiresCsrfBeforeCredentialAuthentication() throws Exception {
         mvc.perform(post(LOGIN_PATH)
                         .contentType("application/json")
                         .content("{\"loginKey\":\"operator-1\",\"password\":\"synthetic-pass\",\"tenantCode\":\"north-plant\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+    }
+
+    @Test
+    void malformedJsonReturnsGenericBadRequestWithoutParserDetails() throws Exception {
+        assertLoginBodyRejected("{malformed");
+    }
+
+    @Test
+    void wrongJsonFieldTypesReturnGenericBadRequestWithoutParserDetails() throws Exception {
+        assertLoginBodyRejected("{\"loginKey\":[],\"password\":\"synthetic-pass\",\"tenantCode\":\"north-plant\"}");
+        assertLoginBodyRejected("{\"loginKey\":\"operator-1\",\"password\":{},\"tenantCode\":\"north-plant\"}");
+    }
+
+    private void assertLoginBodyRejected(String body) throws Exception {
+        MvcResult result = mvc.perform(post(LOGIN_PATH)
+                        .with(validCsrf())
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.message").value("The login request is invalid"))
+                .andReturn();
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain("MismatchedInput", "JacksonException", "line", "column", "synthetic-pass");
     }
 
     @Test
@@ -159,9 +230,11 @@ class IdentityAuthenticationHttpTest {
     @RestController
     static class TestEndpoints {
         private final SessionContextResolver resolver;
+        private final EntityReadAccessPolicy readAccessPolicy;
 
-        TestEndpoints(SessionContextResolver resolver) {
+        TestEndpoints(SessionContextResolver resolver, EntityReadAccessPolicy readAccessPolicy) {
             this.resolver = resolver;
+            this.readAccessPolicy = readAccessPolicy;
         }
 
         @GetMapping(CONTEXT_PATH)
@@ -174,35 +247,68 @@ class IdentityAuthenticationHttpTest {
             result.put("memberId", current.memberId().toString());
             return result;
         }
+
+        @GetMapping(FINDING_READ_PATH)
+        ResponseEntity<Map<String, Object>> findingRead() {
+            CurrentTenantContext current = resolver.currentTenant();
+            Optional<EntityReadGrant> grant = readAccessPolicy.resolveEntityReadGrant(current, "finding");
+            return grant.<ResponseEntity<Map<String, Object>>>map(value -> ResponseEntity.ok(
+                    Map.of("tenantId", value.tenantId().toString(), "organizations", value.organizationIds())))
+                    .orElseGet(() -> ResponseEntity.status(403).body(Map.of("code", "ACTION_DENIED")));
+        }
     }
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        /** Exercise the production provider/filter wiring against in-memory synthetic identity rows. */
         @Bean
-        AuthenticationProvider localPasswordAuthenticationProvider() {
-            return new AuthenticationProvider() {
+        AuthenticationProvider localPasswordAuthenticationProvider(PasswordEncoder passwordEncoder) {
+            AccountPasswordCredentialReadRepository credentials = loginKey ->
+                    "operator-1".equals(loginKey)
+                            ? Optional.of(new LocalPasswordCredential(ACTOR_ID, ACCOUNT_ID, "ACTIVE", "ACTIVE",
+                                    passwordEncoder.encode("synthetic-pass")))
+                            : Optional.empty();
+            TenantLoginContextResolver tenantContexts = (accountId, tenantCode) ->
+                    ACCOUNT_ID.equals(accountId) && "north-plant".equals(tenantCode)
+                            ? Optional.of(new TenantLoginContext(TENANT_ID, MEMBER_ID,
+                                    "ACTIVE", "ACTIVE", 17L, 23L))
+                            : Optional.empty();
+            TransactionOperations transactions = new TransactionOperations() {
                 @Override
-                public Authentication authenticate(Authentication authentication) throws AuthenticationException {
-                    char[] credentials = (char[]) authentication.getCredentials();
-                    try {
-                        if (Arrays.equals(credentials, "wrong-pass".toCharArray())) {
-                            throw new org.springframework.security.authentication.BadCredentialsException(
-                                    "private account detail for operator-1");
-                        }
-                    } finally {
-                        Arrays.fill(credentials, '\0');
-                    }
-                    return UsernamePasswordAuthenticationToken.authenticated(
-                            VerifiedSessionPrincipalTestFixture.create(
-                                    ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L),
-                            null, java.util.List.<GrantedAuthority>of());
-                }
-
-                @Override
-                public boolean supports(Class<?> authentication) {
-                    return LocalPasswordAuthenticationToken.class.isAssignableFrom(authentication);
+                public <T> T execute(org.springframework.transaction.support.TransactionCallback<T> action) {
+                    return action.doInTransaction(new SimpleTransactionStatus());
                 }
             };
+            return new LocalPasswordAuthenticationProvider(credentials, tenantContexts, passwordEncoder, transactions);
         }
+
+        @Bean
+        AuthorizationSnapshotState authorizationSnapshotState() {
+            return new AuthorizationSnapshotState();
+        }
+
+        @Bean
+        PersistentEntityReadAuthorizationRepository syntheticAuthorizationRepository(
+                AuthorizationSnapshotState state) {
+            return (context, permissionCode) -> Optional.of(state.snapshot.get());
+        }
+
+        @Bean
+        EntityReadAccessPolicy entityReadAccessPolicy(PersistentEntityReadAuthorizationRepository repository) {
+            return new PersistentEntityReadAccessPolicy(repository);
+        }
+    }
+
+    static final class AuthorizationSnapshotState {
+        private final AtomicReference<FindingReadAuthorizationSnapshot> snapshot =
+                new AtomicReference<>(snapshot("ACTIVE", "HUMAN", ACTOR_ID, ACCOUNT_ID));
+    }
+
+    private static FindingReadAuthorizationSnapshot snapshot(
+            String principalStatus, String principalKind, UUID principalId, UUID principalAccountId) {
+        return new FindingReadAuthorizationSnapshot(
+                principalId, principalAccountId, principalKind, principalStatus,
+                "ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of(
+                        UUID.fromString("31000000-0000-0000-0000-000000000001")));
     }
 }

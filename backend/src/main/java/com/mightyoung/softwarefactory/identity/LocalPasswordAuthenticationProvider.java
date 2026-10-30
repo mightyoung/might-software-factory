@@ -20,6 +20,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import java.util.UUID;
 
 /**
@@ -31,6 +32,8 @@ public final class LocalPasswordAuthenticationProvider implements Authentication
 
     private static final String GENERIC_FAILURE = "Invalid credentials or account context";
     private static final UUID UNKNOWN_ACCOUNT_ID = new UUID(0L, 0L);
+    private static final Pattern ACCEPTED_PASSWORD_HASH =
+            Pattern.compile("\\{bcrypt\\}\\$2[aby]\\$1[2-6]\\$[./A-Za-z0-9]{53}");
 
     private final AccountPasswordCredentialReadRepository credentials;
     private final TenantLoginContextResolver tenantContextResolver;
@@ -119,6 +122,10 @@ public final class LocalPasswordAuthenticationProvider implements Authentication
     }
 
     private boolean matchesPassword(char[] submittedPassword, String encodedPassword) {
+        if (encodedPassword == null || !ACCEPTED_PASSWORD_HASH.matcher(encodedPassword).matches()) {
+            passwordEncoder.matches(CharBuffer.wrap(submittedPassword), dummyPasswordHash);
+            return false;
+        }
         try {
             return passwordEncoder.matches(CharBuffer.wrap(submittedPassword), encodedPassword);
         } catch (IllegalArgumentException malformedStoredHash) {

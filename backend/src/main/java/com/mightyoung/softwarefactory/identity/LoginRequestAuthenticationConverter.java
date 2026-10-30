@@ -5,6 +5,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.AuthenticationConverter;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -51,8 +52,8 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
                     body.loginKey().strip(), password, body.tenantCode().strip());
         } catch (InvalidLoginRequestException exception) {
             throw exception;
-        } catch (IOException | InvalidMediaTypeException exception) {
-            throw new InvalidLoginRequestException(exception);
+        } catch (JacksonException | IOException | InvalidMediaTypeException exception) {
+            throw new InvalidLoginRequestException();
         }
     }
 

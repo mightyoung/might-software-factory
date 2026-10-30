@@ -30,6 +30,10 @@ public final class PersistentEntityReadAccessPolicy implements EntityReadAccessP
                 .loadFindingReadSnapshot(context, FINDING_READ_PERMISSION)
                 .orElse(null);
         if (snapshot == null
+                || !context.actorId().equals(snapshot.principalId())
+                || !context.accountId().equals(snapshot.principalAccountId())
+                || !"HUMAN".equals(snapshot.principalKind())
+                || !"ACTIVE".equals(snapshot.principalStatus())
                 || !"ACTIVE".equals(snapshot.accountStatus())
                 || !"ACTIVE".equals(snapshot.tenantStatus())
                 || !"ACTIVE".equals(snapshot.memberStatus())

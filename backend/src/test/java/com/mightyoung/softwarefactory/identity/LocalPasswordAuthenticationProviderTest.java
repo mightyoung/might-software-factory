@@ -5,7 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
@@ -13,6 +14,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -24,7 +26,8 @@ class LocalPasswordAuthenticationProviderTest {
     private static final UUID TENANT_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
     private static final UUID MEMBER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
 
-    private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    private final PasswordEncoder passwordEncoder = new DelegatingPasswordEncoder(
+            "bcrypt", Map.of("bcrypt", new BCryptPasswordEncoder(12)));
     private final FakeCredentials credentials = new FakeCredentials();
     private final FakeTenantResolver tenantResolver = new FakeTenantResolver();
     private final TransactionOperations transactions = new TransactionOperations() {
@@ -87,6 +90,20 @@ class LocalPasswordAuthenticationProviderTest {
         BadCredentialsException failure = failureFor("synthetic-pass");
 
         assertThat(failure.getMessage()).isEqualTo("Invalid credentials or account context");
+    }
+
+    @Test
+    void rejectsNoopAndWeakBcryptHashesEvenWhenTheyWouldMatchTheSubmittedPassword() {
+        for (String hash : new String[] {
+                "{noop}synthetic-pass",
+                "{bcrypt}" + new BCryptPasswordEncoder(10).encode("synthetic-pass")
+        }) {
+            credentials.value = Optional.of(credential("ACTIVE", "ACTIVE", hash));
+
+            BadCredentialsException failure = failureFor("synthetic-pass");
+
+            assertThat(failure.getMessage()).isEqualTo("Invalid credentials or account context");
+        }
     }
 
     @Test

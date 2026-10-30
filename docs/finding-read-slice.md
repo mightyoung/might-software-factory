@@ -1,6 +1,6 @@
 # 隐患台账只读切片
 
-状态：只读 HTTP handler、服务、finding 查询及 V2 migration 已在专用 `might_software_factory_test` 库实测。身份/成员/组织/角色读取策略和 V3 schema migration 已写入代码，并通过本地 backend 单元与契约测试。V3 未应用到任何数据库，也没有配置其运行时读取权限。生产登录签发仍未实现；本文件不表示生产闭环或真实租户隔离已经验收。
+状态：只读 HTTP handler、服务、finding 查询及 V2 migration 已在专用 `might_software_factory_test` 库实测。身份/成员/组织/角色读取策略和 V3 schema migration 已写入代码；本地密码登录 provider、HTTP 安全接线及 V4 migration 也已形成。V3/V4 未应用到任何数据库，也没有配置身份/授权表运行权限。登录和授权的本地合成数据测试不代表真实数据库会话或生产租户隔离已经验收。
 
 ## 本地实现
 
@@ -12,17 +12,19 @@
 
 ## 身份、会话和 CSRF 边界
 
-`SessionContextResolver` 只接受 identity 模块签发的 principal 类型；无认证或普通字符串 principal 返回 `401 AUTH_REQUIRED`。principal 保存 actor、account、tenant、member ID 及 tenant/member `auth_epoch` 快照；构造器不是 public，唯一显式构造夹具位于 test source。生产登录/身份验证 provider 尚未实现，Security 配置禁用 form login、HTTP Basic 和默认生成用户，因此当前没有生产途径创建此 principal。
+`POST /api/v1/auth/login` 由 `LocalPasswordAuthenticationProvider` 校验本地密码、账号与 HUMAN principal，并解析所选租户的有效成员后签发 `VerifiedSessionPrincipal`；表单登录、HTTP Basic 和 Spring 默认开发用户均禁用。principal 保存 actor、account、tenant、member ID 及 tenant/member `auth_epoch` 快照；构造器不是 public。每次 finding 读取授权还会按 session actor 查询当前 principal，要求其仍为同 account 的 ACTIVE HUMAN，因此 principal 停用或 actor/account 绑定不符会拒绝旧 session。`credential_version` 尚未纳入 principal 或每请求授权校验；启用改密/重置前必须先实现版本捕获与每请求失效检查。
 
-权限模块的 production `EntityReadAccessPolicy` 通过 identity、tenancy、directory 的公开读取接口，以及自身角色授权查询，从账号、租户、成员、当前组织关系、角色授予、动作权限和数据范围读取授权。数据库查询在只读 `REPEATABLE_READ` 事务内设置 `app.tenant_id`，并使用显式租户连接条件。账号/租户/成员任一非 `ACTIVE`、session epoch 过期、找不到成员关系、权限缺失或组织范围为空都拒绝；finding 只接受 `finding.read`。`DEPT` 解析当前直接组织成员关系，`DEPT_TREE` 再递归包含有效子组织，`EXPLICIT` 取 `scope_org`；组织授予按成员当前直接组织关系匹配，`SELF` 与 `RELATION` 暂不能表示为 finding 的组织过滤条件，因此不会授予范围。V3 将当前可解释的 scope definition 限制为 `{}`，避免忽略未知 JSON 条件。新 migration 未执行前，相关表不可用会导致请求依赖不可用并拒绝访问。没有伪造用户头、租户头或匿名演示登录路径。
+权限模块的 `EntityReadAccessPolicy` 通过 identity、tenancy、directory 的公开读取接口，以及自身角色授权查询，从 actor principal、账号、租户、成员、当前组织关系、角色授予、动作权限和数据范围读取授权。数据库查询在只读 `REPEATABLE_READ` 事务内设置 `app.tenant_id`，并使用显式租户连接条件。principal 必须按 session actor 对应为 ACTIVE HUMAN，且关联 account 必须等于 session account；账号/租户/成员任一非 `ACTIVE`、session epoch 过期、找不到成员关系、权限缺失或组织范围为空都拒绝；finding 只接受 `finding.read`。`DEPT` 解析当前直接组织成员关系，`DEPT_TREE` 再递归包含有效子组织，`EXPLICIT` 取 `scope_org`；组织授予按成员当前直接组织关系匹配，`SELF` 与 `RELATION` 暂不能表示为 finding 的组织过滤条件，因此不会授予范围。V3 将当前可解释的 scope definition 限制为 `{}`，避免忽略未知 JSON 条件。新 migration 未执行前，相关表不可用会导致请求依赖不可用并拒绝访问。没有伪造用户头、租户头或匿名演示登录路径。
 
-`POST` 受 CSRF 保护，使用 `XSRF-TOKEN` cookie 与 `X-XSRF-TOKEN` header；CSRF cookie 为 Secure、SameSite=Lax，且可由同源浏览器读取。SESSION cookie 使用 `SESSION` 名称并配置 Secure、HttpOnly、SameSite=Lax，Spring Session timeout 为 30 分钟。身份登录轮换和实际持久会话恢复仍待真实身份 provider 集成。
+`POST` 受 CSRF 保护，使用 `XSRF-TOKEN` cookie 与 `X-XSRF-TOKEN` header；CSRF cookie 为 Secure、SameSite=Lax，且可由同源浏览器读取。SESSION cookie 使用 `SESSION` 名称并配置 Secure、HttpOnly、SameSite=Lax，Spring Session timeout 为 30 分钟。HTTP 测试通过真实 provider 和合成凭证/成员仓储验证登录、session ID 轮换及停用后拒绝读取；实际 JDBC Session 存储恢复与真实身份表查询仍待数据库联调。
 
 ## 数据库 migration 与权限
 
 新增 `backend/src/main/resources/db/migration/V2__dualprevention_finding_read.sql`：`public.finding`、租户内业务号唯一约束、状态/等级/版本检查、读取索引、RLS ENABLE/FORCE 和基于 `app.tenant_id` 的 tenant policy。`organization_id` 是内部数据范围列，不在 API 字段目录中。source event、risk 等跨模块关联目前只有 ID，没有引用到尚未发布的外模块表。
 
 新增 `backend/src/main/resources/db/migration/V3__identity_directory_authorization_read.sql`：身份、成员、组织、岗位/群组、角色、权限和 scope 读取所需的逻辑表及租户 RLS。该脚本仅作为本地 schema 变更，不曾执行；没有账号/角色/权限数据、登录凭证、角色授予变更 API、应用开通读取、授权来源撤销解析器或数据库授权。V3 也未给 `finding.organization_id` 添加组织复合外键，既有 finding 行尚无组织迁移/回填计划。
+
+新增 `backend/src/main/resources/db/migration/V4__identity_password_login.sql`：规范化 login key 索引，以及 `principal`、`credential` 表和租户登录 code 的 SELECT policy。此 migration 只定义结构，不创建账号、密码或授权数据，也未在任何数据库执行。
 
 默认运行配置只使用 `LAN_PG_APP_JDBC_URL` / `LAN_PG_APP_USERNAME` / `LAN_PG_APP_PASSWORD`，并关闭 runtime Flyway。P0 兼容测试 profile 仍显式使用自己的迁移配置与 `flyway_schema_history`；应用 migration 使用独立的 `flyway_schema_history_app`，避免 P0 probe migration 与业务 migration 混为一条历史。
 
@@ -53,8 +55,8 @@
 
 ## 当前阻塞与验证边界
 
-生产登录/身份 provider、应用开通读取、权限目录/成员/角色数据种子与变更流程、grant source 注册/撤销解析器、独立 migration 执行，以及运行身份对身份/授权表的最小 `SELECT` 权限均未完成。新增授权策略的单元和契约测试已在本地通过；真实 PostgreSQL 15.4 测试库的既有 RLS/query/detail 集成探针仍使用 test-only principal 和测试授权策略，没有验证 V3、真实身份到租户绑定或 HTTP session。因此不能据此宣称生产用户已获授权或租户隔离已经验收。
+本地登录 provider 和 `EntityReadAccessPolicy` 已实现，但 V3/V4 未迁移，也未验证实际运行角色对身份/授权表的权限、JDBC Session 持久化或真实身份到租户绑定。应用开通读取、权限/角色数据维护、grant source 注册/撤销解析器、账号初始化/邀请/重置、失败限流/短期锁定及 `credential_version` 会话撤销均未完成。真实 PostgreSQL 15.4 测试库的 finding RLS/query/detail 探针仍使用 test-only principal 和授权策略，不能据此宣称真实身份会话、生产授权或租户隔离已验收。
 
-无数据库检查使用 test-only 安全上下文夹具、显式 fake repository/policy 和 jOOQ MockDataProvider。已有测试证明 HTTP 状态码、CSRF/输入白名单、tenant/org 参数绑定和 SQL 形状，不运行 PostgreSQL parser、RLS policy、连接池回收或真实身份会话。
+本地 HTTP 登录测试使用实际 `LocalPasswordAuthenticationProvider` 与合成凭证/租户仓储；授权变化测试使用合成授权快照。jOOQ MockDataProvider 检查查询形状和参数。它们不运行 PostgreSQL parser、RLS policy、连接池回收、真实身份表查询或 JDBC Session 持久化。
 
-固定基础提交 `a10f7e61ac5a7051307ae313279277a9a0006623` 的原工作区测试记录：`./mvnw -pl backend -P lan-postgres-compatibility -Dit.test=FindingPostgresReadIT verify -q` 的 Surefire 35 项与 Failsafe `FindingPostgresReadIT` 1 项通过，失败、错误、跳过均为 0。集成测试检查同一低权限连接的列表与详情、跨租户行级策略和连接内 tenant context 清理，并清理后确认合成行数为 0。该记录不覆盖本分支的 V3 或授权 resolver。本分支 backend 单元测试命令 `./mvnw -pl backend test -q` 共 47 项通过，失败、错误、跳过均为 0。兼容 profile 的集成测试源码仅编译命令为 `./mvnw -pl backend -P lan-postgres-compatibility -DskipTests -DskipITs test-compile`，成功生成 `backend/target/test-classes/com/mightyoung/softwarefactory/FindingPostgresReadIT.class`；这一步没有运行集成测试或连接数据库。两项本地验证均不覆盖 V3 的 PostgreSQL 执行、RLS、真实身份会话或应用运行角色授权。未运行 Redis、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。JDBC Session 持久化和生产身份仍未通过真实数据库验证。
+固定基础提交 `a10f7e61ac5a7051307ae313279277a9a0006623` 的原工作区测试记录：`./mvnw -pl backend -P lan-postgres-compatibility -Dit.test=FindingPostgresReadIT verify -q` 的 Surefire 35 项与 Failsafe `FindingPostgresReadIT` 1 项通过，失败、错误、跳过均为 0。该记录不覆盖本分支的 V3/V4 或生产 provider。本分支复核后的 `./mvnw -pl backend test -q` 共 69 项通过，失败、错误、跳过均为 0；HTTP 登录使用真实 provider 与合成仓储。兼容 profile 的集成测试源码仅编译命令为 `./mvnw -pl backend -P lan-postgres-compatibility -DskipTests -DskipITs test-compile`，会编译集成测试和共享夹具；这一步不运行集成测试或连接数据库。此分支本地验证不覆盖 V3/V4 的 PostgreSQL 执行、RLS、真实身份表、JDBC Session 或应用运行角色授权。未运行 Redis、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。

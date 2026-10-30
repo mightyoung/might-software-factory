@@ -4,6 +4,8 @@ import com.mightyoung.softwarefactory.directory.MemberDirectoryReadRepository;
 import com.mightyoung.softwarefactory.directory.MemberDirectorySnapshot;
 import com.mightyoung.softwarefactory.identity.AccountStatusReadRepository;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
+import com.mightyoung.softwarefactory.identity.PrincipalStatus;
+import com.mightyoung.softwarefactory.identity.PrincipalStatusReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantMembershipReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantMembershipState;
 import org.jooq.DSLContext;
@@ -25,6 +27,7 @@ public final class PersistentFindingReadAuthorizationRepository
 
     private final DSLContext dsl;
     private final AccountStatusReadRepository accountStatusRepository;
+    private final PrincipalStatusReadRepository principalStatusRepository;
     private final TenantMembershipReadRepository tenantMembershipRepository;
     private final MemberDirectoryReadRepository directoryRepository;
     private final RoleScopeReadRepository roleScopeRepository;
@@ -33,12 +36,14 @@ public final class PersistentFindingReadAuthorizationRepository
     public PersistentFindingReadAuthorizationRepository(
             DSLContext dsl,
             AccountStatusReadRepository accountStatusRepository,
+            PrincipalStatusReadRepository principalStatusRepository,
             TenantMembershipReadRepository tenantMembershipRepository,
             MemberDirectoryReadRepository directoryRepository,
             RoleScopeReadRepository roleScopeRepository,
             PlatformTransactionManager transactionManager) {
         this.dsl = dsl;
         this.accountStatusRepository = accountStatusRepository;
+        this.principalStatusRepository = principalStatusRepository;
         this.tenantMembershipRepository = tenantMembershipRepository;
         this.directoryRepository = directoryRepository;
         this.roleScopeRepository = roleScopeRepository;
@@ -53,6 +58,10 @@ public final class PersistentFindingReadAuthorizationRepository
         return readTransaction.execute(status -> {
             setLocalTenant(context.tenantId());
 
+            PrincipalStatus principal = principalStatusRepository.findByActorId(context.actorId()).orElse(null);
+            if (principal == null) {
+                return Optional.empty();
+            }
             String accountStatus = accountStatusRepository.findStatus(context.accountId()).orElse(null);
             TenantMembershipState membership = tenantMembershipRepository.findCurrentMembership(
                     context.tenantId(), context.accountId(), context.memberId()).orElse(null);
@@ -61,7 +70,7 @@ public final class PersistentFindingReadAuthorizationRepository
             }
 
             Set<UUID> organizationIds = Set.of();
-            if (canResolveRoles(context, accountStatus, membership)) {
+            if (canResolveRoles(context, principal, accountStatus, membership)) {
                 MemberDirectorySnapshot directory = directoryRepository.findCurrentMemberships(
                         context.tenantId(), context.memberId());
                 var roleScopes = roleScopeRepository.findActiveScopes(
@@ -71,6 +80,10 @@ public final class PersistentFindingReadAuthorizationRepository
             }
 
             return Optional.of(new FindingReadAuthorizationSnapshot(
+                    principal.principalId(),
+                    principal.accountId(),
+                    principal.kind(),
+                    principal.status(),
                     accountStatus,
                     membership.tenantStatus(),
                     membership.memberStatus(),
@@ -82,9 +95,14 @@ public final class PersistentFindingReadAuthorizationRepository
 
     private static boolean canResolveRoles(
             CurrentTenantContext context,
+            PrincipalStatus principal,
             String accountStatus,
             TenantMembershipState membership) {
-        return "ACTIVE".equals(accountStatus)
+        return context.actorId().equals(principal.principalId())
+                && context.accountId().equals(principal.accountId())
+                && "HUMAN".equals(principal.kind())
+                && "ACTIVE".equals(principal.status())
+                && "ACTIVE".equals(accountStatus)
                 && "ACTIVE".equals(membership.tenantStatus())
                 && "ACTIVE".equals(membership.memberStatus())
                 && membership.tenantAuthEpoch() == context.tenantAuthEpoch()

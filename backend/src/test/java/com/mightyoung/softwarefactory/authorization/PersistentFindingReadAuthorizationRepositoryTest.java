@@ -4,6 +4,8 @@ import com.mightyoung.softwarefactory.directory.MemberDirectoryReadRepository;
 import com.mightyoung.softwarefactory.directory.MemberDirectorySnapshot;
 import com.mightyoung.softwarefactory.identity.AccountStatusReadRepository;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
+import com.mightyoung.softwarefactory.identity.PrincipalStatus;
+import com.mightyoung.softwarefactory.identity.PrincipalStatusReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantMembershipReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantMembershipState;
 import org.jooq.DSLContext;
@@ -97,6 +99,10 @@ class PersistentFindingReadAuthorizationRepositoryTest {
 
         PersistentFindingReadAuthorizationRepository repository = repository(
                 dsl,
+                actorId -> {
+                    assertThat(actorId).isEqualTo(ACTOR_ID);
+                    return Optional.of(activeHumanPrincipal());
+                },
                 accountId -> {
                     assertThat(accountId).isEqualTo(ACCOUNT_ID);
                     return Optional.of("ACTIVE");
@@ -111,6 +117,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
                 new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L), "finding.read");
 
         assertThat(snapshot).contains(new FindingReadAuthorizationSnapshot(
+                ACTOR_ID, ACCOUNT_ID, "HUMAN", "ACTIVE",
                 "ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L,
                 Set.of(ORG_ID, CHILD_ORG_ID, EXPLICIT_ORG_ID)));
         assertThat(settings).containsExactly(List.of("app.tenant_id", TENANT_ID.toString()));
@@ -147,6 +154,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
 
         PersistentFindingReadAuthorizationRepository repository = repository(
                 dsl,
+                ignored -> Optional.of(activeHumanPrincipal()),
                 ignored -> Optional.of("ACTIVE"),
                 (tenantId, accountId, memberId) -> Optional.of(
                         new TenantMembershipState("ACTIVE", "ACTIVE", 18L, 23L)),
@@ -168,13 +176,18 @@ class PersistentFindingReadAuthorizationRepositoryTest {
 
     private static PersistentFindingReadAuthorizationRepository repository(
             DSLContext dsl,
+            PrincipalStatusReadRepository principalStatus,
             AccountStatusReadRepository accountStatus,
             TenantMembershipReadRepository tenancy,
             MemberDirectoryReadRepository directory,
             RoleScopeReadRepository roleScopes,
             CapturingTransactionManager transactionManager) {
         return new PersistentFindingReadAuthorizationRepository(
-                dsl, accountStatus, tenancy, directory, roleScopes, transactionManager);
+                dsl, accountStatus, principalStatus, tenancy, directory, roleScopes, transactionManager);
+    }
+
+    private static PrincipalStatus activeHumanPrincipal() {
+        return new PrincipalStatus(ACTOR_ID, ACCOUNT_ID, "HUMAN", "ACTIVE");
     }
 
     private static <T> MockResult singleValue(DSLContext dsl, String key, Class<T> type, T value) {

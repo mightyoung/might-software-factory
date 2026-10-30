@@ -5,6 +5,10 @@ import java.util.UUID;
 
 /** One repeatable-read view of the persisted identity state and finding row scope. */
 public record FindingReadAuthorizationSnapshot(
+        UUID principalId,
+        UUID principalAccountId,
+        String principalKind,
+        String principalStatus,
         String accountStatus,
         String tenantStatus,
         String memberStatus,

@@ -96,7 +96,7 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 
 浏览器使用 Secure、HttpOnly、SameSite Cookie，启用 CSRF，登录轮换 session ID；凭证不放 localStorage。同域反代 /api 优先，前后端分离指代码与部署边界，不要求跨站 Cookie。设计默认空闲 30 分钟、最长 12 小时，管理员敏感动作再认证；为可配置默认而非法规要求。退出、改密、成员停用、权限撤销可撤相应会话/安全版本。SSO 用 OIDC Client；不自行写授权服务器。只有实际联合身份/MFA 管理需求出现时引入 Keycloak 或既有企业 IdP。
 
-本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member 和 auth_epoch 放入 JDBC session。租户 code 是选择条件，不是可信 tenant ID。V4 迁移仍未应用；本切片没有账号/密码初始化、邀请与重置、失败限流/短期锁定或真实 Session JDBC/数据库联调，因此尚不能作为可投产登录配置。
+本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member 和 auth_epoch 放入 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。V4 迁移仍未应用；本切片没有账号/密码初始化、邀请与重置、失败限流/短期锁定或真实 Session JDBC/数据库联调，因此尚不能作为可投产登录配置。`credential_version` 尚未保存到 session 或按请求核验；启用改密/重置前，必须先将该版本纳入已签发会话并在授权读取时核验，旧版本须拒绝访问。
 
 ## 租户与组织
 
