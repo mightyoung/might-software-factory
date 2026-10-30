@@ -1,7 +1,11 @@
 package com.mightyoung.softwarefactory.identity;
 
 import jakarta.servlet.http.HttpSession;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -44,6 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = AuthenticationSessionController.class)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Import({SecurityConfiguration.class, SessionContextResolver.class,
         IdentityAuthenticationHttpTest.TestEndpoints.class,
         IdentityAuthenticationHttpTest.TestDependencies.class})
@@ -65,6 +70,11 @@ class IdentityAuthenticationHttpTest {
 
     @Autowired
     private AuthorizationSnapshotState authorizationSnapshotState;
+
+    @BeforeEach
+    void resetAuthorizationSnapshot() {
+        authorizationSnapshotState.snapshot.set(snapshot("ACTIVE", "HUMAN", ACTOR_ID, ACCOUNT_ID));
+    }
 
     @Test
     void csrfBootstrapIsPublicAndIssuesTheDoubleSubmitCookie() throws Exception {
@@ -106,6 +116,7 @@ class IdentityAuthenticationHttpTest {
     }
 
     @Test
+    @Order(2)
     void disabledPrincipalRevokesFindingReadFromAnAlreadyIssuedSession() throws Exception {
         MockHttpSession session = loginAndReturnSession();
 
@@ -119,6 +130,7 @@ class IdentityAuthenticationHttpTest {
     }
 
     @Test
+    @Order(1)
     void principalAccountMismatchRevokesFindingReadFromAnAlreadyIssuedSession() throws Exception {
         MockHttpSession session = loginAndReturnSession();
 
