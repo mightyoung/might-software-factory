@@ -59,7 +59,7 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 | audit_ops | audit_event、安全事件、trace 关联 | 查审计、查有效授权原因、合规导出和运维健康 |
 | business_* | 各业务自己的聚合表 | 业务校验和状态变更，调用公共接口而非复制规则 |
 
-核心调用上下文固定为 actorId、tenantId、memberId、principalType、人类授权方、requestId、traceId；从验证过的会话/令牌得到，禁止相信客户端随意传来的 tenantId 或角色。
+核心调用上下文固定为 actorId、accountId、tenantId、memberId、principalType、tenant/member auth_epoch、人类授权方、requestId、traceId；从验证过的会话/令牌得到，禁止相信客户端随意传来的 tenantId 或角色。actorId 指审计主体，accountId 用于校验全局账号状态，两者不能默认相等。
 
 同步事务用于必须一起成功的状态：业务提交状态 + 审批实例关联、角色变更 + 安全版本号 + 审计、组织移动 + 来源授权调整。审批同库同事务管理器时参与同一事务；必须以回滚测试证明，不能只靠注解假设。
 
@@ -95,6 +95,8 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 首期使用成熟 Spring Security 认证与密码哈希接口，禁共享默认密码；邀请和重置使用短时一次性随机令牌，仅存哈希，消费原子化。失败限流与短期锁定，避免以账号永久锁定制造拒绝服务。登录响应避免暴露账号是否存在。
 
 浏览器使用 Secure、HttpOnly、SameSite Cookie，启用 CSRF，登录轮换 session ID；凭证不放 localStorage。同域反代 /api 优先，前后端分离指代码与部署边界，不要求跨站 Cookie。设计默认空闲 30 分钟、最长 12 小时，管理员敏感动作再认证；为可配置默认而非法规要求。退出、改密、成员停用、权限撤销可撤相应会话/安全版本。SSO 用 OIDC Client；不自行写授权服务器。只有实际联合身份/MFA 管理需求出现时引入 Keycloak 或既有企业 IdP。
+
+本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member 和 auth_epoch 放入 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。V4 迁移仍未应用；本切片没有账号/密码初始化、邀请与重置、失败限流/短期锁定或真实 Session JDBC/数据库联调，因此尚不能作为可投产登录配置。`credential_version` 尚未保存到 session 或按请求核验；启用改密/重置前，必须先将该版本纳入已签发会话并在授权读取时核验，旧版本须拒绝访问。
 
 ## 租户与组织
 
@@ -143,6 +145,8 @@ Agent 仅能调用登记动作，服务身份和代表用户的授权分开记�
 首期私有持久目录，不在 Web 静态目录；StoragePort 为唯一存储接口。文件内容不能省略持久化和备份，即使不部署“文件服务器”。对象随机键不采用用户路径；上传隔离、大小/类型/签名验证、扫描通过再关联业务。扫描不可用时保持隔离，不默认为安全；离线演示仅允许受限格式和清晰提示。下载和预览执行关联资源权限，HTML/SVG 等主动内容不直接同源执行，必要时附件下载或隔离域。
 
 数据库与文件系统不能原子提交：状态为 UPLOADING、QUARANTINED、READY、DELETING、FAILED，上传先临时对象、确认摘要后幂等标 READY；清理孤儿文件有宽限期、重试和日志。删除先撤访问再异步清对象，不能凭失效业务外键误删仍被引用的对象。[OWASP 上传指南](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)。
+
+隐患整改使用文件证据时，`evidence_item.verification_level=CONTENT` 只能作为投影，必须同时取得可信服务端核验回执，回执绑定tenant、fileId、SHA-256摘要与存储版本；提交还要证明`evidence_item.sha256`、文件元数据摘要和回执摘要相同。提交时同一事务写入不可变的`remediation_submission_evidence`快照，固定file_link_id、file_id、摘要、storage_version、receipt_id及verifier/key/policy签发上下文。数据库锁住提交和证据集，计算全部证据项的规范有序ID manifest/count，校验完整后才允许一次性封存；延迟约束拒绝未封存的提交，封存后拒绝新增快照或扩展该证据集。验收核对持久manifest/count并按receipt_id校验，读取只能指定快照中的不可变storage_version，不得按file_id读取latest。数据库行锁不等于对象存储不可变性。核验器未连接、文件状态非READY、引用/归属无效或回执不匹配时拒绝提交；V6加入快照、只追加、封存和重绑定守卫。本地当前尚未接入真实StoragePort/核验器，也没有版本读取端点；当前生产适配器继续失败关闭。
 
 后续 S3 适配器复用权限接口。签名 URL 短时且不进日志/永久字段，敏感下载可走代理；已签链接在过期前可能仍可用，不能承诺撤权限即全部失效。采用不重复 object key 防上传覆盖。[S3 官方语义](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)。
 
