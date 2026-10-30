@@ -146,6 +146,8 @@ Agent 仅能调用登记动作，服务身份和代表用户的授权分开记�
 
 数据库与文件系统不能原子提交：状态为 UPLOADING、QUARANTINED、READY、DELETING、FAILED，上传先临时对象、确认摘要后幂等标 READY；清理孤儿文件有宽限期、重试和日志。删除先撤访问再异步清对象，不能凭失效业务外键误删仍被引用的对象。[OWASP 上传指南](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)。
 
+隐患整改使用文件证据时，`evidence_item.verification_level=CONTENT` 只能作为投影，必须同时取得可信服务端核验回执，回执绑定tenant、fileId、SHA-256摘要与存储版本；仅数据库字段或客户端声明不能建立可信等级。核验器未连接、文件状态非READY、引用/归属无效或回执不匹配时拒绝提交；本地当前尚未接入真实StoragePort/核验器。
+
 后续 S3 适配器复用权限接口。签名 URL 短时且不进日志/永久字段，敏感下载可走代理；已签链接在过期前可能仍可用，不能承诺撤权限即全部失效。采用不重复 object key 防上传覆盖。[S3 官方语义](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)。
 
 ## 字典和配置

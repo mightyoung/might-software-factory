@@ -21,6 +21,7 @@ class ModuleArchitectureTest {
             "Workflow",
             "Support services",
             "Audit and operations",
+            "File evidence access",
             "Dual-prevention business sample"
     );
 
@@ -33,9 +34,10 @@ class ModuleArchitectureTest {
             "Workflow", Set.of("Authorization", "Identity and authentication", "Tenancy"),
             "Support services", Set.of("Authorization", "Tenancy"),
             "Audit and operations", Set.of("Authorization", "Identity and authentication", "Tenancy"),
+            "File evidence access", Set.of(),
             "Dual-prevention business sample", Set.of(
                     "Application registry", "Audit and operations", "Authorization", "Directory",
-                    "Identity and authentication", "Support services", "Tenancy", "Workflow")
+                    "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")
     );
 
     @Test

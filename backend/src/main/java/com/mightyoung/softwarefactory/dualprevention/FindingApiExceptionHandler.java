@@ -9,6 +9,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRuleException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
+import com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException;
 import com.mightyoung.softwarefactory.workflow.WorkflowEngineUnavailableException;
 import com.mightyoung.softwarefactory.workflow.WorkflowResourceNotVisibleException;
 import com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException;
@@ -82,7 +83,7 @@ public final class FindingApiExceptionHandler {
     }
 
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
-            WorkflowEngineUnavailableException.class})
+            WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
                 "The finding command could not be completed safely", true, List.of());

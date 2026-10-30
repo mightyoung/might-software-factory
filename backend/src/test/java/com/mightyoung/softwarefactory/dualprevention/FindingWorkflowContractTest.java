@@ -112,6 +112,30 @@ class FindingWorkflowContractTest {
     }
 
     @Test
+    void fileEvidenceMetadataMigrationAddsOnlyTenantScopedMetadataAndLinks() throws Exception {
+        String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
+                "V6__file_evidence_reference_metadata.sql"));
+        String compactMigration = migration.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        assertThat(compactMigration).contains(
+                "create table public.file_object",
+                "owner_member_id uuid not null",
+                "owner_actor_id uuid not null",
+                "state in ( 'uploading', 'quarantined', 'ready', 'deleting', 'failed' )",
+                "constraint file_object_ready_shape",
+                "create table public.file_link",
+                "constraint file_link_file_fkey",
+                "alter table public.evidence_item",
+                "foreign key (tenant_id, file_id)",
+                "alter table public.file_object enable row level security",
+                "alter table public.file_object force row level security",
+                "create policy file_object_tenant_isolation",
+                "alter table public.file_link enable row level security",
+                "alter table public.file_link force row level security",
+                "create policy file_link_tenant_isolation")
+                .doesNotContain("grant ", "insert into public.file_object", "insert into public.file_link");
+    }
+
+    @Test
     void flowableDefinitionContainsBothConfirmationsAndLoopsOnlyFailedAcceptance() throws Exception {
         try (InputStream stream = getClass().getResourceAsStream("/processes/finding-remediation-v1.bpmn20.xml")) {
             assertThat(stream).isNotNull();

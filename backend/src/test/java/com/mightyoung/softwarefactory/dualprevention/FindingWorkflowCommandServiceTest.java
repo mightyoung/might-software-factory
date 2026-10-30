@@ -394,11 +394,11 @@ class FindingWorkflowCommandServiceTest {
         }
 
         @Override
-        public void requireReady(UUID tenantId, UUID findingId, int roundNo,
-                                 UUID submittedByMemberId, UUID evidenceSetId) {
+        public void requireReady(CurrentTenantContext context, UUID findingId, int roundNo, UUID evidenceSetId) {
             EvidenceScope scope = ready.get(evidenceSetId);
-            if (scope == null || !scope.tenantId().equals(tenantId) || !scope.findingId().equals(findingId)
-                    || scope.roundNo() != roundNo || !scope.ownerMemberId().equals(submittedByMemberId)) {
+            if (scope == null || !scope.tenantId().equals(context.tenantId())
+                    || !scope.findingId().equals(findingId) || scope.roundNo() != roundNo
+                    || !scope.ownerMemberId().equals(context.memberId())) {
                 throw new FindingWorkflowEvidenceException("A ready evidence set is required");
             }
         }

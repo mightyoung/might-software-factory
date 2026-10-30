@@ -189,8 +189,7 @@ public final class FindingWorkflowCommandService {
             if (request.statement() == null || request.statement().isBlank()) {
                 throw new FindingWorkflowRuleException("A remediation statement is required");
             }
-            evidencePolicy.requireReady(context.tenantId(), findingId, current.roundNo(), context.memberId(),
-                    request.evidenceSetId());
+            evidencePolicy.requireReady(context, findingId, current.roundNo(), request.evidenceSetId());
             Notice notice = tx.findNotice(findingId, current.roundNo())
                     .orElseThrow(() -> new FindingWorkflowConfigurationException(
                             "The active remediation notice is missing"));

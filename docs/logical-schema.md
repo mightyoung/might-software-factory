@@ -29,8 +29,8 @@
 |tenant_application|application_id,status,config_version|UNIQUE(tenant_id,application_id)；不等于用户许可|
 |entity_schema/action_schema（发布元数据）|app_key,key,schema_version,content jsonb,checksum|UNIQUE(app_key,key,schema_version)；不可变发布包，不在线DDL|
 |saved_view|member_id,entity_key,schema_version,filter_ast jsonb,sort_spec jsonb,columns jsonb,name|所有field须存在/可见；schema升级校验无效条件，不能静默扩大范围|
-|file_object|object_key,size_bytes bigint,mime,checksum?,state,storage_version|size>=0，object_key唯一；校验摘要取得后填，READY要求验证成功|
-|file_link|file_id,resource_type,resource_id,purpose|目标经注册资源解析器验证tenant与存在性；多态关联不假装有跨表FK，定期一致性检查|
+|file_object|tenant、id、owner_member_id、owner_actor_id、object_key,size_bytes bigint,mime,checksum?,state,storage_version,verified_at?|size>=0，tenant内object_key唯一；摘要绑定存储版本，READY要求服务端校验完成|
+|file_link|tenant、file_id,resource_type,resource_id,purpose,linked_by_actor_id,revoked_at?|目标经注册资源解析器验证tenant与存在性；多态关联不假装有跨表FK，撤销后拒绝访问，定期一致性检查|
 |dictionary_item|dictionary_key,code,label,sort_no int,active,version_no|UNIQUE(tenant_id,dictionary_key,code)，引用稳定ID|
 |config_entry|scope,key,value_type,value_json?,secret_ref?,version_no|值与secret_ref互斥，类型schema校验；覆盖白名单|
 |audit_event|actor_id,delegator_id?,action,resource_type,resource_id?,result,reason?,diff_redacted jsonb?,trace_id,policy_version,occurred_at|只追加；不存凭证/完整敏感正文|
@@ -102,7 +102,7 @@
 |remediation_round|tenant、finding_id、round_no、state、opened_at、closed_at?；UNIQUE(tenant,finding_id,round_no)，通知书/提交/验收FK关联round|
 |job|tenant、type、payload_version、payload、state、next_run_at、lease_owner?、lease_until?、attempt、last_error?、result_ref?；logical_key唯一，状态含UNKNOWN/CANCEL_REQUESTED|
 |session租户上下文|Session JDBC使用其官方schema；会话标识不入业务URL。member/tenant auth_epoch独立校验，不能依赖整条session删除解决多租户撤权|
-|evidence_set/evidence_item|set_id、finding_id、round_no、owner_member_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；整改提交只可使用同隐患/轮次且归属于提交人的证据集，所有项均须READY且CONTENT核验；未定义共享授权前拒绝跨成员复用；来源未知可空但须说明，不凭URL认定全文核验|
+|evidence_set/evidence_item|set_id、finding_id、round_no、owner_member_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；整改提交只可使用同隐患/轮次且归属于提交人的证据集，所有项均须READY且CONTENT核验；FILE须有同租户file_object与指向该item的有效file_link，且可信服务端核验回执须绑定文件摘要/存储版本；表内CONTENT字段只是投影，不是信任来源；未定义共享授权前拒绝跨成员复用；URL在可信核验器接入前拒绝|
 |event血缘附字段|schema_version、source_kind、replay_run_id?、quality_flags；因果引用若来源外部允许external_ref，进入本系统后有稳定eventId|
 |notification_message|独立notificationId、触发eventId、templateVersion、purpose；delivery唯一(notificationId,recipient,channel)，升级/恢复产生新notificationId，不被原事件键误吞|
 
