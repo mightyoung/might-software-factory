@@ -4,9 +4,9 @@ info:
   version: 1.0.0
   description: >-
     Session-authenticated commands for finding creation, the required person and safety
-    confirmations, safety dispatch, remediation submission, and safety acceptance. The command
-    service is the only writer of the finding workflow projection.
-x-implementation-status: local-command-service-and-flowable-facade
+    confirmations, safety dispatch, remediation submission, safety acceptance, and authorized reads
+    of submitted evidence content. The command service is the only writer of the finding workflow projection.
+x-implementation-status: local-command-service-flowable-facade-and-opt-in-pinned-evidence-reader
 x-tenant-context: >-
   Tenant, actor, account, and member are resolved from the verified server session. Request bodies
   and headers cannot select the actor, tenant, member, permission, or workflow assignee for approval.
@@ -280,6 +280,47 @@ paths:
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
 
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-items/{evidenceItemId}/content:
+    get:
+      operationId: readSubmittedFindingEvidenceContent
+      summary: Download content pinned by a sealed remediation submission
+      description: >-
+        Requires the current finding read permission and an active file link. The server resolves the file,
+        receipt, digest, and immutable storage version from the sealed submission snapshot and verifies the
+        bytes before streaming. This route does not accept a file ID, object key, storage path, or storage
+        version from the caller. Missing, unsealed, revoked, or out-of-scope evidence is hidden as not visible.
+        The local filesystem adapter is disabled unless a private root and receipt trust key are explicitly
+        configured; without a trusted reader the request fails closed.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingResourceId'
+        - $ref: '#/components/parameters/RoundNo'
+        - $ref: '#/components/parameters/EvidenceItemId'
+      responses:
+        '200':
+          description: Verified bytes from the exact immutable version in the sealed evidence snapshot.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+            X-Content-Type-Options:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
 components:
   securitySchemes:
     sessionCookieAuth:
@@ -290,6 +331,27 @@ components:
     FindingId:
       in: path
       name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    FindingResourceId:
+      in: path
+      name: findingId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RoundNo:
+      in: path
+      name: roundNo
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    EvidenceItemId:
+      in: path
+      name: evidenceItemId
       required: true
       schema:
         type: string

@@ -20,7 +20,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** Composes the modules' public read queries into one consistent finding authorization snapshot. */
+/**
+ * Composes the modules' public read queries into one request authorization snapshot. Reads use repeatable read
+ * for a consistent view; authorization source rows are not locked against concurrent revocation.
+ */
 @Repository
 public final class PersistentFindingReadAuthorizationRepository
         implements PersistentEntityReadAuthorizationRepository {
