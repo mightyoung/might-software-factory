@@ -1,5 +1,7 @@
 import {
+  findingSourceLabels,
   findingStateLabels,
+  findingUrgencyLabels,
   getFindingActions,
   workflowCurrentIndex,
   workflowSteps,
@@ -56,6 +58,33 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry }: Fi
                 <dt>上报时间</dt>
                 <dd>{finding.reportedAt.replace("T", " ")}</dd>
               </div>
+              {finding.foundAt && (
+                <div>
+                  <dt>发现时间</dt>
+                  <dd>
+                    {finding.foundAt.replace("T", " ")}
+                    {finding.backfill && <span className="inline-tag">补报</span>}
+                  </dd>
+                </div>
+              )}
+              {finding.source && (
+                <div>
+                  <dt>来源</dt>
+                  <dd>{findingSourceLabels[finding.source]}</dd>
+                </div>
+              )}
+              {finding.urgency && (
+                <div>
+                  <dt>紧急程度</dt>
+                  <dd>{findingUrgencyLabels[finding.urgency]}</dd>
+                </div>
+              )}
+              {finding.interimMeasure && (
+                <div>
+                  <dt>临时措施</dt>
+                  <dd>{finding.interimMeasure}</dd>
+                </div>
+              )}
               <div>
                 <dt>上报人</dt>
                 <dd>{finding.reporter}</dd>

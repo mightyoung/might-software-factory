@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
   mockFindingLedger,
@@ -6,7 +6,9 @@ import {
   type FindingLedgerReadFailureKind,
   type FindingView,
 } from "../../adapters/findingLedger";
+import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetails } from "../../components/FindingDetails";
+import { FindingReportForm } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
@@ -21,6 +23,11 @@ interface FindingsLedgerProps {
   title: string;
   description: string;
   adapter?: FindingLedgerAdapter;
+  /** 提供上报端口且 canReport 为 true 时才显示“新建上报”（仅台账视图）。入口显隐只是呈现，服务端仍须鉴权。 */
+  submitAdapter?: FindingSubmitAdapter;
+  canReport?: boolean;
+  /** 读取或提交收到“未登录”时通知应用回到登录页。 */
+  onUnauthenticated?: () => void;
 }
 
 const firstPage: PageResult<FindingRecord> = {
@@ -30,7 +37,15 @@ const firstPage: PageResult<FindingRecord> = {
   pageCount: 1,
 };
 
-export function FindingsLedger({ view, title, description, adapter = mockFindingLedger }: FindingsLedgerProps) {
+export function FindingsLedger({
+  view,
+  title,
+  description,
+  adapter = mockFindingLedger,
+  submitAdapter,
+  canReport = false,
+  onUnauthenticated,
+}: FindingsLedgerProps) {
   const location = useLocation();
   const [path, search = ""] = location.split("?");
   const selectedFindingId = new URLSearchParams(search).get("caseId");
@@ -47,6 +62,10 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
+  const [reporting, setReporting] = useState(false);
+  const reportButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  const showReport = canReport && submitAdapter !== undefined && view === "all";
 
   useEffect(() => {
     let current = true;
@@ -64,7 +83,9 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
         setPageIndex(result.page.index);
       } catch (error) {
         if (!current || controller.signal.aborted) return;
-        setListError(classifyFindingLedgerReadFailure(error));
+        const kind = classifyFindingLedgerReadFailure(error);
+        setListError(kind);
+        if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
         if (!current || controller.signal.aborted) return;
         setLoading(false);
@@ -97,8 +118,10 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
         setDetail(record);
       } catch (error) {
         if (!current || controller.signal.aborted) return;
+        const kind = classifyFindingLedgerReadFailure(error);
         setDetail(null);
-        setDetailError(classifyFindingLedgerReadFailure(error));
+        setDetailError(kind);
+        if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
         if (!current || controller.signal.aborted) return;
         setDetailLoading(false);
@@ -109,6 +132,35 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
       controller.abort();
     };
   }, [adapter, detailRefreshKey, selectedFindingId]);
+
+  useEffect(() => {
+    if (!reporting && restoreFocus.current) {
+      restoreFocus.current = false;
+      reportButtonRef.current?.focus();
+    }
+  }, [reporting]);
+
+  function openReport() {
+    // 详情与上报共用右侧面板，打开上报时先关闭详情。
+    if (selectedFindingId) navigate(path, true);
+    setReporting(true);
+  }
+
+  function closeReport() {
+    restoreFocus.current = true;
+    setReporting(false);
+  }
+
+  function handleSubmitted() {
+    setSelectedIds(new Set());
+    setPageIndex(1);
+    setRefreshKey((value) => value + 1);
+  }
+
+  function openSubmitted(id: string) {
+    setReporting(false);
+    navigate(`${path}?caseId=${encodeURIComponent(id)}`);
+  }
 
   function updateQuery(key: string, value: QueryValue) {
     setQuery((current) => ({ ...current, [key]: value }));
@@ -141,13 +193,19 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
   const pageCount = Math.max(1, page.pageCount);
 
   return (
-    <div className={`ledger-layout ${selectedFindingId ? "ledger-with-detail" : ""}`}>
-      <section className="ledger-main" aria-label={title}>
+    <div className={`ledger-layout ${selectedFindingId || reporting ? "ledger-with-detail" : ""}`}>
+      {/* 上报面板打开时主区域不可交互，避免带着未提交内容切换到别的记录或筛选。 */}
+      <section className="ledger-main" aria-label={title} inert={reporting}>
         <div className="page-heading">
           <div>
             <h1>{title}</h1>
             <p>{description}</p>
           </div>
+          {showReport && (
+            <button ref={reportButtonRef} type="button" className="button button-primary" onClick={openReport}>
+              新建上报
+            </button>
+          )}
         </div>
 
         <div className="demo-notice" role="note">
@@ -232,7 +290,17 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
         )}
       </section>
 
-      {selectedFindingId && (
+      {reporting && submitAdapter && (
+        <FindingReportForm
+          adapter={submitAdapter}
+          onClose={closeReport}
+          onSubmitted={handleSubmitted}
+          onOpenSubmitted={openSubmitted}
+          onUnauthenticated={onUnauthenticated}
+        />
+      )}
+
+      {selectedFindingId && !reporting && (
         <FindingDetails
           finding={detail}
           loading={detailLoading}

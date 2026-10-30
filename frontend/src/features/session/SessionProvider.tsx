@@ -12,6 +12,8 @@ export interface SessionContextValue {
   /** 失败时抛出 SessionError，由调用方（登录页）展示；成功后返回 bootstrap。 */
   login(username: string, password: string): Promise<SessionBootstrap>;
   logout(): Promise<void>;
+  /** 服务端返回 401（会话失效或被撤销）时调用：清除本地登录态并回到登录页。 */
+  expire(): void;
   loadMenu(applicationId: ApplicationId, signal?: AbortSignal): Promise<AppMenu>;
 }
 
@@ -68,23 +70,25 @@ export function SessionProvider({
     setState({ status: "signedOut", notice: "signedOut" });
   }, [adapter]);
 
+  const expire = useCallback(() => {
+    generation.current += 1;
+    setState({ status: "signedOut", notice: "expired" });
+  }, []);
+
   const loadMenu = useCallback(
     async (applicationId: ApplicationId, signal?: AbortSignal) => {
       try {
         return await adapter.loadMenu(applicationId, signal);
       } catch (error) {
         // 服务端判定未登录（会话过期/被撤销）：回到登录页并提示，而不是停在受保护页面上报错。
-        if (error instanceof SessionError && error.kind === "unauthenticated") {
-          generation.current += 1;
-          setState({ status: "signedOut", notice: "expired" });
-        }
+        if (error instanceof SessionError && error.kind === "unauthenticated") expire();
         throw error;
       }
     },
-    [adapter],
+    [adapter, expire],
   );
 
-  const value = useMemo(() => ({ state, login, logout, loadMenu }), [state, login, logout, loadMenu]);
+  const value = useMemo(() => ({ state, login, logout, expire, loadMenu }), [state, login, logout, expire, loadMenu]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
