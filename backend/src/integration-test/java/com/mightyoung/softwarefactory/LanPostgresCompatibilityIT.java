@@ -104,8 +104,13 @@ class LanPostgresCompatibilityIT {
         assertThat(engineConfiguration).isInstanceOf(org.flowable.spring.SpringProcessEngineConfiguration.class);
         assertThat(((org.flowable.spring.SpringProcessEngineConfiguration) engineConfiguration)
                 .getTransactionManager()).isSameAs(transactionManager);
-        assertThat(jdbc.queryForObject("select current_setting('server_version_num')::int", Integer.class))
-                .isBetween(180000, 189999);
+        int expectedPostgresMajor = Integer.parseInt(
+                System.getenv().getOrDefault("LAN_PG_EXPECTED_MAJOR_VERSION", "18"));
+        int actualPostgresVersion = jdbc.queryForObject(
+                "select current_setting('server_version_num')::int", Integer.class);
+        assertThat(actualPostgresVersion / 10_000)
+                .as("PostgreSQL compatibility target selected by LAN_PG_EXPECTED_MAJOR_VERSION (defaults to design target 18)")
+                .isEqualTo(expectedPostgresMajor);
     }
 
     @Test
