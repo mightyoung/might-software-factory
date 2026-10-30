@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.identity;
 
+import java.io.Serial;
+import java.io.Serializable;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -8,7 +10,10 @@ import java.util.UUID;
  * checks. There is deliberately no public constructor or production factory until that resolver is
  * implemented; web handlers must not accept this value from request data.
  */
-public final class VerifiedSessionPrincipal {
+public final class VerifiedSessionPrincipal implements Serializable {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
 
     private final UUID actorId;
     private final UUID tenantId;
