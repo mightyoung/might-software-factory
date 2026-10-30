@@ -4,12 +4,16 @@ import com.mightyoung.softwarefactory.files.EvidenceFileUse;
 import com.mightyoung.softwarefactory.files.FileEvidenceAccessException;
 import com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException;
 import com.mightyoung.softwarefactory.files.FindingEvidenceFileAccess;
+import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 
 /** Validates evidence rows and asks the file module to verify every file-backed item. */
@@ -25,7 +29,7 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
     }
 
     @Override
-    public void requireReady(
+    public List<VerifiedFileEvidenceSnapshot> requireReady(
             CurrentTenantContext context, UUID findingId, int roundNo, UUID evidenceSetId) {
         if (context == null || context.tenantId() == null || context.actorId() == null || context.memberId() == null
                 || findingId == null || roundNo < 1 || evidenceSetId == null) {
@@ -47,7 +51,7 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
         }
 
         List<Record> items = dsl.fetch("""
-                select ei.id, ei.source_kind, ei.file_id, ei.state, ei.verification_level
+                select ei.id, ei.source_kind, ei.file_id, ei.sha256, ei.state, ei.verification_level
                   from public.evidence_item ei
                  where ei.tenant_id = cast(? as uuid)
                    and ei.evidence_set_id = cast(? as uuid)
@@ -58,6 +62,7 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
             throw new FindingWorkflowEvidenceException("At least one evidence item is required");
         }
         UUID ownerMemberId = evidenceSet.get("owner_member_id", UUID.class);
+        List<VerifiedFileEvidenceSnapshot> snapshots = new ArrayList<>(items.size());
         for (Record item : items) {
             UUID itemId = item.get("id", UUID.class);
             UUID fileId = item.get("file_id", UUID.class);
@@ -67,13 +72,54 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
                 throw new FindingWorkflowEvidenceException(
                         "Evidence items must be ready files with a trusted content verification");
             }
+            String sha256 = item.get("sha256", String.class);
+            if (sha256 != null) sha256 = sha256.strip();
+            if (sha256 == null || sha256.isBlank()) {
+                throw new FindingWorkflowEvidenceException("Every evidence file must have a recorded digest");
+            }
             try {
-                fileEvidenceAccess.requireVerifiedContentEvidence(new EvidenceFileUse(
+                EvidenceFileUse use = new EvidenceFileUse(
                         context.tenantId(), context.actorId(), context.memberId(), findingId, roundNo,
                         evidenceSetId, ownerMemberId, itemId, fileId,
-                        item.get("verification_level", String.class)));
+                        item.get("verification_level", String.class), sha256);
+                VerifiedFileEvidenceSnapshot snapshot = fileEvidenceAccess.requireVerifiedContentEvidence(use);
+                if (!snapshotMatches(use, snapshot)) {
+                    throw new FindingWorkflowEvidenceException(
+                            "The verified file snapshot does not match its evidence item");
+                }
+                snapshots.add(snapshot);
             } catch (FileEvidenceAccessException denied) {
                 throw new FindingWorkflowEvidenceException("An evidence file is unavailable or unauthorized");
+            } catch (FileEvidenceTrustUnavailableException unavailable) {
+                throw unavailable;
+            }
+        }
+        return List.copyOf(snapshots);
+    }
+
+    private static boolean snapshotMatches(EvidenceFileUse use, VerifiedFileEvidenceSnapshot snapshot) {
+        return snapshot != null
+                && Objects.equals(use.tenantId(), snapshot.tenantId())
+                && Objects.equals(use.evidenceItemId(), snapshot.evidenceItemId())
+                && Objects.equals(use.fileId(), snapshot.fileId())
+                && Objects.equals(use.evidenceSetOwnerMemberId(), snapshot.ownerMemberId())
+                && Objects.equals(use.actorId(), snapshot.ownerActorId())
+                && use.recordedSha256().strip().toLowerCase(Locale.ROOT).equals(snapshot.sha256())
+                && snapshot.fileLinkId() != null
+                && snapshot.verificationReceiptId() != null
+                && snapshot.verificationLevel() == com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel.CONTENT;
+    }
+
+    @Override
+    public void requirePinnedEvidence(List<VerifiedFileEvidenceSnapshot> evidenceSnapshots) {
+        if (evidenceSnapshots == null || evidenceSnapshots.isEmpty()) {
+            throw new FindingWorkflowEvidenceException("A pinned evidence snapshot is required for verification");
+        }
+        for (VerifiedFileEvidenceSnapshot snapshot : evidenceSnapshots) {
+            try {
+                fileEvidenceAccess.requirePreviouslySubmittedEvidence(snapshot);
+            } catch (FileEvidenceAccessException denied) {
+                throw new FindingWorkflowEvidenceException("A submitted evidence snapshot is invalid");
             } catch (FileEvidenceTrustUnavailableException unavailable) {
                 throw unavailable;
             }

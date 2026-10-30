@@ -67,7 +67,7 @@ DISCOVERED→PERSON_CONFIRM_PENDING→SAFETY_CONFIRM_PENDING→SAFETY_DISPATCH_P
 
 命令分别confirmByPerson、confirmBySafety、dispatchBySafety、submitRectification、acceptBySafety、rejectAcceptance、requestExtension、approveExtension、reopen；每个有职责、状态、版本、证据门槛。PERSON确认只能一名已解析成员；安全部门动作按角色及实际任务人。退回补充和有理由作废是显式分支，不删除发现。原轮迟到回调拒绝，不得关闭新轮。
 
-初始路由和整改派单均要求目标成员为有效租户成员、当前有效 `member_org` 包含隐患组织，并拥有对应的 finding 动作权限。跨组织委派尚无业务授权规则，当前默认拒绝，待业务明确规则后再开放。整改提交只能使用同隐患、同轮次且归属于提交成员的证据集；未定义共享授权前拒绝跨成员复用，证据集内所有项目须处于 `READY` 且达到 `CONTENT` 核验级别。文件证据还要核对当前租户/actor、文件所有人、有效的item引用和存储摘要，并通过可信服务端`StorageContentVerificationPort`取得与该文件、存储版本一致的`CONTENT`核验回执；V6只建元数据/引用表，不实现存储或核验器，核验器缺失时提交返回依赖不可用。URL证据在安全抓取与可信核验链路明确前拒绝。
+初始路由和整改派单均要求目标成员为有效租户成员、当前有效 `member_org` 包含隐患组织，并拥有对应的 finding 动作权限。跨组织委派尚无业务授权规则，当前默认拒绝，待业务明确规则后再开放。整改提交只能使用同隐患、同轮次且归属于提交成员的证据集；未定义共享授权前拒绝跨成员复用，证据集内所有项目须处于 `READY` 且达到 `CONTENT` 核验级别。文件证据还要核对当前租户/actor、文件所有人、有效的item引用，并保证item sha、文件元数据sha和可信回执sha一致。提交事务保存不可变文件/链接/摘要/storage_version/receipt_id及verifier签发上下文；后续验收按固定receipt_id核验，任何后续读取必须使用快照的不可变storage_version，不能读取latest；数据库行锁不证明外部存储不变。V6是未执行草案，增加快照和重绑定守卫，但没有实现存储/核验器/版本读取端点，核验器缺失时提交与验收均失败关闭。URL证据在安全抓取与可信核验链路明确前拒绝。
 
 兼容：V2 已存在的 `DISCOVERED` 隐患由 V5 保留，不批量改状态或伪造历史。仅通过受权限、版本和幂等校验的逐条流程初始化命令，将一条记录推进到 `PERSON_CONFIRM_PENDING` 并创建第一人员确认任务；初始化不等于确认，人员审批仍必须单独执行。
 

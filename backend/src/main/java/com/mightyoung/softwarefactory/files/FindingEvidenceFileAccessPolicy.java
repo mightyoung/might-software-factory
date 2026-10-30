@@ -25,14 +25,13 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
     }
 
     @Override
-    public void requireVerifiedContentEvidence(EvidenceFileUse use) {
+    public VerifiedFileEvidenceSnapshot requireVerifiedContentEvidence(EvidenceFileUse use) {
         if (!validUse(use) || !"CONTENT".equals(use.recordedVerificationLevel())
                 || !use.memberId().equals(use.evidenceSetOwnerMemberId())) {
             throw new FileEvidenceAccessException();
         }
-        if (!referenceRepository.hasAuthorizedEvidenceReference(use)) {
-            throw new FileEvidenceAccessException();
-        }
+        UUID fileLinkId = referenceRepository.findAuthorizedEvidenceReference(use)
+                .orElseThrow(FileEvidenceAccessException::new);
 
         FileObjectMetadata file = metadataRepository.findFile(use.tenantId(), use.fileId())
                 .filter(value -> sameUuid(value.tenantId(), use.tenantId())
@@ -46,23 +45,68 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
                 || !validDigest(file.sha256()) || file.storageVersion() == null || file.storageVersion().isBlank()) {
             throw new FileEvidenceAccessException();
         }
+        if (!file.sha256().equals(normalizeDigest(use.recordedSha256()))) {
+            throw new FileEvidenceAccessException();
+        }
 
         ContentVerificationReceipt receipt = contentVerifier.findVerifiedContent(use, file)
                 .orElseThrow(FileEvidenceTrustUnavailableException::new);
-        if (!sameUuid(receipt.tenantId(), use.tenantId()) || !sameUuid(receipt.fileId(), file.fileId())
-                || !file.sha256().equals(normalizeDigest(receipt.sha256()))
-                || !file.storageVersion().equals(receipt.storageVersion())
-                || receipt.verificationLevel() != FileEvidenceVerificationLevel.CONTENT
-                || receipt.verifierId() == null || receipt.verifierId().isBlank()
-                || receipt.verifiedAt() == null) {
+        if (!receiptMatches(file, use.tenantId(), receipt)) {
             throw new FileEvidenceTrustUnavailableException();
         }
+        return snapshot(use, file, fileLinkId, receipt);
+    }
+
+    @Override
+    public void requirePreviouslySubmittedEvidence(VerifiedFileEvidenceSnapshot snapshot) {
+        if (snapshot == null) throw new FileEvidenceAccessException();
+        ContentVerificationReceipt receipt = contentVerifier
+                .findByReceiptId(snapshot.tenantId(), snapshot.verificationReceiptId())
+                .orElseThrow(FileEvidenceTrustUnavailableException::new);
+        if (!sameUuid(receipt.tenantId(), snapshot.tenantId())
+                || !sameUuid(receipt.fileId(), snapshot.fileId())
+                || !sameUuid(receipt.receiptId(), snapshot.verificationReceiptId())
+                || !snapshot.sha256().equals(normalizeDigest(receipt.sha256()))
+                || !snapshot.storageVersion().equals(receipt.storageVersion())
+                || receipt.verificationLevel() != FileEvidenceVerificationLevel.CONTENT
+                || !snapshot.verifierId().equals(receipt.verifierId())
+                || !snapshot.verifierKeyId().equals(receipt.verifierKeyId())
+                || !snapshot.verificationPolicyVersion().equals(receipt.verificationPolicyVersion())
+                || !snapshot.verifiedAt().equals(receipt.verifiedAt())) {
+            throw new FileEvidenceTrustUnavailableException();
+        }
+    }
+
+    private static boolean receiptMatches(
+            FileObjectMetadata file, UUID tenantId, ContentVerificationReceipt receipt) {
+        return receipt.receiptId() != null
+                && sameUuid(receipt.tenantId(), tenantId)
+                && sameUuid(receipt.fileId(), file.fileId())
+                && file.sha256().equals(normalizeDigest(receipt.sha256()))
+                && file.storageVersion().equals(receipt.storageVersion())
+                && receipt.verificationLevel() == FileEvidenceVerificationLevel.CONTENT
+                && nonBlank(receipt.verifierId()) && nonBlank(receipt.verifierKeyId())
+                && nonBlank(receipt.verificationPolicyVersion()) && receipt.verifiedAt() != null;
+    }
+
+    private static boolean nonBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static VerifiedFileEvidenceSnapshot snapshot(
+            EvidenceFileUse use, FileObjectMetadata file, UUID fileLinkId, ContentVerificationReceipt receipt) {
+        return new VerifiedFileEvidenceSnapshot(
+                use.tenantId(), use.evidenceItemId(), file.fileId(), fileLinkId,
+                file.ownerMemberId(), file.ownerActorId(), file.sha256(), file.storageVersion(),
+                receipt.receiptId(), receipt.verifierId(), receipt.verifierKeyId(),
+                receipt.verificationPolicyVersion(), receipt.verificationLevel(), receipt.verifiedAt());
     }
 
     private static boolean validUse(EvidenceFileUse use) {
         return use != null && use.tenantId() != null && use.actorId() != null && use.memberId() != null
                 && use.findingId() != null && use.roundNo() > 0 && use.evidenceSetId() != null
-                && use.evidenceSetOwnerMemberId() != null && use.evidenceItemId() != null && use.fileId() != null;
+                && use.evidenceSetOwnerMemberId() != null && use.evidenceItemId() != null && use.fileId() != null
+                && use.recordedSha256() != null;
     }
 
     private static boolean validDigest(String digest) {
@@ -70,7 +114,7 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
     }
 
     private static String normalizeDigest(String digest) {
-        return digest == null ? null : digest.toLowerCase(Locale.ROOT);
+        return digest == null ? null : digest.strip().toLowerCase(Locale.ROOT);
     }
 
     private static boolean sameUuid(UUID actual, UUID expected) {

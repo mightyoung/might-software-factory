@@ -20,11 +20,12 @@ class UnconfiguredStorageContentVerificationAdapterTest {
         UUID setId = UUID.randomUUID();
         UUID itemId = UUID.randomUUID();
         var use = new EvidenceFileUse(tenantId, actorId, memberId, findingId, 1, setId,
-                memberId, itemId, fileId, "CONTENT");
+                memberId, itemId, fileId, "CONTENT", "a".repeat(64));
         var file = new FileObjectMetadata(tenantId, fileId, memberId, actorId, FileObjectState.READY,
                 10L, "application/octet-stream", "a".repeat(64), "synthetic-version",
                 OffsetDateTime.parse("2026-10-30T09:00:00Z"));
 
         assertThat(adapter.findVerifiedContent(use, file)).isEmpty();
+        assertThat(adapter.findByReceiptId(tenantId, UUID.randomUUID())).isEmpty();
     }
 }

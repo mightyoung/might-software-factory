@@ -24,6 +24,7 @@ Grant only the listed operations to the runtime identity. `SELECT ... FOR UPDATE
 | `evidence_set` | `SELECT`; `FOR UPDATE` lock (therefore lock privilege) |
 | `evidence_item` | `SELECT`; `FOR UPDATE` lock (therefore lock privilege) |
 | `remediation_submission` | `SELECT`, `INSERT` |
+| `remediation_submission_evidence` | `SELECT`, `INSERT`; snapshots are append-only, no application `UPDATE`/`DELETE` |
 | `verification` | `INSERT` |
 | `finding_stage_assignment` | `SELECT` |
 | `audit_event` | `INSERT` only; its update/delete trigger is append-only |
@@ -44,7 +45,7 @@ For one disposable test tenant only, prepare:
 3. The V5 finding permissions (`finding.create`, `finding.confirm.person`, `finding.confirm.safety`, `finding.dispatch`, `finding.remediate`, `finding.verify`, `finding.workflow.initialize`), plus active roles, role-permission scope rules, and time-valid grants covering only the test organization and test members.
 4. Exactly one current `finding_stage_assignment` per organization for each stage `PERSON_CONFIRM`, `SAFETY_CONFIRM`, `SAFETY_DISPATCH`, and `SAFETY_VERIFY`. Each assignee must be active and have the matching action permission/scope. The same member may fill more than one stage only if the business test explicitly intends that; the command rules still prevent a remediation submitter from accepting their own work.
 5. Deploy the checked-in `findingRemediationV1` BPMN definition through the Flowable migration/deployment procedure. `workflow_binding` is created by the application and must not be hand-seeded.
-6. The file/evidence writer and upload service are not implemented in this slice. For a positive file-evidence test only, after the commands create the finding and open a remediation round, use an isolated fixture to insert the matching `evidence_set`, `evidence_item`, `file_object`, and `file_link` rows with the exact tenant/finding/round/member/item bindings. Add a test-only trusted verifier that produces a receipt bound to tenant, file, SHA-256, and storage version. The current production adapter intentionally returns no receipt, so a positive submission cannot pass until a trusted verifier is implemented and wired. No raw file bytes are required for the workflow test.
+6. The file/evidence writer and upload service are not implemented in this slice. For a positive file-evidence test only, after the commands create the finding and open a remediation round, use an isolated fixture to insert the matching `evidence_set`, `evidence_item`, `file_object`, and `file_link` rows with the exact tenant/finding/round/member/item bindings and matching evidence-item/file checksum. Add a test-only trusted verifier that produces a stable receipt ID and context bound to tenant, file, SHA-256, and storage version. The remediation command itself must insert one immutable `remediation_submission_evidence` snapshot per evidence item; do not seed that snapshot. The current production adapter intentionally returns no receipt, so a positive submission cannot pass until a trusted verifier is implemented and wired. No raw file bytes are required for the workflow test.
 
 Do not seed findings, command receipts, transition history, confirmations, remediation rounds/notices/submissions, verifications, audit events, or event publications. Exercise those through the commands so transaction behavior is tested. Seed evidence rows only as isolated test fixtures because their writer service is not implemented here.
 
@@ -53,10 +54,10 @@ Do not seed findings, command receipts, transition history, confirmations, remed
 - Apply V2–V6 only to a disposable PostgreSQL 18 test database with the migration identity; inspect legacy `evidence_item.file_id` rows before validating the new V6 foreign key.
 - Exercise login/session, all workflow commands, Flowable process creation/completion, audit insertion, Modulith publication and completion in one real transaction boundary. Force a late failure and prove the finding, evidence locks, Flowable state, audit row, and publication all roll back together.
 - Verify same-tenant reads, cross-tenant invisibility, `FORCE ROW LEVEL SECURITY` under the non-owner runtime role, and the exact minimum grants including lock privileges.
-- Test a synthetic trusted receipt success and mismatch, revoked link, wrong tenant/member/finding/round, QUARANTINED/DELETING file, URL item, missing verifier, and rollback after verification failure.
+- Test a synthetic trusted receipt success and mismatch, changed file metadata after submission, lookup by stable receipt ID during acceptance, revoked link, wrong tenant/member/finding/round, QUARANTINED/DELETING file, URL item, missing verifier, and rollback after verification failure. Verify evidence item hash, file checksum, receipt digest, and pinned storage version agree at submission.
 - Confirm cleanup/retention and delivery behavior for `event_publication`, and independently validate production login bootstrap, reset, rate-limit, and credential-version revocation gates.
 
-The positive content-verification path, real file-storage acceptance, Flowable/JOOQ/Modulith rollback, runtime grants, deployment seeds, and production identity bootstrap are not verified by the local synthetic tests.
+The positive content-verification path, real file-storage acceptance/version reads, Flowable/JOOQ/Modulith rollback, runtime grants, deployment seeds, and production identity bootstrap are not verified by the local synthetic tests. There is no evidence download/read API in this slice; any future reader must resolve the persisted submission snapshot and request exactly its `file_id` plus `storage_version`, never current metadata or latest.
 
 ## Reference
 

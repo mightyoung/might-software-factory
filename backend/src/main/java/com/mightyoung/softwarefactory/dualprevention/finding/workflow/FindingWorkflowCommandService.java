@@ -16,6 +16,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.WorkflowCommand;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import com.mightyoung.softwarefactory.workflow.WorkflowFacade;
 import org.springframework.stereotype.Service;
 
@@ -25,6 +26,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -189,7 +191,8 @@ public final class FindingWorkflowCommandService {
             if (request.statement() == null || request.statement().isBlank()) {
                 throw new FindingWorkflowRuleException("A remediation statement is required");
             }
-            evidencePolicy.requireReady(context, findingId, current.roundNo(), request.evidenceSetId());
+            List<VerifiedFileEvidenceSnapshot> evidenceSnapshots = evidencePolicy.requireReady(
+                    context, findingId, current.roundNo(), request.evidenceSetId());
             Notice notice = tx.findNotice(findingId, current.roundNo())
                     .orElseThrow(() -> new FindingWorkflowConfigurationException(
                             "The active remediation notice is missing"));
@@ -200,9 +203,9 @@ public final class FindingWorkflowCommandService {
 
             FindingWorkflowCase updated = current.submitForAcceptance(context.memberId(), expectedVersion);
             OffsetDateTime now = now();
-            Submission submission = new Submission(UUID.randomUUID(), findingId, notice.id(), current.roundNo(),
-                    context.memberId(), now, request.evidenceSetId(), request.statement().trim(), expectedVersion,
-                    commandId);
+            Submission submission = new Submission(context.tenantId(), UUID.randomUUID(), findingId, notice.id(), current.roundNo(),
+                    context.memberId(), now, request.evidenceSetId(), evidenceSnapshots,
+                    request.statement().trim(), expectedVersion, commandId);
             tx.insertSubmission(submission);
             tx.updateFinding(updated, current.version());
             appendTransition(tx, current, updated, commandId, context.actorId(), null);
@@ -234,6 +237,7 @@ public final class FindingWorkflowCommandService {
             Submission submission = tx.findSubmission(findingId, current.roundNo())
                     .orElseThrow(() -> new FindingWorkflowRuleException(
                             "A submitted remediation is required before verification"));
+            evidencePolicy.requirePinnedEvidence(submission.evidenceSnapshots());
             if (submission.submittedByMemberId().equals(context.memberId())) {
                 throw new org.springframework.security.access.AccessDeniedException(
                         "The remediation member cannot verify their own submission");

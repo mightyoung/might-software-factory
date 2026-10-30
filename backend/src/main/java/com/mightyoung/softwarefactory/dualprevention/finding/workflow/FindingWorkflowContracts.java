@@ -1,6 +1,9 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
+
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -79,6 +82,7 @@ public final class FindingWorkflowContracts {
     }
 
     public record Submission(
+            UUID tenantId,
             UUID id,
             UUID findingId,
             UUID noticeId,
@@ -86,10 +90,12 @@ public final class FindingWorkflowContracts {
             UUID submittedByMemberId,
             OffsetDateTime submittedAt,
             UUID evidenceSetId,
+            List<VerifiedFileEvidenceSnapshot> evidenceSnapshots,
             String statement,
             long expectedVersion,
             UUID commandId) {
         public Submission {
+            Objects.requireNonNull(tenantId, "tenantId");
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(findingId, "findingId");
             Objects.requireNonNull(noticeId, "noticeId");
@@ -97,6 +103,14 @@ public final class FindingWorkflowContracts {
             Objects.requireNonNull(submittedByMemberId, "submittedByMemberId");
             Objects.requireNonNull(submittedAt, "submittedAt");
             Objects.requireNonNull(evidenceSetId, "evidenceSetId");
+            if (evidenceSnapshots == null || evidenceSnapshots.isEmpty()) {
+                throw new IllegalArgumentException("Pinned evidence snapshots are required");
+            }
+            evidenceSnapshots = List.copyOf(evidenceSnapshots);
+            if (evidenceSnapshots.stream().anyMatch(snapshot -> !tenantId.equals(snapshot.tenantId())
+                    || !submittedByMemberId.equals(snapshot.ownerMemberId()))) {
+                throw new IllegalArgumentException("Evidence snapshots must match the tenant and submitter");
+            }
             Objects.requireNonNull(statement, "statement");
             Objects.requireNonNull(commandId, "commandId");
         }

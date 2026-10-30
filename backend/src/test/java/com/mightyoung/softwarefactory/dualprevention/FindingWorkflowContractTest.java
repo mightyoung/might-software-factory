@@ -136,6 +136,42 @@ class FindingWorkflowContractTest {
     }
 
     @Test
+    void remediationSubmissionPinsImmutableEvidenceBytesAndTrustedReceiptContext() throws Exception {
+        String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
+                "V6__file_evidence_reference_metadata.sql"));
+        String normalized = migration.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        assertThat(normalized).contains(
+                "create table public.remediation_submission_evidence",
+                "file_link_id uuid not null",
+                "file_id uuid not null",
+                "sha256 varchar(64) not null",
+                "storage_version varchar(255) not null",
+                "verification_receipt_id uuid not null",
+                "verifier_id varchar(128) not null",
+                "verifier_key_id varchar(128) not null",
+                "verification_policy_version varchar(64) not null",
+                "foreign key (tenant_id, submission_id, evidence_set_id, finding_id, round_no, submitted_by)",
+                "foreign key (tenant_id, evidence_item_id, evidence_set_id)",
+                "foreign key (tenant_id, file_link_id, file_id, resource_type, resource_id, purpose)",
+                "for each row execute function public.reject_submission_evidence_mutation()",
+                "create trigger evidence_item_submission_binding_immutable",
+                "create trigger file_link_identity_immutable",
+                "create trigger file_object_submission_version_immutable",
+                "alter table public.remediation_submission_evidence force row level security")
+                .doesNotContain("unique (tenant_id, submission_id, file_id)");
+
+        String repository = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
+                "softwarefactory", "dualprevention", "finding", "workflow",
+                "JooqFindingWorkflowRepository.java"));
+        assertThat(repository).contains("insert into public.remediation_submission_evidence",
+                "verification_receipt_id", "storage_version", "findSubmissionEvidenceSnapshots");
+        String evidencePolicy = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
+                "softwarefactory", "dualprevention", "finding", "workflow",
+                "JooqFindingWorkflowEvidencePolicy.java"));
+        assertThat(evidencePolicy).contains("ei.sha256", "snapshotMatches");
+    }
+
+    @Test
     void flowableDefinitionContainsBothConfirmationsAndLoopsOnlyFailedAcceptance() throws Exception {
         try (InputStream stream = getClass().getResourceAsStream("/processes/finding-remediation-v1.bpmn20.xml")) {
             assertThat(stream).isNotNull();

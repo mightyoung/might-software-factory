@@ -14,6 +14,8 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowState;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.VerificationDecision;
+import com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel;
+import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipalTestFixture;
@@ -136,6 +138,11 @@ class FindingWorkflowCommandServiceTest {
         assertThat(closed.state()).isEqualTo(FindingWorkflowState.CLOSED);
         assertThat(closed.roundNo()).isEqualTo(2);
         assertThat(repository.submissions).hasSize(2);
+        assertThat(repository.submissions.getFirst().evidenceSnapshots()).hasSize(1);
+        assertThat(repository.submissions.getFirst().evidenceSnapshots().getFirst().storageVersion())
+                .isEqualTo("synthetic-version-1");
+        assertThat(evidencePolicy.lastPinnedSnapshots)
+                .isEqualTo(repository.submissions.getLast().evidenceSnapshots());
         assertThat(repository.verifications).hasSize(2);
         assertThat(publishedEvents).extracting(FindingWorkflowChangedEvent::toState)
                 .containsExactly(
@@ -388,19 +395,35 @@ class FindingWorkflowCommandServiceTest {
 
     private static final class MemoryEvidencePolicy implements FindingWorkflowEvidencePolicy {
         private final Map<UUID, EvidenceScope> ready = new HashMap<>();
+        private List<VerifiedFileEvidenceSnapshot> lastPinnedSnapshots = List.of();
 
         private void allow(UUID evidenceSetId, UUID tenantId, UUID findingId, int roundNo, UUID ownerMemberId) {
             ready.put(evidenceSetId, new EvidenceScope(tenantId, findingId, roundNo, ownerMemberId));
         }
 
         @Override
-        public void requireReady(CurrentTenantContext context, UUID findingId, int roundNo, UUID evidenceSetId) {
+        public List<VerifiedFileEvidenceSnapshot> requireReady(
+                CurrentTenantContext context, UUID findingId, int roundNo, UUID evidenceSetId) {
             EvidenceScope scope = ready.get(evidenceSetId);
             if (scope == null || !scope.tenantId().equals(context.tenantId())
                     || !scope.findingId().equals(findingId) || scope.roundNo() != roundNo
                     || !scope.ownerMemberId().equals(context.memberId())) {
                 throw new FindingWorkflowEvidenceException("A ready evidence set is required");
             }
+            return List.of(new VerifiedFileEvidenceSnapshot(context.tenantId(),
+                    UUID.fromString("51000000-0000-0000-0000-000000000001"),
+                    UUID.fromString("52000000-0000-0000-0000-000000000001"),
+                    UUID.fromString("53000000-0000-0000-0000-000000000001"),
+                    context.memberId(), context.actorId(), "a".repeat(64), "synthetic-version-1",
+                    UUID.fromString("54000000-0000-0000-0000-000000000001"),
+                    "synthetic-verifier", "synthetic-key-1", "content-policy-v1",
+                    FileEvidenceVerificationLevel.CONTENT, OffsetDateTime.parse("2026-10-30T10:30:00Z")));
+        }
+
+        @Override
+        public void requirePinnedEvidence(List<VerifiedFileEvidenceSnapshot> snapshots) {
+            lastPinnedSnapshots = List.copyOf(snapshots);
+            if (snapshots.isEmpty()) throw new FindingWorkflowEvidenceException("Pinned evidence is required");
         }
 
         private record EvidenceScope(UUID tenantId, UUID findingId, int roundNo, UUID ownerMemberId) {}

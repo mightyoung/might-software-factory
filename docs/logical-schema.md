@@ -103,6 +103,7 @@
 |job|tenant、type、payload_version、payload、state、next_run_at、lease_owner?、lease_until?、attempt、last_error?、result_ref?；logical_key唯一，状态含UNKNOWN/CANCEL_REQUESTED|
 |session租户上下文|Session JDBC使用其官方schema；会话标识不入业务URL。member/tenant auth_epoch独立校验，不能依赖整条session删除解决多租户撤权|
 |evidence_set/evidence_item|set_id、finding_id、round_no、owner_member_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；整改提交只可使用同隐患/轮次且归属于提交人的证据集，所有项均须READY且CONTENT核验；FILE须有同租户file_object与指向该item的有效file_link，且可信服务端核验回执须绑定文件摘要/存储版本；表内CONTENT字段只是投影，不是信任来源；未定义共享授权前拒绝跨成员复用；URL在可信核验器接入前拒绝|
+|remediation_submission_evidence|tenant/submission/finding/round/evidence_set/submitted_by、evidence_item_id、file_link_id、file_id、owner_member_id/actor_id、sha256、storage_version、receipt_id/verifier/key/policy/verified_at；提交事务内写入只追加快照，外键固定提交、证据项和链接；后续验收按receipt_id验证，文件读取必须按快照中的immutable storage_version，禁止回退到latest；无存储版本读取保证时拒绝|同一证据集重复引用同一file仍可保存为不同item，不加file_id唯一约束|
 |event血缘附字段|schema_version、source_kind、replay_run_id?、quality_flags；因果引用若来源外部允许external_ref，进入本系统后有稳定eventId|
 |notification_message|独立notificationId、触发eventId、templateVersion、purpose；delivery唯一(notificationId,recipient,channel)，升级/恢复产生新notificationId，不被原事件键误吞|
 

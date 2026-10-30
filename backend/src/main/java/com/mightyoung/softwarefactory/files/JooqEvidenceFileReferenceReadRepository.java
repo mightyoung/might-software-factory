@@ -4,6 +4,9 @@ import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+import java.util.UUID;
+
 /** Checks the tenant-local file link against the exact current evidence item, finding, round, and owner. */
 @Repository
 public final class JooqEvidenceFileReferenceReadRepository implements EvidenceFileReferenceReadRepository {
@@ -15,11 +18,11 @@ public final class JooqEvidenceFileReferenceReadRepository implements EvidenceFi
     }
 
     @Override
-    public boolean hasAuthorizedEvidenceReference(EvidenceFileUse use) {
+    public Optional<UUID> findAuthorizedEvidenceReference(EvidenceFileUse use) {
         if (use == null || use.tenantId() == null || use.fileId() == null || use.evidenceItemId() == null
                 || use.evidenceSetId() == null || use.findingId() == null || use.roundNo() < 1
                 || use.evidenceSetOwnerMemberId() == null) {
-            return false;
+            return Optional.empty();
         }
         Record link = dsl.fetchOne("""
                 select fl.id
@@ -47,6 +50,6 @@ public final class JooqEvidenceFileReferenceReadRepository implements EvidenceFi
                 """, use.tenantId(), use.fileId(), use.evidenceItemId(), use.tenantId(),
                 use.evidenceSetId(), use.evidenceItemId(), use.findingId(), use.roundNo(),
                 use.evidenceSetOwnerMemberId());
-        return link != null;
+        return link == null ? Optional.empty() : Optional.of(link.get("id", UUID.class));
     }
 }

@@ -8,6 +8,8 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Transition;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Verification;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.WorkflowCommand;
+import com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel;
+import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Repository;
@@ -269,6 +271,30 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     submission.evidenceSetId(), submission.statement(), submission.expectedVersion(),
                     submission.commandId());
             if (inserted != 1) throw new IllegalStateException("Remediation submission did not persist");
+
+            for (VerifiedFileEvidenceSnapshot snapshot : submission.evidenceSnapshots()) {
+                int snapshotInserted = dsl.execute("""
+                        insert into public.remediation_submission_evidence
+                            (tenant_id, submission_id, finding_id, round_no, evidence_set_id, submitted_by,
+                             evidence_item_id, file_link_id, file_id, resource_type, resource_id, purpose,
+                             owner_member_id, owner_actor_id, sha256, storage_version,
+                             verification_receipt_id, verifier_id, verifier_key_id,
+                             verification_policy_version, verification_level, verified_at)
+                        values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, cast(? as uuid),
+                                cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid),
+                                'FINDING_EVIDENCE_ITEM', cast(? as uuid), 'REMEDIATION_EVIDENCE',
+                                cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?, ?, ?, ?)
+                        """, tenantId, submission.id(), submission.findingId(), submission.roundNo(),
+                        submission.evidenceSetId(), submission.submittedByMemberId(), snapshot.evidenceItemId(),
+                        snapshot.fileLinkId(), snapshot.fileId(), snapshot.evidenceItemId(), snapshot.ownerMemberId(),
+                        snapshot.ownerActorId(), snapshot.sha256(), snapshot.storageVersion(),
+                        snapshot.verificationReceiptId(), snapshot.verifierId(), snapshot.verifierKeyId(),
+                        snapshot.verificationPolicyVersion(), snapshot.verificationLevel().name(),
+                        snapshot.verifiedAt());
+                if (snapshotInserted != 1) {
+                    throw new IllegalStateException("Remediation submission evidence snapshot did not persist");
+                }
+            }
         }
 
         @Override
@@ -279,12 +305,35 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                       from public.remediation_submission
                      where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid) and round_no = ?
                     """, tenantId, findingId, roundNo);
-            return Optional.ofNullable(row).map(value -> new Submission(
-                    value.get("id", UUID.class), value.get("finding_id", UUID.class),
-                    value.get("notice_id", UUID.class), value.get("round_no", Integer.class),
-                    value.get("submitted_by", UUID.class), value.get("submitted_at", OffsetDateTime.class),
-                    value.get("evidence_set_id", UUID.class), value.get("statement", String.class),
-                    value.get("expected_version", Long.class), value.get("command_id", UUID.class)));
+            if (row == null) return Optional.empty();
+            UUID submissionId = row.get("id", UUID.class);
+            return Optional.of(new Submission(
+                    tenantId, submissionId, row.get("finding_id", UUID.class),
+                    row.get("notice_id", UUID.class), row.get("round_no", Integer.class),
+                    row.get("submitted_by", UUID.class), row.get("submitted_at", OffsetDateTime.class),
+                    row.get("evidence_set_id", UUID.class), findSubmissionEvidenceSnapshots(submissionId),
+                    row.get("statement", String.class), row.get("expected_version", Long.class),
+                    row.get("command_id", UUID.class)));
+        }
+
+        private java.util.List<VerifiedFileEvidenceSnapshot> findSubmissionEvidenceSnapshots(UUID submissionId) {
+            return dsl.fetch("""
+                    select tenant_id, evidence_item_id, file_id, file_link_id, owner_member_id, owner_actor_id,
+                           sha256, storage_version, verification_receipt_id, verifier_id, verifier_key_id,
+                           verification_policy_version, verification_level, verified_at
+                      from public.remediation_submission_evidence
+                     where tenant_id = cast(? as uuid) and submission_id = cast(? as uuid)
+                     order by evidence_item_id
+                    """, tenantId, submissionId).map(value -> new VerifiedFileEvidenceSnapshot(
+                    value.get("tenant_id", UUID.class), value.get("evidence_item_id", UUID.class),
+                    value.get("file_id", UUID.class), value.get("file_link_id", UUID.class),
+                    value.get("owner_member_id", UUID.class), value.get("owner_actor_id", UUID.class),
+                    value.get("sha256", String.class), value.get("storage_version", String.class),
+                    value.get("verification_receipt_id", UUID.class), value.get("verifier_id", String.class),
+                    value.get("verifier_key_id", String.class),
+                    value.get("verification_policy_version", String.class),
+                    FileEvidenceVerificationLevel.valueOf(value.get("verification_level", String.class)),
+                    value.get("verified_at", OffsetDateTime.class)));
         }
 
         @Override

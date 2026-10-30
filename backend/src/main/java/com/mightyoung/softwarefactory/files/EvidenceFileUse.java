@@ -13,5 +13,6 @@ public record EvidenceFileUse(
         UUID evidenceSetOwnerMemberId,
         UUID evidenceItemId,
         UUID fileId,
-        String recordedVerificationLevel) {
+        String recordedVerificationLevel,
+        String recordedSha256) {
 }

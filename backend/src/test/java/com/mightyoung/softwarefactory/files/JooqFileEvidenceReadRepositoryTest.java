@@ -29,6 +29,7 @@ class JooqFileEvidenceReadRepositoryTest {
     private static final UUID SET_ID = UUID.fromString("50000000-0000-0000-0000-000000000002");
     private static final UUID ITEM_ID = UUID.fromString("51000000-0000-0000-0000-000000000002");
     private static final UUID FILE_ID = UUID.fromString("52000000-0000-0000-0000-000000000002");
+    private static final UUID LINK_ID = UUID.fromString("53000000-0000-0000-0000-000000000002");
 
     @Test
     void fileMetadataLookupIsTenantAndFileScopedAndCarriesTheOwnerAndStorageVersion() {
@@ -68,16 +69,17 @@ class JooqFileEvidenceReadRepositoryTest {
             Field<UUID> id = field("id", UUID.class);
             var result = values.newResult(id);
             var row = values.newRecord(id);
-            row.set(id, UUID.randomUUID());
+            row.set(id, LINK_ID);
             result.add(row);
             return new MockResult[] {new MockResult(1, result)};
         };
         var repository = new JooqEvidenceFileReferenceReadRepository(
                 using(new MockConnection(provider), SQLDialect.POSTGRES));
         EvidenceFileUse use = new EvidenceFileUse(TENANT_ID, ACTOR_ID, MEMBER_ID,
-                FINDING_ID, 2, SET_ID, MEMBER_ID, ITEM_ID, FILE_ID, "CONTENT");
+                FINDING_ID, 2, SET_ID, MEMBER_ID, ITEM_ID, FILE_ID, "CONTENT", "a".repeat(64));
 
-        assertThat(repository.hasAuthorizedEvidenceReference(use)).isTrue();
+        UUID linkedId = repository.findAuthorizedEvidenceReference(use).orElseThrow();
+        assertThat(linkedId).isEqualTo(LINK_ID);
         String normalized = sql.get().toLowerCase(java.util.Locale.ROOT);
         assertThat(normalized).contains(
                 "from public.file_link fl", "join public.evidence_item ei", "join public.evidence_set es",
