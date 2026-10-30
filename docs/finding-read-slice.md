@@ -34,3 +34,10 @@
 要继续服务端 DB 读实现，最小权限提案为：在两个软件工厂专用数据库已有 schema `USAGE` 前提下，迁移身份创建并拥有 `public.finding`、约束、索引和 RLS policy；应用身份仅获得该表 `SELECT`。不授予应用身份 DDL、`INSERT/UPDATE/DELETE` 或序列权限。真实会话认证、tenant membership、数据范围服务与已有低权限角色的必要读取权限须先就绪；不得使用 request tenant 参数、`SET ROLE`、超级用户或本地数据库替代。
 
 本批没有连接数据库、运行迁移、改现有角色权限、生成正式业务行或增加登录/伪登录接口。剩余实现应在上述依赖通过 review 后开始，并在 `might_software_factory_test` 中使用明确合成且可清理的数据验证真实 HTTP 链路。
+
+## 本地验证记录
+
+- `./mvnw -Dmaven.repo.local=/tmp/might-software-factory-m2 -pl backend -Dtest=FindingLedgerContractTest test`：4 passed，0 failed/errors/skipped。
+- `./mvnw -Dmaven.repo.local=/tmp/might-software-factory-m2 -pl backend clean verify`：23 passed，0 failed/errors/skipped；含模块边界、依赖闭包和既有查询校验器检查。
+- TDD 初次将测试跑在空契约骨架上时，路径/字段/阻塞声明检查有 3 个断言失败，外部 schema 引用有 1 个解析错误；补齐契约后转为上述通过结果。此红灯是未实现契约的预期证据，不是 HTTP 或数据库功能失败报告。
+- 未运行 LAN 数据库 profile；本分支没有可用控制器、生产 finding 表或身份到 tenant 的运行链路。没有在本地创建数据库/容器，也没有连接或修改 LAN 数据库。
