@@ -14,4 +14,17 @@ public interface RoleScopeReadRepository {
             Set<UUID> positionIds,
             Set<UUID> groupIds,
             String permissionCode);
+
+    /** Resolves a non-read action using the same active membership and scoped RBAC joins. */
+    default List<RoleScopeDescriptor> findActiveActionScopes(
+            UUID tenantId,
+            UUID memberId,
+            Set<UUID> organizationIds,
+            Set<UUID> positionIds,
+            Set<UUID> groupIds,
+            String resourceType,
+            String action,
+            String permissionCode) {
+        return findActiveScopes(tenantId, memberId, organizationIds, positionIds, groupIds, permissionCode);
+    }
 }

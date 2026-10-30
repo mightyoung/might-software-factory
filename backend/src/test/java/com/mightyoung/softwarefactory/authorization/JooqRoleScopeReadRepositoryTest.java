@@ -51,6 +51,30 @@ class JooqRoleScopeReadRepositoryTest {
                 "finding.read", "finding", "read", "MEMBER", "ORG", "POSITION", "GROUP");
     }
 
+    @Test
+    void workflowActionScopesUseTheirOwnActionPermissionInsteadOfFindingRead() {
+        List<String> statements = new ArrayList<>();
+        List<List<Object>> bindings = new ArrayList<>();
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        MockDataProvider provider = context -> {
+            statements.add(context.sql());
+            bindings.add(Arrays.asList(context.bindings()));
+            return new MockResult[] {scopeRow(values)};
+        };
+        DSLContext dsl = DSL.using(new MockConnection(provider), SQLDialect.POSTGRES);
+        var repository = new JooqRoleScopeReadRepository(dsl);
+
+        List<RoleScopeDescriptor> scopes = repository.findActiveActionScopes(
+                TENANT_ID, MEMBER_ID, Set.of(ORG_ID), Set.of(POSITION_ID), Set.of(GROUP_ID),
+                "finding", "verify", "finding.verify");
+
+        assertThat(scopes).containsExactly(new RoleScopeDescriptor(SCOPE_ID, "EXPLICIT", ORG_ID));
+        assertThat(statements.getFirst().toLowerCase(java.util.Locale.ROOT))
+                .contains("permission", "\"p\".\"code\"", "\"p\".\"resource_type\"", "\"p\".\"action\"");
+        assertThat(bindings.getFirst()).contains("finding.verify", "finding", "verify");
+        assertThat(bindings.getFirst()).doesNotContain("finding.read", "read");
+    }
+
     private static MockResult scopeRow(DSLContext dsl) {
         Field<UUID> ruleId = DSL.field("scope_rule_id", UUID.class);
         Field<String> kind = DSL.field("kind", String.class);

@@ -4,6 +4,14 @@ import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContr
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FieldError;
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.ValidationException;
 import com.mightyoung.softwarefactory.identity.UnauthenticatedSessionException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowConfigurationException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEvidenceException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRuleException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
+import com.mightyoung.softwarefactory.workflow.WorkflowEngineUnavailableException;
+import com.mightyoung.softwarefactory.workflow.WorkflowResourceNotVisibleException;
+import com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +19,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
 import java.util.List;
@@ -35,10 +44,35 @@ public final class FindingApiExceptionHandler {
         return error(HttpStatus.NOT_FOUND, "RESOURCE_NOT_VISIBLE", "The finding is not visible", false, List.of());
     }
 
+    @ExceptionHandler(WorkflowResourceNotVisibleException.class)
+    ResponseEntity<ErrorResponse> workflowNotVisible() {
+        return error(HttpStatus.NOT_FOUND, "RESOURCE_NOT_VISIBLE", "The finding is not visible", false, List.of());
+    }
+
+    @ExceptionHandler({FindingWorkflowVersionConflictException.class,
+            FindingWorkflowIdempotencyConflictException.class, WorkflowTaskStateConflictException.class})
+    ResponseEntity<ErrorResponse> conflict() {
+        return error(HttpStatus.CONFLICT, "COMMAND_CONFLICT",
+                "The finding changed or this command key conflicts with a previous command", false, List.of());
+    }
+
+    @ExceptionHandler({FindingWorkflowRuleException.class, FindingWorkflowEvidenceException.class,
+            FindingWorkflowConfigurationException.class})
+    ResponseEntity<ErrorResponse> workflowRule() {
+        return error(HttpStatus.UNPROCESSABLE_ENTITY, "WORKFLOW_RULE",
+                "The finding workflow command is not valid in its current context", false, List.of());
+    }
+
     @ExceptionHandler(ValidationException.class)
     ResponseEntity<ErrorResponse> invalidQuery(ValidationException exception) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_QUERY", "The finding query is invalid", false,
                 List.of(new FieldError(exception.field(), exception.code())));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ResponseEntity<ErrorResponse> invalidBody() {
+        return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "The finding command request is invalid",
+                false, List.of());
     }
 
     @ExceptionHandler({IllegalArgumentException.class, HttpMessageNotReadableException.class,
@@ -47,10 +81,11 @@ public final class FindingApiExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, "INVALID_QUERY", "The finding request is invalid", false, List.of());
     }
 
-    @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class})
+    @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
+            WorkflowEngineUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
-                "The finding read could not be completed", true, List.of());
+                "The finding command could not be completed safely", true, List.of());
     }
 
     private static ResponseEntity<ErrorResponse> error(

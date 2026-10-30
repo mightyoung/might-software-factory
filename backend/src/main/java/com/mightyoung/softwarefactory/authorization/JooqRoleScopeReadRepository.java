@@ -77,6 +77,20 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
             Set<UUID> positionIds,
             Set<UUID> groupIds,
             String permissionCode) {
+        return findActiveActionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
+                "finding", "read", permissionCode);
+    }
+
+    @Override
+    public List<RoleScopeDescriptor> findActiveActionScopes(
+            UUID tenantId,
+            UUID memberId,
+            Set<UUID> organizationIds,
+            Set<UUID> positionIds,
+            Set<UUID> groupIds,
+            String resourceType,
+            String action,
+            String permissionCode) {
         Condition currentGrant = GRANT_VALID_FROM.le(CURRENT_TIMESTAMP)
                 .and(GRANT_VALID_TO.isNull().or(GRANT_VALID_TO.gt(CURRENT_TIMESTAMP)));
         Condition subject = SUBJECT_KIND.eq("MEMBER").and(GRANT_MEMBER_ID.eq(memberId))
@@ -92,8 +106,8 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
                         .and(ROLE_PERMISSION_ROLE_ID.eq(GRANT_ROLE_ID)))
                 .join(PERMISSION).on(PERMISSION_ID.eq(ROLE_PERMISSION_PERMISSION_ID)
                         .and(PERMISSION_CODE.eq(permissionCode))
-                        .and(PERMISSION_RESOURCE_TYPE.eq("finding"))
-                        .and(PERMISSION_ACTION.eq("read")))
+                        .and(PERMISSION_RESOURCE_TYPE.eq(resourceType))
+                        .and(PERMISSION_ACTION.eq(action)))
                 .join(SCOPE_RULE).on(SCOPE_TENANT_ID.eq(ROLE_PERMISSION_TENANT_ID)
                         .and(SCOPE_ID.eq(ROLE_PERMISSION_SCOPE_ID)))
                 .leftJoin(SCOPE_ORG).on(SCOPE_ORG_TENANT_ID.eq(ROLE_PERMISSION_TENANT_ID)

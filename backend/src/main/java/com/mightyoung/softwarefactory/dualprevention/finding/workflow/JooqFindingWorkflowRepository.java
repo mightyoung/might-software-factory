@@ -1,0 +1,315 @@
+package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
+
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandClaim;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Notice;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Submission;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Transition;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Verification;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.WorkflowCommand;
+import org.jooq.DSLContext;
+import org.jooq.Record;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
+
+/** jOOQ persistence with tenant-local RLS, row locking, and a single shared transaction boundary. */
+@Repository
+public final class JooqFindingWorkflowRepository implements FindingWorkflowRepository {
+
+    private final DSLContext dsl;
+    private final TransactionTemplate commandTransaction;
+
+    public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager) {
+        this.dsl = dsl;
+        this.commandTransaction = new TransactionTemplate(transactionManager);
+    }
+
+    @Override
+    public <T> T inTenantTransaction(UUID tenantId, Function<Transaction, T> work) {
+        if (tenantId == null || work == null) throw new IllegalArgumentException("Tenant and command are required");
+        return commandTransaction.execute(status -> {
+            setLocalTenant(tenantId);
+            return work.apply(new JooqTransaction(tenantId));
+        });
+    }
+
+    private void setLocalTenant(UUID tenantId) {
+        String applied = (String) dsl.fetchValue("select set_config(?, ?, true)",
+                "app.tenant_id", tenantId.toString());
+        if (!tenantId.toString().equals(applied)) {
+            throw new IllegalStateException("Unable to apply the finding workflow tenant context");
+        }
+    }
+
+    private final class JooqTransaction implements Transaction {
+        private final UUID tenantId;
+
+        private JooqTransaction(UUID tenantId) {
+            this.tenantId = tenantId;
+        }
+
+        @Override
+        public Optional<FindingWorkflowCase> findForUpdate(UUID findingId) {
+            Record row = dsl.fetchOne("""
+                    select tenant_id, id, organization_id, code, description, discovered_at,
+                           source_event_id, risk_id, grade, state, round_no, version,
+                           created_by_member_id, updated_by_member_id
+                      from public.finding
+                     where tenant_id = cast(? as uuid) and id = cast(? as uuid)
+                     for update
+                    """, tenantId, findingId);
+            return Optional.ofNullable(row).map(JooqFindingWorkflowRepository::toFinding);
+        }
+
+        @Override
+        public void insertFinding(FindingWorkflowCase finding) {
+            if (!tenantId.equals(finding.tenantId())) {
+                throw new IllegalArgumentException("A finding cannot be inserted under another tenant");
+            }
+            int inserted = dsl.execute("""
+                    insert into public.finding
+                        (tenant_id, id, organization_id, code, description, discovered_at,
+                         source_event_id, risk_id, grade, state, round_no, version,
+                         created_at, updated_at, created_by_member_id, updated_by_member_id)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, ?,
+                            cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, current_timestamp,
+                            current_timestamp, cast(? as uuid), cast(? as uuid))
+                    """, finding.tenantId(), finding.id(), finding.organizationId(), finding.code(),
+                    finding.description(), finding.discoveredAt(), finding.sourceEventId(), finding.riskId(),
+                    finding.grade(), finding.state().name(), finding.roundNo(), finding.version(),
+                    finding.createdByMemberId(), finding.updatedByMemberId());
+            if (inserted != 1) throw new IllegalStateException("Finding create did not insert one row");
+        }
+
+        @Override
+        public void updateFinding(FindingWorkflowCase finding, long expectedVersion) {
+            int updated = dsl.execute("""
+                    update public.finding
+                       set state = ?, round_no = ?, version = ?, updated_at = current_timestamp,
+                           updated_by_member_id = cast(? as uuid)
+                     where tenant_id = cast(? as uuid) and id = cast(? as uuid) and version = ?
+                    """, finding.state().name(), finding.roundNo(), finding.version(),
+                    finding.updatedByMemberId(), tenantId, finding.id(), expectedVersion);
+            if (updated != 1) throw new FindingWorkflowVersionConflictException();
+        }
+
+        @Override
+        public CommandClaim claimCommand(WorkflowCommand command) {
+            int inserted = dsl.execute("""
+                    insert into public.finding_command_receipt
+                        (tenant_id, command_id, actor_id, action, request_hash)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?)
+                    on conflict (tenant_id, command_id) do nothing
+                    """, tenantId, command.commandId(), command.actorId(), command.action(), command.requestHash());
+            if (inserted == 1) return CommandClaim.newClaim();
+
+            Record prior = dsl.fetchOne("""
+                    select actor_id, action, request_hash, result_finding_id,
+                           result_state, result_round_no, result_version
+                      from public.finding_command_receipt
+                     where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
+                     for update
+                    """, tenantId, command.commandId());
+            if (prior == null) throw new IllegalStateException("Conflicting command receipt could not be read");
+            if (!command.actorId().equals(prior.get("actor_id", UUID.class))
+                    || !command.action().equals(prior.get("action", String.class))
+                    || !command.requestHash().equals(prior.get("request_hash", String.class))) {
+                throw new FindingWorkflowIdempotencyConflictException();
+            }
+            UUID resultFindingId = prior.get("result_finding_id", UUID.class);
+            if (resultFindingId == null) {
+                throw new IllegalStateException("An incomplete command receipt cannot be replayed");
+            }
+            return CommandClaim.replay(new CommandResult(resultFindingId,
+                    FindingWorkflowState.valueOf(prior.get("result_state", String.class)),
+                    prior.get("result_round_no", Integer.class), prior.get("result_version", Long.class)));
+        }
+
+        @Override
+        public void completeCommand(UUID commandId, CommandResult result) {
+            int updated = dsl.execute("""
+                    update public.finding_command_receipt
+                       set result_finding_id = cast(? as uuid), result_state = ?, result_round_no = ?,
+                           result_version = ?, completed_at = current_timestamp
+                     where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
+                       and result_finding_id is null
+                    """, result.findingId(), result.state().name(), result.roundNo(), result.version(),
+                    tenantId, commandId);
+            if (updated != 1) throw new IllegalStateException("Command receipt could not be completed");
+        }
+
+        @Override
+        public void appendTransition(Transition transition) {
+            int inserted = dsl.execute("""
+                    insert into public.finding_transition
+                        (tenant_id, id, finding_id, from_state, to_state, command_id, actor_id,
+                         occurred_at, reason, from_version, to_version)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid),
+                            cast(? as uuid), ?, ?, ?, ?)
+                    """, tenantId, UUID.randomUUID(), transition.findingId(),
+                    transition.fromState() == null ? null : transition.fromState().name(),
+                    transition.toState().name(), transition.commandId(), transition.actorId(),
+                    transition.occurredAt(), transition.reason(), transition.fromVersion(), transition.toVersion());
+            if (inserted != 1) throw new IllegalStateException("Finding transition did not persist");
+
+            int audited = dsl.execute("""
+                    insert into public.audit_event
+                        (tenant_id, id, actor_id, action, resource_type, resource_id, result, reason,
+                         diff_redacted, trace_id, policy_version, occurred_at)
+                    select cast(? as uuid), cast(? as uuid), cast(? as uuid), receipt.action, 'finding',
+                           cast(? as uuid), 'SUCCESS', cast(? as text),
+                           jsonb_build_object(
+                               'fromState', cast(? as text),
+                               'toState', cast(? as text),
+                               'fromVersion', cast(? as bigint),
+                               'toVersion', cast(? as bigint)),
+                           cast(? as varchar), 'finding-workflow-v1', ?
+                      from public.finding_command_receipt receipt
+                     where receipt.tenant_id = cast(? as uuid)
+                       and receipt.command_id = cast(? as uuid)
+                       and receipt.actor_id = cast(? as uuid)
+                    """, tenantId, UUID.randomUUID(), transition.actorId(), transition.findingId(),
+                    transition.reason(), transition.fromState() == null ? null : transition.fromState().name(),
+                    transition.toState().name(), transition.fromVersion(), transition.toVersion(),
+                    org.slf4j.MDC.get("traceId"), transition.occurredAt(), tenantId,
+                    transition.commandId(), transition.actorId());
+            if (audited != 1) throw new IllegalStateException("Finding audit event did not persist");
+        }
+
+        @Override
+        public void appendConfirmation(Confirmation confirmation) {
+            int inserted = dsl.execute("""
+                    insert into public.finding_confirmation
+                        (tenant_id, finding_id, stage, actor_member_id, decision, decided_at,
+                         expected_version, command_id)
+                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), 'APPROVE', ?, ?, cast(? as uuid))
+                    """, tenantId, confirmation.findingId(), confirmation.stage(), confirmation.actorMemberId(),
+                    confirmation.decidedAt(), confirmation.expectedVersion(), confirmation.commandId());
+            if (inserted != 1) throw new IllegalStateException("Finding confirmation did not persist");
+        }
+
+        @Override
+        public void openRound(UUID findingId, int roundNo, UUID commandId) {
+            int inserted = dsl.execute("""
+                    insert into public.remediation_round
+                        (tenant_id, finding_id, round_no, state, opened_at, opened_by_command_id)
+                    values (cast(? as uuid), cast(? as uuid), ?, 'OPEN', current_timestamp, cast(? as uuid))
+                    """, tenantId, findingId, roundNo, commandId);
+            if (inserted != 1) throw new IllegalStateException("Remediation round did not open");
+        }
+
+        @Override
+        public void closeRound(UUID findingId, int roundNo, String state, UUID commandId) {
+            if (!"FAILED".equals(state) && !"CLOSED".equals(state)) {
+                throw new IllegalArgumentException("Unsupported closed round state");
+            }
+            int updated = dsl.execute("""
+                    update public.remediation_round
+                       set state = ?, closed_at = current_timestamp, closed_by_command_id = cast(? as uuid)
+                     where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid)
+                       and round_no = ? and state = 'OPEN'
+                    """, state, commandId, tenantId, findingId, roundNo);
+            if (updated != 1) throw new FindingWorkflowRuleException("The remediation round is not open");
+            String noticeState = "FAILED".equals(state) ? "NEEDS_REWORK" : "VERIFIED";
+            int updatedNotice = dsl.execute("""
+                    update public.remediation_notice set state = ?
+                     where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid)
+                       and round_no = ? and state = 'ISSUED'
+                    """, noticeState, tenantId, findingId, roundNo);
+            if (updatedNotice != 1) {
+                throw new FindingWorkflowRuleException("The remediation notice is not active for this round");
+            }
+        }
+
+        @Override
+        public Optional<Notice> findNotice(UUID findingId, int roundNo) {
+            Record row = dsl.fetchOne("""
+                    select id, finding_id, round_no, assignee_id, due_at, original_due_at, requirements
+                      from public.remediation_notice
+                     where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid) and round_no = ?
+                    """, tenantId, findingId, roundNo);
+            return Optional.ofNullable(row).map(value -> new Notice(
+                    value.get("id", UUID.class), value.get("finding_id", UUID.class),
+                    value.get("round_no", Integer.class), value.get("assignee_id", UUID.class),
+                    value.get("due_at", OffsetDateTime.class), value.get("original_due_at", OffsetDateTime.class),
+                    value.get("requirements", String.class)));
+        }
+
+        @Override
+        public void insertNotice(Notice notice, UUID commandId) {
+            int inserted = dsl.execute("""
+                    insert into public.remediation_notice
+                        (tenant_id, id, finding_id, revision, round_no, assignee_id, due_at, original_due_at,
+                         requirements, state, issued_at, command_id)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?,
+                            ?, 'ISSUED', current_timestamp, cast(? as uuid))
+                    """, tenantId, notice.id(), notice.findingId(), notice.roundNo(), notice.roundNo(),
+                    notice.assigneeMemberId(), notice.dueAt(), notice.originalDueAt(),
+                    notice.requirements(), commandId);
+            if (inserted != 1) throw new IllegalStateException("Remediation notice did not persist");
+        }
+
+        @Override
+        public void insertSubmission(Submission submission) {
+            int inserted = dsl.execute("""
+                    insert into public.remediation_submission
+                        (tenant_id, id, finding_id, notice_id, round_no, submitted_by, submitted_at,
+                         evidence_set_id, statement, expected_version, command_id)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid), ?,
+                            cast(? as uuid), ?, cast(? as uuid), ?, ?, cast(? as uuid))
+                    """, tenantId, submission.id(), submission.findingId(), submission.noticeId(),
+                    submission.roundNo(), submission.submittedByMemberId(), submission.submittedAt(),
+                    submission.evidenceSetId(), submission.statement(), submission.expectedVersion(),
+                    submission.commandId());
+            if (inserted != 1) throw new IllegalStateException("Remediation submission did not persist");
+        }
+
+        @Override
+        public Optional<Submission> findSubmission(UUID findingId, int roundNo) {
+            Record row = dsl.fetchOne("""
+                    select id, finding_id, notice_id, round_no, submitted_by, submitted_at,
+                           evidence_set_id, statement, expected_version, command_id
+                      from public.remediation_submission
+                     where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid) and round_no = ?
+                    """, tenantId, findingId, roundNo);
+            return Optional.ofNullable(row).map(value -> new Submission(
+                    value.get("id", UUID.class), value.get("finding_id", UUID.class),
+                    value.get("notice_id", UUID.class), value.get("round_no", Integer.class),
+                    value.get("submitted_by", UUID.class), value.get("submitted_at", OffsetDateTime.class),
+                    value.get("evidence_set_id", UUID.class), value.get("statement", String.class),
+                    value.get("expected_version", Long.class), value.get("command_id", UUID.class)));
+        }
+
+        @Override
+        public void insertVerification(Verification verification) {
+            int inserted = dsl.execute("""
+                    insert into public.verification
+                        (tenant_id, id, finding_id, submission_id, round_no, reviewer_id, decision,
+                         reason, decided_at, command_id)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid), ?,
+                            cast(? as uuid), ?, ?, ?, cast(? as uuid))
+                    """, tenantId, UUID.randomUUID(), verification.findingId(), verification.submissionId(),
+                    verification.roundNo(), verification.reviewerMemberId(), verification.decision().name(),
+                    verification.reason(), verification.decidedAt(), verification.commandId());
+            if (inserted != 1) throw new IllegalStateException("Verification did not persist");
+        }
+    }
+
+    private static FindingWorkflowCase toFinding(Record row) {
+        return new FindingWorkflowCase(
+                row.get("tenant_id", UUID.class), row.get("id", UUID.class),
+                row.get("organization_id", UUID.class), row.get("code", String.class),
+                row.get("description", String.class), row.get("discovered_at", OffsetDateTime.class),
+                row.get("source_event_id", UUID.class), row.get("risk_id", UUID.class),
+                row.get("grade", String.class), FindingWorkflowState.valueOf(row.get("state", String.class)),
+                row.get("round_no", Integer.class), row.get("version", Long.class),
+                row.get("created_by_member_id", UUID.class), row.get("updated_by_member_id", UUID.class));
+    }
+}
