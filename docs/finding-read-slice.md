@@ -1,43 +1,58 @@
 # 隐患台账只读切片
 
-状态：契约与无数据库契约测试已建立；HTTP 服务、生产 schema 和身份授权依赖尚未实现。本文件不是可运行端点或业务完成声明。
+状态：本地分支已实现只读 HTTP handler、服务、授权边界、jOOQ 查询和 PostgreSQL migration；生产身份签发、授权数据源、数据库迁移与角色授权尚未就绪。本文件不表示生产闭环或真实租户隔离已经验收。
 
-## 执行计划
+## 本地实现
 
-1. **先完成 P1 身份边界。** 使用经验证的 `SESSION` 持久会话解析 actor、有效 tenant member 和当前 tenant；配置 CSRF；用服务端授权判断隐患读取权限及数据范围。请求体、query string 和普通 header 都不能选择 tenant。缺会话返回 `401 AUTH_REQUIRED`；会话有效但无读取授权返回 `403 ACTION_DENIED`。
-2. **建立隐患只读存储边界。** 由迁移身份新增 `public.finding` 及必要索引、约束与 RLS `ENABLE/FORCE` policy。运行身份保持非 owner、非 superuser、`NOBYPASSRLS`。当前应用角色只在新表上申请 `SELECT`；不授予 DDL、序列写权限或其他库权限。此权限尚未申请或授予。
-3. **实现受控查询与详情。** 在 `dualprevention` 提供 jOOQ 只读仓储和 Spring MVC 控制器；从可信身份上下文取得 tenant 和 member，先应用 tenant 与授权数据范围谓词，再算精确总数及分页。详情对不存在和超出数据范围统一返回 `404 RESOURCE_NOT_VISIBLE`。不提供流程命令、附件、导出或写操作。
-4. **用两个项目专用库和合成记录验收。** 无登录、无读取权、跨租户 ID、字段/操作符白名单、total/pageCount、排序分页、连接池上下文回收均需负例/正例。没有真实 session、表和经授权运行角色时不启用匿名或伪造身份的替代测试。
+- `GET /api/v1/entities/finding/schema`：返回 `finding` v1 的字段目录。端点先验证当前会话和服务端读取授权。
+- `POST /api/v1/entities/finding/query`：严格解析 JSON；只接受一开始的 offset page，size 为 20/50/100、offset 不超过 10,000。字段、排序、过滤运算符和值由 `FindingEntitySchema` 和 `EntityQueryValidator` 白名单控制。默认排序 `discoveredAt DESC, id ASC`，每行始终含 `id`，响应提供精确 `total` 和 `pageCount`。
+- `GET /api/v1/entities/finding/{id}`：详情只按 UUID 读取。不存在与不在可见范围统一为 `404 RESOURCE_NOT_VISIBLE`。
 
-## 前后端契约
+查询范围取自验证过的 `VerifiedSessionPrincipal`，请求 body 和 `X-Tenant-Id` 不参与选租户。授权策略返回当前会话 tenant 与显式组织范围，列表 count、列表和详情查询同时应用 `tenant_id`、`organization_id` 条件。仓储使用参数化 jOOQ 查询，在一个只读 `REPEATABLE_READ` 事务内设置事务级 `app.tenant_id`，以便 RLS 生效；没有动态 SQL 字段名。
 
-机器可读契约：[finding-ledger.yaml](../contracts/openapi/finding-ledger.yaml)。所有路径在当前分支都标为 `contract-only`，尚无控制器提供服务。
+## 身份、会话和 CSRF 边界
 
-|用途|方法与路径|请求/响应|
+`SessionContextResolver` 只接受 identity 模块签发的 principal 类型；无认证或普通字符串 principal 返回 `401 AUTH_REQUIRED`。principal 构造器不是 public，唯一显式构造夹具位于 test source。生产登录/身份验证 provider 尚未实现，Security 配置禁用 form login、HTTP Basic 和默认生成用户，因此当前没有生产途径创建此 principal。
+
+权限模块提供 `EntityReadAccessPolicy` 服务端策略接口，现有 production bean `DenyByDefaultEntityReadAccessPolicy` 一律拒绝。没有权限、租户不匹配或组织范围为空返回 `403 ACTION_DENIED`。没有伪造用户头、租户头或匿名演示登录路径。
+
+`POST` 受 CSRF 保护，使用 `XSRF-TOKEN` cookie 与 `X-XSRF-TOKEN` header；CSRF cookie 为 Secure、SameSite=Lax，且可由同源浏览器读取。SESSION cookie 使用 `SESSION` 名称并配置 Secure、HttpOnly、SameSite=Lax，Spring Session timeout 为 30 分钟。身份登录轮换和实际持久会话恢复仍待真实身份 provider 集成。
+
+## 数据库 migration 与权限
+
+新增 `backend/src/main/resources/db/migration/V2__dualprevention_finding_read.sql`：`public.finding`、租户内业务号唯一约束、状态/等级/版本检查、读取索引、RLS ENABLE/FORCE 和基于 `app.tenant_id` 的 tenant policy。`organization_id` 是内部数据范围列，不在 API 字段目录中。source event、risk 等跨模块关联目前只有 ID，没有引用到尚未发布的外模块表。
+
+默认运行配置只使用 `LAN_PG_APP_JDBC_URL` / `LAN_PG_APP_USERNAME` / `LAN_PG_APP_PASSWORD`，并关闭 runtime Flyway。P0 兼容测试 profile 仍显式使用自己的迁移配置与 `flyway_schema_history`；应用 migration 使用独立的 `flyway_schema_history_app`，避免 P0 probe migration 与业务 migration 混为一条历史。独立 migration runner/凭据尚未配置，本地没有运行这段 DDL。
+
+最小后续数据库权限提案（本轮未执行）：
+
+- 迁移身份在两个软件工厂专用库需要 `CONNECT`、`public` schema 的 `USAGE` 与 `CREATE`，用于建立 finding 表/索引/RLS policy 以及独立的 Flyway history；它拥有新表，不作为应用登录身份。部署迁移后，finding 表的运行授权单独交由库管理员发放。
+- finding 读取运行身份只需两个专用库的 `CONNECT`、`public` schema 的 `USAGE` 和 `GRANT SELECT ON TABLE public.finding`。它不需要 finding 表写权限、sequence 权限、DDL、`BYPASSRLS`、表所有权或角色成员授权；真正授权前仍须确认运行身份不是 superuser/BYPASSRLS，且 RLS policy 已部署。
+- `spring.session.store-type=jdbc` 当前已配置，但真实登录/session 表尚未设计或部署。若后续继续用 JDBC 持久会话，需先确认实际 Spring Session 表和索引，再由迁移身份建表，运行身份只获得对应会话表的 `SELECT/INSERT/UPDATE/DELETE`，不能把这些未确认权限混进 finding 的 grant。
+- 本只读切片不调用 Flowable。不要给 finding 运行身份 Flowable 表权限；若另阶段启用流程引擎，须按实际命令及引擎版本另列所需对象权限，不以本切片授权代替。
+
+本轮没有执行 GRANT、连接数据库或确认现有权限，finding 表迁移也未运行。以上权限是部署前待核清单，不代表当前应用账号已具备读取权。
+
+## 前后端 wire 契约
+
+机器可读契约：[finding-ledger.yaml](../contracts/openapi/finding-ledger.yaml)。handler 现已在此分支实现，但生产依赖仍 fail closed；OpenAPI `x-implementation-status` 明确为 `local-handlers-fail-closed`。
+
+|用途|方法与路径|前端响应要点|
 |---|---|---|
-|读取当前用户可用 schema|`GET /api/v1/entities/finding/schema`|响应 `data.key=finding`、`data.schemaVersion="1"`、字段清单和 `meta`。|
-|列表查询|`POST /api/v1/entities/finding/query`|`filterAST`、`sort`、`page.number`、`size`、可选 `fields`；响应 `data.items`、`data.page` 和 `meta`。|
-|详情|`GET /api/v1/entities/finding/{id}`|`id` 为 UUID；响应 `data` 与 `meta`。未找到和不在调用者数据范围内都返回同一 `404 RESOURCE_NOT_VISIBLE`。|
+|字段目录|`GET /api/v1/entities/finding/schema`|`data.key=finding`、`data.schemaVersion="1"`、`data.fields`、`meta`|
+|分页列表|`POST /api/v1/entities/finding/query`|请求 `filterAST/sort/page.number/size/fields`；响应 `data.items`、`data.page.number/size/total/pageCount`、`meta`|
+|详情|`GET /api/v1/entities/finding/{id}`|`data` 为 finding v1 字段；`meta`|
 
-`finding` 是 `logical-schema.md` 的稳定实体 key；字段 schema 版本为字符串 `"1"`。注册字段为 `id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。API 使用 camelCase；不暴露 `tenant_id`。默认列表投影为 `id, code, discoveredAt, grade, state, roundNo`，可选详情字段来自同一 allowlist。`description` 在 v1 可读取，但不可筛选或排序。等级为 `UNKNOWN | GENERAL | MAJOR`；状态只使用接口规范中的 `DISCOVERED | PERSON_CONFIRM_PENDING | SAFETY_CONFIRM_PENDING | SAFETY_DISPATCH_PENDING | RECTIFYING | ACCEPTANCE_PENDING | CLOSED`。
+列表使用接口基线定义的实体级注册查询路径 `/api/v1/entities/{key}/query`。这不是大屏/页面批量查询协调器；后者唯一入口仍是 `/api/v1/page-queries`，其 pageKey、widget 请求拆分、预算、缓存和渐进结果本阶段均未实现。
 
-接口设计已有 `GET /entities/{key}/schema` 和 `POST /entities/{key}/query`，没有定义实体详情方法；本切片新增同一命名空间下的 `GET /entities/finding/{id}` 契约，作为独立兼容性 review 项，不暗示既有服务已支持该路由。
+字段 key 是 `id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影为 `id, code, discoveredAt, grade, state, roundNo`；`description` 可读但不可筛选或排序。请求体和返回投影都不包括租户/组织控制列。
 
-列表使用 **1 起始的 offset page**，`size` 只允许 20、50、100，offset 最多 10,000；不使用 cursor。无请求排序时按 `discoveredAt DESC, id ASC`，自定义排序末尾追加 `id ASC` 稳定分页。`total` 是当前有效 tenant、数据范围和用户筛选共同约束后的精确行数，计算在 page slicing 前；`pageCount = ceil(total / size)`，空集两者均为 0。计数不能安全完成时请求失败，不能伪报 0。此业务切片比通用查询 schema 更严格，因为列表 UI 需要可确定的页数。
+浏览器使用同源 `SESSION` cookie。列表 POST 要带 `X-XSRF-TOKEN`。无有效会话是 401，读取权限或 CSRF 拒绝是 403，详情不可见统一 404，查询形状错误 400，安全读取失败 503。菜单可见性不代替服务端授权。
 
-浏览器使用同源 session cookie `SESSION`，通过浏览器 credential 请求；列表 POST 携带与 `XSRF-TOKEN` cookie 配对的 `X-XSRF-TOKEN`。无效/过期会话为 401；授权或 CSRF 拒绝为 403；详情不存在或超出范围统一 404。服务端不接受 tenant header 或 body tenant 字段。菜单隐藏不能代替接口鉴权。
+## 当前阻塞与验证边界
 
-## 当前阶段依赖与数据库边界
+生产登录/身份 provider、tenant membership 与授权数据源、有效数据范围服务、独立 migration 执行、运行身份 `finding` SELECT 权限、真实 PostgreSQL RLS/HTTP 联调均未完成。授权服务当前默认拒绝，因此本地 handler 的测试成功不能表示生产用户可访问或业务租户隔离已经通过。
 
-代码检查确认仓库目前没有 `SecurityFilterChain`、身份认证 provider、会话到 tenant 的可信解析器、生产 controller 或生产 migration。P0 集成 migration 只建临时兼容探针表；PR3 记录的受限应用角色在测试库不能读取 `p0_finding_projection`，没有 `finding` 业务表权限。因此本批只验证了 wire schema 与既有查询校验器，不虚称真实 API 或租户隔离完成。
+无数据库检查使用 test-only 安全上下文夹具、显式 fake repository/policy 和 jOOQ MockDataProvider。它们证明 HTTP 状态码、CSRF/输入白名单、tenant/org 参数绑定和 SQL 形状，不运行 PostgreSQL parser、RLS policy、连接池回收或真实身份会话。
 
-要继续服务端 DB 读实现，最小权限提案为：在两个软件工厂专用数据库已有 schema `USAGE` 前提下，迁移身份创建并拥有 `public.finding`、约束、索引和 RLS policy；应用身份仅获得该表 `SELECT`。不授予应用身份 DDL、`INSERT/UPDATE/DELETE` 或序列权限。真实会话认证、tenant membership、数据范围服务与已有低权限角色的必要读取权限须先就绪；不得使用 request tenant 参数、`SET ROLE`、超级用户或本地数据库替代。
-
-本批没有连接数据库、运行迁移、改现有角色权限、生成正式业务行或增加登录/伪登录接口。剩余实现应在上述依赖通过 review 后开始，并在 `might_software_factory_test` 中使用明确合成且可清理的数据验证真实 HTTP 链路。
-
-## 本地验证记录
-
-- `./mvnw -Dmaven.repo.local=/tmp/might-software-factory-m2 -pl backend -Dtest=FindingLedgerContractTest test`：4 passed，0 failed/errors/skipped。
-- `./mvnw -Dmaven.repo.local=/tmp/might-software-factory-m2 -pl backend clean verify`：23 passed，0 failed/errors/skipped；含模块边界、依赖闭包和既有查询校验器检查。
-- TDD 初次将测试跑在空契约骨架上时，路径/字段/阻塞声明检查有 3 个断言失败，外部 schema 引用有 1 个解析错误；补齐契约后转为上述通过结果。此红灯是未实现契约的预期证据，不是 HTTP 或数据库功能失败报告。
-- 未运行 LAN 数据库 profile；本分支没有可用控制器、生产 finding 表或身份到 tenant 的运行链路。没有在本地创建数据库/容器，也没有连接或修改 LAN 数据库。
+本阶段没有运行数据库 migration、GRANT、LAN DB/Redis 连接、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。

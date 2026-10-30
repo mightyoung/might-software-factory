@@ -31,7 +31,7 @@ class FindingLedgerContractTest {
         Map<String, Object> contract = readContract();
 
         assertThat(contract).containsEntry("openapi", "3.1.0");
-        assertThat(contract).containsEntry("x-implementation-status", "contract-only");
+        assertThat(contract).containsEntry("x-implementation-status", "local-handlers-fail-closed");
         Map<String, Object> paths = (Map<String, Object>) contract.get("paths");
         assertThat(paths).containsKeys(
                 "/api/v1/entities/finding/schema",
@@ -168,9 +168,10 @@ class FindingLedgerContractTest {
     }
 
     @Test
-    void documentsTheAuthenticationAndDataScopeDependenciesInsteadOfClaimingAHandlerExists() throws IOException {
+    void documentsTheRemainingProductionAuthenticationAndDataScopeBlockers() throws IOException {
         String yaml = Files.readString(contractPath());
-        assertThat(yaml).contains("no controller", "no production finding table", "no verified session-to-tenant resolver");
+        assertThat(yaml).contains("no production login", "denies by default", "migration has not been applied",
+                "has not been granted SELECT");
     }
 
     private static void assertValid(Schema schema, String json) {

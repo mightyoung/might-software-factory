@@ -2,14 +2,17 @@ spring:
   application:
     name: might-software-factory
   datasource:
-    url: ${LAN_PG_JDBC_URL}
-    username: ${LAN_PG_USERNAME}
-    password: ${LAN_PG_PASSWORD}
+    url: ${LAN_PG_APP_JDBC_URL}
+    username: ${LAN_PG_APP_USERNAME}
+    password: ${LAN_PG_APP_PASSWORD}
     driver-class-name: org.postgresql.Driver
   flyway:
-    enabled: true
+    # Runtime must never run DDL. Apply versioned migrations separately with the migration identity.
+    enabled: false
+    table: flyway_schema_history_app
   session:
     store-type: jdbc
+    timeout: 30m
     jdbc:
       initialize-schema: never
   jooq:
