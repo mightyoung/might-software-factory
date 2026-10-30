@@ -21,8 +21,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Authorizes and opens the exact file version fixed by a sealed remediation-submission snapshot.
- * The short read transaction is the authorization linearization point: a response opened before a later
- * revocation may finish sending its already verified buffer, while each subsequent request rechecks access.
+ * The permission scope is the snapshot resolved for this request. This flow does not lock principal, member,
+ * role, or grant-source rows against revocation; a later request resolves authorization again. The evidence
+ * query's shared locks protect only the selected file-link and file-object rows while opening pinned content.
  */
 @Service
 public final class FindingEvidenceContentReadService implements FindingEvidenceContentReader {
@@ -51,8 +52,8 @@ public final class FindingEvidenceContentReadService implements FindingEvidenceC
             this.readTransaction = null;
         } else {
             this.readTransaction = new TransactionTemplate(transactionManager);
-            // The repository takes short-lived shared row locks so a concurrent link revocation or
-            // file-state change cannot slip between authorization and opening the pinned bytes.
+            // The evidence query takes short-lived shared locks on file_link/file_object only. They do not
+            // serialize the request's principal/member/role/grant snapshot with an authorization revocation.
             this.readTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
         }
     }

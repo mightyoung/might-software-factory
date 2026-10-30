@@ -271,6 +271,26 @@ class FindingEvidenceContentReadServiceTest {
         assertThat(contentReader.calls).hasValue(1);
     }
 
+    @Test
+    void revocationAfterTheRequestAuthorizationSnapshotDoesNotRewriteThatRequestBeforeCommit() throws Exception {
+        // Synthetic ordering: FindingReadAuthorizer has resolved the request scope before this hook runs;
+        // the hook revokes the grant before the repository returns and before the read transaction commits.
+        snapshotRepository.afterAuthorizationScopeResolved = () -> accessPolicy.grant = Optional.empty();
+
+        VerifiedFileContent content = service.openSubmittedEvidence(FINDING_ID, 2, ITEM_ID);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (content) {
+            content.transferTo(output);
+        }
+
+        assertThat(output.toString(StandardCharsets.UTF_8)).isEqualTo("synthetic pinned bytes");
+        assertThat(accessPolicy.grant).isEmpty();
+        assertThatThrownBy(() -> service.openSubmittedEvidence(FINDING_ID, 2, ITEM_ID))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThat(snapshotRepository.calls).isEqualTo(1);
+        assertThat(contentReader.calls).hasValue(1);
+    }
+
     private static VerifiedFileEvidenceSnapshot snapshot() {
         return new VerifiedFileEvidenceSnapshot(TENANT_ID, ITEM_ID, FILE_ID, LINK_ID, MEMBER_ID, ACTOR_ID,
                 "a".repeat(64), "disk-v1", UUID.randomUUID(), "server-verifier", "key-1", "content-v1",
@@ -291,12 +311,16 @@ class FindingEvidenceContentReadServiceTest {
         private Optional<VerifiedFileEvidenceSnapshot> snapshot = Optional.empty();
         private int calls;
         private FindingEvidenceReadScope scope;
+        private Runnable afterAuthorizationScopeResolved;
 
         @Override
         public Optional<VerifiedFileEvidenceSnapshot> findReadableSealedSnapshot(
                 FindingEvidenceReadScope scope, UUID findingId, int roundNo, UUID evidenceItemId) {
             calls++;
             this.scope = scope;
+            Runnable action = afterAuthorizationScopeResolved;
+            afterAuthorizationScopeResolved = null;
+            if (action != null) action.run();
             return snapshot;
         }
     }

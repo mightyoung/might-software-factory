@@ -8,7 +8,10 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Reads only sealed evidence snapshots whose finding, link, file state, and tenant scope remain valid. */
+/**
+ * Reads sealed snapshots under the caller's request authorization scope. FOR SHARE covers file_link and
+ * file_object only; it does not lock the principal/member/role/grant rows used to resolve that scope.
+ */
 @Repository
 public final class JooqFindingEvidenceContentReadRepository implements FindingEvidenceContentReadRepository {
 

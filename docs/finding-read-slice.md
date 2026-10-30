@@ -53,7 +53,7 @@
 
 本地文件 adapter 默认未启用。只有显式配置私有根目录及至少 256 位的 receipt HMAC 密钥和 key ID 才创建；部署必须预先提供仅服务账户可访问的 POSIX 私有目录和 `.receipt-registry` 子目录，adapter 会校验权限并拒绝不支持 POSIX 权限的文件系统；应用不会创建或扫描根目录。固定版本 `.blob` 必须由服务账户拥有、仅 owner 可读且没有 POSIX 写权限，并且 `unix:nlink` 必须为 1；文件系统不支持读取链接数时拒绝核验/读取。路径由服务端派生为 `root/{tenant UUID}/{file UUID}/{storageVersion}.blob`。核验签发只在业务事务外散列文件并写入 HMAC 回执；业务事务只查现存回执。读取端对返回前的固定版本内容执行摘要校验，单个文件最大 64 MiB、进程内总缓冲预算也是 64 MiB，预算耗尽时 fail-closed。测试使用临时目录里的合成文件，不设置运行配置，不触碰用户文件。该实现没有上传/扫描器，没有执行 V6，也没有实际 PG18 或部署根目录验收。
 
-授权读取事务在确认当前会话/权限、封存快照和未撤销文件链接时持有必要的短期行锁；事务提交是本端点的授权线性化点。若撤权发生在该事务提交之后，已打开的请求仍可能发送其已校验并缓冲的内容；之后发起的请求会重新检查权限和链接并拒绝。此实现不承诺撤权可以中止已在途响应或撤回已发送字节。
+本请求按读取时解析出的 principal/member/role/grant 授权快照作出权限判断；授权来源行没有与撤权方共同加锁或串行化。因此，如果撤权发生在本请求解析授权之后，即使发生在读取事务提交之前，本请求仍可能按已读快照继续并完成。证据查询中的 `FOR SHARE` 只保护 `file_link` 和 `file_object` 行，以协调链接撤销/文件状态变更与固定版本打开；它不提供授权来源的最新性保证。之后发起的请求会重新解析授权和链接状态。已在途响应也可能发送已校验缓冲中的内容，本端点不承诺撤权能中止响应或撤回已发送字节。
 
 当前本地 adapter 只验证一个配置的 HMAC key ID，没有历史验证 keyring。更换或删除该密钥会使仍由它签发的回执无法验证；在增加历史 key ID 验证支持或完成受控回执重签并确认旧快照不再依赖它之前，部署不得轮换/移除该 key。此处没有生成或配置真实密钥。
 
@@ -67,6 +67,6 @@
 
 本地登录 provider 和 `EntityReadAccessPolicy` 已实现，但 V3/V4 未迁移，也未验证实际运行角色对身份/授权表的权限、JDBC Session 持久化或真实身份到租户绑定。应用开通读取、权限/角色数据维护、grant source 注册/撤销解析器、账号初始化/邀请/重置、失败限流/短期锁定及 `credential_version` 会话撤销均未完成。真实 PostgreSQL 15.4 测试库的 finding RLS/query/detail 探针仍使用 test-only principal 和授权策略，不能据此宣称真实身份会话、生产授权或租户隔离已验收。
 
-本地 HTTP 登录测试使用实际 `LocalPasswordAuthenticationProvider` 与合成凭证/租户仓储；授权变化测试使用合成授权快照。jOOQ MockDataProvider 检查查询形状和参数。它们不运行 PostgreSQL parser、RLS policy、连接池回收、真实身份表查询或 JDBC Session 持久化。
+本地 HTTP 登录测试使用实际 `LocalPasswordAuthenticationProvider` 与合成凭证/租户仓储；授权变化测试使用合成授权快照。新增时序测试在本请求解析授权后、读取事务完成前合成撤权，只说明请求快照语义，不是 PostgreSQL 并发/可见性证据。jOOQ MockDataProvider 检查查询形状和参数。它们不运行 PostgreSQL parser、RLS policy、连接池回收、真实身份表查询或 JDBC Session 持久化。
 
 固定基础提交 `a10f7e61ac5a7051307ae313279277a9a0006623` 的原工作区测试记录：`./mvnw -pl backend -P lan-postgres-compatibility -Dit.test=FindingPostgresReadIT verify -q` 的 Surefire 35 项与 Failsafe `FindingPostgresReadIT` 1 项通过，失败、错误、跳过均为 0。该记录不覆盖本分支的 V3/V4 或生产 provider。本分支复核后的 `./mvnw -pl backend test -q` 共 69 项通过，失败、错误、跳过均为 0；HTTP 登录使用真实 provider 与合成仓储。兼容 profile 的集成测试源码仅编译命令为 `./mvnw -pl backend -P lan-postgres-compatibility -DskipTests -DskipITs test-compile`，会编译集成测试和共享夹具；这一步不运行集成测试或连接数据库。此分支本地验证不覆盖 V3/V4 的 PostgreSQL 执行、RLS、真实身份表、JDBC Session 或应用运行角色授权。未运行 Redis、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。
