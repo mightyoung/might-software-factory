@@ -1,0 +1,246 @@
+openapi: 3.1.0
+info:
+  title: Might Software Factory Entity Query Contract
+  version: 1.0.0
+  description: >-
+    Shared request, schema, response, and error types for schema-driven entity queries.
+    This artifact publishes component schemas only; an HTTP handler is not implemented.
+x-target-endpoint: /api/v1/entities/{key}/query
+x-implementation-status: contract-only
+x-validation-limits:
+  pageSizes: [20, 50, 100]
+  maximumOffset: 10000
+  maximumCursorLength: 2048
+  maximumFilterConditions: 50
+  maximumExplicitSortFields: 3
+  maximumOutputFields: 50
+  maximumValuesInInOperator: 100
+paths: {}
+components:
+  schemas:
+    EntityQueryRequest:
+      type: object
+      additionalProperties: false
+      required: [page, size]
+      properties:
+        filterAST:
+          oneOf:
+            - $ref: '#/components/schemas/FilterGroup'
+            - type: 'null'
+        sort:
+          oneOf:
+            - type: array
+              maxItems: 3
+              items:
+                $ref: '#/components/schemas/SortField'
+            - type: 'null'
+          description: Omit or set null to use no explicit sort; the server appends the stable ID sort.
+        page:
+          $ref: '#/components/schemas/PageRequest'
+        size:
+          type: integer
+          enum: [20, 50, 100]
+        fields:
+          oneOf:
+            - type: array
+              maxItems: 50
+              uniqueItems: true
+              items:
+                type: string
+                pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+            - type: 'null'
+          description: Omit or set null to use the registered default projection.
+    FilterGroup:
+      type: object
+      additionalProperties: false
+      required: [operator, conditions]
+      properties:
+        operator:
+          type: string
+          const: AND
+        conditions:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/FilterCondition'
+    FilterCondition:
+      type: object
+      additionalProperties: false
+      required: [field, operator]
+      properties:
+        field:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+        operator:
+          type: string
+          enum: [EQ, GT, GTE, LT, LTE, BETWEEN, IN, CONTAINS, IS_EMPTY, IS_NOT_EMPTY, IS_NULL, IS_NOT_NULL, IN_SUBTREE]
+        value:
+          description: >-
+            Type is determined by the registered field schema. Unary existence and null
+            operators omit value; null and an empty string remain distinct inputs.
+    SortField:
+      type: object
+      additionalProperties: false
+      required: [field, direction]
+      properties:
+        field:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+        direction:
+          type: string
+          enum: [ASC, DESC]
+    PageRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [number]
+          properties:
+            number:
+              type: integer
+              minimum: 1
+            cursor:
+              type: 'null'
+        - type: object
+          additionalProperties: false
+          required: [cursor]
+          properties:
+            cursor:
+              type: string
+              minLength: 1
+              maxLength: 2048
+              pattern: '.*\S.*'
+            number:
+              type: 'null'
+    EntitySchema:
+      type: object
+      additionalProperties: false
+      required: [key, schemaVersion, idField, defaultFields, fields]
+      properties:
+        key:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+        schemaVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+        idField:
+          type: string
+        defaultFields:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+        fields:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            $ref: '#/components/schemas/EntityFieldSchema'
+    EntityFieldSchema:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type:
+          type: string
+          enum: [TEXT, NUMBER, MONEY, DATE, DATETIME, BOOLEAN, ENUM, UUID, USER, ORGANIZATION, REFERENCE, IMAGE, ATTACHMENT]
+        nullable:
+          type: boolean
+        selectable:
+          type: boolean
+        sortable:
+          type: boolean
+        operators:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/FilterCondition/properties/operator'
+        maxLength:
+          type: integer
+          minimum: 0
+        enumValues:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+    EntityQueryResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ListData'
+        meta:
+          $ref: '#/components/schemas/Metadata'
+    ListData:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+    PageMetadata:
+      type: object
+      additionalProperties: false
+      required: [size]
+      properties:
+        size:
+          type: integer
+          enum: [20, 50, 100]
+        number:
+          type: integer
+          minimum: 1
+        nextCursor:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        total:
+          type: integer
+          minimum: 0
+          description: Omit when an authorized total is not available; do not return a placeholder zero.
+    Metadata:
+      type: object
+      additionalProperties: false
+      required: [requestId, traceId, schemaVersion]
+      properties:
+        requestId:
+          type: string
+        traceId:
+          type: string
+        schemaVersion:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message, traceId, retryable, fieldErrors]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        traceId:
+          type: string
+        retryable:
+          type: boolean
+        fieldErrors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+        currentVersion:
+          type: integer
+          format: int64
+          description: Returned only for a resource the caller is authorized to read.
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [field, reason]
+      properties:
+        field:
+          type: string
+        reason:
+          type: string
