@@ -59,7 +59,7 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 | audit_ops | audit_event、安全事件、trace 关联 | 查审计、查有效授权原因、合规导出和运维健康 |
 | business_* | 各业务自己的聚合表 | 业务校验和状态变更，调用公共接口而非复制规则 |
 
-核心调用上下文固定为 actorId、tenantId、memberId、principalType、人类授权方、requestId、traceId；从验证过的会话/令牌得到，禁止相信客户端随意传来的 tenantId 或角色。
+核心调用上下文固定为 actorId、accountId、tenantId、memberId、principalType、tenant/member auth_epoch、人类授权方、requestId、traceId；从验证过的会话/令牌得到，禁止相信客户端随意传来的 tenantId 或角色。actorId 指审计主体，accountId 用于校验全局账号状态，两者不能默认相等。
 
 同步事务用于必须一起成功的状态：业务提交状态 + 审批实例关联、角色变更 + 安全版本号 + 审计、组织移动 + 来源授权调整。审批同库同事务管理器时参与同一事务；必须以回滚测试证明，不能只靠注解假设。
 

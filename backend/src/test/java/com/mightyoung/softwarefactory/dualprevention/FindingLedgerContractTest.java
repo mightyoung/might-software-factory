@@ -170,8 +170,9 @@ class FindingLedgerContractTest {
     @Test
     void documentsTheRemainingProductionAuthenticationAndDataScopeBlockers() throws IOException {
         String yaml = Files.readString(contractPath());
-        assertThat(yaml).contains("no production login", "denies by default", "migration has not been applied",
-                "has not been granted SELECT");
+        assertThat(yaml).contains("no production login", "denies by default",
+                "V3 identity and authorization migration has not been applied",
+                "runtime SELECT access to the V3 identity and authorization tables has not been granted");
     }
 
     private static void assertValid(Schema schema, String json) {

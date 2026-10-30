@@ -10,9 +10,12 @@ info:
 x-implementation-status: local-handlers-fail-closed
 x-runtime-blockers:
   - no production login or trusted session-principal issuer is configured
-  - finding authorization and current membership scope storage are not implemented; the policy denies by default
-  - finding migration has only been applied to might_software_factory_test; production and development databases are not verified
-  - the SELECT-only runtime grant has only been applied to the existing low-privilege role in might_software_factory_test
+  - persisted finding authorization is implemented, but denies by default when required identity, membership, role, or scope data is missing or ineligible
+  - the V3 identity and authorization migration has not been applied to any database
+  - runtime SELECT access to the V3 identity and authorization tables has not been granted
+  - the V2 finding migration has only been applied to might_software_factory_test; production and development databases are not verified
+  - the SELECT-only finding runtime grant has only been applied to the existing low-privilege role in might_software_factory_test
+  - tenant application entitlement checks, grant-source registration and revocation handling, and production role and permission data management are not implemented
 x-tenant-context: >-
   The active tenant and member must come from a verified server session and current membership.
   No request body or header may supply tenant_id. Apply tenant and authorized data-scope predicates

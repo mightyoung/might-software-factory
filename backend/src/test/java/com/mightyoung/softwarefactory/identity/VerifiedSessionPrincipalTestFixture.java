@@ -9,6 +9,13 @@ public final class VerifiedSessionPrincipalTestFixture {
     }
 
     public static VerifiedSessionPrincipal create(UUID actorId, UUID tenantId, UUID memberId) {
-        return new VerifiedSessionPrincipal(actorId, tenantId, memberId);
+        return create(actorId, actorId, tenantId, memberId, 1L, 1L);
+    }
+
+    public static VerifiedSessionPrincipal create(
+            UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
+            long tenantAuthEpoch, long memberAuthEpoch) {
+        return new VerifiedSessionPrincipal(
+                actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch);
     }
 }

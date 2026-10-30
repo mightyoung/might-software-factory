@@ -16,7 +16,7 @@
 |credential（全局）|account_id uuid, kind, secret_hash text, changed_at|FK account；不存明文；每种当前凭证受唯一约束|
 |external_identity（全局）|issuer text, subject text, account_id uuid|UNIQUE(issuer,subject)，长度受API限制|
 |tenant|code,name,status,auth_epoch bigint|code唯一；ACTIVE/SUSPENDED；平台作用域|
-|tenant_member|account_id uuid,status,display_name|UNIQUE(tenant_id,account_id)，account为全局FK|
+|tenant_member|account_id uuid,status,display_name,auth_epoch bigint|UNIQUE(tenant_id,account_id)，account为全局FK；成员安全状态独立于租户auth_epoch|
 |org_unit|code,name,parent_id?,active boolean|租户code唯一；同级有效name唯一；parent同租户，服务递归防环并发锁|
 |member_org|member_id,org_id,kind,valid_from,valid_to?|from<to；PRIMARY/CONCURRENT；有效期同成员PRIMARY不得重叠，事务校验并锁成员|
 |position/group|code,name,active|租户code唯一；岗位可绑定org_id?|
@@ -92,7 +92,7 @@
 
 迁移ID V{递增号}__{模块_目的}，发布清单锁checksum、最低/目标应用版本、回填/锁表影响、验证与恢复方案；引擎升级脚本单列纳入同发布审查。已执行脚本不可修改。应用先兼容新旧schema，破坏性收缩在旧实例退出后做。数据回填分批断点、幂等、可监控，失败不继续发布。API/schema/event版本和DDL版本分别管理，不假设版本号相同。
 
-本文件仍不是已执行DDL。具体数据库驱动、迁移脚本和SQL计划在编码授权后形成，必须遵守本逻辑模型并用测试验证。
+本文件是逻辑约束基线，不代表DDL已部署。finding 只读切片的迁移脚本已形成：V2 finding schema 只在专用测试库执行，V3 身份/目录/授权脚本仍未应用到任何数据库。其他模块的迁移需按阶段形成，遵守本逻辑模型并通过相应测试验证。
 
 ## 7 补充支撑实体与边界
 |表|字段/约束|

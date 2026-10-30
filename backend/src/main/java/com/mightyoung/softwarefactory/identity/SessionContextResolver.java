@@ -16,6 +16,12 @@ public final class SessionContextResolver {
                 || !(authentication.getPrincipal() instanceof VerifiedSessionPrincipal principal)) {
             throw new UnauthenticatedSessionException();
         }
-        return new CurrentTenantContext(principal.actorId(), principal.tenantId(), principal.memberId());
+        if (principal.actorId() == null || principal.accountId() == null
+                || principal.tenantId() == null || principal.memberId() == null) {
+            throw new UnauthenticatedSessionException();
+        }
+        return new CurrentTenantContext(
+                principal.actorId(), principal.accountId(), principal.tenantId(), principal.memberId(),
+                principal.tenantAuthEpoch(), principal.memberAuthEpoch());
     }
 }

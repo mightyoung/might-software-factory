@@ -32,8 +32,11 @@ class VerifiedSessionPrincipalSerializationTest {
         VerifiedSessionPrincipal restored = (VerifiedSessionPrincipal) deserializer.convert(serialized);
 
         assertThat(restored.actorId()).isEqualTo(ACTOR_ID);
+        assertThat(restored.accountId()).isEqualTo(ACTOR_ID);
         assertThat(restored.tenantId()).isEqualTo(TENANT_ID);
         assertThat(restored.memberId()).isEqualTo(MEMBER_ID);
+        assertThat(restored.tenantAuthEpoch()).isEqualTo(1L);
+        assertThat(restored.memberAuthEpoch()).isEqualTo(1L);
         assertThat(restored.toString()).isEqualTo("VerifiedSessionPrincipal");
     }
 

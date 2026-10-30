@@ -16,13 +16,24 @@ public final class VerifiedSessionPrincipal implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final UUID actorId;
+    private final UUID accountId;
     private final UUID tenantId;
     private final UUID memberId;
+    private final long tenantAuthEpoch;
+    private final long memberAuthEpoch;
 
-    VerifiedSessionPrincipal(UUID actorId, UUID tenantId, UUID memberId) {
+    VerifiedSessionPrincipal(
+            UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
+            long tenantAuthEpoch, long memberAuthEpoch) {
         this.actorId = Objects.requireNonNull(actorId, "actorId");
+        this.accountId = Objects.requireNonNull(accountId, "accountId");
         this.tenantId = Objects.requireNonNull(tenantId, "tenantId");
         this.memberId = Objects.requireNonNull(memberId, "memberId");
+        if (tenantAuthEpoch < 0 || memberAuthEpoch < 0) {
+            throw new IllegalArgumentException("Authorization epochs must be non-negative");
+        }
+        this.tenantAuthEpoch = tenantAuthEpoch;
+        this.memberAuthEpoch = memberAuthEpoch;
     }
 
     public UUID actorId() {
@@ -33,8 +44,20 @@ public final class VerifiedSessionPrincipal implements Serializable {
         return tenantId;
     }
 
+    public UUID accountId() {
+        return accountId;
+    }
+
     public UUID memberId() {
         return memberId;
+    }
+
+    public long tenantAuthEpoch() {
+        return tenantAuthEpoch;
+    }
+
+    public long memberAuthEpoch() {
+        return memberAuthEpoch;
     }
 
     @Override

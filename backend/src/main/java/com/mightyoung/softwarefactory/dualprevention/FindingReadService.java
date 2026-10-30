@@ -18,13 +18,19 @@ import com.mightyoung.softwarefactory.dualprevention.finding.FindingRepository;
 import com.mightyoung.softwarefactory.dualprevention.finding.FindingRepository.PageResult;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.ValidationException;
 
@@ -36,49 +42,72 @@ public final class FindingReadService {
     private final FindingEntitySchema entitySchema;
     private final EntityQueryValidator validator;
     private final FindingRepository repository;
+    private final TransactionTemplate readTransaction;
 
     public FindingReadService(
             SessionContextResolver sessionContextResolver,
             FindingReadAuthorizer authorizer,
             FindingEntitySchema entitySchema,
             EntityQueryValidator validator,
-            FindingRepository repository) {
+            FindingRepository repository,
+            ObjectProvider<PlatformTransactionManager> transactionManagerProvider) {
         this.sessionContextResolver = sessionContextResolver;
         this.authorizer = authorizer;
         this.entitySchema = entitySchema;
         this.validator = validator;
         this.repository = repository;
+        PlatformTransactionManager transactionManager = transactionManagerProvider.getIfAvailable();
+        if (transactionManager == null) {
+            this.readTransaction = null;
+        } else {
+            this.readTransaction = new TransactionTemplate(transactionManager);
+            this.readTransaction.setReadOnly(true);
+            this.readTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        }
     }
 
     public SchemaResponse schema() {
-        authorizer.requireReadScope(sessionContextResolver.currentTenant());
-        return new SchemaResponse(entitySchema.schema(), metadata());
+        return withinReadTransaction(() -> {
+            authorizer.requireReadScope(sessionContextResolver.currentTenant());
+            return new SchemaResponse(entitySchema.schema(), metadata());
+        });
     }
 
     public ListResponse query(String jsonBody) {
-        CurrentTenantContext currentTenant = sessionContextResolver.currentTenant();
-        FindingReadScope scope = authorizer.requireReadScope(currentTenant);
-        Request request = parseRequest(jsonBody);
-        Request effectiveRequest = applyFindingPaginationAndDefaults(request);
-        ValidatedQuery query = validator.validate(effectiveRequest, entitySchema.schema());
-        validateIntegerFilters(query);
+        return withinReadTransaction(() -> {
+            CurrentTenantContext currentTenant = sessionContextResolver.currentTenant();
+            FindingReadScope scope = authorizer.requireReadScope(currentTenant);
+            Request request = parseRequest(jsonBody);
+            Request effectiveRequest = applyFindingPaginationAndDefaults(request);
+            ValidatedQuery query = validator.validate(effectiveRequest, entitySchema.schema());
+            validateIntegerFilters(query);
 
-        PageResult result = repository.findPage(scope, query);
-        List<Map<String, Object>> items = result.items().stream()
-                .map(record -> project(record, query.fields()))
-                .toList();
-        int pageNumber = effectiveRequest.page().number();
-        long pageCount = result.total() == 0 ? 0 : 1 + (result.total() - 1) / query.size();
-        return new ListResponse(
-                new ListData(items, new PageMetadata(pageNumber, query.size(), result.total(), pageCount)),
-                metadata());
+            PageResult result = repository.findPage(scope, query);
+            List<Map<String, Object>> items = result.items().stream()
+                    .map(record -> project(record, query.fields()))
+                    .toList();
+            int pageNumber = effectiveRequest.page().number();
+            long pageCount = result.total() == 0 ? 0 : 1 + (result.total() - 1) / query.size();
+            return new ListResponse(
+                    new ListData(items, new PageMetadata(pageNumber, query.size(), result.total(), pageCount)),
+                    metadata());
+        });
     }
 
     public DetailResponse detail(UUID findingId) {
-        FindingReadScope scope = authorizer.requireReadScope(sessionContextResolver.currentTenant());
-        FindingRecord record = repository.findVisible(scope, findingId)
-                .orElseThrow(FindingNotVisibleException::new);
-        return new DetailResponse(record.toApiMap(), metadata());
+        return withinReadTransaction(() -> {
+            FindingReadScope scope = authorizer.requireReadScope(sessionContextResolver.currentTenant());
+            FindingRecord record = repository.findVisible(scope, findingId)
+                    .orElseThrow(FindingNotVisibleException::new);
+            return new DetailResponse(record.toApiMap(), metadata());
+        });
+    }
+
+    private <T> T withinReadTransaction(Supplier<T> operation) {
+        if (readTransaction == null) {
+            return operation.get();
+        }
+        return Objects.requireNonNull(readTransaction.execute(status -> operation.get()));
     }
 
     private Request parseRequest(String jsonBody) {

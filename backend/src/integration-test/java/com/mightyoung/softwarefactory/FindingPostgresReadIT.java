@@ -24,6 +24,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -409,7 +411,8 @@ class FindingPostgresReadIT {
         };
         return new FindingReadService(
                 new SessionContextResolver(), new FindingReadAuthorizer(accessPolicy),
-                new FindingEntitySchema(), new EntityQueryValidator(), repository);
+                new FindingEntitySchema(), new EntityQueryValidator(), repository,
+                new StaticListableBeanFactory().getBeanProvider(PlatformTransactionManager.class));
     }
 
     private static void setupService(DataSource dataSource, UUID tenantA, UUID organizationA) {
