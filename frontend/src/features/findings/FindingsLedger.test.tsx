@@ -10,6 +10,8 @@ import {
   workflowSteps,
 } from "../../domain/finding";
 import type { FindingRecord } from "../../domain/finding";
+import { matchesQuery } from "../../domain/ledger";
+import { findingLedgerSchema } from "./schema";
 import { navigate } from "../../routing/router";
 
 function createPagedFixtureAdapter(): FindingLedgerAdapter {
@@ -18,14 +20,17 @@ function createPagedFixtureAdapter(): FindingLedgerAdapter {
     id: `TEST-HZ-${String(index + 1).padStart(3, "0")}`,
   }));
   return {
-    async list({ page }) {
-      const pageCount = Math.max(1, Math.ceil(rows.length / page.size));
+    async list({ query, page }) {
+      const filtered = rows.filter((record) =>
+        matchesQuery(record, findingLedgerSchema.queryFields, query),
+      );
+      const pageCount = Math.max(1, Math.ceil(filtered.length / page.size));
       const safeIndex = Math.min(Math.max(page.index, 1), pageCount);
       const start = (safeIndex - 1) * page.size;
       return {
-        items: rows.slice(start, start + page.size),
+        items: filtered.slice(start, start + page.size),
         page: { index: safeIndex, size: page.size },
-        total: rows.length,
+        total: filtered.length,
         pageCount,
       };
     },
@@ -34,7 +39,6 @@ function createPagedFixtureAdapter(): FindingLedgerAdapter {
     },
   };
 }
-
 function resetRoute() {
   navigate("/safety/findings", true);
 }
