@@ -164,8 +164,14 @@ class FindingWorkflowContractTest {
                 "evidence_snapshot_count is not null",
                 "evidence_snapshot_manifest uuid[]",
                 "evidence_snapshots_sealed_at timestamptz",
+                "alter table public.evidence_set add column evidence_revision bigint not null default 0",
+                "add column submission_sealed_at timestamptz",
+                "create function public.guard_evidence_set_submission_version",
+                "create function public.advance_evidence_set_revision_for_item_change",
                 "create function public.guard_remediation_submission_snapshot_seal",
-                "for update",
+                "before insert or update or delete on public.evidence_item",
+                "set evidence_revision = es.evidence_revision + 1",
+                "set evidence_revision = es.evidence_revision + 1, submission_sealed_at = transaction_timestamp()",
                 "array_agg(snapshot.evidence_item_id order by snapshot.evidence_item_id)",
                 "array_agg(item.id order by item.id)",
                 "evidence snapshot manifest does not match the complete evidence set",
@@ -178,14 +184,27 @@ class FindingWorkflowContractTest {
                 "evidence_snapshots_sealed_at is not null",
                 "remediation submission evidence snapshots are sealed",
                 "evidence set is sealed by a remediation submission",
-                "a sealed remediation submission is immutable");
+                "a sealed remediation submission is immutable",
+                "and evidence_set.submission_sealed_at is not null");
+        assertThat(normalized.indexOf("set evidence_revision = es.evidence_revision + 1, submission_sealed_at"))
+                .isLessThan(normalized.indexOf("select array_agg(item.id order by item.id)"));
+        int versionGuardStart = normalized.indexOf("create function public.guard_evidence_set_submission_version");
+        int versionGuardEnd = normalized.indexOf("create trigger evidence_set_submission_version_guard");
+        assertThat(normalized.substring(versionGuardStart, versionGuardEnd))
+                .doesNotContain("update public.evidence_set");
+        int itemMutationStart = normalized.indexOf("create function public.advance_evidence_set_revision_for_item_change");
+        int itemMutationEnd = normalized.indexOf("create trigger evidence_item_submission_set_lock");
+        assertThat(normalized.substring(itemMutationStart, itemMutationEnd))
+                .contains("update public.evidence_set", "set evidence_revision = es.evidence_revision + 1")
+                .doesNotContain("for update");
 
         String repository = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
                 "JooqFindingWorkflowRepository.java"));
         assertThat(repository).contains("insert into public.remediation_submission_evidence",
                 "verification_receipt_id", "storage_version", "findSubmissionEvidenceSnapshots",
-                "evidence_snapshots_sealed_at", "evidence_snapshot_manifest", "evidence_snapshot_count");
+                "evidence_snapshots_sealed_at", "evidence_snapshot_manifest", "evidence_snapshot_count",
+                "setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED)");
         String evidencePolicy = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
                 "JooqFindingWorkflowEvidencePolicy.java"));

@@ -50,13 +50,14 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
             throw new FindingWorkflowEvidenceException("A ready evidence set owned by the submitter is required");
         }
 
+        // The V6 item-write trigger advances this already-locked parent row. Read children
+        // without row locks so UPDATE/DELETE writers cannot form a parent/child lock cycle.
         List<Record> items = dsl.fetch("""
                 select ei.id, ei.source_kind, ei.file_id, ei.sha256, ei.state, ei.verification_level
                   from public.evidence_item ei
                  where ei.tenant_id = cast(? as uuid)
                    and ei.evidence_set_id = cast(? as uuid)
                  order by ei.id
-                 for update of ei
                 """, context.tenantId(), evidenceSetId);
         if (items.isEmpty()) {
             throw new FindingWorkflowEvidenceException("At least one evidence item is required");

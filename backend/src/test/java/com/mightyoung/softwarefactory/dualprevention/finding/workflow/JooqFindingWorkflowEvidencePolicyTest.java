@@ -44,7 +44,7 @@ class JooqFindingWorkflowEvidencePolicyTest {
     private static final String STORAGE_VERSION = "pg-test-version-11";
 
     @Test
-    void locksEvidenceRowsAndPassesExactServerScopeToTrustedFileAccess() {
+    void locksEvidenceSetAndPassesExactServerScopeToTrustedFileAccess() {
         List<String> statements = new ArrayList<>();
         List<List<Object>> bindings = new ArrayList<>();
         DSLContext values = using(SQLDialect.POSTGRES);
@@ -70,7 +70,7 @@ class JooqFindingWorkflowEvidencePolicyTest {
         assertThat(setSql).contains("es.finding_id", "es.round_no", "for update of es");
         String itemSql = statements.get(1).toLowerCase(java.util.Locale.ROOT);
         assertThat(itemSql).contains("ei.id", "ei.file_id", "ei.state", "ei.verification_level",
-                "ei.sha256", "order by ei.id", "for update of ei");
+                "ei.sha256", "order by ei.id").doesNotContain("for update");
         assertThat(bindings.get(0)).contains(TENANT_ID, EVIDENCE_SET_ID, FINDING_ID, 2);
         assertThat(bindings.get(1)).contains(TENANT_ID, EVIDENCE_SET_ID);
         assertThat(authorizedUse.get()).isEqualTo(new EvidenceFileUse(

@@ -14,6 +14,7 @@ import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
@@ -32,6 +33,9 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
     public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager) {
         this.dsl = dsl;
         this.commandTransaction = new TransactionTemplate(transactionManager);
+        // Read fresh evidence rows after lock waits; V6's parent revision update also
+        // turns stale REPEATABLE READ writers into serialization conflicts.
+        this.commandTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
     @Override

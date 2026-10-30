@@ -70,6 +70,9 @@ alter table public.remediation_submission
             and evidence_snapshot_count = cardinality(evidence_snapshot_manifest)
             and array_position(evidence_snapshot_manifest, null) is null)
     );
+alter table public.evidence_set
+    add column evidence_revision bigint not null default 0 check (evidence_revision >= 0),
+    add column submission_sealed_at timestamptz;
 alter table public.file_link
     add constraint file_link_submission_snapshot_key
         unique (tenant_id, id, file_id, resource_type, resource_id, purpose);
@@ -127,34 +130,115 @@ create table public.remediation_submission_evidence (
 create index remediation_submission_evidence_file_version_idx
     on public.remediation_submission_evidence (tenant_id, file_id, storage_version);
 
--- Item creation takes the same evidence-set lock used while sealing a submission.
--- Once a set has a sealed submission, its item list cannot be extended.
-create function public.guard_new_evidence_item_for_submission() returns trigger
+-- A set's revision is the serialization point for every source-item write and submission seal.
+-- Keep its workflow state/verification fields unchanged when advancing the evidence revision.
+create function public.guard_evidence_set_submission_version() returns trigger
 language plpgsql
 as $$
 begin
-    perform 1
-      from public.evidence_set es
-     where es.tenant_id = NEW.tenant_id and es.id = NEW.evidence_set_id
-     for update;
-    if not found then
-        raise exception 'evidence set for new item was not found';
+    if OLD.submission_sealed_at is not null then
+        if NEW is distinct from OLD then
+            raise exception 'a submitted evidence set is immutable';
+        end if;
+        return NEW;
     end if;
-    if exists (
-        select 1 from public.remediation_submission submission
-         where submission.tenant_id = NEW.tenant_id
-           and submission.evidence_set_id = NEW.evidence_set_id
-           and submission.evidence_snapshots_sealed_at is not null
-    ) then
-        raise exception 'evidence set is sealed by a remediation submission';
+
+    if NEW.submission_sealed_at is not null then
+        if NEW.submission_sealed_at is distinct from transaction_timestamp()
+           or NEW.evidence_revision <> OLD.evidence_revision + 1
+           or ROW(NEW.tenant_id, NEW.id, NEW.finding_id, NEW.round_no, NEW.owner_member_id,
+                  NEW.state, NEW.created_at, NEW.verified_at)
+              IS DISTINCT FROM
+              ROW(OLD.tenant_id, OLD.id, OLD.finding_id, OLD.round_no, OLD.owner_member_id,
+                  OLD.state, OLD.created_at, OLD.verified_at)
+           or not exists (
+                select 1 from public.remediation_submission submission
+                 where submission.tenant_id = OLD.tenant_id
+                   and submission.evidence_set_id = OLD.id
+                   and submission.evidence_snapshots_sealed_at is null
+           ) then
+            raise exception 'evidence set submission seal is database-managed';
+        end if;
+        return NEW;
+    end if;
+
+    if NEW.evidence_revision <> OLD.evidence_revision then
+        if NEW.evidence_revision <> OLD.evidence_revision + 1
+           or ROW(NEW.tenant_id, NEW.id, NEW.finding_id, NEW.round_no, NEW.owner_member_id,
+                  NEW.state, NEW.created_at, NEW.verified_at, NEW.submission_sealed_at)
+              IS DISTINCT FROM
+              ROW(OLD.tenant_id, OLD.id, OLD.finding_id, OLD.round_no, OLD.owner_member_id,
+                  OLD.state, OLD.created_at, OLD.verified_at, OLD.submission_sealed_at) then
+            raise exception 'evidence revision can only advance by one without changing set data';
+        end if;
     end if;
     return NEW;
 end;
 $$;
 
+create trigger evidence_set_submission_version_guard
+    before update on public.evidence_set
+    for each row execute function public.guard_evidence_set_submission_version();
+
+-- Every source-item write updates the same parent row before changing the item. Under
+-- REPEATABLE READ, an older snapshot then conflicts if the parent changed after that snapshot.
+create function public.advance_evidence_set_revision_for_item_change() returns trigger
+language plpgsql
+as $$
+declare
+    evidence_set_tenant_id uuid;
+    evidence_set_id uuid;
+    parent_set record;
+begin
+    if TG_OP = 'UPDATE' then
+        if NEW.tenant_id is distinct from OLD.tenant_id then
+            raise exception 'evidence item cannot move between tenants';
+        end if;
+        if NEW.evidence_set_id is distinct from OLD.evidence_set_id then
+            -- Lock both parents in a stable order so a move cannot deadlock with its inverse.
+            for parent_set in
+                select distinct moved.evidence_set_id
+                  from (values (OLD.evidence_set_id), (NEW.evidence_set_id)) moved(evidence_set_id)
+                 order by moved.evidence_set_id
+            loop
+                update public.evidence_set es
+                   set evidence_revision = es.evidence_revision + 1
+                 where es.tenant_id = NEW.tenant_id
+                   and es.id = parent_set.evidence_set_id
+                   and es.submission_sealed_at is null;
+                if not found then
+                    raise exception 'evidence set is sealed by a remediation submission or was not found';
+                end if;
+            end loop;
+            return NEW;
+        end if;
+        evidence_set_tenant_id := OLD.tenant_id;
+        evidence_set_id := OLD.evidence_set_id;
+    elsif TG_OP = 'DELETE' then
+        evidence_set_tenant_id := OLD.tenant_id;
+        evidence_set_id := OLD.evidence_set_id;
+    else
+        evidence_set_tenant_id := NEW.tenant_id;
+        evidence_set_id := NEW.evidence_set_id;
+    end if;
+
+    update public.evidence_set es
+       set evidence_revision = es.evidence_revision + 1
+     where es.tenant_id = evidence_set_tenant_id
+       and es.id = evidence_set_id
+       and es.submission_sealed_at is null;
+    if not found then
+        raise exception 'evidence set is sealed by a remediation submission or was not found';
+    end if;
+
+    if TG_OP = 'DELETE' then return OLD; end if;
+    return NEW;
+end;
+$$;
+
 create trigger evidence_item_submission_set_lock
-    before insert on public.evidence_item
-    for each row execute function public.guard_new_evidence_item_for_submission();
+    before insert or update or delete on public.evidence_item
+    for each row execute function public.advance_evidence_set_revision_for_item_change();
 
 -- Serialize child inserts against the one-way parent seal transition.
 create function public.lock_remediation_submission_evidence_parent() returns trigger
@@ -190,8 +274,9 @@ create trigger remediation_submission_evidence_parent_lock
     before insert on public.remediation_submission_evidence
     for each row execute function public.lock_remediation_submission_evidence_parent();
 
--- The application requests only the seal transition. The database computes and stores
--- the complete, sorted item manifest and its count while holding the evidence-set lock.
+-- The application requests only the submission seal transition. Advancing and sealing the
+-- evidence-set row is the serialization point for all source-item mutations; the database
+-- then computes the complete, sorted item manifest and count while that row lock is held.
 create function public.guard_remediation_submission_snapshot_seal() returns trigger
 language plpgsql
 as $$
@@ -227,12 +312,14 @@ begin
         raise exception 'submission evidence snapshot count and manifest are database-managed';
     end if;
 
-    perform 1
-      from public.evidence_set es
-     where es.tenant_id = NEW.tenant_id and es.id = NEW.evidence_set_id
-     for update;
+    update public.evidence_set es
+       set evidence_revision = es.evidence_revision + 1,
+           submission_sealed_at = transaction_timestamp()
+     where es.tenant_id = NEW.tenant_id
+       and es.id = NEW.evidence_set_id
+       and es.submission_sealed_at is null;
     if not found then
-        raise exception 'evidence set for remediation submission was not found';
+        raise exception 'evidence set is already submitted or was not found';
     end if;
 
     select array_agg(item.id order by item.id)
@@ -268,8 +355,12 @@ declare
     is_sealed boolean;
 begin
     select submission.evidence_snapshots_sealed_at is not null
+           and evidence_set.submission_sealed_at is not null
       into is_sealed
       from public.remediation_submission submission
+      join public.evidence_set evidence_set
+        on evidence_set.tenant_id = submission.tenant_id
+       and evidence_set.id = submission.evidence_set_id
      where submission.tenant_id = NEW.tenant_id and submission.id = NEW.id;
     if not found or is_sealed is distinct from true then
         raise exception 'remediation submission cannot commit before its evidence snapshots are sealed';

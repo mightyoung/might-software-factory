@@ -74,8 +74,9 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
             }
             throw new AssertionError("Unexpected SQL: " + context.sql());
         };
+        NoOpTransactionManager transactionManager = new NoOpTransactionManager();
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                using(new MockConnection(provider), SQLDialect.POSTGRES), new NoOpTransactionManager());
+                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager);
 
         Submission reloaded = repository.inTenantTransaction(TENANT, tx -> {
             tx.insertSubmission(submission);
@@ -83,6 +84,8 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
         });
 
         assertThat(reloaded.evidenceSnapshots()).containsExactlyElementsOf(snapshots);
+        assertThat(transactionManager.isolationLevel)
+                .isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
         assertThat(reloaded.evidenceSnapshots()).extracting(VerifiedFileEvidenceSnapshot::fileId)
                 .containsExactly(FILE, FILE);
         List<Integer> evidenceInsertIndexes = new ArrayList<>();
@@ -281,6 +284,7 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
 
     private static final class NoOpTransactionManager extends AbstractPlatformTransactionManager {
         private int rollbackCount;
+        private int isolationLevel = TransactionDefinition.ISOLATION_DEFAULT;
 
         @Override
         protected Object doGetTransaction() {
@@ -289,6 +293,7 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
 
         @Override
         protected void doBegin(Object transaction, TransactionDefinition definition) {
+            isolationLevel = definition.getIsolationLevel();
         }
 
         @Override
