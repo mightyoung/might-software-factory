@@ -167,10 +167,10 @@ export function mapLedgerQueryToEntityRequest<T>(input: {
       requireType(wireField, wireFieldName, ["NUMBER", "MONEY"]);
       const operator = field.operator === "atLeast" ? "GTE" : field.operator === "atMost" ? "LTE" : "EQ";
       requireOperator(wireField, wireFieldName, operator);
-      const numericValue = typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
-      if (!Number.isFinite(numericValue)) {
-        throw new EntityQueryMappingError(`Value for numeric field "${field.key}" must be finite`);
+      if (typeof value !== "string") {
+        throw new EntityQueryMappingError(`Value for numeric field "${field.key}" must be a decimal string`);
       }
+      const numericValue = parseExactQueryNumber(value, field.key);
       conditions.push(createEntityQueryFilter(wireFieldName, operator, numericValue));
       continue;
     }
@@ -236,6 +236,12 @@ export function mapLedgerQueryToEntityRequest<T>(input: {
 }
 
 /** Creates unary conditions without a value; an empty string remains a distinct valued input. */
+/**
+ * @internal
+ * Constructs a filter object's basic TypeScript/JSON shape only. It has no registry context and
+ * does not validate field/operator compatibility, scalar types, mixed IN arrays, or range order.
+ * Use mapLedgerQueryToEntityRequest for registry-bound UI mappings; this is not a validator.
+ */
 export function createEntityQueryFilter(
   field: string,
   operator: EntityQueryOperator,
@@ -339,6 +345,44 @@ function requireOperator(field: RegisteredEntityFieldV1, name: string, operator:
 function hasValue(value: QueryValues[string] | undefined): boolean {
   if (typeof value === "string") return value.trim().length > 0;
   return Boolean(value?.from || value?.to);
+}
+
+function parseExactQueryNumber(raw: string, fieldKey: string): number {
+  const lexicalValue = raw.trim();
+  const numericValue = Number(lexicalValue);
+  if (!Number.isFinite(numericValue)) {
+    throw new EntityQueryMappingError(`Value for numeric field "${fieldKey}" must be finite`);
+  }
+  if (Number.isInteger(numericValue) && !Number.isSafeInteger(numericValue)) {
+    throw new EntityQueryMappingError(`Integer value for numeric field "${fieldKey}" exceeds JavaScript's safe integer range`);
+  }
+  if (decimalSignature(lexicalValue) !== decimalSignature(numericValue.toString())) {
+    throw new EntityQueryMappingError(`Value for numeric field "${fieldKey}" cannot be represented without decimal precision loss`);
+  }
+  return numericValue;
+}
+
+function decimalSignature(value: string): string {
+  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(value);
+  if (!match) throw new EntityQueryMappingError("Numeric input must use decimal syntax");
+
+  const sign = match[1] === "-" ? "-" : "";
+  const whole = match[2] ?? "0";
+  const fraction = match[3] ?? match[4] ?? "";
+  let digits = `${whole}${fraction}`.replace(/^0+/, "");
+  if (digits.length === 0) return "0";
+
+  const rawExponent = Number(match[5] ?? "0");
+  if (!Number.isSafeInteger(rawExponent)) {
+    throw new EntityQueryMappingError("Numeric exponent is outside the supported JavaScript range");
+  }
+  let exponent = rawExponent - fraction.length;
+  const trailingZeroCount = digits.match(/0+$/)?.[0].length ?? 0;
+  if (trailingZeroCount > 0) {
+    digits = digits.slice(0, -trailingZeroCount);
+    exponent += trailingZeroCount;
+  }
+  return `${sign}${digits}e${exponent}`;
 }
 
 function isValidDate(value: string): boolean {

@@ -59,6 +59,10 @@ export const contractFixtureRegisteredSchema: RegisteredEntityV1 = {
       type: "NUMBER", nullable: false, selectable: true, sortable: true,
       operators: ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"], maxLength: 0, enumValues: [],
     },
+    price: {
+      type: "MONEY", nullable: false, selectable: true, sortable: true,
+      operators: ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"], maxLength: 0, enumValues: [],
+    },
     internalNote: {
       type: "TEXT", nullable: false, selectable: false, sortable: false,
       operators: [], maxLength: 80, enumValues: [],

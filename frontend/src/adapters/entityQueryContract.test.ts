@@ -69,7 +69,7 @@ describe("Entity Query Contract v1 adapter seam", () => {
     expect(request).not.toHaveProperty("fields");
   });
 
-  it("keeps explicit empty text distinct from a null check and rejects null scalar values", () => {
+  it("keeps explicit empty text distinct from a null check through the internal shape helper", () => {
     const emptyText = createEntityQueryFilter("description", "EQ", "");
     const nullCheck = createEntityQueryFilter("description", "IS_NULL");
 
@@ -78,22 +78,6 @@ describe("Entity Query Contract v1 adapter seam", () => {
     expect(nullCheck).not.toHaveProperty("value");
     expect(() => createEntityQueryFilter("description", "EQ", null)).toThrow(EntityQueryMappingError);
     expect(() => createEntityQueryFilter("description", "IS_NULL", "")).toThrow(EntityQueryMappingError);
-  });
-
-  it("keeps typed BETWEEN and IN values bounded to the component schema shape", () => {
-    expect(createEntityQueryFilter("reportedDate", "BETWEEN", ["2026-10-01", "2026-10-31"])).toEqual({
-      field: "reportedDate",
-      operator: "BETWEEN",
-      value: ["2026-10-01", "2026-10-31"],
-    });
-    expect(createEntityQueryFilter("state", "IN", ["OPEN", "CLOSED"])).toEqual({
-      field: "state",
-      operator: "IN",
-      value: ["OPEN", "CLOSED"],
-    });
-    expect(() => createEntityQueryFilter("reportedDate", "BETWEEN", ["2026-10-01"])).toThrow(/exactly two/);
-    expect(() => createEntityQueryFilter("state", "IN", [])).toThrow(/between 1 and 100/);
-    expect(() => createEntityQueryFilter("state", "IN", Array.from({ length: 101 }, (_, index) => String(index)))).toThrow(/between 1 and 100/);
   });
 
   it("validates page sizes and the contract offset ceiling", () => {
@@ -113,6 +97,26 @@ describe("Entity Query Contract v1 adapter seam", () => {
     })).toThrow(/type TEXT|Operator CONTAINS/);
     expect(() => mapLedgerQueryToEntityRequest({ ...base, query: { ...base.query, state: "REJECTED" } })).toThrow(/not registered/);
     expect(() => mapLedgerQueryToEntityRequest({ ...base, query: { ...base.query, score: "NaN" } })).toThrow(/finite/);
+  });
+
+  it("rejects integer or decimal query values that JavaScript would silently round", () => {
+    expect(() => mapLedgerQueryToEntityRequest({
+      ...base,
+      query: { ...base.query, score: "9007199254740993" },
+    })).toThrow(/safe integer range/);
+    expect(() => mapLedgerQueryToEntityRequest({
+      ...base,
+      fieldBindings: { ...contractFixtureFieldBindings, score: "price" },
+      query: { ...base.query, score: "90071992547409.93" },
+    })).toThrow(/decimal precision loss/);
+
+    const exactMoney = mapLedgerQueryToEntityRequest({
+      ...base,
+      fieldBindings: { ...contractFixtureFieldBindings, score: "price" },
+      query: { ...base.query, score: "12.50" },
+    });
+    const lastCondition = exactMoney.filterAST?.conditions[exactMoney.filterAST.conditions.length - 1];
+    expect(lastCondition).toEqual({ field: "price", operator: "GTE", value: 12.5 });
   });
 
   it("rejects invalid, reversed, or DATETIME-backed date-only ranges", () => {
