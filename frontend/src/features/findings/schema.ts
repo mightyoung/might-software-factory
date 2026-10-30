@@ -19,6 +19,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
       kind: "enum",
       read: (record) => record.state,
       options: [
+        { value: "DISCOVERED", label: findingStateLabels.DISCOVERED },
         { value: "PERSON_CONFIRM_PENDING", label: findingStateLabels.PERSON_CONFIRM_PENDING },
         { value: "SAFETY_CONFIRM_PENDING", label: findingStateLabels.SAFETY_CONFIRM_PENDING },
         { value: "SAFETY_DISPATCH_PENDING", label: findingStateLabels.SAFETY_DISPATCH_PENDING },

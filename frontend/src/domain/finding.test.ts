@@ -3,6 +3,7 @@ import { findingStateLabels, findingStates, workflowCurrentIndex, type FindingSt
 import { findingLedgerSchema } from "../features/findings/schema";
 
 const expectedLabels: Record<FindingState, string> = {
+  DISCOVERED: "已发现·待启动流程",
   PERSON_CONFIRM_PENDING: "待一人确认",
   SAFETY_CONFIRM_PENDING: "待安全确认",
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
@@ -12,8 +13,9 @@ const expectedLabels: Record<FindingState, string> = {
 };
 
 describe("隐患流程状态映射", () => {
-  it("查询选项和领域标签完整覆盖六个状态", () => {
+  it("查询选项和领域标签完整覆盖契约里的全部七个状态", () => {
     expect(findingStates.map((state) => findingStateLabels[state])).toEqual([
+      "已发现·待启动流程",
       "待一人确认",
       "待安全确认",
       "待安全部门派单",
@@ -29,7 +31,19 @@ describe("隐患流程状态映射", () => {
     );
   });
 
+  it("状态枚举与后端 OpenAPI 契约一致（顺序即流程顺序）", () => {
+    expect([...findingStates]).toEqual([
+      "DISCOVERED",
+      "PERSON_CONFIRM_PENDING",
+      "SAFETY_CONFIRM_PENDING",
+      "SAFETY_DISPATCH_PENDING",
+      "RECTIFYING",
+      "ACCEPTANCE_PENDING",
+      "CLOSED",
+    ]);
+  });
+
   it("每个状态映射到约定的工作流节点", () => {
-    expect(findingStates.map(workflowCurrentIndex)).toEqual([1, 2, 3, 4, 5, 5]);
+    expect(findingStates.map(workflowCurrentIndex)).toEqual([0, 1, 2, 3, 4, 5, 5]);
   });
 });
