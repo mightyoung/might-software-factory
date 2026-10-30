@@ -68,7 +68,7 @@ describe("隐患台账分页与详情", () => {
     fireEvent.click(screen.getByRole("button", { name: "重置" }));
     await screen.findByText("共 7 条演示记录");
     expect(screen.getByText("DEMO-HZ-001")).toBeInTheDocument();
-    expect(screen.queryByText("DEMO-HZ-006")).not.toBeInTheDocument();
+    expect(screen.getByText("DEMO-HZ-006")).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "隐患编号 / 描述" })).toHaveValue("");
   });
 
