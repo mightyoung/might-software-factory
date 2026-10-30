@@ -67,6 +67,10 @@ DISCOVERED→PERSON_CONFIRM_PENDING→SAFETY_CONFIRM_PENDING→SAFETY_DISPATCH_P
 
 命令分别confirmByPerson、confirmBySafety、dispatchBySafety、submitRectification、acceptBySafety、rejectAcceptance、requestExtension、approveExtension、reopen；每个有职责、状态、版本、证据门槛。PERSON确认只能一名已解析成员；安全部门动作按角色及实际任务人。退回补充和有理由作废是显式分支，不删除发现。原轮迟到回调拒绝，不得关闭新轮。
 
+初始路由和整改派单均要求目标成员为有效租户成员、当前有效 `member_org` 包含隐患组织，并拥有对应的 finding 动作权限。跨组织委派尚无业务授权规则，当前默认拒绝，待业务明确规则后再开放。整改提交只能使用同隐患、同轮次且归属于提交成员的证据集；未定义共享授权前拒绝跨成员复用，证据集内所有项目须处于 `READY` 且达到 `CONTENT` 核验级别。
+
+兼容：V2 已存在的 `DISCOVERED` 隐患由 V5 保留，不批量改状态或伪造历史。仅通过受权限、版本和幂等校验的逐条流程初始化命令，将一条记录推进到 `PERSON_CONFIRM_PENDING` 并创建第一人员确认任务；初始化不等于确认，人员审批仍必须单独执行。
+
 Flowable为运行执行权威，业务投影与之同命令更新；失配进入修复告警，禁止手动直接改状态假修复。通知书生成/送达、整改提交/验收通过分别记录。紧急处置和依法报告并行，不被流程锁住。
 
 ### 5.1 计时器、异步回调与投影修复

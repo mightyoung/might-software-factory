@@ -102,7 +102,7 @@
 |remediation_round|tenant、finding_id、round_no、state、opened_at、closed_at?；UNIQUE(tenant,finding_id,round_no)，通知书/提交/验收FK关联round|
 |job|tenant、type、payload_version、payload、state、next_run_at、lease_owner?、lease_until?、attempt、last_error?、result_ref?；logical_key唯一，状态含UNKNOWN/CANCEL_REQUESTED|
 |session租户上下文|Session JDBC使用其官方schema；会话标识不入业务URL。member/tenant auth_epoch独立校验，不能依赖整条session删除解决多租户撤权|
-|evidence_set/evidence_item|set_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；来源未知可空但须说明，不凭URL认定全文核验|
+|evidence_set/evidence_item|set_id、finding_id、round_no、owner_member_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；整改提交只可使用同隐患/轮次且归属于提交人的证据集，所有项均须READY且CONTENT核验；未定义共享授权前拒绝跨成员复用；来源未知可空但须说明，不凭URL认定全文核验|
 |event血缘附字段|schema_version、source_kind、replay_run_id?、quality_flags；因果引用若来源外部允许external_ref，进入本系统后有稳定eventId|
 |notification_message|独立notificationId、触发eventId、templateVersion、purpose；delivery唯一(notificationId,recipient,channel)，升级/恢复产生新notificationId，不被原事件键误吞|
 

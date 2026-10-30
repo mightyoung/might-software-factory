@@ -33,6 +33,15 @@ public final class FindingWorkflowController {
         return response(service.create(parseIdempotencyKey(idempotencyKey), request.toCommand()));
     }
 
+    @PostMapping("/api/v1/findings/{id}/workflow-initialization")
+    public CommandResponse initializeLegacyWorkflow(
+            @PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody ConfirmRequest request) {
+        return response(service.initializeDiscoveredWorkflow(
+                parseIdempotencyKey(idempotencyKey), id, request.expectedVersion()));
+    }
+
     @PostMapping("/api/v1/findings/{id}/confirm/person")
     public CommandResponse confirmPerson(
             @PathVariable UUID id,

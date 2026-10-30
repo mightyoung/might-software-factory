@@ -8,4 +8,6 @@ import java.util.UUID;
 public interface FindingWorkflowAssignmentResolver {
 
     InitialRoute resolve(UUID tenantId, UUID organizationId);
+
+    UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId);
 }

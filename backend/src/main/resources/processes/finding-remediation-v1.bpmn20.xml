@@ -20,7 +20,7 @@
     <sequenceFlow id="verificationPass" sourceRef="verificationDecision" targetRef="end">
       <conditionExpression xsi:type="tFormalExpression"><![CDATA[${verificationDecision == 'PASS'}]]></conditionExpression>
     </sequenceFlow>
-    <sequenceFlow id="verificationFailure" sourceRef="verificationDecision" targetRef="remediation"/>
+    <sequenceFlow id="verificationFailure" sourceRef="verificationDecision" targetRef="safetyDispatch"/>
     <endEvent id="end"/>
   </process>
 </definitions>

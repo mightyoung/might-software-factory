@@ -37,6 +37,7 @@ public final class FindingWorkflowCommandService {
     public static final String PROCESS_DEFINITION_KEY = "findingRemediationV1";
 
     private static final String CREATE = "finding.create";
+    private static final String INITIALIZE_DISCOVERED = "finding.workflow.initialize";
     private static final String PERSON_CONFIRM = "finding.confirm.person";
     private static final String SAFETY_CONFIRM = "finding.confirm.safety";
     private static final String DISPATCH = "finding.dispatch";
@@ -104,6 +105,33 @@ public final class FindingWorkflowCommandService {
         });
     }
 
+    /** Starts the new command workflow for a preserved pre-v0.2 DISCOVERED finding, one row at a time. */
+    public CommandResult initializeDiscoveredWorkflow(
+            UUID commandId, UUID findingId, long expectedVersion) {
+        Objects.requireNonNull(commandId, "commandId");
+        CurrentTenantContext context = sessionContextResolver.currentTenant();
+        return repository.inTenantTransaction(context.tenantId(), tx -> {
+            FindingWorkflowCase current = visibleForCommand(tx, findingId);
+            accessPolicy.requireAction(context, INITIALIZE_DISCOVERED, current.organizationId());
+            WorkflowCommand command = command(commandId, context, INITIALIZE_DISCOVERED, findingId, expectedVersion);
+            CommandClaim claim = tx.claimCommand(command);
+            if (!claim.acquired()) return claim.replay();
+            requireExpectedVersion(current, expectedVersion);
+
+            InitialRoute route = assignmentResolver.resolve(context.tenantId(), current.organizationId());
+            requireRouteMembers(context, route, current.organizationId());
+            FindingWorkflowCase updated = current.initializeDiscoveredWorkflow(context.memberId(), expectedVersion);
+            tx.updateFinding(updated, current.version());
+            workflowFacade.startProcess(context.tenantId(), BUSINESS_TYPE, findingId, 1,
+                    PROCESS_DEFINITION_KEY, processVariables(findingId, route));
+            appendTransition(tx, current, updated, commandId, context.actorId(), "Legacy workflow initialized");
+            CommandResult result = CommandResult.from(updated);
+            tx.completeCommand(commandId, result);
+            publishChange(context, commandId, INITIALIZE_DISCOVERED, current, updated);
+            return result;
+        });
+    }
+
     public CommandResult confirmPerson(UUID commandId, UUID findingId, long expectedVersion) {
         return confirm(commandId, findingId, expectedVersion, PERSON_CONFIRM, "PERSON", "personConfirm");
     }
@@ -124,13 +152,16 @@ public final class FindingWorkflowCommandService {
             if (!claim.acquired()) return claim.replay();
             requireExpectedVersion(current, expectedVersion);
             validateDispatch(request);
-            accessPolicy.requireAssignableMember(context, request.assigneeMemberId(), current.organizationId());
+            accessPolicy.requireAssignableMember(context, request.assigneeMemberId(), current.organizationId(), REMEDIATE);
 
             FindingWorkflowCase updated = current.dispatch(context.memberId(), expectedVersion);
-            OffsetDateTime now = now();
+            boolean reDispatch = current.state() == FindingWorkflowState.RECTIFYING && current.roundNo() > 1;
+            if (reDispatch && tx.findNotice(findingId, current.roundNo()).isPresent()) {
+                throw new FindingWorkflowRuleException("The rework round already has a remediation notice");
+            }
             Notice notice = new Notice(UUID.randomUUID(), findingId, current.roundNo(), request.assigneeMemberId(),
                     request.dueAt(), request.dueAt(), request.requirements().trim());
-            tx.openRound(findingId, current.roundNo(), commandId);
+            if (!reDispatch) tx.openRound(findingId, current.roundNo(), commandId);
             tx.insertNotice(notice, commandId);
             tx.updateFinding(updated, current.version());
             appendTransition(tx, current, updated, commandId, context.actorId(), null);
@@ -158,7 +189,8 @@ public final class FindingWorkflowCommandService {
             if (request.statement() == null || request.statement().isBlank()) {
                 throw new FindingWorkflowRuleException("A remediation statement is required");
             }
-            evidencePolicy.requireReady(context.tenantId(), findingId, current.roundNo(), request.evidenceSetId());
+            evidencePolicy.requireReady(context.tenantId(), findingId, current.roundNo(), context.memberId(),
+                    request.evidenceSetId());
             Notice notice = tx.findNotice(findingId, current.roundNo())
                     .orElseThrow(() -> new FindingWorkflowConfigurationException(
                             "The active remediation notice is missing"));
@@ -207,28 +239,29 @@ public final class FindingWorkflowCommandService {
                 throw new org.springframework.security.access.AccessDeniedException(
                         "The remediation member cannot verify their own submission");
             }
-            Notice previousNotice = tx.findNotice(findingId, current.roundNo())
-                    .orElseThrow(() -> new FindingWorkflowConfigurationException(
-                            "The active remediation notice is missing"));
-
             FindingWorkflowCase updated = current.verify(context.memberId(), expectedVersion, request.decision());
             OffsetDateTime now = now();
             tx.insertVerification(new Verification(findingId, submission.id(), current.roundNo(),
                     context.memberId(), request.decision(), cleanReason(request.reason()), now, commandId));
             tx.closeRound(findingId, current.roundNo(),
                     request.decision() == VerificationDecision.PASS ? "CLOSED" : "FAILED", commandId);
+            Map<String, Object> taskVariables;
             if (request.decision() == VerificationDecision.FAIL) {
-                accessPolicy.requireAssignableMember(context, previousNotice.assigneeMemberId(),
-                        current.organizationId());
+                UUID safetyDispatcher = assignmentResolver.resolveSafetyDispatcher(
+                        context.tenantId(), current.organizationId());
+                accessPolicy.requireAssignableMember(
+                        context, safetyDispatcher, current.organizationId(), DISPATCH);
                 tx.openRound(findingId, updated.roundNo(), commandId);
-                tx.insertNotice(new Notice(UUID.randomUUID(), findingId, updated.roundNo(),
-                        previousNotice.assigneeMemberId(), previousNotice.dueAt(), previousNotice.originalDueAt(),
-                        previousNotice.requirements()), commandId);
+                taskVariables = Map.of(
+                        "verificationDecision", request.decision().name(),
+                        "safetyDispatcherMemberId", safetyDispatcher.toString());
+            } else {
+                taskVariables = Map.of("verificationDecision", request.decision().name());
             }
             tx.updateFinding(updated, current.version());
             appendTransition(tx, current, updated, commandId, context.actorId(), cleanReason(request.reason()));
             workflowFacade.completeTask(context.tenantId(), BUSINESS_TYPE, findingId, "safetyVerification",
-                    context.memberId(), Map.of("verificationDecision", request.decision().name()));
+                    context.memberId(), taskVariables);
             CommandResult result = CommandResult.from(updated);
             tx.completeCommand(commandId, result);
             publishChange(context, commandId, VERIFY, current, updated);
@@ -268,10 +301,19 @@ public final class FindingWorkflowCommandService {
     }
 
     private void requireRouteMembers(CurrentTenantContext context, InitialRoute route, UUID organizationId) {
-        accessPolicy.requireAssignableMember(context, route.personConfirmerMemberId(), organizationId);
-        accessPolicy.requireAssignableMember(context, route.safetyConfirmerMemberId(), organizationId);
-        accessPolicy.requireAssignableMember(context, route.safetyDispatcherMemberId(), organizationId);
-        accessPolicy.requireAssignableMember(context, route.safetyVerifierMemberId(), organizationId);
+        accessPolicy.requireAssignableMember(context, route.personConfirmerMemberId(), organizationId, PERSON_CONFIRM);
+        accessPolicy.requireAssignableMember(context, route.safetyConfirmerMemberId(), organizationId, SAFETY_CONFIRM);
+        accessPolicy.requireAssignableMember(context, route.safetyDispatcherMemberId(), organizationId, DISPATCH);
+        accessPolicy.requireAssignableMember(context, route.safetyVerifierMemberId(), organizationId, VERIFY);
+    }
+
+    private static Map<String, Object> processVariables(UUID findingId, InitialRoute route) {
+        return Map.of(
+                "findingId", findingId.toString(),
+                "personConfirmerMemberId", route.personConfirmerMemberId().toString(),
+                "safetyConfirmerMemberId", route.safetyConfirmerMemberId().toString(),
+                "safetyDispatcherMemberId", route.safetyDispatcherMemberId().toString(),
+                "safetyVerifierMemberId", route.safetyVerifierMemberId().toString());
     }
 
     private static FindingWorkflowCase visibleForCommand(FindingWorkflowRepository.Transaction tx, UUID findingId) {

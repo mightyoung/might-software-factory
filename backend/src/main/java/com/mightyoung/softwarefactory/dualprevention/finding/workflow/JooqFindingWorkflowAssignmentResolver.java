@@ -49,6 +49,24 @@ public final class JooqFindingWorkflowAssignmentResolver implements FindingWorkf
         }
     }
 
+    @Override
+    public UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId) {
+        var rows = dsl.fetch("""
+                select assignee_member_id
+                  from public.finding_stage_assignment
+                 where tenant_id = cast(? as uuid)
+                   and organization_id = cast(? as uuid)
+                   and stage = 'SAFETY_DISPATCH'
+                   and valid_from <= current_timestamp
+                   and (valid_to is null or valid_to > current_timestamp)
+                """, tenantId, organizationId);
+        if (rows.size() != 1) {
+            throw new FindingWorkflowConfigurationException(
+                    "Exactly one current safety dispatcher must be configured for a rework round");
+        }
+        return rows.getFirst().get("assignee_member_id", UUID.class);
+    }
+
     private enum Stage {
         PERSON_CONFIRM,
         SAFETY_CONFIRM,

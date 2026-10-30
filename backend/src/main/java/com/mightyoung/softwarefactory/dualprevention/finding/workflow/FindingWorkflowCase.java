@@ -55,6 +55,12 @@ public record FindingWorkflowCase(
                 createdByMemberId, createdByMemberId);
     }
 
+    /** Explicitly adopts one legacy DISCOVERED row into the person-confirmation workflow. */
+    public FindingWorkflowCase initializeDiscoveredWorkflow(UUID memberId, long expectedVersion) {
+        return advance(memberId, expectedVersion, FindingWorkflowState.DISCOVERED,
+                FindingWorkflowState.PERSON_CONFIRM_PENDING, roundNo);
+    }
+
     public FindingWorkflowCase confirmByPerson(UUID memberId, long expectedVersion) {
         return advance(memberId, expectedVersion, FindingWorkflowState.PERSON_CONFIRM_PENDING,
                 FindingWorkflowState.SAFETY_CONFIRM_PENDING, roundNo);
@@ -66,8 +72,14 @@ public record FindingWorkflowCase(
     }
 
     public FindingWorkflowCase dispatch(UUID memberId, long expectedVersion) {
-        return advance(memberId, expectedVersion, FindingWorkflowState.SAFETY_DISPATCH_PENDING,
-                FindingWorkflowState.RECTIFYING, roundNo);
+        FindingWorkflowState next = state == FindingWorkflowState.SAFETY_DISPATCH_PENDING
+                || (state == FindingWorkflowState.RECTIFYING && roundNo > 1)
+                ? FindingWorkflowState.RECTIFYING : null;
+        if (next == null) {
+            throw new FindingWorkflowRuleException(
+                    "Dispatch requires the initial safety task or a failed-acceptance re-dispatch");
+        }
+        return advance(memberId, expectedVersion, state, next, roundNo);
     }
 
     public FindingWorkflowCase submitForAcceptance(UUID memberId, long expectedVersion) {

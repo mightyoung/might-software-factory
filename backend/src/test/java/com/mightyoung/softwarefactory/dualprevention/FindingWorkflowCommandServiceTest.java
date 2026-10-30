@@ -48,7 +48,9 @@ class FindingWorkflowCommandServiceTest {
     private static final UUID PERSON_CONFIRMER = UUID.fromString("20000000-0000-0000-0000-000000000002");
     private static final UUID SAFETY_MEMBER = UUID.fromString("20000000-0000-0000-0000-000000000003");
     private static final UUID REMEDIATOR = UUID.fromString("20000000-0000-0000-0000-000000000004");
+    private static final UUID REPLACEMENT_REMEDIATOR = UUID.fromString("20000000-0000-0000-0000-000000000005");
     private static final UUID EVIDENCE_SET = UUID.fromString("50000000-0000-0000-0000-000000000001");
+    private static final UUID EVIDENCE_SET_REWORK = UUID.fromString("50000000-0000-0000-0000-000000000002");
     private static final OffsetDateTime DISCOVERED_AT = OffsetDateTime.parse("2026-10-30T10:00:00Z");
     private static final OffsetDateTime DUE_AT = OffsetDateTime.parse("2999-11-01T10:00:00Z");
 
@@ -64,7 +66,6 @@ class FindingWorkflowCommandServiceTest {
     void setUp() {
         service = new FindingWorkflowCommandService(new SessionContextResolver(), repository,
                 accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add);
-        evidencePolicy.ready.add(EVIDENCE_SET);
         asMember(CREATOR, TENANT_A);
     }
 
@@ -78,6 +79,7 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CommandResult created = service.create(
                 command("60000000-0000-0000-0000-000000000001"), newFinding());
         UUID findingId = created.findingId();
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 1, REMEDIATOR);
         assertThat(created.state()).isEqualTo(FindingWorkflowState.PERSON_CONFIRM_PENDING);
 
         asMember(PERSON_CONFIRMER, TENANT_A);
@@ -102,25 +104,34 @@ class FindingWorkflowCommandServiceTest {
                 new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET, "Guard replaced"));
         assertThat(acceptance.state()).isEqualTo(FindingWorkflowState.ACCEPTANCE_PENDING);
 
+        accessPolicy.inactiveMembers.add(REMEDIATOR);
         asMember(SAFETY_MEMBER, TENANT_A);
         FindingWorkflowContracts.CommandResult returned = service.verify(
                 command("60000000-0000-0000-0000-000000000006"), findingId, 5L,
                 new FindingWorkflowContracts.Verify(VerificationDecision.FAIL, "Gap remains"));
         assertThat(returned.state()).isEqualTo(FindingWorkflowState.RECTIFYING);
         assertThat(returned.roundNo()).isEqualTo(2);
-        assertThat(repository.notices).hasSize(2);
+        assertThat(repository.notices).hasSize(1);
         assertThat(repository.transitions).hasSize(6);
         assertThat(repository.verifications).hasSize(1);
 
-        asMember(REMEDIATOR, TENANT_A);
+        FindingWorkflowContracts.CommandResult redispatched = service.dispatch(
+                command("60000000-0000-0000-0000-000000000009"), findingId, 6L,
+                new FindingWorkflowContracts.Dispatch(REPLACEMENT_REMEDIATOR, DUE_AT, "Replace the guard"));
+        assertThat(redispatched.state()).isEqualTo(FindingWorkflowState.RECTIFYING);
+        assertThat(redispatched.roundNo()).isEqualTo(2);
+        assertThat(repository.notices).hasSize(2);
+        evidencePolicy.allow(EVIDENCE_SET_REWORK, TENANT_A, findingId, 2, REPLACEMENT_REMEDIATOR);
+
+        asMember(REPLACEMENT_REMEDIATOR, TENANT_A);
         FindingWorkflowContracts.CommandResult acceptanceAgain = service.submitRemediation(
-                command("60000000-0000-0000-0000-000000000007"), findingId, 6L,
-                new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET, "Gap corrected"));
+                command("60000000-0000-0000-0000-000000000007"), findingId, 7L,
+                new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET_REWORK, "Gap corrected"));
         assertThat(acceptanceAgain.state()).isEqualTo(FindingWorkflowState.ACCEPTANCE_PENDING);
 
         asMember(SAFETY_MEMBER, TENANT_A);
         FindingWorkflowContracts.CommandResult closed = service.verify(
-                command("60000000-0000-0000-0000-000000000008"), findingId, 7L,
+                command("60000000-0000-0000-0000-000000000008"), findingId, 8L,
                 new FindingWorkflowContracts.Verify(VerificationDecision.PASS, null));
         assertThat(closed.state()).isEqualTo(FindingWorkflowState.CLOSED);
         assertThat(closed.roundNo()).isEqualTo(2);
@@ -134,17 +145,18 @@ class FindingWorkflowCommandServiceTest {
                         FindingWorkflowState.RECTIFYING,
                         FindingWorkflowState.ACCEPTANCE_PENDING,
                         FindingWorkflowState.RECTIFYING,
+                        FindingWorkflowState.RECTIFYING,
                         FindingWorkflowState.ACCEPTANCE_PENDING,
                         FindingWorkflowState.CLOSED);
         assertThat(publishedEvents).extracting(FindingWorkflowChangedEvent::roundNo)
-                .containsExactly(1, 1, 1, 1, 1, 2, 2, 2);
+                .containsExactly(1, 1, 1, 1, 1, 2, 2, 2, 2);
         assertThat(publishedEvents).allSatisfy(event -> {
             assertThat(event.tenantId()).isEqualTo(TENANT_A);
             assertThat(event.findingId()).isEqualTo(findingId);
         });
         assertThat(workflow.completedTasks).containsExactly(
                 "personConfirm", "safetyConfirm", "safetyDispatch", "remediation",
-                "safetyVerification", "remediation", "safetyVerification");
+                "safetyVerification", "safetyDispatch", "remediation", "safetyVerification");
     }
 
     @Test
@@ -190,6 +202,7 @@ class FindingWorkflowCommandServiceTest {
         service.confirmSafety(command("60000000-0000-0000-0000-000000000023"), findingId, 2L);
         service.dispatch(command("60000000-0000-0000-0000-000000000024"), findingId, 3L,
                 new FindingWorkflowContracts.Dispatch(REMEDIATOR, DUE_AT, "Repair"));
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 1, REMEDIATOR);
         FindingWorkflowContracts.SubmitRemediation missingEvidence =
                 new FindingWorkflowContracts.SubmitRemediation(null, "No evidence");
 
@@ -239,6 +252,7 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CommandResult created = service.create(
                 command("60000000-0000-0000-0000-000000000041"), newFinding());
         UUID findingId = created.findingId();
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 1, REMEDIATOR);
         asMember(PERSON_CONFIRMER, TENANT_A);
         service.confirmPerson(command("60000000-0000-0000-0000-000000000042"), findingId, 1L);
         asMember(SAFETY_MEMBER, TENANT_A);
@@ -256,6 +270,67 @@ class FindingWorkflowCommandServiceTest {
         assertThat(repository.finding(TENANT_A, findingId).orElseThrow().state())
                 .isEqualTo(FindingWorkflowState.ACCEPTANCE_PENDING);
         assertThat(repository.verifications).isEmpty();
+    }
+
+    @Test
+    void evidenceMustBelongToTheCurrentFindingRoundAndSubmitter() {
+        FindingWorkflowContracts.CommandResult created = service.create(
+                command("60000000-0000-0000-0000-000000000051"), newFinding());
+        UUID findingId = created.findingId();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        service.confirmPerson(command("60000000-0000-0000-0000-000000000052"), findingId, 1L);
+        asMember(SAFETY_MEMBER, TENANT_A);
+        service.confirmSafety(command("60000000-0000-0000-0000-000000000053"), findingId, 2L);
+        service.dispatch(command("60000000-0000-0000-0000-000000000054"), findingId, 3L,
+                new FindingWorkflowContracts.Dispatch(REMEDIATOR, DUE_AT, "Repair"));
+        asMember(REMEDIATOR, TENANT_A);
+
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, UUID.randomUUID(), 1, REMEDIATOR);
+        assertRejectedEvidence(findingId, "60000000-0000-0000-0000-000000000055");
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 2, REMEDIATOR);
+        assertRejectedEvidence(findingId, "60000000-0000-0000-0000-000000000056");
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 1, REPLACEMENT_REMEDIATOR);
+        assertRejectedEvidence(findingId, "60000000-0000-0000-0000-000000000057");
+
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, findingId, 1, REMEDIATOR);
+        FindingWorkflowContracts.CommandResult accepted = service.submitRemediation(
+                command("60000000-0000-0000-0000-000000000058"), findingId, 4L,
+                new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET, "Work complete"));
+        assertThat(accepted.state()).isEqualTo(FindingWorkflowState.ACCEPTANCE_PENDING);
+    }
+
+    @Test
+    void legacyDiscoveredFindingIsInitializedIndividuallyWithoutSkippingPersonApproval() {
+        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000099");
+        FindingWorkflowCase legacy = new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID,
+                "FND-LEGACY-01", "Preserved legacy row", DISCOVERED_AT, null, null, "GENERAL",
+                FindingWorkflowState.DISCOVERED, 1, 1, CREATOR, CREATOR);
+        repository.seed(legacy);
+        UUID key = command("60000000-0000-0000-0000-000000000059");
+
+        FindingWorkflowContracts.CommandResult initialized = service.initializeDiscoveredWorkflow(key, findingId, 1L);
+        FindingWorkflowContracts.CommandResult replay = service.initializeDiscoveredWorkflow(key, findingId, 1L);
+
+        assertThat(replay).isEqualTo(initialized);
+        assertThat(initialized.state()).isEqualTo(FindingWorkflowState.PERSON_CONFIRM_PENDING);
+        assertThat(initialized.version()).isEqualTo(2L);
+        assertThat(repository.transitions).singleElement().satisfies(transition -> {
+            assertThat(transition.fromState()).isEqualTo(FindingWorkflowState.DISCOVERED);
+            assertThat(transition.toState()).isEqualTo(FindingWorkflowState.PERSON_CONFIRM_PENDING);
+        });
+        assertThat(workflow.startedProcesses).containsExactly(FindingWorkflowCommandService.PROCESS_DEFINITION_KEY);
+        assertThat(workflow.tasks.get(findingId).key()).isEqualTo("personConfirm");
+        assertThat(repository.finding(TENANT_A, findingId).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.PERSON_CONFIRM_PENDING);
+    }
+
+    private void assertRejectedEvidence(UUID findingId, String commandId) {
+        assertThatThrownBy(() -> service.submitRemediation(command(commandId), findingId, 4L,
+                new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET, "Work complete")))
+                .isInstanceOf(FindingWorkflowEvidenceException.class);
+        assertThat(repository.finding(TENANT_A, findingId).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.RECTIFYING);
+        assertThat(repository.submissions).isEmpty();
     }
 
     private static FindingWorkflowContracts.CreateFinding newFinding() {
@@ -276,6 +351,7 @@ class FindingWorkflowCommandServiceTest {
 
     private static final class MemoryAccessPolicy implements FindingWorkflowAccessPolicy {
         private boolean allowed = true;
+        private final Set<UUID> inactiveMembers = new java.util.HashSet<>();
 
         @Override
         public void requireAction(CurrentTenantContext context, String permissionCode, UUID organizationId) {
@@ -285,8 +361,9 @@ class FindingWorkflowCommandServiceTest {
         }
 
         @Override
-        public void requireAssignableMember(CurrentTenantContext context, UUID memberId, UUID organizationId) {
-            if (memberId == null || organizationId == null) {
+        public void requireAssignableMember(
+                CurrentTenantContext context, UUID memberId, UUID organizationId, String permissionCode) {
+            if (memberId == null || organizationId == null || inactiveMembers.contains(memberId)) {
                 throw new AccessDeniedException("The remediation assignee is not eligible");
             }
         }
@@ -301,17 +378,32 @@ class FindingWorkflowCommandServiceTest {
             if (route == null) throw new FindingWorkflowConfigurationException("No route configured");
             return route;
         }
+
+        @Override
+        public UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId) {
+            if (route == null) throw new FindingWorkflowConfigurationException("No route configured");
+            return route.safetyDispatcherMemberId();
+        }
     }
 
     private static final class MemoryEvidencePolicy implements FindingWorkflowEvidencePolicy {
-        private final Set<UUID> ready = new java.util.HashSet<>();
+        private final Map<UUID, EvidenceScope> ready = new HashMap<>();
+
+        private void allow(UUID evidenceSetId, UUID tenantId, UUID findingId, int roundNo, UUID ownerMemberId) {
+            ready.put(evidenceSetId, new EvidenceScope(tenantId, findingId, roundNo, ownerMemberId));
+        }
 
         @Override
-        public void requireReady(UUID tenantId, UUID findingId, int roundNo, UUID evidenceSetId) {
-            if (evidenceSetId == null || !ready.contains(evidenceSetId)) {
+        public void requireReady(UUID tenantId, UUID findingId, int roundNo,
+                                 UUID submittedByMemberId, UUID evidenceSetId) {
+            EvidenceScope scope = ready.get(evidenceSetId);
+            if (scope == null || !scope.tenantId().equals(tenantId) || !scope.findingId().equals(findingId)
+                    || scope.roundNo() != roundNo || !scope.ownerMemberId().equals(submittedByMemberId)) {
                 throw new FindingWorkflowEvidenceException("A ready evidence set is required");
             }
         }
+
+        private record EvidenceScope(UUID tenantId, UUID findingId, int roundNo, UUID ownerMemberId) {}
     }
 
     private static final class MemoryWorkflowFacade implements WorkflowFacade {
@@ -350,7 +442,7 @@ class FindingWorkflowCommandServiceTest {
                 case "safetyDispatch" -> "remediation";
                 case "remediation" -> "safetyVerification";
                 case "safetyVerification" -> "FAIL".equals(activeVariables.get("verificationDecision"))
-                        ? "remediation" : "END";
+                        ? "safetyDispatch" : "END";
                 default -> throw new IllegalArgumentException("Unexpected workflow task");
             };
             if (next.equals("END")) {
@@ -410,6 +502,10 @@ class FindingWorkflowCommandServiceTest {
         }
 
         private long findingCount() { return findings.size(); }
+
+        private void seed(FindingWorkflowCase finding) {
+            findings.put(finding.id(), finding);
+        }
 
         private final class Tx implements Transaction {
             private final UUID tenantId;

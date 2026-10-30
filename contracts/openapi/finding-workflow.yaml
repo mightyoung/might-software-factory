@@ -19,9 +19,9 @@ x-workflow-order:
   - ACCEPTANCE_PENDING
   - CLOSED
 x-remediation-loop: >-
-  A failed safety verification requires a reason, retains the failed round, and starts a new
-  remediation round. Only a passing safety verification closes the finding. The remediation
-  submitter cannot verify their own submission.
+  A failed safety verification requires a reason, retains the failed round, and routes through a
+  safety re-dispatch before the new remediation notice is issued. Only a passing safety verification
+  closes the finding. The remediation submitter cannot verify their own submission.
 servers:
   - url: /
 paths:
@@ -50,6 +50,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CommandResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /api/v1/findings/{id}/workflow-initialization:
+    post:
+      operationId: initializeLegacyDiscoveredFinding
+      summary: Start the confirmation workflow for one preserved legacy discovery
+      description: >-
+        Explicitly moves a legacy DISCOVERED row to PERSON_CONFIRM_PENDING, creates the first
+        confirmation task, and records the transition. Initialization does not perform confirmation.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionedCommandRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/CommandSucceeded'
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':

@@ -80,6 +80,44 @@ public final class PersistentFindingWorkflowAuthorizationRepository
         });
     }
 
+    @Override
+    public boolean isAssignableMemberAuthorizedForAction(
+            UUID tenantId, UUID memberId, UUID organizationId, String permissionCode) {
+        if (tenantId == null || memberId == null || organizationId == null
+                || permissionCode == null || !permissionCode.startsWith("finding.")) {
+            return false;
+        }
+        String action = permissionCode.substring("finding.".length());
+        return Boolean.TRUE.equals(readTransaction.execute(status -> {
+            setLocalTenant(tenantId);
+            Boolean activeHuman = (Boolean) dsl.fetchValue("""
+                    select exists (
+                        select 1
+                          from public.tenant_member m
+                          join public.account a on a.id = m.account_id and a.status = 'ACTIVE'
+                          join public.principal p on p.account_id = a.id
+                               and p.kind = 'HUMAN' and p.status = 'ACTIVE'
+                          join public.tenant t on t.id = m.tenant_id and t.status = 'ACTIVE'
+                         where m.tenant_id = cast(? as uuid)
+                           and m.id = cast(? as uuid)
+                           and m.status = 'ACTIVE'
+                    )
+                    """, tenantId, memberId);
+            if (!Boolean.TRUE.equals(activeHuman)) return false;
+
+            MemberDirectorySnapshot directory = directoryRepository.findCurrentMemberships(tenantId, memberId);
+            if (!directory.organizationIds().contains(organizationId)) return false;
+            var scopes = roleScopeRepository.findActiveActionScopes(
+                    tenantId, memberId, directory.organizationIds(), directory.positionIds(), directory.groupIds(),
+                    "finding", action, permissionCode);
+            Set<UUID> departmentTree = scopes.stream().anyMatch(scope -> "DEPT_TREE".equals(scope.kind()))
+                    ? directoryRepository.expandDepartmentTree(tenantId, memberId)
+                    : Set.of();
+            return FindingWorkflowActionAssignmentPolicy.allows(
+                    organizationId, directory.organizationIds(), departmentTree, scopes);
+        }));
+    }
+
     private static boolean isCurrentHuman(
             CurrentTenantContext context,
             PrincipalStatus principal,

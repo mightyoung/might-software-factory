@@ -21,7 +21,7 @@ class FindingWorkflowContractTest {
     private static final String FLOWABLE_NS = "http://flowable.org/bpmn";
 
     @Test
-    void apiContractExposesAllSixCommandsWithVersionAndIdempotencyHeaders() throws Exception {
+    void apiContractExposesAllCommandsWithVersionAndIdempotencyHeaders() throws Exception {
         Path contractPath = Path.of("..", "contracts", "openapi", "finding-workflow.yaml");
         Map<String, Object> document = new Yaml().load(Files.readString(contractPath));
         Map<String, Object> paths = (Map<String, Object>) document.get("paths");
@@ -31,7 +31,8 @@ class FindingWorkflowContractTest {
                 "/api/v1/findings/{id}/confirm/safety",
                 "/api/v1/findings/{id}/dispatch",
                 "/api/v1/findings/{id}/remediation-submissions",
-                "/api/v1/findings/{id}/verifications");
+                "/api/v1/findings/{id}/verifications",
+                "/api/v1/findings/{id}/workflow-initialization");
 
         for (Map.Entry<String, Object> entry : paths.entrySet()) {
             Map<String, Object> post = (Map<String, Object>) ((Map<String, Object>) entry.getValue()).get("post");
@@ -71,7 +72,12 @@ class FindingWorkflowContractTest {
                 "public.evidence_item",
                 "public.audit_event",
                 "public.event_publication",
+                "foreign key (tenant_id, notice_id, finding_id, round_no)",
+                "foreign key (tenant_id, submission_id, finding_id, round_no)",
                 "constraint finding_transition_command_key unique (tenant_id, command_id)");
+        String compactMigration = migration.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        assertThat(compactMigration).contains(
+                "foreign key (tenant_id, evidence_set_id, finding_id, round_no, submitted_by)");
         String repository = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
                 "JooqFindingWorkflowRepository.java"));
@@ -95,6 +101,8 @@ class FindingWorkflowContractTest {
                 .contains("create policy audit_event_tenant_isolation on public.audit_event")
                 .contains("create trigger audit_event_append_only")
                 .contains("create table public.event_publication");
+        assertThat(migration).contains("owner_member_id", "finding_id", "round_no", "verification_level")
+                .doesNotContain("update public.finding");
         String listener = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "FindingWorkflowEventListener.java"));
         assertThat(listener).contains("@ApplicationModuleListener");
@@ -119,6 +127,16 @@ class FindingWorkflowContractTest {
             assertThat(process.getElementsByTagNameNS(BPMN_NS, "serviceTask").getLength()).isZero();
             assertThat(process.getElementsByTagNameNS(BPMN_NS, "scriptTask").getLength()).isZero();
             assertThat(process.getElementsByTagNameNS(BPMN_NS, "sequenceFlow").getLength()).isEqualTo(8);
+            var failureFlow = process.getElementsByTagNameNS(BPMN_NS, "sequenceFlow");
+            boolean failureReturnsToSafetyDispatch = false;
+            for (int index = 0; index < failureFlow.getLength(); index++) {
+                var flow = failureFlow.item(index);
+                if ("verificationFailure".equals(flow.getAttributes().getNamedItem("id").getNodeValue())) {
+                    failureReturnsToSafetyDispatch = "safetyDispatch".equals(
+                            flow.getAttributes().getNamedItem("targetRef").getNodeValue());
+                }
+            }
+            assertThat(failureReturnsToSafetyDispatch).isTrue();
 
             Set<String> taskIds = Set.of("personConfirm", "safetyConfirm", "safetyDispatch", "remediation",
                     "safetyVerification");

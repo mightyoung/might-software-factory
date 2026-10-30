@@ -9,5 +9,6 @@ public interface FindingWorkflowAccessPolicy {
 
     void requireAction(CurrentTenantContext context, String permissionCode, UUID organizationId);
 
-    void requireAssignableMember(CurrentTenantContext context, UUID memberId, UUID organizationId);
+    void requireAssignableMember(
+            CurrentTenantContext context, UUID memberId, UUID organizationId, String permissionCode);
 }

@@ -1,5 +1,6 @@
 -- P2 finding workflow records. V2 remains immutable; this migration adds dependent history.
 -- The application runtime role receives no grants here. Flyway uses the separate migration identity.
+-- Existing DISCOVERED rows are preserved and initialized individually through the audited workflow command.
 
 insert into public.permission (id, code, resource_type, action)
 values
@@ -8,7 +9,8 @@ values
     (gen_random_uuid(), 'finding.confirm.safety', 'finding', 'confirm.safety'),
     (gen_random_uuid(), 'finding.dispatch', 'finding', 'dispatch'),
     (gen_random_uuid(), 'finding.remediate', 'finding', 'remediate'),
-    (gen_random_uuid(), 'finding.verify', 'finding', 'verify')
+    (gen_random_uuid(), 'finding.verify', 'finding', 'verify'),
+    (gen_random_uuid(), 'finding.workflow.initialize', 'finding', 'workflow.initialize')
 on conflict (code) do nothing;
 
 create table public.workflow_binding (
@@ -115,6 +117,7 @@ create table public.remediation_notice (
     command_id uuid not null,
     constraint remediation_notice_pkey primary key (tenant_id, id),
     constraint remediation_notice_round_key unique (tenant_id, finding_id, round_no),
+    constraint remediation_notice_finding_round_id_key unique (tenant_id, id, finding_id, round_no),
     constraint remediation_notice_round_fkey foreign key (tenant_id, finding_id, round_no)
         references public.remediation_round(tenant_id, finding_id, round_no) on delete restrict,
     constraint remediation_notice_assignee_fkey foreign key (tenant_id, assignee_id)
@@ -122,13 +125,20 @@ create table public.remediation_notice (
 );
 
 create table public.evidence_set (
-    tenant_id uuid not null references public.tenant(id) on delete restrict,
+    tenant_id uuid not null,
     id uuid not null,
+    finding_id uuid not null,
+    round_no integer not null check (round_no >= 1),
     owner_member_id uuid not null,
     state varchar(24) not null check (state in ('UPLOADING', 'QUARANTINED', 'READY', 'FAILED')),
     created_at timestamptz not null,
     verified_at timestamptz,
     constraint evidence_set_pkey primary key (tenant_id, id),
+    constraint evidence_set_finding_round_key unique (tenant_id, id, finding_id, round_no),
+    constraint evidence_set_finding_round_owner_key unique
+        (tenant_id, id, finding_id, round_no, owner_member_id),
+    constraint evidence_set_round_fkey foreign key (tenant_id, finding_id, round_no)
+        references public.remediation_round(tenant_id, finding_id, round_no) on delete restrict,
     constraint evidence_set_owner_fkey foreign key (tenant_id, owner_member_id)
         references public.tenant_member(tenant_id, id) on delete restrict,
     constraint evidence_set_ready_shape check (state <> 'READY' or verified_at is not null)
@@ -172,15 +182,17 @@ create table public.remediation_submission (
     command_id uuid not null,
     constraint remediation_submission_pkey primary key (tenant_id, id),
     constraint remediation_submission_round_key unique (tenant_id, finding_id, round_no),
+    constraint remediation_submission_finding_round_id_key unique (tenant_id, id, finding_id, round_no),
     constraint remediation_submission_command_key unique (tenant_id, command_id),
     constraint remediation_submission_round_fkey foreign key (tenant_id, finding_id, round_no)
         references public.remediation_round(tenant_id, finding_id, round_no) on delete restrict,
-    constraint remediation_submission_notice_fkey foreign key (tenant_id, notice_id)
-        references public.remediation_notice(tenant_id, id) on delete restrict,
+    constraint remediation_submission_notice_fkey foreign key (tenant_id, notice_id, finding_id, round_no)
+        references public.remediation_notice(tenant_id, id, finding_id, round_no) on delete restrict,
     constraint remediation_submission_actor_fkey foreign key (tenant_id, submitted_by)
         references public.tenant_member(tenant_id, id) on delete restrict,
-    constraint remediation_submission_evidence_fkey foreign key (tenant_id, evidence_set_id)
-        references public.evidence_set(tenant_id, id) on delete restrict
+    constraint remediation_submission_evidence_fkey foreign key
+        (tenant_id, evidence_set_id, finding_id, round_no, submitted_by)
+        references public.evidence_set(tenant_id, id, finding_id, round_no, owner_member_id) on delete restrict
 );
 
 create table public.verification (
@@ -196,11 +208,12 @@ create table public.verification (
     command_id uuid not null,
     constraint verification_pkey primary key (tenant_id, id),
     constraint verification_submission_key unique (tenant_id, submission_id),
+    constraint verification_finding_round_id_key unique (tenant_id, id, finding_id, round_no),
     constraint verification_command_key unique (tenant_id, command_id),
     constraint verification_round_fkey foreign key (tenant_id, finding_id, round_no)
         references public.remediation_round(tenant_id, finding_id, round_no) on delete restrict,
-    constraint verification_submission_fkey foreign key (tenant_id, submission_id)
-        references public.remediation_submission(tenant_id, id) on delete restrict,
+    constraint verification_submission_fkey foreign key (tenant_id, submission_id, finding_id, round_no)
+        references public.remediation_submission(tenant_id, id, finding_id, round_no) on delete restrict,
     constraint verification_reviewer_fkey foreign key (tenant_id, reviewer_id)
         references public.tenant_member(tenant_id, id) on delete restrict,
     constraint verification_failure_reason check (decision <> 'FAIL' or length(btrim(reason)) > 0)

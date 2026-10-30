@@ -3,7 +3,6 @@ package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 import com.mightyoung.softwarefactory.authorization.FindingReadAuthorizationSnapshot;
 import com.mightyoung.softwarefactory.authorization.FindingWorkflowAuthorizationRepository;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
-import org.jooq.DSLContext;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 
@@ -14,13 +13,9 @@ import java.util.UUID;
 public final class PersistentFindingWorkflowAccessPolicy implements FindingWorkflowAccessPolicy {
 
     private final FindingWorkflowAuthorizationRepository authorizationRepository;
-    private final DSLContext dsl;
 
-    public PersistentFindingWorkflowAccessPolicy(
-            FindingWorkflowAuthorizationRepository authorizationRepository,
-            DSLContext dsl) {
+    public PersistentFindingWorkflowAccessPolicy(FindingWorkflowAuthorizationRepository authorizationRepository) {
         this.authorizationRepository = authorizationRepository;
-        this.dsl = dsl;
     }
 
     @Override
@@ -42,17 +37,15 @@ public final class PersistentFindingWorkflowAccessPolicy implements FindingWorkf
     }
 
     @Override
-    public void requireAssignableMember(CurrentTenantContext context, UUID memberId, UUID organizationId) {
-        if (context == null || memberId == null || organizationId == null) {
-            throw new AccessDeniedException("An active remediation member is required");
+    public void requireAssignableMember(
+            CurrentTenantContext context, UUID memberId, UUID organizationId, String permissionCode) {
+        if (context == null || memberId == null || organizationId == null || permissionCode == null) {
+            throw new AccessDeniedException("An active, organization-scoped workflow member is required");
         }
-        String status = (String) dsl.fetchValue("""
-                select status from public.tenant_member
-                 where tenant_id = cast(? as uuid) and id = cast(? as uuid)
-                """, context.tenantId(), memberId);
-        if (!"ACTIVE".equals(status)) {
-            throw new FindingWorkflowConfigurationException(
-                    "A configured workflow member is missing or inactive");
+        if (!authorizationRepository.isAssignableMemberAuthorizedForAction(
+                context.tenantId(), memberId, organizationId, permissionCode)) {
+            throw new AccessDeniedException(
+                    "The workflow member is inactive or lacks the required action scope in this organization");
         }
     }
 
