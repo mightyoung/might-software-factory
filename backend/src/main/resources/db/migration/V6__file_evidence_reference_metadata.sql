@@ -188,33 +188,13 @@ as $$
 declare
     evidence_set_tenant_id uuid;
     evidence_set_id uuid;
-    parent_set record;
 begin
     if TG_OP = 'UPDATE' then
-        if NEW.tenant_id is distinct from OLD.tenant_id then
-            raise exception 'evidence item cannot move between tenants';
+        if NEW.tenant_id is distinct from OLD.tenant_id
+           or NEW.id is distinct from OLD.id
+           or NEW.evidence_set_id is distinct from OLD.evidence_set_id then
+            raise exception 'evidence item tenant/id/set identity is immutable';
         end if;
-        if NEW.evidence_set_id is distinct from OLD.evidence_set_id then
-            -- Lock both parents in a stable order so a move cannot deadlock with its inverse.
-            for parent_set in
-                select distinct moved.evidence_set_id
-                  from (values (OLD.evidence_set_id), (NEW.evidence_set_id)) moved(evidence_set_id)
-                 order by moved.evidence_set_id
-            loop
-                update public.evidence_set es
-                   set evidence_revision = es.evidence_revision + 1
-                 where es.tenant_id = NEW.tenant_id
-                   and es.id = parent_set.evidence_set_id
-                   and es.submission_sealed_at is null;
-                if not found then
-                    raise exception 'evidence set is sealed by a remediation submission or was not found';
-                end if;
-            end loop;
-            return NEW;
-        end if;
-        evidence_set_tenant_id := OLD.tenant_id;
-        evidence_set_id := OLD.evidence_set_id;
-    elsif TG_OP = 'DELETE' then
         evidence_set_tenant_id := OLD.tenant_id;
         evidence_set_id := OLD.evidence_set_id;
     else
@@ -231,14 +211,26 @@ begin
         raise exception 'evidence set is sealed by a remediation submission or was not found';
     end if;
 
-    if TG_OP = 'DELETE' then return OLD; end if;
     return NEW;
 end;
 $$;
 
 create trigger evidence_item_submission_set_lock
-    before insert or update or delete on public.evidence_item
+    before insert or update on public.evidence_item
     for each row execute function public.advance_evidence_set_revision_for_item_change();
+
+-- Historical evidence is retained. No deletion bypass is provided by this migration.
+create function public.reject_evidence_item_hard_delete() returns trigger
+language plpgsql
+as $$
+begin
+    raise exception 'hard deletion of evidence items is prohibited';
+end;
+$$;
+
+create trigger evidence_item_hard_delete_prohibited
+    before delete on public.evidence_item
+    for each row execute function public.reject_evidence_item_hard_delete();
 
 -- Serialize child inserts against the one-way parent seal transition.
 create function public.lock_remediation_submission_evidence_parent() returns trigger

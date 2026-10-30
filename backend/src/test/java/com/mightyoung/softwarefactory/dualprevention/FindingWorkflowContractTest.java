@@ -168,8 +168,12 @@ class FindingWorkflowContractTest {
                 "add column submission_sealed_at timestamptz",
                 "create function public.guard_evidence_set_submission_version",
                 "create function public.advance_evidence_set_revision_for_item_change",
+                "create function public.reject_evidence_item_hard_delete",
+                "before delete on public.evidence_item",
+                "before insert or update on public.evidence_item",
+                "hard deletion of evidence items is prohibited",
+                "evidence item tenant/id/set identity is immutable",
                 "create function public.guard_remediation_submission_snapshot_seal",
-                "before insert or update or delete on public.evidence_item",
                 "set evidence_revision = es.evidence_revision + 1",
                 "set evidence_revision = es.evidence_revision + 1, submission_sealed_at = transaction_timestamp()",
                 "array_agg(snapshot.evidence_item_id order by snapshot.evidence_item_id)",
@@ -194,9 +198,23 @@ class FindingWorkflowContractTest {
                 .doesNotContain("update public.evidence_set");
         int itemMutationStart = normalized.indexOf("create function public.advance_evidence_set_revision_for_item_change");
         int itemMutationEnd = normalized.indexOf("create trigger evidence_item_submission_set_lock");
-        assertThat(normalized.substring(itemMutationStart, itemMutationEnd))
+        String itemMutation = normalized.substring(itemMutationStart, itemMutationEnd);
+        assertThat(itemMutation)
                 .contains("update public.evidence_set", "set evidence_revision = es.evidence_revision + 1")
-                .doesNotContain("for update");
+                .contains("evidence item tenant/id/set identity is immutable")
+                .doesNotContain("for update", "delete");
+        assertThat(itemMutation.indexOf("evidence item tenant/id/set identity is immutable"))
+                .isLessThan(itemMutation.indexOf("update public.evidence_set es"));
+        int hardDeleteStart = normalized.indexOf("create function public.reject_evidence_item_hard_delete");
+        int hardDeleteEnd = normalized.indexOf("create trigger evidence_item_hard_delete_prohibited");
+        String hardDeleteHandler = normalized.substring(hardDeleteStart, hardDeleteEnd);
+        assertThat(hardDeleteHandler).contains("hard deletion of evidence items is prohibited")
+                .doesNotContain("update public.evidence_set", "for update");
+
+        String pg18Checklist = Files.readString(Path.of("..", "docs", "pg18-finding-evidence-integration-checklist.md"));
+        assertThat(pg18Checklist).contains("may receive only its required `INSERT`/`UPDATE` privileges",
+                "Do not grant runtime `DELETE` or `TRUNCATE`", "database trigger rejects row deletion")
+                .doesNotContain("`INSERT`/`UPDATE`/`DELETE` operations");
 
         String repository = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
