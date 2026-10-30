@@ -28,23 +28,28 @@ components:
             - $ref: '#/components/schemas/FilterGroup'
             - type: 'null'
         sort:
-          type: array
-          maxItems: 3
-          items:
-            $ref: '#/components/schemas/SortField'
+          oneOf:
+            - type: array
+              maxItems: 3
+              items:
+                $ref: '#/components/schemas/SortField'
+            - type: 'null'
+          description: Omit or set null to use no explicit sort; the server appends the stable ID sort.
         page:
           $ref: '#/components/schemas/PageRequest'
         size:
           type: integer
           enum: [20, 50, 100]
         fields:
-          type: array
-          maxItems: 50
-          uniqueItems: true
-          items:
-            type: string
-            pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
-          description: Omit to use the registered default projection.
+          oneOf:
+            - type: array
+              maxItems: 50
+              uniqueItems: true
+              items:
+                type: string
+                pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+            - type: 'null'
+          description: Omit or set null to use the registered default projection.
     FilterGroup:
       type: object
       additionalProperties: false
@@ -93,6 +98,8 @@ components:
             number:
               type: integer
               minimum: 1
+            cursor:
+              type: 'null'
         - type: object
           additionalProperties: false
           required: [cursor]
@@ -101,6 +108,9 @@ components:
               type: string
               minLength: 1
               maxLength: 2048
+              pattern: '.*\S.*'
+            number:
+              type: 'null'
     EntitySchema:
       type: object
       additionalProperties: false

@@ -97,9 +97,52 @@ class EntityQueryValidatorTest {
         assertInvalid(new Request(null, List.of(), new PageRequest(0, null), 20, null));
         assertInvalid(new Request(null, List.of(), new PageRequest(1, "cursor"), 25, null));
         assertInvalid(new Request(null, List.of(), new PageRequest(1, "cursor"), 20, null));
+        assertInvalid(new Request(null, List.of(), new PageRequest(1, null), 20, List.of("name", "name")));
+        assertInvalid(new Request(null, List.of(
+                new SortField("name", Direction.ASC), new SortField("name", Direction.DESC)),
+                new PageRequest(1, null), 20, null));
         assertInvalid(new Request(null, List.of(new SortField("secret", Direction.ASC)),
                 new PageRequest(1, null), 20, null));
+        assertInvalid(new Request(null, List.of(new SortField("notes", Direction.ASC)),
+                new PageRequest(1, null), 20, null));
         assertInvalid(new Request(null, List.of(), new PageRequest(1, null), 20, List.of("secret")));
+        assertInvalid(new Request(null, List.of(), new PageRequest(1, null), 20, List.of("internal")));
+    }
+
+    @Test
+    void enforcesOffsetAndCursorBoundaries() {
+        assertThatCode(() -> validator.validate(new Request(null, List.of(),
+                new PageRequest(501, null), 20, null), schema)).doesNotThrowAnyException();
+        assertInvalid(new Request(null, List.of(), new PageRequest(502, null), 20, null));
+
+        assertThatCode(() -> validator.validate(new Request(null, List.of(),
+                new PageRequest(201, null), 50, null), schema)).doesNotThrowAnyException();
+        assertInvalid(new Request(null, List.of(), new PageRequest(202, null), 50, null));
+
+        assertThatCode(() -> validator.validate(new Request(null, List.of(),
+                new PageRequest(101, null), 100, null), schema)).doesNotThrowAnyException();
+        assertInvalid(new Request(null, List.of(), new PageRequest(102, null), 100, null));
+
+        assertThatCode(() -> validator.validate(new Request(null, List.of(),
+                new PageRequest(null, "c".repeat(2048)), 20, null), schema)).doesNotThrowAnyException();
+        assertInvalid(new Request(null, List.of(), new PageRequest(null, "c".repeat(2049)), 20, null));
+        assertInvalid(new Request(null, List.of(), new PageRequest(null, "  \t  "), 20, null));
+    }
+
+    @Test
+    void enforcesInOperatorCountBoundaries() {
+        assertInvalid(request(new FilterCondition("status", IN, json(List.of()))));
+
+        List<String> maxValues = java.util.stream.IntStream.range(0, 100)
+                .mapToObj(index -> index % 2 == 0 ? "OPEN" : "CLOSED")
+                .toList();
+        Request maxInRequest = request(new FilterCondition("status", IN, json(maxValues)));
+        assertThatCode(() -> validator.validate(maxInRequest, schema)).doesNotThrowAnyException();
+
+        List<String> tooManyValues = java.util.stream.IntStream.range(0, 101)
+                .mapToObj(index -> index % 2 == 0 ? "OPEN" : "CLOSED")
+                .toList();
+        assertInvalid(request(new FilterCondition("status", IN, json(tooManyValues))));
     }
 
     @Test
@@ -119,11 +162,15 @@ class EntityQueryValidatorTest {
     void omitsUnavailableTotalInsteadOfSerializingAPlaceholder() throws Exception {
         String json = JSON.writeValueAsString(new EntityQueryContract.PageMetadata(20, 1, null, null));
         String offsetPage = JSON.writeValueAsString(new PageRequest(1, null));
+        String omittedControls = JSON.writeValueAsString(new Request(
+                null, null, new PageRequest(1, null), 20, null));
         String error = JSON.writeValueAsString(new EntityQueryContract.ErrorResponse(
                 "INVALID_QUERY", "Invalid query", "trace-1", false, List.of(), null));
 
         assertThat(json).contains("\"size\":20", "\"number\":1").doesNotContain("total", "nextCursor");
         assertThat(offsetPage).contains("\"number\":1").doesNotContain("cursor");
+        assertThat(omittedControls).contains("\"page\":{\"number\":1}")
+                .doesNotContain("filterAST", "sort", "fields", "cursor");
         assertThat(error).contains("\"fieldErrors\":[]").doesNotContain("currentVersion");
     }
 
@@ -138,6 +185,44 @@ class EntityQueryValidatorTest {
         assertThatThrownBy(() -> validator.validate(request(
                 new FilterCondition("amount", BETWEEN, json(List.of(25, 12)))), schema))
                 .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void comparesDatetimeRangesByInstantAcrossOffsets() {
+        String plusEight = "2026-10-30T10:00:00+08:00";
+        String utc = "2026-10-30T02:00:00Z";
+
+        assertThatCode(() -> validator.validate(request(
+                new FilterCondition("createdAt", BETWEEN, json(List.of(plusEight, utc)))), schema))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> validator.validate(request(
+                new FilterCondition("createdAt", BETWEEN, json(List.of(utc, plusEight)))), schema))
+                .doesNotThrowAnyException();
+
+        assertThatThrownBy(() -> validator.validate(request(new FilterCondition(
+                        "createdAt", BETWEEN, json(List.of(plusEight, "2026-10-30T01:00:00Z")))), schema))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void validatesCanonicalUuidsAndBooleanDateAndOrganizationValues() {
+        String uppercaseUuid = "00112233-4455-6677-8899-AABBCCDDEEFF";
+        Request canonicalId = request(new FilterCondition("id", EQ, json(uppercaseUuid)));
+        assertThatCode(() -> validator.validate(canonicalId, schema)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> validator.validate(request(
+                new FilterCondition("id", EQ, json("1-1-1-1-1"))), schema))
+                .isInstanceOf(ValidationException.class);
+        assertThatThrownBy(() -> validator.validate(request(
+                new FilterCondition("id", EQ, json("0011223-34455-6677-8899-aabbccddeeff"))), schema))
+                .isInstanceOf(ValidationException.class);
+
+        Request booleanFilter = request(new FilterCondition("active", EQ, json(true)));
+        assertThatCode(() -> validator.validate(booleanFilter, schema)).doesNotThrowAnyException();
+        assertThatCode(() -> validator.validate(request(new FilterCondition(
+                "dueDate", BETWEEN, json(List.of("2026-10-29", "2026-10-30")))), schema))
+                .doesNotThrowAnyException();
+        Request organizationFilter = request(new FilterCondition("organization", IN_SUBTREE, json(uppercaseUuid)));
+        assertThatCode(() -> validator.validate(organizationFilter, schema)).doesNotThrowAnyException();
     }
 
     @Test
@@ -168,7 +253,13 @@ class EntityQueryValidatorTest {
     private static FieldSchema field(
             FieldType type, boolean nullable, boolean sortable, Set<FilterOperator> operators,
             int maxLength, Set<String> enumValues) {
-        return new FieldSchema(type, nullable, true, sortable, operators, maxLength, enumValues);
+        return field(type, nullable, true, sortable, operators, maxLength, enumValues);
+    }
+
+    private static FieldSchema field(
+            FieldType type, boolean nullable, boolean selectable, boolean sortable,
+            Set<FilterOperator> operators, int maxLength, Set<String> enumValues) {
+        return new FieldSchema(type, nullable, selectable, sortable, operators, maxLength, enumValues);
     }
 
     private static EntitySchema schema() {
@@ -183,6 +274,12 @@ class EntityQueryValidatorTest {
                 "createdAt", field(FieldType.DATETIME, true, true,
                         Set.of(GT, GTE, LT, LTE, BETWEEN, IS_NULL, IS_NOT_NULL), 0, Set.of()),
                 "notes", field(FieldType.TEXT, false, false,
-                        Set.of(), 120, Set.of())));
+                        Set.of(), 120, Set.of()),
+                "internal", field(FieldType.TEXT, false, false, false, Set.of(), 0, Set.of()),
+                "active", field(FieldType.BOOLEAN, false, true, Set.of(EQ), 0, Set.of()),
+                "dueDate", field(FieldType.DATE, false, true,
+                        Set.of(EQ, GT, GTE, LT, LTE, BETWEEN), 0, Set.of()),
+                "organization", field(FieldType.ORGANIZATION, false, true,
+                        Set.of(EQ, IN, IN_SUBTREE), 0, Set.of())));
     }
 }

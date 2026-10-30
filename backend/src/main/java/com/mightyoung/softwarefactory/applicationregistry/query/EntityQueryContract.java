@@ -34,6 +34,7 @@ public final class EntityQueryContract {
         }
     }
 
+    /** Explicit null for optional sort/fields is treated the same as omission. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Request(
             FilterGroup filterAST,
@@ -52,7 +53,7 @@ public final class EntityQueryContract {
     public record SortField(String field, Direction direction) {
     }
 
-    /** Exactly one of {@code number} (one-based page) or {@code cursor} must be supplied. */
+    /** Exactly one non-null member is required; a null opposite member is treated as omitted. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PageRequest(Integer number, String cursor) {
     }

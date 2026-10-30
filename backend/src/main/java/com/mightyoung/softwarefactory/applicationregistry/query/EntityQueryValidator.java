@@ -235,7 +235,8 @@ public final class EntityQueryValidator {
         return switch (type) {
             case NUMBER, MONEY -> lower.decimalValue().compareTo(upper.decimalValue());
             case DATE -> LocalDate.parse(lower.stringValue()).compareTo(LocalDate.parse(upper.stringValue()));
-            case DATETIME -> OffsetDateTime.parse(lower.stringValue()).compareTo(OffsetDateTime.parse(upper.stringValue()));
+            case DATETIME -> OffsetDateTime.parse(lower.stringValue()).toInstant()
+                    .compareTo(OffsetDateTime.parse(upper.stringValue()).toInstant());
             default -> 0;
         };
     }
@@ -351,8 +352,8 @@ public final class EntityQueryValidator {
             return false;
         }
         try {
-            UUID.fromString(value.stringValue());
-            return true;
+            UUID uuid = UUID.fromString(value.stringValue());
+            return uuid.toString().equalsIgnoreCase(value.stringValue());
         } catch (IllegalArgumentException exception) {
             return false;
         }
