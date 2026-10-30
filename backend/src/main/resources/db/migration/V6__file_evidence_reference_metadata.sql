@@ -55,6 +55,21 @@ alter table public.evidence_item
 alter table public.remediation_submission
     add constraint remediation_submission_evidence_context_key
         unique (tenant_id, id, evidence_set_id, finding_id, round_no, submitted_by);
+alter table public.remediation_submission
+    add column evidence_snapshot_count integer,
+    add column evidence_snapshot_manifest uuid[],
+    add column evidence_snapshots_sealed_at timestamptz,
+    add constraint remediation_submission_snapshot_seal_shape check (
+        (evidence_snapshots_sealed_at is null
+            and evidence_snapshot_count is null
+            and evidence_snapshot_manifest is null)
+        or (evidence_snapshots_sealed_at is not null
+            and evidence_snapshot_count is not null
+            and evidence_snapshot_count > 0
+            and evidence_snapshot_manifest is not null
+            and evidence_snapshot_count = cardinality(evidence_snapshot_manifest)
+            and array_position(evidence_snapshot_manifest, null) is null)
+    );
 alter table public.file_link
     add constraint file_link_submission_snapshot_key
         unique (tenant_id, id, file_id, resource_type, resource_id, purpose);
@@ -111,6 +126,162 @@ create table public.remediation_submission_evidence (
 
 create index remediation_submission_evidence_file_version_idx
     on public.remediation_submission_evidence (tenant_id, file_id, storage_version);
+
+-- Item creation takes the same evidence-set lock used while sealing a submission.
+-- Once a set has a sealed submission, its item list cannot be extended.
+create function public.guard_new_evidence_item_for_submission() returns trigger
+language plpgsql
+as $$
+begin
+    perform 1
+      from public.evidence_set es
+     where es.tenant_id = NEW.tenant_id and es.id = NEW.evidence_set_id
+     for update;
+    if not found then
+        raise exception 'evidence set for new item was not found';
+    end if;
+    if exists (
+        select 1 from public.remediation_submission submission
+         where submission.tenant_id = NEW.tenant_id
+           and submission.evidence_set_id = NEW.evidence_set_id
+           and submission.evidence_snapshots_sealed_at is not null
+    ) then
+        raise exception 'evidence set is sealed by a remediation submission';
+    end if;
+    return NEW;
+end;
+$$;
+
+create trigger evidence_item_submission_set_lock
+    before insert on public.evidence_item
+    for each row execute function public.guard_new_evidence_item_for_submission();
+
+-- Serialize child inserts against the one-way parent seal transition.
+create function public.lock_remediation_submission_evidence_parent() returns trigger
+language plpgsql
+as $$
+declare
+    submission_row record;
+begin
+    select submission.evidence_set_id, submission.finding_id, submission.round_no,
+           submission.submitted_by, submission.evidence_snapshots_sealed_at
+      into submission_row
+      from public.remediation_submission submission
+     where submission.tenant_id = NEW.tenant_id and submission.id = NEW.submission_id
+     for update;
+
+    if not found then
+        raise exception 'remediation submission for evidence snapshot was not found';
+    end if;
+    if submission_row.evidence_snapshots_sealed_at is not null then
+        raise exception 'remediation submission evidence snapshots are sealed';
+    end if;
+    if submission_row.evidence_set_id is distinct from NEW.evidence_set_id
+       or submission_row.finding_id is distinct from NEW.finding_id
+       or submission_row.round_no is distinct from NEW.round_no
+       or submission_row.submitted_by is distinct from NEW.submitted_by then
+        raise exception 'remediation submission evidence parent context does not match';
+    end if;
+    return NEW;
+end;
+$$;
+
+create trigger remediation_submission_evidence_parent_lock
+    before insert on public.remediation_submission_evidence
+    for each row execute function public.lock_remediation_submission_evidence_parent();
+
+-- The application requests only the seal transition. The database computes and stores
+-- the complete, sorted item manifest and its count while holding the evidence-set lock.
+create function public.guard_remediation_submission_snapshot_seal() returns trigger
+language plpgsql
+as $$
+declare
+    expected_item_ids uuid[];
+    actual_item_ids uuid[];
+begin
+    if TG_OP = 'INSERT' then
+        if NEW.evidence_snapshot_count is not null
+           or NEW.evidence_snapshot_manifest is not null
+           or NEW.evidence_snapshots_sealed_at is not null then
+            raise exception 'submission evidence snapshot seal is database-managed';
+        end if;
+        return NEW;
+    end if;
+
+    if OLD.evidence_snapshots_sealed_at is not null then
+        raise exception 'a sealed remediation submission is immutable';
+    end if;
+    if NEW.evidence_snapshots_sealed_at is null then
+        raise exception 'remediation submission update must seal its evidence snapshots';
+    end if;
+    if ROW(NEW.tenant_id, NEW.id, NEW.finding_id, NEW.notice_id, NEW.round_no,
+           NEW.submitted_by, NEW.submitted_at, NEW.evidence_set_id, NEW.statement,
+           NEW.expected_version, NEW.command_id)
+       IS DISTINCT FROM
+       ROW(OLD.tenant_id, OLD.id, OLD.finding_id, OLD.notice_id, OLD.round_no,
+           OLD.submitted_by, OLD.submitted_at, OLD.evidence_set_id, OLD.statement,
+           OLD.expected_version, OLD.command_id) then
+        raise exception 'remediation submission business fields are immutable';
+    end if;
+    if NEW.evidence_snapshot_count is not null or NEW.evidence_snapshot_manifest is not null then
+        raise exception 'submission evidence snapshot count and manifest are database-managed';
+    end if;
+
+    perform 1
+      from public.evidence_set es
+     where es.tenant_id = NEW.tenant_id and es.id = NEW.evidence_set_id
+     for update;
+    if not found then
+        raise exception 'evidence set for remediation submission was not found';
+    end if;
+
+    select array_agg(item.id order by item.id)
+      into expected_item_ids
+      from public.evidence_item item
+     where item.tenant_id = NEW.tenant_id
+       and item.evidence_set_id = NEW.evidence_set_id;
+    select array_agg(snapshot.evidence_item_id order by snapshot.evidence_item_id)
+      into actual_item_ids
+      from public.remediation_submission_evidence snapshot
+     where snapshot.tenant_id = NEW.tenant_id
+       and snapshot.submission_id = NEW.id;
+
+    if expected_item_ids is null or actual_item_ids is distinct from expected_item_ids then
+        raise exception 'evidence snapshot manifest does not match the complete evidence set';
+    end if;
+
+    NEW.evidence_snapshot_count := cardinality(expected_item_ids);
+    NEW.evidence_snapshot_manifest := expected_item_ids;
+    NEW.evidence_snapshots_sealed_at := transaction_timestamp();
+    return NEW;
+end;
+$$;
+
+create trigger remediation_submission_evidence_seal_guard
+    before insert or update on public.remediation_submission
+    for each row execute function public.guard_remediation_submission_snapshot_seal();
+
+create function public.require_remediation_submission_evidence_sealed() returns trigger
+language plpgsql
+as $$
+declare
+    is_sealed boolean;
+begin
+    select submission.evidence_snapshots_sealed_at is not null
+      into is_sealed
+      from public.remediation_submission submission
+     where submission.tenant_id = NEW.tenant_id and submission.id = NEW.id;
+    if not found or is_sealed is distinct from true then
+        raise exception 'remediation submission cannot commit before its evidence snapshots are sealed';
+    end if;
+    return null;
+end;
+$$;
+
+create constraint trigger remediation_submission_requires_evidence_seal
+    after insert on public.remediation_submission
+    deferrable initially deferred
+    for each row execute function public.require_remediation_submission_evidence_sealed();
 
 create function public.validate_submission_evidence_snapshot() returns trigger
 language plpgsql

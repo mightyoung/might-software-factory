@@ -72,7 +72,8 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
                 || !snapshot.verifierId().equals(receipt.verifierId())
                 || !snapshot.verifierKeyId().equals(receipt.verifierKeyId())
                 || !snapshot.verificationPolicyVersion().equals(receipt.verificationPolicyVersion())
-                || !snapshot.verifiedAt().equals(receipt.verifiedAt())) {
+                || receipt.verifiedAt() == null
+                || !snapshot.verifiedAt().isEqual(receipt.verifiedAt())) {
             throw new FileEvidenceTrustUnavailableException();
         }
     }

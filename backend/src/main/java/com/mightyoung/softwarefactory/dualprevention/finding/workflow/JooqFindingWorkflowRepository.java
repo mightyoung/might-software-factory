@@ -17,6 +17,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -260,6 +261,9 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
 
         @Override
         public void insertSubmission(Submission submission) {
+            if (!tenantId.equals(submission.tenantId())) {
+                throw new IllegalArgumentException("A remediation submission cannot be inserted under another tenant");
+            }
             int inserted = dsl.execute("""
                     insert into public.remediation_submission
                         (tenant_id, id, finding_id, notice_id, round_no, submitted_by, submitted_at,
@@ -295,23 +299,49 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     throw new IllegalStateException("Remediation submission evidence snapshot did not persist");
                 }
             }
+
+            int sealed = dsl.execute("""
+                    update public.remediation_submission
+                       set evidence_snapshots_sealed_at = current_timestamp
+                     where tenant_id = cast(? as uuid)
+                       and id = cast(? as uuid)
+                       and evidence_snapshots_sealed_at is null
+                    """, tenantId, submission.id());
+            if (sealed != 1) {
+                throw new IllegalStateException("Remediation submission evidence snapshot set did not seal");
+            }
         }
 
         @Override
         public Optional<Submission> findSubmission(UUID findingId, int roundNo) {
             Record row = dsl.fetchOne("""
                     select id, finding_id, notice_id, round_no, submitted_by, submitted_at,
-                           evidence_set_id, statement, expected_version, command_id
+                           evidence_set_id, statement, expected_version, command_id,
+                           evidence_snapshot_count, evidence_snapshot_manifest, evidence_snapshots_sealed_at
                       from public.remediation_submission
                      where tenant_id = cast(? as uuid) and finding_id = cast(? as uuid) and round_no = ?
                     """, tenantId, findingId, roundNo);
             if (row == null) return Optional.empty();
             UUID submissionId = row.get("id", UUID.class);
+            Integer expectedSnapshotCount = row.get("evidence_snapshot_count", Integer.class);
+            UUID[] expectedSnapshotManifest = row.get("evidence_snapshot_manifest", UUID[].class);
+            OffsetDateTime sealedAt = row.get("evidence_snapshots_sealed_at", OffsetDateTime.class);
+            if (expectedSnapshotCount == null || expectedSnapshotCount < 1
+                    || expectedSnapshotManifest == null || sealedAt == null) {
+                throw new IllegalStateException("Remediation submission has no sealed evidence snapshot manifest");
+            }
+            java.util.List<VerifiedFileEvidenceSnapshot> snapshots = findSubmissionEvidenceSnapshots(submissionId);
+            UUID[] actualSnapshotManifest = snapshots.stream()
+                    .map(VerifiedFileEvidenceSnapshot::evidenceItemId).toArray(UUID[]::new);
+            if (expectedSnapshotCount != snapshots.size()
+                    || !Arrays.equals(expectedSnapshotManifest, actualSnapshotManifest)) {
+                throw new IllegalStateException("Remediation submission evidence snapshot manifest is inconsistent");
+            }
             return Optional.of(new Submission(
                     tenantId, submissionId, row.get("finding_id", UUID.class),
                     row.get("notice_id", UUID.class), row.get("round_no", Integer.class),
                     row.get("submitted_by", UUID.class), row.get("submitted_at", OffsetDateTime.class),
-                    row.get("evidence_set_id", UUID.class), findSubmissionEvidenceSnapshots(submissionId),
+                    row.get("evidence_set_id", UUID.class), snapshots,
                     row.get("statement", String.class), row.get("expected_version", Long.class),
                     row.get("command_id", UUID.class)));
         }

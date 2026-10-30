@@ -142,6 +142,31 @@ class FindingEvidenceFileAccessPolicyTest {
                 .isInstanceOf(FileEvidenceTrustUnavailableException.class);
     }
 
+    @Test
+    void laterAcceptanceAcceptsTheSameReceiptInstantWithAnotherOffset() {
+        VerifiedFileEvidenceSnapshot snapshot = policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "CONTENT", sha256Unchecked(SYNTHETIC_CONTENT)));
+        adapter.receipt = new ContentVerificationReceipt(snapshot.verificationReceiptId(), TENANT_ID, FILE_ID,
+                snapshot.sha256(), snapshot.storageVersion(), FileEvidenceVerificationLevel.CONTENT,
+                snapshot.verifierId(), snapshot.verifierKeyId(), snapshot.verificationPolicyVersion(),
+                OffsetDateTime.parse("2026-10-30T12:00:00+02:00"));
+
+        policy.requirePreviouslySubmittedEvidence(snapshot);
+    }
+
+    @Test
+    void laterAcceptanceRejectsAReceiptAtADifferentInstant() {
+        VerifiedFileEvidenceSnapshot snapshot = policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "CONTENT", sha256Unchecked(SYNTHETIC_CONTENT)));
+        adapter.receipt = new ContentVerificationReceipt(snapshot.verificationReceiptId(), TENANT_ID, FILE_ID,
+                snapshot.sha256(), snapshot.storageVersion(), FileEvidenceVerificationLevel.CONTENT,
+                snapshot.verifierId(), snapshot.verifierKeyId(), snapshot.verificationPolicyVersion(),
+                snapshot.verifiedAt().plusSeconds(1));
+
+        assertThatThrownBy(() -> policy.requirePreviouslySubmittedEvidence(snapshot))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
     private void assertDenied(EvidenceFileUse request) {
         assertThatThrownBy(() -> policy.requireVerifiedContentEvidence(request))
                 .isInstanceOf(FileEvidenceAccessException.class);

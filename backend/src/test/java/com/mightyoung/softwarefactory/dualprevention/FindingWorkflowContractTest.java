@@ -159,12 +159,33 @@ class FindingWorkflowContractTest {
                 "create trigger file_object_submission_version_immutable",
                 "alter table public.remediation_submission_evidence force row level security")
                 .doesNotContain("unique (tenant_id, submission_id, file_id)");
+        assertThat(normalized).contains(
+                "evidence_snapshot_count integer",
+                "evidence_snapshot_count is not null",
+                "evidence_snapshot_manifest uuid[]",
+                "evidence_snapshots_sealed_at timestamptz",
+                "create function public.guard_remediation_submission_snapshot_seal",
+                "for update",
+                "array_agg(snapshot.evidence_item_id order by snapshot.evidence_item_id)",
+                "array_agg(item.id order by item.id)",
+                "evidence snapshot manifest does not match the complete evidence set",
+                "create trigger remediation_submission_evidence_seal_guard",
+                "create constraint trigger remediation_submission_requires_evidence_seal",
+                "deferrable initially deferred",
+                "remediation submission cannot commit before its evidence snapshots are sealed",
+                "create trigger remediation_submission_evidence_parent_lock",
+                "create trigger evidence_item_submission_set_lock",
+                "evidence_snapshots_sealed_at is not null",
+                "remediation submission evidence snapshots are sealed",
+                "evidence set is sealed by a remediation submission",
+                "a sealed remediation submission is immutable");
 
         String repository = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
                 "JooqFindingWorkflowRepository.java"));
         assertThat(repository).contains("insert into public.remediation_submission_evidence",
-                "verification_receipt_id", "storage_version", "findSubmissionEvidenceSnapshots");
+                "verification_receipt_id", "storage_version", "findSubmissionEvidenceSnapshots",
+                "evidence_snapshots_sealed_at", "evidence_snapshot_manifest", "evidence_snapshot_count");
         String evidencePolicy = Files.readString(Path.of("src", "main", "java", "com", "mightyoung",
                 "softwarefactory", "dualprevention", "finding", "workflow",
                 "JooqFindingWorkflowEvidencePolicy.java"));

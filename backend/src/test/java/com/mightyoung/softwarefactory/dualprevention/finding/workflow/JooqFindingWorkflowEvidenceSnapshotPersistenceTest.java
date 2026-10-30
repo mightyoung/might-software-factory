@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.jooq.impl.DSL.field;
 import static org.jooq.impl.DSL.name;
 import static org.jooq.impl.DSL.using;
@@ -62,11 +63,14 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
             if (sql.startsWith("insert into public.remediation_submission")) {
                 return new MockResult[] {new MockResult(1)};
             }
+            if (sql.startsWith("update public.remediation_submission")) {
+                return new MockResult[] {new MockResult(1)};
+            }
             if (sql.contains("from public.remediation_submission_evidence")) {
                 return new MockResult[] {snapshotRows(values, snapshots)};
             }
             if (sql.contains("from public.remediation_submission")) {
-                return new MockResult[] {submissionRow(values)};
+                return new MockResult[] {submissionRow(values, snapshots.size(), itemIds(snapshots), VERIFIED_AT)};
             }
             throw new AssertionError("Unexpected SQL: " + context.sql());
         };
@@ -95,9 +99,97 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
             assertThat(bindings.get(index)).contains(FILE, SHA256, "synthetic-verifier", "synthetic-key-7",
                     "content-policy-v3", "CONTENT");
         });
+        int sealIndex = -1;
+        for (int index = 0; index < statements.size(); index++) {
+            if (statements.get(index).toLowerCase(java.util.Locale.ROOT)
+                    .startsWith("update public.remediation_submission")) {
+                sealIndex = index;
+                break;
+            }
+        }
+        assertThat(sealIndex).isGreaterThan(evidenceInsertIndexes.getLast());
+        assertThat(statements.get(sealIndex)).contains("evidence_snapshots_sealed_at");
         assertThat(statements.stream().filter(sql -> sql.toLowerCase(java.util.Locale.ROOT)
                 .contains("from public.remediation_submission_evidence")).findFirst().orElseThrow())
                 .contains("verification_receipt_id", "storage_version", "order by evidence_item_id");
+    }
+
+    @Test
+    void rejectsSubmissionRowsWithAnIncompleteCountOrDifferentStoredManifest() {
+        List<VerifiedFileEvidenceSnapshot> snapshots = List.of(
+                snapshot(UUID.fromString("51000000-0000-0000-0000-000000000001"),
+                        "54000000-0000-0000-0000-000000000001", "disk-v1"),
+                snapshot(UUID.fromString("51000000-0000-0000-0000-000000000002"),
+                        "54000000-0000-0000-0000-000000000002", "disk-v2"));
+
+        assertManifestRejected(snapshots, 1, itemIds(snapshots));
+        assertManifestRejected(snapshots, 2, new UUID[] {
+                UUID.fromString("51000000-0000-0000-0000-000000000099"),
+                UUID.fromString("51000000-0000-0000-0000-000000000002")});
+    }
+
+    @Test
+    void aFailedSealAbortsTheSubmissionTransaction() {
+        List<VerifiedFileEvidenceSnapshot> snapshots = List.of(
+                snapshot(UUID.fromString("51000000-0000-0000-0000-000000000001"),
+                        "54000000-0000-0000-0000-000000000001", "disk-v1"));
+        Submission submission = new Submission(TENANT, SUBMISSION, FINDING, NOTICE, 1, MEMBER, VERIFIED_AT,
+                SET, snapshots, "Repaired guard", 3, COMMAND);
+        DSLContext values = using(SQLDialect.POSTGRES);
+        MockDataProvider provider = context -> {
+            String sql = context.sql().toLowerCase(java.util.Locale.ROOT);
+            if (sql.contains("set_config")) {
+                return new MockResult[] {singleValue(values, "set_config", String.class,
+                        (String) context.bindings()[1])};
+            }
+            if (sql.startsWith("insert into public.remediation_submission")) {
+                return new MockResult[] {new MockResult(1)};
+            }
+            if (sql.startsWith("update public.remediation_submission")) {
+                return new MockResult[] {new MockResult(0)};
+            }
+            throw new AssertionError("Unexpected SQL: " + context.sql());
+        };
+        NoOpTransactionManager transactionManager = new NoOpTransactionManager();
+        JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
+                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager);
+
+        assertThatThrownBy(() -> repository.inTenantTransaction(TENANT, tx -> {
+            tx.insertSubmission(submission);
+            return null;
+        })).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("snapshot set did not seal");
+        assertThat(transactionManager.rollbackCount).isEqualTo(1);
+    }
+
+    private static void assertManifestRejected(
+            List<VerifiedFileEvidenceSnapshot> snapshots, int expectedCount, UUID[] manifest) {
+        DSLContext values = using(SQLDialect.POSTGRES);
+        MockDataProvider provider = context -> {
+            String sql = context.sql().toLowerCase(java.util.Locale.ROOT);
+            if (sql.contains("set_config")) {
+                return new MockResult[] {singleValue(values, "set_config", String.class,
+                        (String) context.bindings()[1])};
+            }
+            if (sql.contains("from public.remediation_submission_evidence")) {
+                return new MockResult[] {snapshotRows(values, snapshots)};
+            }
+            if (sql.contains("from public.remediation_submission")) {
+                return new MockResult[] {submissionRow(values, expectedCount, manifest, VERIFIED_AT)};
+            }
+            throw new AssertionError("Unexpected SQL: " + context.sql());
+        };
+        JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
+                using(new MockConnection(provider), SQLDialect.POSTGRES), new NoOpTransactionManager());
+
+        assertThatThrownBy(() -> repository.inTenantTransaction(
+                TENANT, tx -> tx.findSubmission(FINDING, 1).orElseThrow()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("snapshot manifest is inconsistent");
+    }
+
+    private static UUID[] itemIds(List<VerifiedFileEvidenceSnapshot> snapshots) {
+        return snapshots.stream().map(VerifiedFileEvidenceSnapshot::evidenceItemId).toArray(UUID[]::new);
     }
 
     private static VerifiedFileEvidenceSnapshot snapshot(UUID itemId, String receipt, String version) {
@@ -108,13 +200,17 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
                 FileEvidenceVerificationLevel.CONTENT, VERIFIED_AT);
     }
 
-    private static MockResult submissionRow(DSLContext dsl) {
+    private static MockResult submissionRow(
+            DSLContext dsl, int snapshotCount, UUID[] snapshotManifest, OffsetDateTime sealedAt) {
         Field<?>[] fields = new Field<?>[] {
                 nameField("id", UUID.class), nameField("finding_id", UUID.class),
                 nameField("notice_id", UUID.class), nameField("round_no", Integer.class),
                 nameField("submitted_by", UUID.class), nameField("submitted_at", OffsetDateTime.class),
                 nameField("evidence_set_id", UUID.class), nameField("statement", String.class),
-                nameField("expected_version", Long.class), nameField("command_id", UUID.class)};
+                nameField("expected_version", Long.class), nameField("command_id", UUID.class),
+                nameField("evidence_snapshot_count", Integer.class),
+                nameField("evidence_snapshot_manifest", UUID[].class),
+                nameField("evidence_snapshots_sealed_at", OffsetDateTime.class)};
         Record row = dsl.newRecord(fields);
         set(row, fields[0], SUBMISSION);
         set(row, fields[1], FINDING);
@@ -126,6 +222,9 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
         set(row, fields[7], "Repaired guard");
         set(row, fields[8], 3L);
         set(row, fields[9], COMMAND);
+        set(row, fields[10], snapshotCount);
+        set(row, fields[11], snapshotManifest);
+        set(row, fields[12], sealedAt);
         var result = dsl.newResult(fields);
         result.add(row);
         return new MockResult(1, result);
@@ -181,6 +280,8 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
     }
 
     private static final class NoOpTransactionManager extends AbstractPlatformTransactionManager {
+        private int rollbackCount;
+
         @Override
         protected Object doGetTransaction() {
             return new Object();
@@ -196,6 +297,7 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
 
         @Override
         protected void doRollback(DefaultTransactionStatus status) {
+            rollbackCount++;
         }
     }
 }
