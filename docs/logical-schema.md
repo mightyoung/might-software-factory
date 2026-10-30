@@ -16,7 +16,7 @@
 |credential（全局）|account_id uuid, kind, secret_hash text, changed_at|FK account；不存明文；每种当前凭证受唯一约束|
 |external_identity（全局）|issuer text, subject text, account_id uuid|UNIQUE(issuer,subject)，长度受API限制|
 |tenant|code,name,status,auth_epoch bigint|code唯一；ACTIVE/SUSPENDED；平台作用域|
-|tenant_member|account_id uuid,status,display_name|UNIQUE(tenant_id,account_id)，account为全局FK|
+|tenant_member|account_id uuid,status,display_name,auth_epoch bigint|UNIQUE(tenant_id,account_id)，account为全局FK；成员安全状态独立于租户auth_epoch|
 |org_unit|code,name,parent_id?,active boolean|租户code唯一；同级有效name唯一；parent同租户，服务递归防环并发锁|
 |member_org|member_id,org_id,kind,valid_from,valid_to?|from<to；PRIMARY/CONCURRENT；有效期同成员PRIMARY不得重叠，事务校验并锁成员|
 |position/group|code,name,active|租户code唯一；岗位可绑定org_id?|
@@ -29,8 +29,8 @@
 |tenant_application|application_id,status,config_version|UNIQUE(tenant_id,application_id)；不等于用户许可|
 |entity_schema/action_schema（发布元数据）|app_key,key,schema_version,content jsonb,checksum|UNIQUE(app_key,key,schema_version)；不可变发布包，不在线DDL|
 |saved_view|member_id,entity_key,schema_version,filter_ast jsonb,sort_spec jsonb,columns jsonb,name|所有field须存在/可见；schema升级校验无效条件，不能静默扩大范围|
-|file_object|object_key,size_bytes bigint,mime,checksum?,state,storage_version|size>=0，object_key唯一；校验摘要取得后填，READY要求验证成功|
-|file_link|file_id,resource_type,resource_id,purpose|目标经注册资源解析器验证tenant与存在性；多态关联不假装有跨表FK，定期一致性检查|
+|file_object|tenant、id、owner_member_id、owner_actor_id、object_key,size_bytes bigint,mime,checksum?,state,storage_version,verified_at?|size>=0，tenant内object_key唯一；摘要绑定存储版本，READY要求服务端校验完成|
+|file_link|tenant、file_id,resource_type,resource_id,purpose,linked_by_actor_id,revoked_at?|目标经注册资源解析器验证tenant与存在性；多态关联不假装有跨表FK，撤销后拒绝访问，定期一致性检查|
 |dictionary_item|dictionary_key,code,label,sort_no int,active,version_no|UNIQUE(tenant_id,dictionary_key,code)，引用稳定ID|
 |config_entry|scope,key,value_type,value_json?,secret_ref?,version_no|值与secret_ref互斥，类型schema校验；覆盖白名单|
 |audit_event|actor_id,delegator_id?,action,resource_type,resource_id?,result,reason?,diff_redacted jsonb?,trace_id,policy_version,occurred_at|只追加；不存凭证/完整敏感正文|
@@ -55,7 +55,7 @@
 |finding|code,description,discovered_at,source_event_id?,risk_id?,grade,state,round_no int|grade UNKNOWN/GENERAL/MAJOR，与alarm_severity独立；source关联不强制必须有risk|
 |finding_confirmation|finding_id,stage,actor_member_id,decision,reason?,at,expected_version|stage PERSON/SAFETY，分别留痕；不能省PERSON|
 |remediation_notice|finding_id,revision,round_no,assignee_id,due_at,original_due_at,requirements,state,issued_at?,delivered_at?|版本追加，派单与送达区分|
-|remediation_submission|notice_id,round_no,submitted_by,submitted_at,evidence_set_id,statement|一次提交版本化，缺证据不能进验收|
+|remediation_submission|notice_id,round_no,submitted_by,submitted_at,evidence_set_id,statement,evidence_snapshot_count?,evidence_snapshot_manifest?,evidence_snapshots_sealed_at?|一次提交版本化；只能在事务内由未封存转成封存，数据库计算完整清单/count并以延迟约束拒绝未封存提交，封存后禁止修改或增补|
 |verification|finding_id,submission_id,round_no,reviewer_id,decision,reason,at|PASS/FAIL，默认reviewer!=整改人；FAIL要求原因并回整改|
 |finding_transition|finding_id,from_state,to_state,command_id,actor_id,at,reason?|UNIQUE(tenant,command_id)，不可变历史|
 |report_record|finding_id?,type,recipient,deadline?,submitted_at?,receipt_file_id?,status|UNKNOWN/PENDING/SUBMITTED/ACKNOWLEDGED/FAILED，内部审批不代监管回执|
@@ -92,7 +92,7 @@
 
 迁移ID V{递增号}__{模块_目的}，发布清单锁checksum、最低/目标应用版本、回填/锁表影响、验证与恢复方案；引擎升级脚本单列纳入同发布审查。已执行脚本不可修改。应用先兼容新旧schema，破坏性收缩在旧实例退出后做。数据回填分批断点、幂等、可监控，失败不继续发布。API/schema/event版本和DDL版本分别管理，不假设版本号相同。
 
-本文件仍不是已执行DDL。具体数据库驱动、迁移脚本和SQL计划在编码授权后形成，必须遵守本逻辑模型并用测试验证。
+本文件是逻辑约束基线，不代表DDL已部署。finding 只读切片的迁移脚本已形成：V2 finding schema 只在专用测试库执行，V3 身份/目录/授权脚本仍未应用到任何数据库。其他模块的迁移需按阶段形成，遵守本逻辑模型并通过相应测试验证。
 
 ## 7 补充支撑实体与边界
 |表|字段/约束|
@@ -102,7 +102,8 @@
 |remediation_round|tenant、finding_id、round_no、state、opened_at、closed_at?；UNIQUE(tenant,finding_id,round_no)，通知书/提交/验收FK关联round|
 |job|tenant、type、payload_version、payload、state、next_run_at、lease_owner?、lease_until?、attempt、last_error?、result_ref?；logical_key唯一，状态含UNKNOWN/CANCEL_REQUESTED|
 |session租户上下文|Session JDBC使用其官方schema；会话标识不入业务URL。member/tenant auth_epoch独立校验，不能依赖整条session删除解决多租户撤权|
-|evidence_set/evidence_item|set_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；来源未知可空但须说明，不凭URL认定全文核验|
+|evidence_set/evidence_item|set_id、finding_id、round_no、owner_member_id、file_id?/source_url?、captured_at?、verified_at?、verification_level、hash?、rule/algorithm版本引用；证据集另有单调递增的evidence_revision与单向submission_sealed_at；整改提交只可使用同隐患/轮次且归属于提交人的证据集，所有项均须READY且CONTENT核验；FILE须有同租户file_object与指向该item的有效file_link，且可信服务端核验回执须绑定文件摘要/存储版本；表内CONTENT字段只是投影，不是信任来源；未定义共享授权前拒绝跨成员复用；URL在可信核验器接入前拒绝。证据项插入和非身份字段更新先递增所属证据集revision，身份键tenant/id/set不可变；业务运行路径禁止硬删除证据项，V6不提供删除绕过，任何保留/隐私例外须另行设计和审查。提交封存也递增revision并置sealed标记；两条路径更新同一父行，使旧REPEATABLE READ快照在父行冲突，而非依赖默认READ COMMITTED。封存后证据集和证据项不可修改。|
+|remediation_submission_evidence|tenant/submission/finding/round/evidence_set/submitted_by、evidence_item_id、file_link_id、file_id、owner_member_id/actor_id、sha256、storage_version、receipt_id/verifier/key/policy/verified_at；提交事务内写入只追加快照，数据库对submission行与evidence_set父版本行执行真实更新并持锁，证据项增删改也先递增同一父版本；比较全部item ID的有序manifest后计算count并分别单向封存submission与evidence_set，避免依赖默认READ COMMITTED；后续验收核对封存count/manifest并按receipt_id验证，文件读取必须按快照中的immutable storage_version，禁止回退到latest；无存储版本读取保证时拒绝|同一证据集重复引用同一file仍可保存为不同item，不加file_id唯一约束|
 |event血缘附字段|schema_version、source_kind、replay_run_id?、quality_flags；因果引用若来源外部允许external_ref，进入本系统后有稳定eventId|
 |notification_message|独立notificationId、触发eventId、templateVersion、purpose；delivery唯一(notificationId,recipient,channel)，升级/恢复产生新notificationId，不被原事件键误吞|
 
