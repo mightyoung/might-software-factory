@@ -1,6 +1,6 @@
 # 隐患台账只读切片
 
-状态：本地分支已实现只读 HTTP handler、服务、授权边界、jOOQ 查询和 PostgreSQL migration；生产身份签发、授权数据源、数据库迁移与角色授权尚未就绪。本文件不表示生产闭环或真实租户隔离已经验收。
+状态：本地分支已实现只读 HTTP handler、服务、授权边界、jOOQ 查询和 PostgreSQL migration；migration 与最低限度的读取授权已在专用 `might_software_factory_test` 库实测。生产身份签发、授权数据源及生产迁移尚未就绪。本文件不表示生产闭环或真实租户隔离已经验收。
 
 ## 本地实现
 
@@ -22,16 +22,16 @@
 
 新增 `backend/src/main/resources/db/migration/V2__dualprevention_finding_read.sql`：`public.finding`、租户内业务号唯一约束、状态/等级/版本检查、读取索引、RLS ENABLE/FORCE 和基于 `app.tenant_id` 的 tenant policy。`organization_id` 是内部数据范围列，不在 API 字段目录中。source event、risk 等跨模块关联目前只有 ID，没有引用到尚未发布的外模块表。
 
-默认运行配置只使用 `LAN_PG_APP_JDBC_URL` / `LAN_PG_APP_USERNAME` / `LAN_PG_APP_PASSWORD`，并关闭 runtime Flyway。P0 兼容测试 profile 仍显式使用自己的迁移配置与 `flyway_schema_history`；应用 migration 使用独立的 `flyway_schema_history_app`，避免 P0 probe migration 与业务 migration 混为一条历史。独立 migration runner/凭据尚未配置，本地没有运行这段 DDL。
+默认运行配置只使用 `LAN_PG_APP_JDBC_URL` / `LAN_PG_APP_USERNAME` / `LAN_PG_APP_PASSWORD`，并关闭 runtime Flyway。P0 兼容测试 profile 仍显式使用自己的迁移配置与 `flyway_schema_history`；应用 migration 使用独立的 `flyway_schema_history_app`，避免 P0 probe migration 与业务 migration 混为一条历史。
 
-最小后续数据库权限提案（本轮未执行）：
+本轮只在 `might_software_factory_test` 执行了 app history 的 version 1 baseline 和 V2 finding migration。测试库已有其他 history 管理的 P0/Session 对象；baseline 只记录现存 schema 基线，不表示 app history 接管这些对象。使用既有测试管理连接执行 migration、合成数据写入和清理，没有改角色或访问其他库。对既有低权限应用角色只执行 `GRANT SELECT ON TABLE public.finding`。未在 dev 库或其他数据库迁移或授权。
 
-- 迁移身份在两个软件工厂专用库需要 `CONNECT`、`public` schema 的 `USAGE` 与 `CREATE`，用于建立 finding 表/索引/RLS policy 以及独立的 Flyway history；它拥有新表，不作为应用登录身份。部署迁移后，finding 表的运行授权单独交由库管理员发放。
-- finding 读取运行身份只需两个专用库的 `CONNECT`、`public` schema 的 `USAGE` 和 `GRANT SELECT ON TABLE public.finding`。它不需要 finding 表写权限、sequence 权限、DDL、`BYPASSRLS`、表所有权或角色成员授权；真正授权前仍须确认运行身份不是 superuser/BYPASSRLS，且 RLS policy 已部署。
-- `spring.session.store-type=jdbc` 当前已配置，但真实登录/session 表尚未设计或部署。若后续继续用 JDBC 持久会话，需先确认实际 Spring Session 表和索引，再由迁移身份建表，运行身份只获得对应会话表的 `SELECT/INSERT/UPDATE/DELETE`，不能把这些未确认权限混进 finding 的 grant。
+- 测试库检查确认应用角色为非 superuser、非 `BYPASSRLS`、非 `CREATEDB`、非 `CREATEROLE`；在测试库具有 `CONNECT`、`public` schema `USAGE` 和 `finding SELECT`，没有 finding 的 `INSERT/UPDATE/DELETE`。finding 表由不同角色拥有，且 RLS ENABLE/FORCE 与 tenant policy 已核验。测试不改变其他库的默认连接权限。
+- 该测试使用已有管理身份迁移，因此还没有独立、低权限 migration runner。若后续在其他库执行迁移，应为迁移身份单独配置所需的 `CONNECT`、`public` schema `USAGE/CREATE`；它拥有新表，不作为应用登录身份。运行身份在每个目标库只需 `CONNECT`、schema `USAGE` 及 finding `SELECT`，不需要 finding 写权限、sequence 权限、DDL、`BYPASSRLS`、表所有权或角色成员授权。
+- `spring.session.store-type=jdbc` 当前已配置，专用测试库已有 `public.spring_session`；本轮没有给运行身份授予 Session 表权限，也没有验证 Spring Session 序列化或 JDBC 持久化。若后续启用 JDBC 持久会话，需另行核定会话表权限，不能把它混进 finding 的 grant。
 - 本只读切片不调用 Flowable。不要给 finding 运行身份 Flowable 表权限；若另阶段启用流程引擎，须按实际命令及引擎版本另列所需对象权限，不以本切片授权代替。
 
-本轮没有执行 GRANT、连接数据库或确认现有权限，finding 表迁移也未运行。以上权限是部署前待核清单，不代表当前应用账号已具备读取权。
+测试仅证明该专用测试库及该既有低权限角色上的数据库行为，不表示生产数据库已迁移或获授权。
 
 ## 前后端 wire 契约
 
@@ -51,8 +51,8 @@
 
 ## 当前阻塞与验证边界
 
-生产登录/身份 provider、tenant membership 与授权数据源、有效数据范围服务、独立 migration 执行、运行身份 `finding` SELECT 权限、真实 PostgreSQL RLS/HTTP 联调均未完成。授权服务当前默认拒绝，因此本地 handler 的测试成功不能表示生产用户可访问或业务租户隔离已经通过。
+生产登录/身份 provider、tenant membership 与授权数据源、有效数据范围服务、独立 migration 执行，以及生产运行身份的 `finding` SELECT 权限均未完成。真实 PostgreSQL 15.4 测试库已通过 RLS/query/detail 集成探针，但使用 test-only principal 和测试授权策略；没有验证生产身份到租户绑定或真实 HTTP 会话。授权服务当前默认拒绝，因此本地 handler 的测试成功不能表示生产用户可访问或业务租户隔离已经通过。
 
 无数据库检查使用 test-only 安全上下文夹具、显式 fake repository/policy 和 jOOQ MockDataProvider。它们证明 HTTP 状态码、CSRF/输入白名单、tenant/org 参数绑定和 SQL 形状，不运行 PostgreSQL parser、RLS policy、连接池回收或真实身份会话。
 
-本阶段没有运行数据库 migration、GRANT、LAN DB/Redis 连接、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。
+本轮运行 `./mvnw -pl backend -P lan-postgres-compatibility -Dit.test=FindingPostgresReadIT verify -q`：Surefire 35 项通过；Failsafe 的 `FindingPostgresReadIT` 1 项通过，失败、错误、跳过均为 0。集成测试检查同一低权限连接的列表与详情、跨租户行级策略和连接内 tenant context 清理，并清理后确认本轮合成行数为 0。未运行 Redis、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。JDBC Session 持久化和生产身份仍未通过真实数据库验证。

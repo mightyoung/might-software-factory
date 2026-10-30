@@ -488,7 +488,7 @@ class LanPostgresCompatibilityIT {
         return value;
     }
 
-    private static final class DatabaseTarget {
+    static final class DatabaseTarget {
         private final String jdbcUrl;
         private final String databaseName;
 

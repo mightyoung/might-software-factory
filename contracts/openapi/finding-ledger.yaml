@@ -4,14 +4,15 @@ info:
   version: 1.0.0
   description: >-
     Read-only list and detail contract for the finding ledger. This repository branch contains
-    local handlers which fail closed. It is not a production-ready endpoint until the runtime
-    identity and authorization dependencies and the production database migration are configured.
+    local handlers which fail closed. A PostgreSQL 15.4 integration probe verified the finding
+    migration, RLS, list/detail reads, and SELECT-only runtime grant in the dedicated test database.
+    This does not configure production identity or authorization and is not a production-ready endpoint.
 x-implementation-status: local-handlers-fail-closed
 x-runtime-blockers:
   - no production login or trusted session-principal issuer is configured
   - finding authorization and current membership scope storage are not implemented; the policy denies by default
-  - production finding migration has not been applied
-  - runtime database role has not been granted SELECT on public.finding
+  - finding migration has only been applied to might_software_factory_test; production and development databases are not verified
+  - the SELECT-only runtime grant has only been applied to the existing low-privilege role in might_software_factory_test
 x-tenant-context: >-
   The active tenant and member must come from a verified server session and current membership.
   No request body or header may supply tenant_id. Apply tenant and authorized data-scope predicates
