@@ -225,7 +225,7 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
           finding={detail}
           loading={detailLoading}
           error={detailError}
-          onClose={() => navigate(path)}
+          onClose={() => navigate(path, true)}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
         />
       )}
