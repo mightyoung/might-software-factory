@@ -18,7 +18,7 @@ interface FindingsLedgerProps {
 
 const firstPage: PageResult<FindingRecord> = {
   items: [],
-  page: { index: 1, size: 5 },
+  page: { index: 1, size: 20 },
   total: 0,
   pageCount: 1,
 };
@@ -30,7 +30,7 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
   const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
   const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
   const [pageIndex, setPageIndex] = useState(1);
-  const [pageSize, setPageSize] = useState(5);
+  const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
@@ -203,9 +203,9 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
                   setSelectedIds(new Set());
                 }}
               >
-                <option value={5}>5 条/页</option>
-                <option value={10}>10 条/页</option>
-                <option value={25}>25 条/页</option>
+                <option value={20}>20 条/页</option>
+                <option value={50}>50 条/页</option>
+                <option value={100}>100 条/页</option>
               </select>
             </label>
             <button type="button" className="page-button" aria-label="上一页" disabled={pageIndex <= 1} onClick={() => goToPage(pageIndex - 1)}>

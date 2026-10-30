@@ -5,6 +5,29 @@ import { syntheticFindings, type FindingLedgerAdapter } from "../../adapters/fin
 import type { FindingRecord } from "../../domain/finding";
 import { navigate } from "../../routing/router";
 
+function createPagedFixtureAdapter(): FindingLedgerAdapter {
+  const rows: FindingRecord[] = Array.from({ length: 23 }, (_, index) => ({
+    ...syntheticFindings[index % syntheticFindings.length]!,
+    id: `TEST-HZ-${String(index + 1).padStart(3, "0")}`,
+  }));
+  return {
+    async list({ page }) {
+      const pageCount = Math.max(1, Math.ceil(rows.length / page.size));
+      const safeIndex = Math.min(Math.max(page.index, 1), pageCount);
+      const start = (safeIndex - 1) * page.size;
+      return {
+        items: rows.slice(start, start + page.size),
+        page: { index: safeIndex, size: page.size },
+        total: rows.length,
+        pageCount,
+      };
+    },
+    async get(id) {
+      return rows.find((row) => row.id === id) ?? null;
+    },
+  };
+}
+
 function resetRoute() {
   navigate("/safety/findings", true);
 }
@@ -55,21 +78,26 @@ describe("隐患台账分页与详情", () => {
         view="all"
         title="隐患台账"
         description="合成样例"
+        adapter={createPagedFixtureAdapter()}
       />,
     );
 
-    await screen.findByText("DEMO-HZ-001");
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择 DEMO-HZ-001" }));
+    const pageSize = screen.getByRole("combobox", { name: "每页条数" });
+    expect(pageSize).toHaveValue("20");
+    expect(Array.from((pageSize as HTMLSelectElement).options).map((option) => option.value)).toEqual(["20", "50", "100"]);
+
+    await screen.findByText("TEST-HZ-001");
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 TEST-HZ-001" }));
     expect(screen.getByText("已选 1 条（当前页）")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-    await screen.findByText("DEMO-HZ-006");
+    await screen.findByText("TEST-HZ-021");
     await waitFor(() => expect(screen.getByText("已选 0 条（当前页）")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择本页记录" }));
-    expect(screen.getByRole("checkbox", { name: "选择 DEMO-HZ-006" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "选择 DEMO-HZ-007" })).toBeChecked();
-    expect(screen.getByText("已选 2 条（当前页）")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择 TEST-HZ-021" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 TEST-HZ-023" })).toBeChecked();
+    expect(screen.getByText("已选 3 条（当前页）")).toBeInTheDocument();
   });
 
   it("显示与流程状态对应的详情，未接后端时禁用审批动作", async () => {
@@ -101,7 +129,7 @@ describe("隐患台账分页与详情", () => {
         if (attempts === 1) throw new Error("temporary list failure");
         return {
           items: [record],
-          page: { index: 1, size: 5 },
+          page: { index: 1, size: 20 },
           total: 1,
           pageCount: 1,
         };
@@ -128,7 +156,7 @@ describe("隐患台账分页与详情", () => {
       async list() {
         return {
           items: [record],
-          page: { index: 1, size: 5 },
+          page: { index: 1, size: 20 },
           total: 1,
           pageCount: 1,
         };
@@ -161,7 +189,7 @@ describe("隐患台账分页与详情", () => {
       async list() {
         return {
           items: [firstRecord, secondRecord],
-          page: { index: 1, size: 5 },
+          page: { index: 1, size: 20 },
           total: 2,
           pageCount: 1,
         };
