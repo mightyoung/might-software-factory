@@ -21,7 +21,7 @@ class FindingWorkflowContractTest {
     private static final String FLOWABLE_NS = "http://flowable.org/bpmn";
 
     @Test
-    void apiContractExposesAllCommandsWithVersionAndIdempotencyHeaders() throws Exception {
+    void apiContractExposesAllCommandsAndSubmittedEvidenceReadRoute() throws Exception {
         Path contractPath = Path.of("..", "contracts", "openapi", "finding-workflow.yaml");
         Map<String, Object> document = new Yaml().load(Files.readString(contractPath));
         Map<String, Object> paths = (Map<String, Object>) document.get("paths");
@@ -32,10 +32,19 @@ class FindingWorkflowContractTest {
                 "/api/v1/findings/{id}/dispatch",
                 "/api/v1/findings/{id}/remediation-submissions",
                 "/api/v1/findings/{id}/verifications",
-                "/api/v1/findings/{id}/workflow-initialization");
+                "/api/v1/findings/{id}/workflow-initialization",
+                "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-items/{evidenceItemId}/content");
 
         for (Map.Entry<String, Object> entry : paths.entrySet()) {
-            Map<String, Object> post = (Map<String, Object>) ((Map<String, Object>) entry.getValue()).get("post");
+            Map<String, Object> path = (Map<String, Object>) entry.getValue();
+            if (path.containsKey("get")) {
+                Map<String, Object> get = (Map<String, Object>) path.get("get");
+                assertThat(get.get("operationId")).isEqualTo("readSubmittedFindingEvidenceContent");
+                assertThat(get.get("description").toString())
+                        .contains("does not accept a file ID, object key, storage path, or storage version");
+                continue;
+            }
+            Map<String, Object> post = (Map<String, Object>) path.get("post");
             List<Map<String, Object>> parameters = (List<Map<String, Object>>) post.get("parameters");
             assertThat(parameters).extracting(parameter -> parameter.get("$ref"))
                     .contains("#/components/parameters/IdempotencyKey",
