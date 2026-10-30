@@ -17,9 +17,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicReference;
 
-/** Authorizes and opens the exact file version fixed by a sealed remediation-submission snapshot. */
+/**
+ * Authorizes and opens the exact file version fixed by a sealed remediation-submission snapshot.
+ * The short read transaction is the authorization linearization point: a response opened before a later
+ * revocation may finish sending its already verified buffer, while each subsequent request rechecks access.
+ */
 @Service
 public final class FindingEvidenceContentReadService implements FindingEvidenceContentReader {
 
@@ -58,21 +62,34 @@ public final class FindingEvidenceContentReadService implements FindingEvidenceC
         if (findingId == null || roundNo < 1 || evidenceItemId == null) {
             throw new FindingNotVisibleException();
         }
-        return withinReadTransaction(() -> {
-            CurrentTenantContext context = sessionContextResolver.currentTenant();
-            FindingReadScope findingScope = readAuthorizer.requireReadScope(context);
-            FindingEvidenceReadScope fileScope = new FindingEvidenceReadScope(
-                    findingScope.tenantId(), findingScope.organizationIds());
-            var snapshot = snapshotRepository.findReadableSealedSnapshot(
-                            fileScope, findingId, roundNo, evidenceItemId)
-                    .orElseThrow(FindingNotVisibleException::new);
-            fileAccess.requirePreviouslySubmittedEvidence(snapshot);
-            return contentReader.openVerifiedVersion(snapshot);
-        });
+        if (readTransaction == null) throw new FileEvidenceTrustUnavailableException();
+        AtomicReference<VerifiedFileContent> openedContent = new AtomicReference<>();
+        try {
+            return Objects.requireNonNull(readTransaction.execute(status -> {
+                CurrentTenantContext context = sessionContextResolver.currentTenant();
+                FindingReadScope findingScope = readAuthorizer.requireReadScope(context);
+                FindingEvidenceReadScope fileScope = new FindingEvidenceReadScope(
+                        findingScope.tenantId(), findingScope.organizationIds());
+                var snapshot = snapshotRepository.findReadableSealedSnapshot(
+                                fileScope, findingId, roundNo, evidenceItemId)
+                        .orElseThrow(FindingNotVisibleException::new);
+                fileAccess.requirePreviouslySubmittedEvidence(snapshot);
+                VerifiedFileContent content = contentReader.openVerifiedVersion(snapshot);
+                openedContent.set(content);
+                return content;
+            }));
+        } catch (RuntimeException | Error transactionFailure) {
+            closeAfterFailedTransaction(openedContent.getAndSet(null), transactionFailure);
+            throw transactionFailure;
+        }
     }
 
-    private <T> T withinReadTransaction(Supplier<T> operation) {
-        if (readTransaction == null) throw new FileEvidenceTrustUnavailableException();
-        return Objects.requireNonNull(readTransaction.execute(status -> operation.get()));
+    private static void closeAfterFailedTransaction(VerifiedFileContent content, Throwable transactionFailure) {
+        if (content == null) return;
+        try {
+            content.close();
+        } catch (Throwable closeFailure) {
+            if (closeFailure != transactionFailure) transactionFailure.addSuppressed(closeFailure);
+        }
     }
 }

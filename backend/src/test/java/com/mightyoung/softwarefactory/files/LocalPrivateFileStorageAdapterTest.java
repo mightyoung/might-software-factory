@@ -17,7 +17,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.nio.file.attribute.PosixFilePermission;
+import java.time.Clock;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -171,6 +174,62 @@ class LocalPrivateFileStorageAdapterTest {
     }
 
     @Test
+    void refusesStorageVersionsReadableByGroupOrOther() throws Exception {
+        writeVersion("disk-v1", VERSION_ONE);
+        Path storedVersion = root.resolve(TENANT_ID.toString()).resolve(FILE_ID.toString()).resolve("disk-v1.blob");
+        Files.setPosixFilePermissions(storedVersion,
+                Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.GROUP_READ));
+
+        assertThatThrownBy(() -> adapter.verifyAndRegister(metadata("disk-v1", VERSION_ONE)))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
+    @Test
+    void refusesStorageVersionsWithAnExternalHardLink() throws Exception {
+        writeVersion("disk-v1", VERSION_ONE);
+        Path storedVersion = root.resolve(TENANT_ID.toString()).resolve(FILE_ID.toString()).resolve("disk-v1.blob");
+        Files.createLink(root.resolve("external-synthetic-hardlink.blob"), storedVersion);
+
+        assertThatThrownBy(() -> adapter.verifyAndRegister(metadata("disk-v1", VERSION_ONE)))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
+    @Test
+    void repeatedOuterFileCloseFailuresReleaseCapacityAndContentCloseIsIdempotent() throws Exception {
+        adapter.close();
+        AtomicInteger injectedFailures = new AtomicInteger(3);
+        AtomicBoolean injectCloseFailure = new AtomicBoolean(false);
+        adapter = adapterWithCloseFailureHook(() -> {
+            if (injectCloseFailure.get()
+                    && injectedFailures.getAndUpdate(value -> Math.max(0, value - 1)) > 0) {
+                throw new IllegalStateException("synthetic outer close failure");
+            }
+        });
+        writeVersion("disk-v1", VERSION_ONE);
+        ContentVerificationReceipt receipt = adapter.verifyAndRegister(metadata("disk-v1", VERSION_ONE));
+        injectCloseFailure.set(true);
+
+        for (int failure = 0; failure < 3; failure++) {
+            assertThatThrownBy(() -> adapter.openVerifiedVersion(snapshot(receipt)))
+                    .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        }
+
+        VerifiedFileContent first = adapter.openVerifiedVersion(snapshot(receipt));
+        first.close();
+        first.close();
+        List<VerifiedFileContent> responses = new ArrayList<>();
+        try {
+            for (int index = 0; index < 64; index++) {
+                responses.add(adapter.openVerifiedVersion(snapshot(receipt)));
+            }
+            assertThatThrownBy(() -> adapter.openVerifiedVersion(snapshot(receipt)))
+                    .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        } finally {
+            for (VerifiedFileContent response : responses) response.close();
+        }
+    }
+
+    @Test
     void rejectsReceiptTamperingAndSnapshotReceiptMismatch() throws Exception {
         writeVersion("disk-v1", VERSION_ONE);
         ContentVerificationReceipt receipt = adapter.verifyAndRegister(metadata("disk-v1", VERSION_ONE));
@@ -283,6 +342,11 @@ class LocalPrivateFileStorageAdapterTest {
         }
         Files.write(file, bytes);
         Files.setPosixFilePermissions(file, READ_ONLY_FILE_PERMISSIONS);
+    }
+
+    private LocalPrivateFileStorageAdapter adapterWithCloseFailureHook(Runnable hook) throws Exception {
+        return new LocalPrivateFileStorageAdapter(root, TRUST_KEY, "local-test-verifier", "test-key-1",
+                "content-v1", 1_048_576L, Clock.systemUTC(), hook);
     }
 
     private static String sha256(byte[] content) throws Exception {

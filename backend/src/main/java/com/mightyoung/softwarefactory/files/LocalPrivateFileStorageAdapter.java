@@ -69,6 +69,7 @@ public final class LocalPrivateFileStorageAdapter
     private final String policyVersion;
     private final long maxBytes;
     private final Clock clock;
+    private final Runnable afterSecureFileClose;
     private final Semaphore verifiedContentBudget = new Semaphore(CONTENT_BUDGET_UNITS, true);
 
     public LocalPrivateFileStorageAdapter(
@@ -78,7 +79,7 @@ public final class LocalPrivateFileStorageAdapter
             String verifierKeyId,
             String policyVersion,
             long maxBytes) {
-        this(root, receiptHmacKey, verifierId, verifierKeyId, policyVersion, maxBytes, Clock.systemUTC());
+        this(root, receiptHmacKey, verifierId, verifierKeyId, policyVersion, maxBytes, Clock.systemUTC(), () -> { });
     }
 
     LocalPrivateFileStorageAdapter(
@@ -89,6 +90,18 @@ public final class LocalPrivateFileStorageAdapter
             String policyVersion,
             long maxBytes,
             Clock clock) {
+        this(root, receiptHmacKey, verifierId, verifierKeyId, policyVersion, maxBytes, clock, () -> { });
+    }
+
+    LocalPrivateFileStorageAdapter(
+            Path root,
+            byte[] receiptHmacKey,
+            String verifierId,
+            String verifierKeyId,
+            String policyVersion,
+            long maxBytes,
+            Clock clock,
+            Runnable afterSecureFileClose) {
         this.root = resolveTrustedRoot(root);
         this.storageOwner = currentProcessOwner(this.root);
         if (receiptHmacKey == null || receiptHmacKey.length < 32) {
@@ -103,6 +116,7 @@ public final class LocalPrivateFileStorageAdapter
         }
         this.maxBytes = maxBytes;
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.afterSecureFileClose = Objects.requireNonNull(afterSecureFileClose, "afterSecureFileClose");
         SecureDirectoryChain roots = null;
         SecureDirectoryChain receiptDirectories = new SecureDirectoryChain();
         SecureDirectoryStream<Path> pinnedRoot;
@@ -190,6 +204,9 @@ public final class LocalPrivateFileStorageAdapter
         if (snapshot == null || !receiptMatchesSnapshot(snapshot)) {
             throw new FileEvidenceTrustUnavailableException();
         }
+        int reservedUnits = 0;
+        boolean reservationHeld = false;
+        byte[] verifiedBytes;
         try {
             ContentVerificationReceipt receipt = readReceipt(
                             receiptName(snapshot.verificationReceiptId()), snapshot.verificationReceiptId())
@@ -197,24 +214,25 @@ public final class LocalPrivateFileStorageAdapter
             if (!matches(snapshot, receipt)) throw new FileEvidenceTrustUnavailableException();
             try (OpenedSecureFile opened = openVersion(
                     snapshot.tenantId(), snapshot.fileId(), snapshot.storageVersion())) {
-                int reservedUnits = contentBudgetUnits(opened.initialAttributes.size());
+                reservedUnits = contentBudgetUnits(opened.initialAttributes.size());
                 if (!verifiedContentBudget.tryAcquire(reservedUnits)) {
                     throw new FileEvidenceTrustUnavailableException();
                 }
-                boolean transferredReservation = false;
-                try {
-                    byte[] verifiedBytes = readAndVerify(opened, snapshot.sha256());
-                    VerifiedFileContent content = new InMemoryVerifiedFileContent(
-                            verifiedBytes, verifiedContentBudget, reservedUnits);
-                    transferredReservation = true;
-                    return content;
-                } finally {
-                    if (!transferredReservation) verifiedContentBudget.release(reservedUnits);
-                }
+                reservationHeld = true;
+                verifiedBytes = readAndVerify(opened, snapshot.sha256());
             }
-        } catch (IOException | GeneralSecurityException | RuntimeException exception) {
+        } catch (IOException | GeneralSecurityException | RuntimeException | Error exception) {
+            if (reservationHeld) verifiedContentBudget.release(reservedUnits);
             if (exception instanceof FileEvidenceTrustUnavailableException trustException) throw trustException;
+            if (exception instanceof Error error) throw error;
             throw new FileEvidenceTrustUnavailableException();
+        }
+        try {
+            // Transfer the memory reservation only after the outer secure file handles closed successfully.
+            return new InMemoryVerifiedFileContent(verifiedBytes, verifiedContentBudget, reservedUnits);
+        } catch (RuntimeException | Error exception) {
+            verifiedContentBudget.release(reservedUnits);
+            throw exception;
         }
     }
 
@@ -343,6 +361,7 @@ public final class LocalPrivateFileStorageAdapter
             throw new IOException("Unsupported storage version");
         }
         SecureDirectoryChain chain = new SecureDirectoryChain();
+        FileChannel openedChannel = null;
         try {
             SecureDirectoryStream<Path> tenantDirectory = chain.openChild(rootDirectory, tenantId.toString());
             SecureDirectoryStream<Path> fileDirectory = chain.openChild(tenantDirectory, fileId.toString());
@@ -353,14 +372,27 @@ public final class LocalPrivateFileStorageAdapter
                 throw new IOException("Invalid stored object");
             }
             requireReadOnlyObject(fileDirectory, leaf, storageOwner);
+            Path absolutePath = root.resolve(tenantId.toString()).resolve(fileId.toString()).resolve(leaf);
+            requireSingleLink(absolutePath, attributes.fileKey());
             Set<OpenOption> options = Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
             SeekableByteChannel channel = fileDirectory.newByteChannel(leaf, options);
             if (!(channel instanceof FileChannel fileChannel)) {
                 channel.close();
                 throw new IOException("Secure file channels are unavailable");
             }
-            return new OpenedSecureFile(chain, fileDirectory, leaf, fileChannel, attributes, storageOwner);
+            openedChannel = fileChannel;
+            OpenedSecureFile opened = new OpenedSecureFile(chain, fileDirectory, leaf, fileChannel, attributes,
+                    storageOwner, absolutePath, afterSecureFileClose);
+            opened.verifyUnchanged();
+            return opened;
         } catch (IOException | RuntimeException exception) {
+            if (openedChannel != null) {
+                try {
+                    openedChannel.close();
+                } catch (IOException closeFailure) {
+                    exception.addSuppressed(closeFailure);
+                }
+            }
             chain.closeQuietly();
             throw exception;
         }
@@ -553,10 +585,24 @@ public final class LocalPrivateFileStorageAdapter
         Set<PosixFilePermission> permissions = attributes.permissions();
         Set<PosixFilePermission> writePermissions = Set.of(PosixFilePermission.OWNER_WRITE,
                 PosixFilePermission.GROUP_WRITE, PosixFilePermission.OTHERS_WRITE);
+        Set<PosixFilePermission> sharedReadPermissions = Set.of(
+                PosixFilePermission.GROUP_READ, PosixFilePermission.OTHERS_READ);
         if (!attributes.owner().equals(expectedOwner)
                 || !permissions.contains(PosixFilePermission.OWNER_READ)
-                || writePermissions.stream().anyMatch(permissions::contains)) {
+                || writePermissions.stream().anyMatch(permissions::contains)
+                || sharedReadPermissions.stream().anyMatch(permissions::contains)) {
             throw new IOException("Storage version is not immutable");
+        }
+    }
+
+    private static void requireSingleLink(Path absolutePath, Object expectedFileKey) throws IOException {
+        BasicFileAttributes pathAttributes = Files.readAttributes(
+                absolutePath, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        Object linkCount = Files.getAttribute(absolutePath, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
+        if (!pathAttributes.isRegularFile() || pathAttributes.isSymbolicLink()
+                || !Objects.equals(expectedFileKey, pathAttributes.fileKey())
+                || !(linkCount instanceof Number number) || number.longValue() != 1) {
+            throw new IOException("Storage version must be a single-link file");
         }
     }
 
@@ -648,21 +694,27 @@ public final class LocalPrivateFileStorageAdapter
         private final FileChannel channel;
         private final BasicFileAttributes initialAttributes;
         private final UserPrincipal storageOwner;
+        private final Path absolutePath;
+        private final Runnable afterClose;
 
         private OpenedSecureFile(
                 SecureDirectoryChain chain, SecureDirectoryStream<Path> parent, Path leaf, FileChannel channel,
-                BasicFileAttributes initialAttributes, UserPrincipal storageOwner) {
+                BasicFileAttributes initialAttributes, UserPrincipal storageOwner, Path absolutePath,
+                Runnable afterClose) {
             this.chain = chain;
             this.parent = parent;
             this.leaf = leaf;
             this.channel = channel;
             this.initialAttributes = initialAttributes;
             this.storageOwner = storageOwner;
+            this.absolutePath = absolutePath;
+            this.afterClose = afterClose;
         }
 
         private void verifyUnchanged() throws IOException {
             BasicFileAttributes current = readFileAttributes(parent, leaf);
             requireReadOnlyObject(parent, leaf, storageOwner);
+            requireSingleLink(absolutePath, initialAttributes.fileKey());
             if (!current.isRegularFile() || current.isSymbolicLink()
                     || !Objects.equals(initialAttributes.fileKey(), current.fileKey())
                     || initialAttributes.size() != current.size()
@@ -685,6 +737,12 @@ public final class LocalPrivateFileStorageAdapter
             } catch (IOException exception) {
                 if (failure == null) failure = exception;
                 else failure.addSuppressed(exception);
+            }
+            try {
+                afterClose.run();
+            } catch (RuntimeException exception) {
+                if (failure != null) exception.addSuppressed(failure);
+                throw exception;
             }
             if (failure != null) throw failure;
         }
