@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.springframework.session.Session;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Assumptions;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -270,8 +269,26 @@ class LanPostgresCompatibilityIT {
                     "select has_table_privilege(current_user, 'public.p0_finding_projection', 'SELECT')",
                     Boolean.class)).isFalse();
             assertThat(appJdbc.queryForObject("""
+                    select pg_get_userbyid(relowner)
+                    from pg_class where oid = 'public.p0_tenant_probe'::regclass
+                    """, String.class)).isNotEqualTo(required("LAN_PG_APP_USERNAME"));
+            assertThat(appJdbc.queryForObject("""
                     select relrowsecurity and relforcerowsecurity
                     from pg_class where oid = 'public.p0_tenant_probe'::regclass
+                    """, Boolean.class)).isTrue();
+            assertThat(appJdbc.queryForObject("""
+                    select exists (
+                        select 1 from pg_policies
+                        where schemaname = 'public'
+                          and tablename = 'p0_tenant_probe'
+                          and policyname = 'p0_tenant_probe_isolation'
+                          and cmd = 'ALL'
+                          and 'public' = any(roles)
+                          and position('tenant_id' in coalesce(qual, '')) > 0
+                          and position('app.tenant_id' in coalesce(qual, '')) > 0
+                          and position('tenant_id' in coalesce(with_check, '')) > 0
+                          and position('app.tenant_id' in coalesce(with_check, '')) > 0
+                    )
                     """, Boolean.class)).isTrue();
 
             String suffix = UUID.randomUUID().toString();
@@ -279,40 +296,66 @@ class LanPostgresCompatibilityIT {
             String tenantB = "tenant-b-" + suffix;
             String keyA = "a-" + suffix;
             String keyB = "b-" + suffix;
+            String noContextInsertKey = "no-context-insert-" + suffix;
             String crossTenantInsertKey = "cross-insert-" + suffix;
+            String crossTenantUpdatedKey = "cross-updated-" + suffix;
 
             try {
-                insertTenantProbe(appJdbc, appTransaction, tenantA, tenantA, keyA);
-                assertThat(countTenantProbeWithoutContext(appJdbc, appTransaction)).isZero();
-                insertTenantProbe(appJdbc, appTransaction, tenantB, tenantB, keyB);
+                int backendPid = insertTenantProbe(appJdbc, appTransaction, tenantA, tenantA, keyA);
+                assertCleanTenantContextOnSameConnection(appJdbc, appTransaction, backendPid);
+                assertRlsRejected("INSERT without tenant context",
+                        () -> insertTenantProbeWithoutContext(appJdbc, appTransaction, tenantA, noContextInsertKey));
+                assertCleanTenantContextOnSameConnection(appJdbc, appTransaction, backendPid);
 
+                assertThat(insertTenantProbe(appJdbc, appTransaction, tenantB, tenantB, keyB))
+                        .isEqualTo(backendPid);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantA, keyA)).isEqualTo(1);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyB)).isEqualTo(1);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantA, keyB)).isZero();
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyA)).isZero();
-                assertThat(countTenantProbeWithoutContext(appJdbc, appTransaction)).isZero();
+                assertCleanTenantContextOnSameConnection(appJdbc, appTransaction, backendPid);
 
                 assertRlsRejected("cross-tenant INSERT",
                         () -> insertTenantProbe(appJdbc, appTransaction, tenantA, tenantB, crossTenantInsertKey));
+                assertCleanTenantContextOnSameConnection(appJdbc, appTransaction, backendPid);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, crossTenantInsertKey)).isZero();
+
+                assertThat(updateOtherTenantProbe(appJdbc, appTransaction, tenantA, tenantB, keyB,
+                        crossTenantUpdatedKey)).isZero();
+                assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyB)).isEqualTo(1);
+                assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, crossTenantUpdatedKey)).isZero();
+                assertThat(deleteOtherTenantProbe(appJdbc, appTransaction, tenantA, tenantB, keyB)).isZero();
+                assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyB)).isEqualTo(1);
+
                 assertRlsRejected("cross-tenant UPDATE",
                         () -> updateTenantProbeTenant(appJdbc, appTransaction, tenantA, tenantB, keyA));
+                assertCleanTenantContextOnSameConnection(appJdbc, appTransaction, backendPid);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantA, keyA)).isEqualTo(1);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyA)).isZero();
             } finally {
                 deleteTenantProbe(appJdbc, appTransaction, tenantA, keyA);
+                deleteTenantProbe(appJdbc, appTransaction, tenantA, noContextInsertKey);
                 deleteTenantProbe(appJdbc, appTransaction, tenantB, keyB);
                 deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantInsertKey);
+                deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantUpdatedKey);
             }
         }
     }
 
-    private static void insertTenantProbe(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
-                                          String contextTenantId, String rowTenantId, String key) {
-        appTransaction.executeWithoutResult(status -> {
+    private static int insertTenantProbe(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
+                                         String contextTenantId, String rowTenantId, String key) {
+        return appTransaction.execute(status -> {
             setTenantContext(appJdbc, contextTenantId);
+            int backendPid = appJdbc.queryForObject("select pg_backend_pid()", Integer.class);
             appJdbc.update("insert into p0_tenant_probe (tenant_id, item_key) values (?, ?)", rowTenantId, key);
+            return backendPid;
         });
+    }
+
+    private static void insertTenantProbeWithoutContext(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
+                                                        String rowTenantId, String key) {
+        appTransaction.executeWithoutResult(status -> appJdbc.update(
+                "insert into p0_tenant_probe (tenant_id, item_key) values (?, ?)", rowTenantId, key));
     }
 
     private static void updateTenantProbeTenant(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
@@ -321,6 +364,25 @@ class LanPostgresCompatibilityIT {
             setTenantContext(appJdbc, contextTenantId);
             appJdbc.update("update p0_tenant_probe set tenant_id = ? where tenant_id = ? and item_key = ?",
                     rowTenantId, contextTenantId, key);
+        });
+    }
+
+    private static int updateOtherTenantProbe(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
+                                              String contextTenantId, String rowTenantId, String key,
+                                              String replacementKey) {
+        return appTransaction.execute(status -> {
+            setTenantContext(appJdbc, contextTenantId);
+            return appJdbc.update("update p0_tenant_probe set item_key = ? where tenant_id = ? and item_key = ?",
+                    replacementKey, rowTenantId, key);
+        });
+    }
+
+    private static int deleteOtherTenantProbe(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
+                                              String contextTenantId, String rowTenantId, String key) {
+        return appTransaction.execute(status -> {
+            setTenantContext(appJdbc, contextTenantId);
+            return appJdbc.update("delete from p0_tenant_probe where tenant_id = ? and item_key = ?",
+                    rowTenantId, key);
         });
     }
 
@@ -333,9 +395,22 @@ class LanPostgresCompatibilityIT {
         });
     }
 
-    private static int countTenantProbeWithoutContext(JdbcTemplate appJdbc, TransactionTemplate appTransaction) {
-        return appTransaction.execute(status -> appJdbc.queryForObject(
-                "select count(*) from p0_tenant_probe", Integer.class));
+    private static RlsConnectionState inspectUnscopedConnection(JdbcTemplate appJdbc,
+                                                                 TransactionTemplate appTransaction) {
+        return appTransaction.execute(status -> new RlsConnectionState(
+                appJdbc.queryForObject("select pg_backend_pid()", Integer.class),
+                appJdbc.queryForObject("select nullif(current_setting('app.tenant_id', true), '') is null",
+                        Boolean.class),
+                appJdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)));
+    }
+
+    private static void assertCleanTenantContextOnSameConnection(JdbcTemplate appJdbc,
+                                                                  TransactionTemplate appTransaction,
+                                                                  int expectedBackendPid) {
+        RlsConnectionState state = inspectUnscopedConnection(appJdbc, appTransaction);
+        assertThat(state.backendPid()).isEqualTo(expectedBackendPid);
+        assertThat(state.tenantContextUnset()).isTrue();
+        assertThat(state.visibleRows()).isZero();
     }
 
     private static void deleteTenantProbe(JdbcTemplate appJdbc, TransactionTemplate appTransaction,
@@ -350,6 +425,8 @@ class LanPostgresCompatibilityIT {
     private static void setTenantContext(JdbcTemplate appJdbc, String tenantId) {
         appJdbc.queryForObject("select set_config('app.tenant_id', ?, true)", String.class, tenantId);
     }
+
+    private record RlsConnectionState(int backendPid, boolean tenantContextUnset, int visibleRows) { }
 
     private static void assertRlsRejected(String operationName, Runnable operation) {
         Throwable failure = catchThrowable(operation::run);
