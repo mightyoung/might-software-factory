@@ -5,11 +5,13 @@ import {
   workflowSteps,
   type FindingRecord,
 } from "../domain/finding";
+import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
+import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
 interface FindingDetailsProps {
   finding: FindingRecord | null;
   loading: boolean;
-  error: boolean;
+  error: FindingLedgerReadFailureKind | null;
   onClose: () => void;
   onRetry: () => void;
 }
@@ -30,7 +32,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry }: Fi
       {loading && <p className="detail-state" role="status">正在读取演示记录…</p>}
       {!loading && error && (
         <div className="detail-error" role="alert">
-          <p>暂时无法读取隐患详情。</p>
+          <p>{findingReadFailureMessage(error, "detail")}</p>
           <button type="button" className="button button-subtle" onClick={onRetry}>
             重试读取
           </button>

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { mockFindingLedger, type FindingLedgerAdapter, type FindingView } from "../../adapters/findingLedger";
+import {
+  classifyFindingLedgerReadFailure,
+  mockFindingLedger,
+  type FindingLedgerAdapter,
+  type FindingLedgerReadFailureKind,
+  type FindingView,
+} from "../../adapters/findingLedger";
 import { FindingDetails } from "../../components/FindingDetails";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
@@ -7,6 +13,7 @@ import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } 
 import type { FindingRecord } from "../../domain/finding";
 import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { findingLedgerSchema } from "./schema";
+import { findingReadFailureMessage } from "./readFailureMessage";
 import { navigate, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -34,34 +41,38 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
-  const [listError, setListError] = useState(false);
+  const [listError, setListError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detail, setDetail] = useState<FindingRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState(false);
+  const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
 
   useEffect(() => {
     let current = true;
+    const controller = new AbortController();
     setLoading(true);
-    setListError(false);
-    void Promise.resolve()
-      .then(() => adapter.list({ query: appliedQuery, page: { index: pageIndex, size: pageSize }, view }))
-      .then((result) => {
-        if (!current) return;
+    setListError(null);
+    void (async () => {
+      try {
+        const result = await adapter.list(
+          { query: appliedQuery, page: { index: pageIndex, size: pageSize }, view },
+          { signal: controller.signal },
+        );
+        if (!current || controller.signal.aborted) return;
         setPage(result);
         setPageIndex(result.page.index);
-      })
-      .catch(() => {
-        if (!current) return;
-        setListError(true);
-      })
-      .finally(() => {
-        if (!current) return;
+      } catch (error) {
+        if (!current || controller.signal.aborted) return;
+        setListError(classifyFindingLedgerReadFailure(error));
+      } finally {
+        if (!current || controller.signal.aborted) return;
         setLoading(false);
-      });
+      }
+    })();
     return () => {
       current = false;
+      controller.abort();
     };
   }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view]);
 
@@ -69,32 +80,33 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
     let current = true;
     if (!selectedFindingId) {
       setDetail(null);
-      setDetailError(false);
+      setDetailError(null);
       setDetailLoading(false);
       return () => {
         current = false;
       };
     }
+    const controller = new AbortController();
     setDetail(null);
-    setDetailError(false);
+    setDetailError(null);
     setDetailLoading(true);
-    void Promise.resolve()
-      .then(() => adapter.get(selectedFindingId))
-      .then((record) => {
-        if (!current) return;
+    void (async () => {
+      try {
+        const record = await adapter.get(selectedFindingId, { signal: controller.signal });
+        if (!current || controller.signal.aborted) return;
         setDetail(record);
-      })
-      .catch(() => {
-        if (!current) return;
+      } catch (error) {
+        if (!current || controller.signal.aborted) return;
         setDetail(null);
-        setDetailError(true);
-      })
-      .finally(() => {
-        if (!current) return;
+        setDetailError(classifyFindingLedgerReadFailure(error));
+      } finally {
+        if (!current || controller.signal.aborted) return;
         setDetailLoading(false);
-      });
+      }
+    })();
     return () => {
       current = false;
+      controller.abort();
     };
   }, [adapter, detailRefreshKey, selectedFindingId]);
 
@@ -170,7 +182,7 @@ export function FindingsLedger({ view, title, description, adapter = mockFinding
           {loading && <div className="table-loading" role="status">正在加载演示记录…</div>}
           {!loading && listError && (
             <div className="table-error" role="alert">
-              <span>暂时无法加载隐患记录。</span>
+              <span>{findingReadFailureMessage(listError, "list")}</span>
               <button type="button" className="button button-subtle" onClick={() => setRefreshKey((value) => value + 1)}>
                 重试加载
               </button>

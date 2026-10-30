@@ -17,6 +17,8 @@ npm run build
 
 `src/adapters/entityQueryContract.ts` 为共享 `Entity Query Contract` v1.0.0（`contracts/openapi/entity-query.yaml`，来源提交 `3d08108831e4283a38f618944bae30662d13063b`）提供类型化请求映射。该 OpenAPI 文件当前 `paths: {}`，仅发布组件 schema；映射器不发 HTTP 请求。调用方必须提供代码审查发布的实体字段注册 schema 和 UI 字段映射，映射器不会推断或授权字段。当前隐患演示 adapter 尚未调用该映射器，也未取得隐患实体注册字段。
 
+`FindingsLedger` 通过 `FindingLedgerAdapter` 属性注入列表/详情读取端口，默认值为 `mockFindingLedger`。端口接收可选 `AbortSignal`，便于将来由可取消传输实现承接 UI 取消；当前 mock 不联网，现有用例验证取消信号与迟到响应保护。`FindingLedgerAccessError` 的 `unauthenticated` / `forbidden` 是仅供 UI 呈现的语义分类，不映射 HTTP 状态、服务端错误码或认证机制；未知错误显示通用失败状态。后端当前没有真实隐患查询或详情端点契约，尚未实现 HTTP adapter，也未验证真实权限。
+
 映射器使用契约规定的 20/50/100 分页、正整数页码与最大偏移，按已注册运算符生成过滤，并检查显式排序和输出字段。无显式排序/投影时省略对应属性。日期输入只映射到注册为 `DATE` 的字段；不把无时区的日期输入转换成 `DATETIME`。整数查询拒绝超出 JavaScript 安全整数范围的值。金额和小数不设业务小数位数，但仅接受经过 JavaScript 数值转换再序列化后与输入十进制值完全相等的值；否则拒绝，避免静默精度损失。响应类型把 `total` 保持为可选，避免构造占位总数。
 
 此适配器的 fixture 使用合成字段注册，仅验证前端映射行为。测试不读取或解析共享 YAML，也不调用/验证 Java validator；契约来源提交号仅标记来源，不代表跨端一致性验收。内部 `createEntityQueryFilter` helper 只构造基础对象形状，没有 registry 上下文，也不验证字段/运算符/值类型；请求映射入口才按传入的注册 schema 检查 UI 查询。

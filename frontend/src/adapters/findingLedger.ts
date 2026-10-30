@@ -4,6 +4,26 @@ import type { FindingRecord, FindingState } from "../domain/finding";
 
 export type FindingView = "all" | "confirmation" | "acceptance";
 
+export interface FindingReadOptions {
+  /** Cancellation signal for the current UI read; it does not imply a transport or route. */
+  signal?: AbortSignal;
+}
+
+export type FindingLedgerAccessFailureKind = "unauthenticated" | "forbidden";
+export type FindingLedgerReadFailureKind = FindingLedgerAccessFailureKind | "unknown";
+
+/** Semantic UI boundary only. A future transport must map documented server behavior explicitly. */
+export class FindingLedgerAccessError extends Error {
+  constructor(readonly kind: FindingLedgerAccessFailureKind) {
+    super(`Finding ledger read ${kind}`);
+    this.name = "FindingLedgerAccessError";
+  }
+}
+
+export function classifyFindingLedgerReadFailure(error: unknown): FindingLedgerReadFailureKind {
+  return error instanceof FindingLedgerAccessError ? error.kind : "unknown";
+}
+
 export interface FindingListRequest {
   query: QueryValues;
   page: PageRequest;
@@ -12,8 +32,8 @@ export interface FindingListRequest {
 
 /** UI-facing seam only. No HTTP route or server payload is implied by this type. */
 export interface FindingLedgerAdapter {
-  list(input: FindingListRequest): Promise<PageResult<FindingRecord>>;
-  get(id: string): Promise<FindingRecord | null>;
+  list(input: FindingListRequest, options?: FindingReadOptions): Promise<PageResult<FindingRecord>>;
+  get(id: string, options?: FindingReadOptions): Promise<FindingRecord | null>;
 }
 
 const demoHistory = (at: string, title: string, note: string) => [{ at, title, note }];
