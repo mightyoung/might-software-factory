@@ -1,4 +1,6 @@
+/** 与 contracts/openapi/finding-ledger.yaml 的 state 枚举一致。DISCOVERED 是尚未启动确认流程的旧数据。 */
 export const findingStates = [
+  "DISCOVERED",
   "PERSON_CONFIRM_PENDING",
   "SAFETY_CONFIRM_PENDING",
   "SAFETY_DISPATCH_PENDING",
@@ -10,6 +12,7 @@ export const findingStates = [
 export type FindingState = (typeof findingStates)[number];
 
 export const findingStateLabels: Record<FindingState, string> = {
+  DISCOVERED: "已发现·待启动流程",
   PERSON_CONFIRM_PENDING: "待一人确认",
   SAFETY_CONFIRM_PENDING: "待安全确认",
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
@@ -70,6 +73,7 @@ export interface FindingAction {
 /** Actions stay disabled until a real adapter and backend authorization exist. */
 export function getFindingActions(state: FindingState): FindingAction[] {
   const actionLabels: Record<FindingState, string[]> = {
+    DISCOVERED: ["启动确认流程"],
     PERSON_CONFIRM_PENDING: ["确认发现", "退回补充"],
     SAFETY_CONFIRM_PENDING: ["安全确认", "退回第一确认"],
     SAFETY_DISPATCH_PENDING: ["分派整改"],
@@ -86,6 +90,7 @@ export function getFindingActions(state: FindingState): FindingAction[] {
 
 export function workflowCurrentIndex(state: FindingState): number {
   const indexByState: Record<FindingState, number> = {
+    DISCOVERED: 0,
     PERSON_CONFIRM_PENDING: 1,
     SAFETY_CONFIRM_PENDING: 2,
     SAFETY_DISPATCH_PENDING: 3,

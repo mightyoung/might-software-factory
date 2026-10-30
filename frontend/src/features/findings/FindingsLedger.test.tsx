@@ -158,7 +158,10 @@ describe("隐患台账分页与详情", () => {
   });
 
   it.each(findingStates)("状态 %s 的详情映射和业务动作保持受限", async (state) => {
-    const record = syntheticFindings.find((item) => item.state === state);
+    // DISCOVERED 是契约里的旧数据状态，种子数据没有它：从现有样例派生，避免改动台账总数和新记录编号。
+    const record =
+      syntheticFindings.find((item) => item.state === state) ??
+      (state === "DISCOVERED" ? { ...syntheticFindings[0]!, state } : undefined);
     if (!record) throw new Error(`Missing synthetic record for state ${state}`);
 
     let detailReads = 0;
