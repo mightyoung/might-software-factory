@@ -133,22 +133,30 @@ function isInView(record: FindingRecord, view: FindingView): boolean {
   return true;
 }
 
+/** Shared by the static mock and the in-memory synthetic store so both page and filter identically. */
+export function listFindingRecords(
+  records: readonly FindingRecord[],
+  { query, page, view }: FindingListRequest,
+): PageResult<FindingRecord> {
+  const filtered = records.filter(
+    (record) => isInView(record, view) && matchesQuery(record, findingLedgerSchema.queryFields, query),
+  );
+  const pageCount = Math.max(1, Math.ceil(filtered.length / page.size));
+  const safeIndex = Math.min(Math.max(page.index, 1), pageCount);
+  const start = (safeIndex - 1) * page.size;
+
+  return {
+    items: filtered.slice(start, start + page.size),
+    page: { index: safeIndex, size: page.size },
+    total: filtered.length,
+    pageCount,
+  };
+}
+
 /** Clearly synthetic, deterministic data adapter for screen rendering and unit tests. */
 export const mockFindingLedger: FindingLedgerAdapter = {
-  async list({ query, page, view }) {
-    const filtered = syntheticFindings.filter(
-      (record) => isInView(record, view) && matchesQuery(record, findingLedgerSchema.queryFields, query),
-    );
-    const pageCount = Math.max(1, Math.ceil(filtered.length / page.size));
-    const safeIndex = Math.min(Math.max(page.index, 1), pageCount);
-    const start = (safeIndex - 1) * page.size;
-
-    return {
-      items: filtered.slice(start, start + page.size),
-      page: { index: safeIndex, size: page.size },
-      total: filtered.length,
-      pageCount,
-    };
+  async list(input) {
+    return listFindingRecords(syntheticFindings, input);
   },
   async get(id) {
     return syntheticFindings.find((record) => record.id === id) ?? null;

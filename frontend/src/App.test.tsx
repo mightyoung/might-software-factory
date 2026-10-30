@@ -143,7 +143,8 @@ describe("登录与退出", () => {
     setPath("/safety/inbox");
     render(<App sessionAdapter={createSyntheticSessionAdapter()} />);
     await screen.findByRole("heading", { name: "登录" });
-    expect(new URLSearchParams(window.location.search).get("next")).toBe("/safety/inbox");
+    // 登录页先渲染，地址改为 /login?next=… 在随后的 effect 里完成：等它完成再读。
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("next")).toBe("/safety/inbox"));
     fillAndSubmit("demo.manager", "x");
     expect(await screen.findByRole("heading", { name: "待确认" })).toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/inbox`));

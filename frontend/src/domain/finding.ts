@@ -18,6 +18,23 @@ export const findingStateLabels: Record<FindingState, string> = {
   CLOSED: "已闭环",
 };
 
+/** 人工上报时可选的来源。“监测/算法”产生的待确认发现由系统创建，不在手工表单里选择。 */
+export const findingSources = ["FIELD_OBSERVATION", "INSPECTION", "PERSON_REPORT"] as const;
+export type FindingSource = (typeof findingSources)[number];
+export const findingSourceLabels: Record<FindingSource, string> = {
+  FIELD_OBSERVATION: "现场发现",
+  INSPECTION: "检查发现",
+  PERSON_REPORT: "人员举报",
+};
+
+export const findingUrgencies = ["NORMAL", "URGENT", "IMMEDIATE"] as const;
+export type FindingUrgency = (typeof findingUrgencies)[number];
+export const findingUrgencyLabels: Record<FindingUrgency, string> = {
+  NORMAL: "一般",
+  URGENT: "紧急",
+  IMMEDIATE: "需立即处置",
+};
+
 export const workflowSteps = ["发现上报", "一人确认", "安全部门确认", "安全部门派单", "整改", "安全验收"] as const;
 
 export interface FindingHistoryEntry {
@@ -37,6 +54,12 @@ export interface FindingRecord {
   riskLabel: "待专业评估";
   round: number;
   history: readonly FindingHistoryEntry[];
+  /** 以下字段只有通过上报表单创建的记录才有；发现时间与上报时间分开保存，补报不改写发现时间。 */
+  foundAt?: string;
+  source?: FindingSource;
+  urgency?: FindingUrgency;
+  interimMeasure?: string;
+  backfill?: boolean;
 }
 
 export interface FindingAction {

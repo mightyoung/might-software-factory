@@ -8,6 +8,7 @@ import { hasPermission, type ApplicationId, type SessionBootstrap } from "./doma
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
+import { syntheticFindingStore, type SyntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingView } from "./adapters/findingLedger";
 
 interface LedgerPage {
@@ -121,8 +122,8 @@ function StatusPage({ title, description, note }: { title: string; description: 
   );
 }
 
-function AppRouter() {
-  const { state, logout } = useSession();
+function AppRouter({ findingStore }: { findingStore: SyntheticFindingStore }) {
+  const { state, logout, expire } = useSession();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
@@ -193,6 +194,10 @@ function AppRouter() {
         view={route.page.view}
         title={route.page.title}
         description={route.page.description}
+        adapter={findingStore.ledger}
+        submitAdapter={findingStore.submit}
+        canReport={hasPermission(session, "safety.finding.report")}
+        onUnauthenticated={expire}
       />
     );
   } else {
@@ -223,10 +228,16 @@ function AppRouter() {
   );
 }
 
-export function App({ sessionAdapter }: { sessionAdapter?: SessionAdapter }) {
+export function App({
+  sessionAdapter,
+  findingStore = syntheticFindingStore,
+}: {
+  sessionAdapter?: SessionAdapter;
+  findingStore?: SyntheticFindingStore;
+}) {
   return (
     <SessionProvider adapter={sessionAdapter}>
-      <AppRouter />
+      <AppRouter findingStore={findingStore} />
     </SessionProvider>
   );
 }
