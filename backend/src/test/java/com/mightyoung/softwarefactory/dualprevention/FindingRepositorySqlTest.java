@@ -54,14 +54,16 @@ class FindingRepositorySqlTest {
         var query = new EntityQueryValidator().validate(EntityQueryContract.readRequest("""
                 {"filterAST":{"operator":"AND","conditions":[
                   {"field":"grade","operator":"EQ","value":"MAJOR"}]},
-                 "sort":[{"field":"discoveredAt","direction":"DESC"}],
-                 "page":{"number":2},"size":20,"fields":["id","code"]}
+                 "sort":[{"field":"createdAt","direction":"DESC"}],
+                 "page":{"number":2},"size":20,"fields":["id","code","organizationId","organizationName"]}
                 """), new FindingEntitySchema().schema());
 
         var result = repository.findPage(new FindingReadScope(
                 UUID.randomUUID(), TENANT, UUID.randomUUID(), java.util.Set.of(ORG)), query);
 
         assertThat(result.total()).isEqualTo(1L);
+        assertThat(result.items().getFirst().organizationId()).isEqualTo(ORG);
+        assertThat(result.items().getFirst().organizationName()).isEqualTo("安全一部");
         assertThat(statements).hasSize(3);
         assertThat(statements.get(0).toLowerCase(java.util.Locale.ROOT)).contains("set_config");
         List<String> queries = statements.stream()
@@ -74,7 +76,11 @@ class FindingRepositorySqlTest {
         });
         assertThat(queries.get(0).toLowerCase(java.util.Locale.ROOT)).contains("count(*)");
         assertThat(queries.get(1).toLowerCase(java.util.Locale.ROOT))
-                .contains("order by \"discovered_at\" desc, \"id\" asc", "offset ? rows fetch next ? rows only");
+                .contains("left outer join \"public\".\"org_unit\"",
+                        "\"reportable_organization\".\"tenant_id\" = \"finding\".\"tenant_id\"",
+                        "\"reportable_organization\".\"id\" = \"finding\".\"organization_id\"",
+                        "order by \"finding\".\"created_at\" desc, \"finding\".\"id\" asc",
+                        "offset ? rows fetch next ? rows only");
         assertThat(bindings.stream().flatMap(List::stream))
                 .contains(TENANT, ORG, "MAJOR", "app.tenant_id", TENANT.toString(), 20L);
     }
@@ -82,6 +88,7 @@ class FindingRepositorySqlTest {
     private static MockResult findingRow(DSLContext dsl) {
         List<Field<?>> fields = List.of(
                 DSL.field("id", UUID.class), DSL.field("code", String.class),
+                DSL.field("organization_id", UUID.class), DSL.field("organization_name", String.class),
                 DSL.field("description", String.class), DSL.field("discovered_at", OffsetDateTime.class),
                 DSL.field("source_event_id", UUID.class), DSL.field("risk_id", UUID.class),
                 DSL.field("grade", String.class), DSL.field("state", String.class),
@@ -92,6 +99,7 @@ class FindingRepositorySqlTest {
         OffsetDateTime now = OffsetDateTime.parse("2026-10-30T10:00:00Z");
         List<Object> values = Arrays.asList(
                 UUID.fromString("40000000-0000-0000-0000-000000000001"), "FND-TEST-01",
+                ORG, "安全一部",
                 "Synthetic test finding", now, null, null, "MAJOR", "PERSON_CONFIRM_PENDING", 1,
                 1L, now, now);
         for (int i = 0; i < fields.size(); i++) {

@@ -27,7 +27,7 @@ x-pagination-semantics: >-
   cannot be produced, fail the request rather than returning a placeholder zero. The response
   never includes nextCursor for this offset contract.
 x-finding-default-sort:
-  - field: discoveredAt
+  - field: createdAt
     direction: DESC
   - field: id
     direction: ASC
@@ -70,9 +70,9 @@ paths:
       description: >-
         Read-only operation. Requires an authenticated session and the entity's registered read
         action. Server-side tenant and data-scope predicates are applied before the exact total
-        count and page are computed. The server always includes id in each item and appends id ASC
-        as a stable tie-breaker when it is not already in the requested sort. Tenant identity is
-        never read from the request body or headers.
+        count and page are computed. The default order is createdAt DESC then id ASC. The server
+        always includes id in each item and appends id ASC as a stable tie-breaker when it is not
+        already in the requested sort. Tenant identity is never read from the request body or headers.
       security:
         - sessionCookieAuth: []
       parameters:
@@ -219,18 +219,22 @@ components:
           const: id
         defaultFields:
           type: array
-          const: [id, code, discoveredAt, grade, state, roundNo]
+          const: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, createdAt]
           items:
             type: string
         fields:
           type: object
           additionalProperties: false
-          required: [id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
           properties:
             id:
               $ref: '#/components/schemas/UuidField'
             code:
               $ref: '#/components/schemas/CodeField'
+            organizationId:
+              $ref: '#/components/schemas/OrganizationIdField'
+            organizationName:
+              $ref: '#/components/schemas/OrganizationNameField'
             description:
               $ref: '#/components/schemas/DescriptionField'
             discoveredAt:
@@ -287,6 +291,33 @@ components:
         operators: { type: array, items: { enum: [EQ, CONTAINS] }, uniqueItems: true }
         maxLength: { const: 64 }
         enumValues: { const: [] }
+    OrganizationIdField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: UUID }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    OrganizationNameField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: TEXT }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+      description: >-
+        Display name resolved from the tenant-scoped organization directory. Null is possible only
+        when a legacy finding references a directory row that is not visible or no longer present.
     DescriptionField:
       type: object
       additionalProperties: false
@@ -381,6 +412,8 @@ components:
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
+        organizationId: { type: string, format: uuid }
+        organizationName: { type: [string, 'null'] }
         description: { type: string }
         discoveredAt: { type: string, format: date-time }
         sourceEventId: { type: [string, 'null'], format: uuid }
@@ -412,10 +445,12 @@ components:
     FindingDetail:
       type: object
       additionalProperties: false
-      required: [id, code, description, discoveredAt, grade, state, roundNo, version, createdAt, updatedAt]
+      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
+        organizationId: { type: string, format: uuid }
+        organizationName: { type: [string, 'null'] }
         description: { type: string }
         discoveredAt: { type: string, format: date-time }
         sourceEventId: { type: [string, 'null'], format: uuid }

@@ -5,7 +5,7 @@
 ## 本地实现
 
 - `GET /api/v1/entities/finding/schema`：返回 `finding` v1 的字段目录。端点先验证当前会话和服务端读取授权。
-- `POST /api/v1/entities/finding/query`：严格解析 JSON；只接受一开始的 offset page，size 为 20/50/100、offset 不超过 10,000。字段、排序、过滤运算符和值由 `FindingEntitySchema` 和 `EntityQueryValidator` 白名单控制。默认排序 `discoveredAt DESC, id ASC`，每行始终含 `id`，响应提供精确 `total` 和 `pageCount`。
+- `POST /api/v1/entities/finding/query`：严格解析 JSON；只接受一开始的 offset page，size 为 20/50/100、offset 不超过 10,000。字段、排序、过滤运算符和值由 `FindingEntitySchema` 和 `EntityQueryValidator` 白名单控制。默认排序 `createdAt DESC, id ASC`，每行始终含 `id`，响应提供精确 `total` 和 `pageCount`。
 - `GET /api/v1/entities/finding/{id}`：详情只按 UUID 读取。不存在与不在可见范围统一为 `404 RESOURCE_NOT_VISIBLE`。
 
 查询范围取自验证过的 `VerifiedSessionPrincipal`，请求 body 和 `X-Tenant-Id` 不参与选租户。授权策略返回当前会话 tenant 与显式组织范围，列表 count、列表和详情查询同时应用 `tenant_id`、`organization_id` 条件。仓储使用参数化 jOOQ 查询，在一个只读 `REPEATABLE_READ` 事务内设置事务级 `app.tenant_id`，以便 RLS 生效；没有动态 SQL 字段名。
@@ -59,7 +59,7 @@
 
 列表使用接口基线定义的实体级注册查询路径 `/api/v1/entities/{key}/query`。这不是大屏/页面批量查询协调器；后者唯一入口仍是 `/api/v1/page-queries`，其 pageKey、widget 请求拆分、预算、缓存和渐进结果本阶段均未实现。
 
-字段 key 是 `id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影为 `id, code, discoveredAt, grade, state, roundNo`；`description` 可读但不可筛选或排序。请求体和返回投影都不包括租户/组织控制列。
+字段 key 是 `id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影包含完整创建输入、服务端业务编号、组织 ID 与租户范围内组织名称、状态及创建时间；`description`、`organizationName` 可读但不可筛选或排序。读模型以 `finding.tenant_id + organization_id` 限定数据，再按相同 tenant 条件左连接 `org_unit` 取名称；缺失的历史目录项不应隐藏隐患，`organizationName` 此时返回 null。租户控制列不对外返回；`organizationId` 是请求中已有的业务字段，也用于可见范围展示。
 
 浏览器使用同源 `SESSION` cookie。列表 POST 要带 `X-XSRF-TOKEN`。无有效会话是 401，读取权限或 CSRF 拒绝是 403，详情不可见统一 404，查询形状错误 400，安全读取失败 503。菜单可见性不代替服务端授权。
 

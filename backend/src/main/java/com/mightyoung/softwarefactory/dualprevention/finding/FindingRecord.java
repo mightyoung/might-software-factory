@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Read model. Tenant and organization control columns are intentionally not exposed on the wire. */
+/** Read model. Tenant control columns are intentionally not exposed on the wire. */
 public record FindingRecord(
         UUID id,
         String code,
@@ -18,7 +18,9 @@ public record FindingRecord(
         Integer roundNo,
         Long version,
         OffsetDateTime createdAt,
-        OffsetDateTime updatedAt) {
+        OffsetDateTime updatedAt,
+        UUID organizationId,
+        String organizationName) {
 
     public Map<String, Object> toApiMap() {
         Map<String, Object> values = new LinkedHashMap<>();
@@ -34,6 +36,8 @@ public record FindingRecord(
         values.put("version", version);
         values.put("createdAt", createdAt);
         values.put("updatedAt", updatedAt);
+        values.put("organizationId", organizationId);
+        values.put("organizationName", organizationName);
         return values;
     }
 }

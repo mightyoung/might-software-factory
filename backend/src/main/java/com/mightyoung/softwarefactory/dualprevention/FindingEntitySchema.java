@@ -30,7 +30,8 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 public final class FindingEntitySchema {
 
     public static final List<String> DEFAULT_FIELDS =
-            List.of("id", "code", "discoveredAt", "grade", "state", "roundNo");
+            List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
+                    "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
 
     private final EntitySchema schema;
 
@@ -38,6 +39,8 @@ public final class FindingEntitySchema {
         Map<String, FieldSchema> fields = new LinkedHashMap<>();
         fields.put("id", field(FieldType.UUID, false, true, 0, List.of(EQ, IN), List.of()));
         fields.put("code", field(FieldType.TEXT, false, true, 64, List.of(EQ, CONTAINS), List.of()));
+        fields.put("organizationId", field(FieldType.UUID, false, false, 0, List.of(), List.of()));
+        fields.put("organizationName", field(FieldType.TEXT, true, false, 0, List.of(), List.of()));
         fields.put("description", field(FieldType.TEXT, false, false, 0, List.of(), List.of()));
         fields.put("discoveredAt", field(FieldType.DATETIME, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));

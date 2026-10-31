@@ -47,21 +47,28 @@ import static org.jooq.impl.DSL.table;
 @Repository
 public final class JooqFindingRepository implements FindingRepository {
 
-    private static final Table<?> FINDING = table(name("public", "finding"));
-    private static final Field<UUID> ID = field(name("id"), UUID.class);
-    private static final Field<UUID> TENANT_ID = field(name("tenant_id"), UUID.class);
-    private static final Field<UUID> ORGANIZATION_ID = field(name("organization_id"), UUID.class);
-    private static final Field<String> CODE = field(name("code"), String.class);
-    private static final Field<String> DESCRIPTION = field(name("description"), String.class);
-    private static final Field<OffsetDateTime> DISCOVERED_AT = field(name("discovered_at"), OffsetDateTime.class);
-    private static final Field<UUID> SOURCE_EVENT_ID = field(name("source_event_id"), UUID.class);
-    private static final Field<UUID> RISK_ID = field(name("risk_id"), UUID.class);
-    private static final Field<String> GRADE = field(name("grade"), String.class);
-    private static final Field<String> STATE = field(name("state"), String.class);
-    private static final Field<Integer> ROUND_NO = field(name("round_no"), Integer.class);
-    private static final Field<Long> VERSION = field(name("version"), Long.class);
-    private static final Field<OffsetDateTime> CREATED_AT = field(name("created_at"), OffsetDateTime.class);
-    private static final Field<OffsetDateTime> UPDATED_AT = field(name("updated_at"), OffsetDateTime.class);
+    private static final Table<?> FINDING = table(name("public", "finding")).as("finding");
+    private static final Table<?> ORGANIZATION = table(name("public", "org_unit")).as("reportable_organization");
+    private static final Field<UUID> ID = field(name("finding", "id"), UUID.class);
+    private static final Field<UUID> TENANT_ID = field(name("finding", "tenant_id"), UUID.class);
+    private static final Field<UUID> ORGANIZATION_ID = field(name("finding", "organization_id"), UUID.class);
+    private static final Field<UUID> ORGANIZATION_TENANT_ID =
+            field(name("reportable_organization", "tenant_id"), UUID.class);
+    private static final Field<UUID> ORGANIZATION_KEY = field(name("reportable_organization", "id"), UUID.class);
+    private static final Field<String> ORGANIZATION_NAME =
+            field(name("reportable_organization", "name"), String.class).as("organization_name");
+    private static final Field<String> CODE = field(name("finding", "code"), String.class);
+    private static final Field<String> DESCRIPTION = field(name("finding", "description"), String.class);
+    private static final Field<OffsetDateTime> DISCOVERED_AT =
+            field(name("finding", "discovered_at"), OffsetDateTime.class);
+    private static final Field<UUID> SOURCE_EVENT_ID = field(name("finding", "source_event_id"), UUID.class);
+    private static final Field<UUID> RISK_ID = field(name("finding", "risk_id"), UUID.class);
+    private static final Field<String> GRADE = field(name("finding", "grade"), String.class);
+    private static final Field<String> STATE = field(name("finding", "state"), String.class);
+    private static final Field<Integer> ROUND_NO = field(name("finding", "round_no"), Integer.class);
+    private static final Field<Long> VERSION = field(name("finding", "version"), Long.class);
+    private static final Field<OffsetDateTime> CREATED_AT = field(name("finding", "created_at"), OffsetDateTime.class);
+    private static final Field<OffsetDateTime> UPDATED_AT = field(name("finding", "updated_at"), OffsetDateTime.class);
     private static final Map<String, Field<?>> API_FIELDS = apiFields();
     private static final List<Field<?>> ALL_FIELDS = List.copyOf(API_FIELDS.values());
 
@@ -87,6 +94,7 @@ public final class JooqFindingRepository implements FindingRepository {
             int offset = Math.toIntExact((long) (query.page().number() - 1) * query.size());
             List<FindingRecord> items = dsl.select(projection)
                     .from(FINDING)
+                    .leftJoin(ORGANIZATION).on(organizationJoinCondition())
                     .where(where)
                     .orderBy(ordering)
                     .offset(offset)
@@ -103,6 +111,7 @@ public final class JooqFindingRepository implements FindingRepository {
             setLocalTenant(scope.tenantId());
             return dsl.select(ALL_FIELDS)
                     .from(FINDING)
+                    .leftJoin(ORGANIZATION).on(organizationJoinCondition())
                     .where(scopeCondition(scope).and(ID.eq(findingId)))
                     .limit(1)
                     .fetchOptional(JooqFindingRepository::toRecord);
@@ -119,6 +128,10 @@ public final class JooqFindingRepository implements FindingRepository {
 
     private static Condition scopeCondition(FindingReadScope scope) {
         return TENANT_ID.eq(scope.tenantId()).and(ORGANIZATION_ID.in(scope.organizationIds()));
+    }
+
+    private static Condition organizationJoinCondition() {
+        return ORGANIZATION_TENANT_ID.eq(TENANT_ID).and(ORGANIZATION_KEY.eq(ORGANIZATION_ID));
     }
 
     private static Condition filterCondition(List<FilterCondition> filters) {
@@ -200,8 +213,8 @@ public final class JooqFindingRepository implements FindingRepository {
 
     private static FieldType fieldType(String key) {
         return switch (key) {
-            case "id", "sourceEventId", "riskId" -> FieldType.UUID;
-            case "code", "description" -> FieldType.TEXT;
+            case "id", "organizationId", "sourceEventId", "riskId" -> FieldType.UUID;
+            case "code", "description", "organizationName" -> FieldType.TEXT;
             case "grade", "state" -> FieldType.ENUM;
             case "discoveredAt", "createdAt", "updatedAt" -> FieldType.DATETIME;
             case "roundNo", "version" -> FieldType.NUMBER;
@@ -214,7 +227,8 @@ public final class JooqFindingRepository implements FindingRepository {
                 selectedValue(row, ID), selectedValue(row, CODE), selectedValue(row, DESCRIPTION),
                 selectedValue(row, DISCOVERED_AT), selectedValue(row, SOURCE_EVENT_ID), selectedValue(row, RISK_ID),
                 selectedValue(row, GRADE), selectedValue(row, STATE), selectedValue(row, ROUND_NO),
-                selectedValue(row, VERSION), selectedValue(row, CREATED_AT), selectedValue(row, UPDATED_AT));
+                selectedValue(row, VERSION), selectedValue(row, CREATED_AT), selectedValue(row, UPDATED_AT),
+                selectedValue(row, ORGANIZATION_ID), selectedValue(row, ORGANIZATION_NAME));
     }
 
     private static <T> T selectedValue(Record row, Field<T> field) {
@@ -234,6 +248,8 @@ public final class JooqFindingRepository implements FindingRepository {
         Map<String, Field<?>> fields = new LinkedHashMap<>();
         fields.put("id", ID);
         fields.put("code", CODE);
+        fields.put("organizationId", ORGANIZATION_ID);
+        fields.put("organizationName", ORGANIZATION_NAME);
         fields.put("description", DESCRIPTION);
         fields.put("discoveredAt", DISCOVERED_AT);
         fields.put("sourceEventId", SOURCE_EVENT_ID);
