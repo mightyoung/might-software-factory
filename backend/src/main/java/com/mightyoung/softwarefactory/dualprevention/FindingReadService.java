@@ -174,7 +174,8 @@ public final class FindingReadService {
         }
     }
 
-    private static Metadata metadata() {
-        return new Metadata(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "1");
+    private Metadata metadata() {
+        return new Metadata(UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                entitySchema.schema().schemaVersion());
     }
 }

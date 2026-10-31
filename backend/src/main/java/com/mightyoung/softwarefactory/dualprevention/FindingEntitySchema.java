@@ -25,10 +25,11 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LT;
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LTE;
 
-/** Finding v1 field allowlist shared by schema discovery, query validation, and SQL projection. */
+/** Finding v2 field allowlist shared by schema discovery, query validation, and SQL projection. */
 @Component
 public final class FindingEntitySchema {
 
+    public static final String SCHEMA_VERSION = "2";
     public static final List<String> DEFAULT_FIELDS =
             List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
                     "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
@@ -61,7 +62,7 @@ public final class FindingEntitySchema {
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
         fields.put("updatedAt", field(FieldType.DATETIME, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
-        this.schema = new EntitySchema("finding", "1", "id", DEFAULT_FIELDS,
+        this.schema = new EntitySchema("finding", SCHEMA_VERSION, "id", DEFAULT_FIELDS,
                 Collections.unmodifiableMap(fields));
     }
 

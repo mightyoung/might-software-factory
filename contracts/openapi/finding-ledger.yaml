@@ -39,9 +39,11 @@ paths:
       operationId: getFindingEntitySchema
       summary: Read the caller's effective finding schema
       description: >-
-        Requires the caller's authenticated session and finding read permission. Version 1 grants
+        Requires the caller's authenticated session and finding read permission. Version 2 grants
         the registered finding fields as one read bundle; row-level data scope is still enforced.
-        This schema is not a global access grant.
+        This schema is not a global access grant. Version 2 adds organizationId and organizationName,
+        expands the default projection, and changes the omitted-sort default to createdAt DESC then
+        id ASC.
       security:
         - sessionCookieAuth: []
       responses:
@@ -213,7 +215,13 @@ components:
           const: finding
         schemaVersion:
           type: string
-          const: '1'
+          const: '2'
+          description: >-
+            Monotonic version of this entity's fields and query defaults; it is not an authorization
+            token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share
+            entries across tenant or authorization scopes. When this value changes, discard the
+            older cached schema and fetch this endpoint before validating requests or responses.
+            Increment it when field shape, nullability, default projection, or default ordering changes.
         idField:
           type: string
           const: id

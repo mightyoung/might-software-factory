@@ -15,7 +15,7 @@ export interface paths {
         };
         /**
          * Read the caller's effective finding schema
-         * @description Requires the caller's authenticated session and finding read permission. Version 1 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant.
+         * @description Requires the caller's authenticated session and finding read permission. Version 2 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant. Version 2 adds organizationId and organizationName, expands the default projection, and changes the omitted-sort default to createdAt DESC then id ASC.
          */
         get: operations["getFindingEntitySchema"];
         put?: never;
@@ -80,8 +80,11 @@ export interface components {
         FindingEntitySchema: {
             /** @constant */
             key: "finding";
-            /** @constant */
-            schemaVersion: "1";
+            /**
+             * @description Monotonic version of this entity's fields and query defaults; it is not an authorization token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share entries across tenant or authorization scopes. When this value changes, discard the older cached schema and fetch this endpoint before validating requests or responses. Increment it when field shape, nullability, default projection, or default ordering changes.
+             * @constant
+             */
+            schemaVersion: "2";
             /** @constant */
             idField: "id";
             /** @constant */
