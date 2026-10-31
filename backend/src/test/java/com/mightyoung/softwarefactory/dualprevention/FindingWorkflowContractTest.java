@@ -86,6 +86,47 @@ class FindingWorkflowContractTest {
     }
 
     @Test
+    void confirmationRequestsHaveStageSpecificOpinionAndGradeContracts() throws Exception {
+        Map<String, Object> document = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));
+        Map<String, Object> paths = (Map<String, Object>) document.get("paths");
+
+        assertThat(requestBodySchema(paths, "/api/v1/findings/{id}/confirm/person"))
+                .isEqualTo("#/components/schemas/PersonConfirmationRequest");
+        assertThat(requestBodySchema(paths, "/api/v1/findings/{id}/confirm/safety"))
+                .isEqualTo("#/components/schemas/SafetyConfirmationRequest");
+        assertThat(requestBodySchema(paths, "/api/v1/findings/{id}/workflow-initialization"))
+                .isEqualTo("#/components/schemas/VersionedCommandRequest");
+
+        Map<String, Object> components = (Map<String, Object>) document.get("components");
+        Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
+        Map<String, Object> person = (Map<String, Object>) schemas.get("PersonConfirmationRequest");
+        Map<String, Object> safety = (Map<String, Object>) schemas.get("SafetyConfirmationRequest");
+        assertThat((List<String>) person.get("required")).containsExactly("expectedVersion", "reason");
+        Map<String, Object> personProperties = (Map<String, Object>) person.get("properties");
+        assertThat(personProperties).containsKeys("expectedVersion", "reason")
+                .doesNotContainKey("grade");
+        assertThat((Map<String, Object>) personProperties.get("reason")).containsEntry("maxLength", 4000);
+        assertThat((List<String>) safety.get("required")).containsExactly("expectedVersion", "reason", "grade");
+        Map<String, Object> safetyProperties = (Map<String, Object>) safety.get("properties");
+        assertThat((Map<String, Object>) safetyProperties.get("reason")).containsEntry("maxLength", 4000);
+        assertThat((Map<String, Object>) safetyProperties.get("grade"))
+                .containsEntry("enum", List.of("GENERAL", "MAJOR"));
+
+        Map<String, Object> versioned = (Map<String, Object>) schemas.get("VersionedCommandRequest");
+        assertThat((Map<String, Object>) versioned.get("properties")).containsOnlyKeys("expectedVersion");
+    }
+
+    private static String requestBodySchema(Map<String, Object> paths, String path) {
+        Map<String, Object> operation = (Map<String, Object>) ((Map<String, Object>) paths.get(path)).get("post");
+        Map<String, Object> requestBody = (Map<String, Object>) operation.get("requestBody");
+        Map<String, Object> content = (Map<String, Object>) requestBody.get("content");
+        Map<String, Object> json = (Map<String, Object>) content.get("application/json");
+        Map<String, Object> schema = (Map<String, Object>) json.get("schema");
+        return (String) schema.get("$ref");
+    }
+
+    @Test
     void errorContractDistinguishesConflictsAndDefinesSafeFieldErrorCodes() throws Exception {
         Map<String, Object> workflow = new Yaml().load(Files.readString(
                 Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));

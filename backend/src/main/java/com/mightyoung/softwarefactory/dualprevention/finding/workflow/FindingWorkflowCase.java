@@ -66,9 +66,12 @@ public record FindingWorkflowCase(
                 FindingWorkflowState.SAFETY_CONFIRM_PENDING, roundNo);
     }
 
-    public FindingWorkflowCase confirmBySafety(UUID memberId, long expectedVersion) {
+    public FindingWorkflowCase confirmBySafety(UUID memberId, long expectedVersion, String confirmedGrade) {
+        if (!"GENERAL".equals(confirmedGrade) && !"MAJOR".equals(confirmedGrade)) {
+            throw new FindingWorkflowRuleException("Safety confirmation requires a GENERAL or MAJOR grade");
+        }
         return advance(memberId, expectedVersion, FindingWorkflowState.SAFETY_CONFIRM_PENDING,
-                FindingWorkflowState.SAFETY_DISPATCH_PENDING, roundNo);
+                FindingWorkflowState.SAFETY_DISPATCH_PENDING, roundNo, confirmedGrade);
     }
 
     public FindingWorkflowCase dispatch(UUID memberId, long expectedVersion) {
@@ -102,6 +105,16 @@ public record FindingWorkflowCase(
             FindingWorkflowState required,
             FindingWorkflowState next,
             int nextRound) {
+        return advance(memberId, expectedVersion, required, next, nextRound, grade);
+    }
+
+    private FindingWorkflowCase advance(
+            UUID memberId,
+            long expectedVersion,
+            FindingWorkflowState required,
+            FindingWorkflowState next,
+            int nextRound,
+            String nextGrade) {
         Objects.requireNonNull(memberId, "memberId");
         if (version != expectedVersion) {
             throw new FindingWorkflowVersionConflictException();
@@ -111,7 +124,7 @@ public record FindingWorkflowCase(
                     "Command requires state " + required + " but finding is " + state);
         }
         return new FindingWorkflowCase(tenantId, id, organizationId, code, description, discoveredAt,
-                sourceEventId, riskId, grade, next, nextRound, Math.addExact(version, 1),
+                sourceEventId, riskId, nextGrade, next, nextRound, Math.addExact(version, 1),
                 createdByMemberId, memberId);
     }
 
