@@ -18,7 +18,9 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -96,6 +98,31 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         }
 
         @Override
+        public String nextFindingCode(LocalDate businessDay) {
+            Long sequence = (Long) dsl.fetchValue("""
+                    with observed as (
+                        select coalesce(max(split_part(code, '-', 3)::numeric), 0) + 1 as next_sequence
+                          from public.finding
+                         where tenant_id = cast(? as uuid)
+                           and code ~ ('^YH-' || to_char(cast(? as date), 'YYYYMMDD') || '-[0-9]{4,}$')
+                    )
+                    insert into public.finding_number_sequence (tenant_id, business_day, last_sequence)
+                    select cast(? as uuid), cast(? as date), observed.next_sequence
+                      from observed
+                    on conflict (tenant_id, business_day)
+                    do update set last_sequence = greatest(
+                        public.finding_number_sequence.last_sequence + 1,
+                        excluded.last_sequence)
+                    returning last_sequence
+                    """, tenantId, businessDay, tenantId, businessDay);
+            if (sequence == null || sequence < 1) {
+                throw new IllegalStateException("Finding number sequence could not be allocated");
+            }
+            return "YH-" + businessDay.toString().replace("-", "") + "-"
+                    + String.format(Locale.ROOT, "%04d", sequence);
+        }
+
+        @Override
         public void updateFinding(FindingWorkflowCase finding, long expectedVersion) {
             int updated = dsl.execute("""
                     update public.finding
@@ -118,11 +145,16 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
             if (inserted == 1) return CommandClaim.newClaim();
 
             Record prior = dsl.fetchOne("""
-                    select actor_id, action, request_hash, result_finding_id,
-                           result_state, result_round_no, result_version
-                      from public.finding_command_receipt
-                     where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
-                     for update
+                    select receipt.actor_id, receipt.action, receipt.request_hash,
+                           receipt.result_finding_id, finding.code as result_code,
+                           receipt.result_state, receipt.result_round_no, receipt.result_version
+                      from public.finding_command_receipt receipt
+                      left join public.finding
+                        on finding.tenant_id = receipt.tenant_id
+                       and finding.id = receipt.result_finding_id
+                     where receipt.tenant_id = cast(? as uuid)
+                       and receipt.command_id = cast(? as uuid)
+                     for update of receipt
                     """, tenantId, command.commandId());
             if (prior == null) throw new IllegalStateException("Conflicting command receipt could not be read");
             if (!command.actorId().equals(prior.get("actor_id", UUID.class))
@@ -134,7 +166,12 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
             if (resultFindingId == null) {
                 throw new IllegalStateException("An incomplete command receipt cannot be replayed");
             }
+            String resultCode = prior.get("result_code", String.class);
+            if (resultCode == null || resultCode.isBlank()) {
+                throw new IllegalStateException("A completed finding command receipt has no visible finding code");
+            }
             return CommandClaim.replay(new CommandResult(resultFindingId,
+                    resultCode,
                     FindingWorkflowState.valueOf(prior.get("result_state", String.class)),
                     prior.get("result_round_no", Integer.class), prior.get("result_version", Long.class)));
         }
@@ -200,6 +237,19 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     """, tenantId, confirmation.findingId(), confirmation.stage(), confirmation.actorMemberId(),
                     confirmation.decidedAt(), confirmation.expectedVersion(), confirmation.commandId());
             if (inserted != 1) throw new IllegalStateException("Finding confirmation did not persist");
+        }
+
+        @Override
+        public Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage) {
+            Record row = dsl.fetchOne("""
+                    select actor_member_id
+                      from public.finding_confirmation
+                     where tenant_id = cast(? as uuid)
+                       and finding_id = cast(? as uuid)
+                       and stage = ?
+                    """, tenantId, findingId, stage);
+            UUID actorMemberId = row == null ? null : row.get("actor_member_id", UUID.class);
+            return Optional.ofNullable(actorMemberId);
         }
 
         @Override

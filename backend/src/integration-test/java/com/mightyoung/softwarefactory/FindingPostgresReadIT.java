@@ -14,7 +14,6 @@ import com.mightyoung.softwarefactory.dualprevention.finding.JooqFindingReposito
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipal;
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipalTestFixture;
-import org.flywaydb.core.Flyway;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
@@ -53,8 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FindingPostgresReadIT {
 
-    private static final String EXPECTED_DATABASE = "might_software_factory_test";
-    private static final String MIGRATION_HISTORY_TABLE = "flyway_schema_history_app";
+    private static final String EXPECTED_DATABASE = "might_software_factory_pg18_test";
     private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID MEMBER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
     private static final Pattern SAFE_ROLE_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,62}");
@@ -74,12 +72,12 @@ class FindingPostgresReadIT {
     @Test
     void lowPrivilegeConnectionReadsOnlyItsTenantAndRlsHidesOtherTenantRows() throws Exception {
         LanPostgresCompatibilityIT.DatabaseTarget target =
-                LanPostgresCompatibilityIT.DatabaseTarget.forAppRole(System.getenv());
+                LanPostgresCompatibilityIT.DatabaseTarget.preflightFromEnvironment(System.getenv());
         assertThat(target.databaseName()).isEqualTo(EXPECTED_DATABASE);
         appRole = required("LAN_PG_APP_USERNAME");
         assertThat(SAFE_ROLE_NAME.matcher(appRole).matches()).isTrue();
 
-        applyFindingMigrationAndReadGrant(target.jdbcUrl(), appRole);
+        verifyFindingMigrationAndReadGrant(target.jdbcUrl(), appRole);
         applicationDataSource = createApplicationDataSource(target.jdbcUrl(), appRole,
                 required("LAN_PG_APP_PASSWORD"));
         verifyApplicationRoleBoundary(applicationDataSource, appRole);
@@ -120,92 +118,35 @@ class FindingPostgresReadIT {
         assertSyntheticFindingsRemoved(target.jdbcUrl(), tenantA, tenantB, findingA, findingB);
     }
 
-    private static void applyFindingMigrationAndReadGrant(String jdbcUrl, String applicationRole) throws Exception {
+    private static void verifyFindingMigrationAndReadGrant(String jdbcUrl, String applicationRole) throws Exception {
         String migrationUser = required("LAN_PG_USERNAME");
         String migrationPassword = required("LAN_PG_PASSWORD");
-        assertSafeMigrationState(jdbcUrl, migrationUser);
-        Flyway.configure()
-                .dataSource(jdbcUrl, migrationUser, migrationPassword)
-                .locations("classpath:db/migration")
-                .schemas("public")
-                .defaultSchema("public")
-                .table(MIGRATION_HISTORY_TABLE)
-                // The dedicated app history is new, while this DB already has separately tracked
-                // P0 and Spring Session objects in public; record that pre-existing baseline at V1.
-                .baselineOnMigrate(true)
-                .baselineVersion("1")
-                .baselineDescription("Existing software factory schema")
-                .cleanDisabled(true)
-                .load()
-                .migrate();
-
-        try (Connection connection = managementConnection(jdbcUrl);
-                Statement statement = connection.createStatement()) {
-            statement.execute("GRANT SELECT ON TABLE public.finding TO \"" + applicationRole + "\"");
-        }
-
-        try (Connection connection = managementConnection(jdbcUrl);
-                PreparedStatement query = connection.prepareStatement("""
-                        select current_database(), has_schema_privilege(?, 'public', 'USAGE'),
-                               has_table_privilege(?, 'public.finding', 'SELECT'),
-                               has_table_privilege(?, 'public.finding', 'INSERT'),
-                               has_table_privilege(?, 'public.finding', 'UPDATE'),
-                               has_table_privilege(?, 'public.finding', 'DELETE'),
-                               exists(select 1 from public.flyway_schema_history_app
-                                      where version = '2' and success)
-                        """)) {
-            query.setString(1, applicationRole);
-            query.setString(2, applicationRole);
-            query.setString(3, applicationRole);
-            query.setString(4, applicationRole);
-            query.setString(5, applicationRole);
-            try (ResultSet result = query.executeQuery()) {
-                assertThat(result.next()).isTrue();
-                assertThat(result.getString(1)).isEqualTo(EXPECTED_DATABASE);
-                assertThat(result.getBoolean(2)).isTrue();
-                assertThat(result.getBoolean(3)).isTrue();
-                assertThat(result.getBoolean(4)).isFalse();
-                assertThat(result.getBoolean(5)).isFalse();
-                assertThat(result.getBoolean(6)).isFalse();
-                assertThat(result.getBoolean(7)).isTrue();
-            }
-        }
-    }
-
-    private static void assertSafeMigrationState(String jdbcUrl, String expectedManagementUser) throws Exception {
-        boolean findingExists;
-        boolean historyExists;
-        try (Connection connection = managementConnection(jdbcUrl);
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, migrationUser, migrationPassword);
                 PreparedStatement query = connection.prepareStatement("""
                         select current_database(), current_user,
                                (select rolsuper from pg_roles where rolname = current_user),
                                to_regclass('public.finding') is not null,
-                               to_regclass('public.flyway_schema_history_app') is not null
+                               to_regclass('public.flyway_schema_history_app') is not null,
+                               exists(select 1 from public.flyway_schema_history_app
+                                      where version = '2' and success),
+                               has_table_privilege(?, 'public.finding', 'SELECT'),
+                               has_table_privilege(current_user, 'public.finding', 'INSERT'),
+                               has_table_privilege(current_user, 'public.finding', 'DELETE')
                         """)) {
+            query.setString(1, applicationRole);
             try (ResultSet result = query.executeQuery()) {
                 assertThat(result.next()).isTrue();
                 assertThat(result.getString(1)).isEqualTo(EXPECTED_DATABASE);
-                assertThat(result.getString(2)).isEqualTo(expectedManagementUser);
-                assertThat(result.getBoolean(3)).isTrue();
-                findingExists = result.getBoolean(4);
-                historyExists = result.getBoolean(5);
+                assertThat(result.getString(2)).isEqualTo(migrationUser);
+                assertThat(result.getBoolean(3)).isFalse();
+                assertThat(result.getBoolean(4)).isTrue();
+                assertThat(result.getBoolean(5)).isTrue();
+                assertThat(result.getBoolean(6)).isTrue();
+                assertThat(result.getBoolean(7)).isTrue();
+                assertThat(result.getBoolean(8)).isTrue();
+                assertThat(result.getBoolean(9)).isTrue();
             }
         }
-        assertThat(findingExists == historyExists).as(
-                "finding and its separate migration history must either both exist or both be absent").isTrue();
-        boolean migrationRecorded = false;
-        if (historyExists) {
-            try (Connection connection = managementConnection(jdbcUrl);
-                    PreparedStatement query = connection.prepareStatement(
-                            "select exists(select 1 from public.flyway_schema_history_app where version = '2' and success)")) {
-                try (ResultSet result = query.executeQuery()) {
-                    assertThat(result.next()).isTrue();
-                    migrationRecorded = result.getBoolean(1);
-                }
-            }
-        }
-        assertThat(findingExists == migrationRecorded).as(
-                "an existing finding table must have the successful version-2 migration record").isTrue();
     }
 
     private static HikariDataSource createApplicationDataSource(String url, String username, String password) {
@@ -223,30 +164,34 @@ class FindingPostgresReadIT {
         try (Connection connection = dataSource.getConnection(); Statement query = connection.createStatement();
                 ResultSet result = query.executeQuery("""
                         select current_database(), current_user, session_user,
-                               r.rolsuper, r.rolbypassrls,
+                               pg_get_userbyid(d.datdba), pg_get_userbyid(n.nspowner),
+                               r.rolsuper, r.rolbypassrls, r.rolcreatedb, r.rolcreaterole,
+                               r.rolreplication, r.rolinherit,
                                has_database_privilege(current_user, current_database(), 'CONNECT'),
                                has_schema_privilege(current_user, 'public', 'USAGE'),
+                               has_schema_privilege(current_user, 'public', 'CREATE'),
+                               exists(select 1 from pg_auth_members where member = r.oid),
                                has_table_privilege(current_user, 'public.finding', 'SELECT'),
-                               has_table_privilege(current_user, 'public.finding', 'INSERT'),
-                               has_table_privilege(current_user, 'public.finding', 'UPDATE'),
-                               has_table_privilege(current_user, 'public.finding', 'DELETE'),
                                pg_get_userbyid(c.relowner)
-                          from pg_roles r cross join pg_class c
-                         where r.rolname = current_user and c.oid = to_regclass('public.finding')
+                          from pg_roles r
+                          join pg_database d on d.datname = current_database()
+                          join pg_namespace n on n.nspname = 'public'
+                          join pg_class c on c.oid = to_regclass('public.finding')
+                         where r.rolname = current_user
                         """)) {
             assertThat(result.next()).isTrue();
             assertThat(result.getString(1)).isEqualTo(EXPECTED_DATABASE);
             assertThat(result.getString(2)).isEqualTo(expectedRole);
             assertThat(result.getString(3)).isEqualTo(expectedRole);
-            assertThat(result.getBoolean(4)).isFalse();
-            assertThat(result.getBoolean(5)).isFalse();
-            assertThat(result.getBoolean(6)).isTrue();
-            assertThat(result.getBoolean(7)).isTrue();
-            assertThat(result.getBoolean(8)).isTrue();
-            assertThat(result.getBoolean(9)).isFalse();
-            assertThat(result.getBoolean(10)).isFalse();
-            assertThat(result.getBoolean(11)).isFalse();
-            assertThat(result.getString(12)).isNotEqualTo(expectedRole);
+            assertThat(result.getString(4)).isNotEqualTo(expectedRole);
+            assertThat(result.getString(5)).isNotEqualTo(expectedRole);
+            for (int privilege : List.of(6, 7, 8, 9, 10, 11)) assertThat(result.getBoolean(privilege)).isFalse();
+            assertThat(result.getBoolean(12)).isTrue();
+            assertThat(result.getBoolean(13)).isTrue();
+            assertThat(result.getBoolean(14)).isFalse();
+            assertThat(result.getBoolean(15)).isFalse();
+            assertThat(result.getBoolean(16)).isTrue();
+            assertThat(result.getString(17)).isNotEqualTo(expectedRole);
         }
     }
 
@@ -279,10 +224,30 @@ class FindingPostgresReadIT {
                             grade, state, round_no, version, created_by_member_id, updated_by_member_id
                         ) values (?, ?, ?, ?, ?, ?, 'GENERAL', 'DISCOVERED', 1, 1, ?, ?)
                         """)) {
-            insertSyntheticFinding(insert, tenantA, findingA, organizationA, "FINDING-IT-A");
-            insert.executeUpdate();
-            insertSyntheticFinding(insert, tenantB, findingB, organizationB, "FINDING-IT-B");
-            insert.executeUpdate();
+            connection.setAutoCommit(false);
+            try {
+                setTenantContext(connection, tenantA);
+                insertSyntheticFinding(insert, tenantA, findingA, organizationA, "FINDING-IT-A");
+                assertThat(insert.executeUpdate()).isEqualTo(1);
+                setTenantContext(connection, tenantB);
+                insertSyntheticFinding(insert, tenantB, findingB, organizationB, "FINDING-IT-B");
+                assertThat(insert.executeUpdate()).isEqualTo(1);
+                connection.commit();
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
+        }
+    }
+
+    private static void setTenantContext(Connection connection, UUID tenantId) throws Exception {
+        try (PreparedStatement setTenant = connection.prepareStatement(
+                "select set_config('app.tenant_id', ?, true)")) {
+            setTenant.setString(1, tenantId.toString());
+            try (ResultSet result = setTenant.executeQuery()) {
+                assertThat(result.next()).isTrue();
+                assertThat(result.getString(1)).isEqualTo(tenantId.toString());
+            }
         }
     }
 
@@ -310,10 +275,7 @@ class FindingPostgresReadIT {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             int backendPid = queryBackendPid(connection);
-            try (PreparedStatement setTenant = connection.prepareStatement("select set_config('app.tenant_id', ?, true)")) {
-                setTenant.setString(1, currentTenant.toString());
-                setTenant.execute();
-            }
+            setTenantContext(connection, currentTenant);
             try (PreparedStatement query = connection.prepareStatement(
                     "select count(*) from public.finding where tenant_id = ? and id = ?")) {
                 query.setObject(1, otherTenant);
@@ -358,12 +320,22 @@ class FindingPostgresReadIT {
             UUID findingA, UUID findingB) throws Exception {
         try (Connection connection = managementConnection(jdbcUrl);
                 PreparedStatement delete = connection.prepareStatement(
-                        "delete from public.finding where (tenant_id = ? and id = ?) or (tenant_id = ? and id = ?)")) {
-            delete.setObject(1, tenantA);
-            delete.setObject(2, findingA);
-            delete.setObject(3, tenantB);
-            delete.setObject(4, findingB);
-            delete.executeUpdate();
+                        "delete from public.finding where tenant_id = ? and id = ?")) {
+            connection.setAutoCommit(false);
+            try {
+                setTenantContext(connection, tenantA);
+                delete.setObject(1, tenantA);
+                delete.setObject(2, findingA);
+                assertThat(delete.executeUpdate()).isBetween(0, 1);
+                setTenantContext(connection, tenantB);
+                delete.setObject(1, tenantB);
+                delete.setObject(2, findingB);
+                assertThat(delete.executeUpdate()).isBetween(0, 1);
+                connection.commit();
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
         }
     }
 
@@ -371,15 +343,23 @@ class FindingPostgresReadIT {
             UUID findingA, UUID findingB) throws Exception {
         try (Connection connection = managementConnection(jdbcUrl);
                 PreparedStatement query = connection.prepareStatement(
-                        "select count(*) from public.finding where (tenant_id = ? and id = ?) or (tenant_id = ? and id = ?)")) {
+                        "select count(*) from public.finding where tenant_id = ? and id = ?")) {
+            connection.setAutoCommit(false);
+            setTenantContext(connection, tenantA);
             query.setObject(1, tenantA);
             query.setObject(2, findingA);
-            query.setObject(3, tenantB);
-            query.setObject(4, findingB);
             try (ResultSet result = query.executeQuery()) {
                 assertThat(result.next()).isTrue();
                 assertThat(result.getLong(1)).isZero();
             }
+            setTenantContext(connection, tenantB);
+            query.setObject(1, tenantB);
+            query.setObject(2, findingB);
+            try (ResultSet result = query.executeQuery()) {
+                assertThat(result.next()).isTrue();
+                assertThat(result.getLong(1)).isZero();
+            }
+            connection.rollback();
         }
     }
 

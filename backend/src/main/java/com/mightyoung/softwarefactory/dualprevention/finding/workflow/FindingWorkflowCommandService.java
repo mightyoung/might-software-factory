@@ -21,10 +21,13 @@ import com.mightyoung.softwarefactory.workflow.WorkflowFacade;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +56,7 @@ public final class FindingWorkflowCommandService {
     private final FindingWorkflowEvidencePolicy evidencePolicy;
     private final WorkflowFacade workflowFacade;
     private final FindingWorkflowEventPublisher eventPublisher;
+    private final Clock clock;
 
     public FindingWorkflowCommandService(
             SessionContextResolver sessionContextResolver,
@@ -61,7 +65,8 @@ public final class FindingWorkflowCommandService {
             FindingWorkflowAssignmentResolver assignmentResolver,
             FindingWorkflowEvidencePolicy evidencePolicy,
             WorkflowFacade workflowFacade,
-            FindingWorkflowEventPublisher eventPublisher) {
+            FindingWorkflowEventPublisher eventPublisher,
+            Clock clock) {
         this.sessionContextResolver = Objects.requireNonNull(sessionContextResolver, "sessionContextResolver");
         this.repository = Objects.requireNonNull(repository, "repository");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
@@ -69,14 +74,16 @@ public final class FindingWorkflowCommandService {
         this.evidencePolicy = Objects.requireNonNull(evidencePolicy, "evidencePolicy");
         this.workflowFacade = Objects.requireNonNull(workflowFacade, "workflowFacade");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public CommandResult create(UUID commandId, CreateFinding request) {
         Objects.requireNonNull(commandId, "commandId");
         Objects.requireNonNull(request, "request");
         CurrentTenantContext context = sessionContextResolver.currentTenant();
+        LocalDate businessDay = LocalDate.now(clock.withZone(ZoneId.of("Asia/Shanghai")));
         WorkflowCommand command = command(commandId, context, CREATE,
-                request.organizationId(), request.code(), request.description(), request.discoveredAt(),
+                request.organizationId(), request.description(), request.discoveredAt(),
                 request.sourceEventId(), request.riskId(), request.grade());
 
         return repository.inTenantTransaction(context.tenantId(), tx -> {
@@ -85,10 +92,11 @@ public final class FindingWorkflowCommandService {
             if (!claim.acquired()) return claim.replay();
 
             InitialRoute route = assignmentResolver.resolve(context.tenantId(), request.organizationId());
-            requireRouteMembers(context, route, request.organizationId());
+            requireRouteMembers(context, route, request.organizationId(), context.memberId());
+            String code = tx.nextFindingCode(businessDay);
             UUID findingId = UUID.randomUUID();
             FindingWorkflowCase finding = FindingWorkflowCase.create(
-                    context.tenantId(), findingId, request.organizationId(), request.code(), request.description(),
+                    context.tenantId(), findingId, request.organizationId(), code, request.description(),
                     request.discoveredAt(), request.sourceEventId(), request.riskId(), request.grade(),
                     context.memberId());
             tx.insertFinding(finding);
@@ -121,7 +129,7 @@ public final class FindingWorkflowCommandService {
             requireExpectedVersion(current, expectedVersion);
 
             InitialRoute route = assignmentResolver.resolve(context.tenantId(), current.organizationId());
-            requireRouteMembers(context, route, current.organizationId());
+            requireRouteMembers(context, route, current.organizationId(), current.createdByMemberId());
             FindingWorkflowCase updated = current.initializeDiscoveredWorkflow(context.memberId(), expectedVersion);
             tx.updateFinding(updated, current.version());
             workflowFacade.startProcess(context.tenantId(), BUSINESS_TYPE, findingId, 1,
@@ -283,6 +291,19 @@ public final class FindingWorkflowCommandService {
         return repository.inTenantTransaction(context.tenantId(), tx -> {
             FindingWorkflowCase current = visibleForCommand(tx, findingId);
             accessPolicy.requireAction(context, permission, current.organizationId());
+            if (context.memberId().equals(current.createdByMemberId())) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "The finding reporter cannot confirm their own finding");
+            }
+            if ("SAFETY".equals(stage)) {
+                UUID personConfirmer = tx.findConfirmationActorMemberId(findingId, "PERSON")
+                        .orElseThrow(() -> new FindingWorkflowConfigurationException(
+                                "A person confirmation is required before safety confirmation"));
+                if (context.memberId().equals(personConfirmer)) {
+                    throw new org.springframework.security.access.AccessDeniedException(
+                            "The safety confirmer must be different from the person confirmer");
+                }
+            }
             WorkflowCommand command = command(commandId, context, permission, findingId, expectedVersion);
             CommandClaim claim = tx.claimCommand(command);
             if (!claim.acquired()) return claim.replay();
@@ -303,7 +324,17 @@ public final class FindingWorkflowCommandService {
         });
     }
 
-    private void requireRouteMembers(CurrentTenantContext context, InitialRoute route, UUID organizationId) {
+    private void requireRouteMembers(
+            CurrentTenantContext context, InitialRoute route, UUID organizationId, UUID reporterMemberId) {
+        if (route.personConfirmerMemberId().equals(route.safetyConfirmerMemberId())) {
+            throw new FindingWorkflowConfigurationException(
+                    "Person and safety confirmation require different members");
+        }
+        if (route.personConfirmerMemberId().equals(reporterMemberId)
+                || route.safetyConfirmerMemberId().equals(reporterMemberId)) {
+            throw new FindingWorkflowConfigurationException(
+                    "Neither confirmation member may be the finding reporter");
+        }
         accessPolicy.requireAssignableMember(context, route.personConfirmerMemberId(), organizationId, PERSON_CONFIRM);
         accessPolicy.requireAssignableMember(context, route.safetyConfirmerMemberId(), organizationId, SAFETY_CONFIRM);
         accessPolicy.requireAssignableMember(context, route.safetyDispatcherMemberId(), organizationId, DISPATCH);

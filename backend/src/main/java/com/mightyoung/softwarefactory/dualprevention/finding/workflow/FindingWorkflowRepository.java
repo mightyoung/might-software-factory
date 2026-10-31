@@ -10,6 +10,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.WorkflowCommand;
 
 import java.util.Optional;
+import java.time.LocalDate;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -23,6 +24,8 @@ public interface FindingWorkflowRepository {
 
         void insertFinding(FindingWorkflowCase finding);
 
+        String nextFindingCode(LocalDate businessDay);
+
         void updateFinding(FindingWorkflowCase finding, long expectedVersion);
 
         CommandClaim claimCommand(WorkflowCommand command);
@@ -32,6 +35,8 @@ public interface FindingWorkflowRepository {
         void appendTransition(Transition transition);
 
         void appendConfirmation(Confirmation confirmation);
+
+        Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage);
 
         void openRound(UUID findingId, int roundNo, UUID commandId);
 

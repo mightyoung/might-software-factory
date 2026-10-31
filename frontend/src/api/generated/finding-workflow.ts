@@ -17,7 +17,7 @@ export interface paths {
         put?: never;
         /**
          * Create a finding and start its required confirmation workflow
-         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
+         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code.
          */
         post: operations["createFinding"];
         delete?: never;
@@ -164,10 +164,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code. */
         CreateFindingRequest: {
             /** Format: uuid */
             organizationId: string;
-            code: string;
             description: string;
             /** Format: date-time */
             discoveredAt: string;
@@ -175,12 +175,17 @@ export interface components {
             sourceEventId?: string;
             /** Format: uuid */
             riskId?: string;
-            /** @enum {string} */
-            grade: "UNKNOWN" | "GENERAL" | "MAJOR";
+            /**
+             * @description The reporter cannot assign a professional finding grade.
+             * @enum {string}
+             */
+            grade: "UNKNOWN";
         };
+        /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         VersionedCommandRequest: {
             expectedVersion: number;
         };
+        /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         DispatchRequest: {
             expectedVersion: number;
             /** Format: uuid */
@@ -189,12 +194,14 @@ export interface components {
             dueAt: string;
             requirements: string;
         };
+        /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         RemediationSubmissionRequest: {
             expectedVersion: number;
             /** Format: uuid */
             evidenceSetId: string;
             statement: string;
         };
+        /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         VerificationRequest: {
             expectedVersion: number;
             /** @enum {string} */
@@ -206,6 +213,7 @@ export interface components {
             data: {
                 /** Format: uuid */
                 findingId: string;
+                code: string;
                 /** @enum {string} */
                 state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "CLOSED";
                 roundNo: number;
@@ -213,7 +221,9 @@ export interface components {
             };
         };
         FieldError: {
+            /** @description JSON request field path using the request's property names, such as description or items[0].name. */
             field: string;
+            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, or Size; never validation prose or a rejected value. */
             reason: string;
         };
         ErrorResponse: {
@@ -239,7 +249,7 @@ export interface components {
                 "application/json": components["schemas"]["CommandResponse"];
             };
         };
-        /** @description Invalid body, version, identifier, or idempotency key. */
+        /** @description Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request binding failures return INVALID_QUERY with an empty fieldErrors array. Unsupported create fields also return INVALID_QUERY; lifecycle command DTOs currently ignore unknown properties for compatibility. */
         InvalidRequest: {
             headers: {
                 [name: string]: unknown;
@@ -275,8 +285,17 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Expected version is stale or idempotency key conflicts with a prior command. */
+        /** @description A lifecycle command can fail because the expected version is stale, the idempotency key was reused for a different command, or the workflow task state changed. Use code to distinguish VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, and the compatible generic COMMAND_CONFLICT. */
         CommandConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The idempotency key was reused for a different command. */
+        IdempotencyConflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -350,7 +369,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["ActionDenied"];
             404: components["responses"]["NotVisible"];
-            409: components["responses"]["CommandConflict"];
+            409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["WorkflowRule"];
             503: components["responses"]["DependencyUnavailable"];
         };

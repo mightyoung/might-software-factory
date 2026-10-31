@@ -63,6 +63,122 @@ class FindingWorkflowContractTest {
     }
 
     @Test
+    void createContractUsesServerNumberingAndPreventsReporterRiskGrading() throws Exception {
+        Map<String, Object> document = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));
+        Map<String, Object> components = (Map<String, Object>) document.get("components");
+        Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
+        Map<String, Object> createRequest = (Map<String, Object>) schemas.get("CreateFindingRequest");
+        Map<String, Object> createProperties = (Map<String, Object>) createRequest.get("properties");
+
+        assertThat((List<String>) createRequest.get("required"))
+                .contains("organizationId", "description", "discoveredAt", "grade")
+                .doesNotContain("code");
+        assertThat(createProperties).doesNotContainKey("code");
+        assertThat((Map<String, Object>) createProperties.get("grade"))
+                .containsEntry("enum", List.of("UNKNOWN"));
+
+        Map<String, Object> response = (Map<String, Object>) schemas.get("CommandResponse");
+        Map<String, Object> responseProperties = (Map<String, Object>) response.get("properties");
+        Map<String, Object> data = (Map<String, Object>) responseProperties.get("data");
+        assertThat((List<String>) data.get("required")).contains("code");
+        assertThat((Map<String, Object>) data.get("properties")).containsKey("code");
+    }
+
+    @Test
+    void errorContractDistinguishesConflictsAndDefinesSafeFieldErrorCodes() throws Exception {
+        Map<String, Object> workflow = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));
+        Map<String, Object> workflowComponents = (Map<String, Object>) workflow.get("components");
+        Map<String, Object> workflowResponses = (Map<String, Object>) workflowComponents.get("responses");
+        Map<String, Object> paths = (Map<String, Object>) workflow.get("paths");
+        Map<String, Object> createPost = (Map<String, Object>) ((Map<String, Object>) paths
+                .get("/api/v1/findings")).get("post");
+        Map<String, Object> createResponses = (Map<String, Object>) createPost.get("responses");
+        assertThat((Map<String, Object>) createResponses.get("409"))
+                .containsEntry("$ref", "#/components/responses/IdempotencyConflict");
+
+        Map<String, Object> personConfirmPost = (Map<String, Object>) ((Map<String, Object>) paths
+                .get("/api/v1/findings/{id}/confirm/person")).get("post");
+        Map<String, Object> personConfirmResponses = (Map<String, Object>) personConfirmPost.get("responses");
+        assertThat((Map<String, Object>) personConfirmResponses.get("409"))
+                .containsEntry("$ref", "#/components/responses/CommandConflict");
+
+        Map<String, Object> commandConflict = (Map<String, Object>) workflowResponses.get("CommandConflict");
+        Map<String, Object> conflictContent = (Map<String, Object>) commandConflict.get("content");
+        Map<String, Object> conflictJson = (Map<String, Object>) conflictContent.get("application/json");
+        Map<String, Object> conflictExamples = (Map<String, Object>) conflictJson.get("examples");
+        assertThat(conflictExamples.keySet()).containsExactlyInAnyOrder(
+                "versionConflict", "idempotencyConflict", "workflowStateConflict");
+        assertThat(errorExampleCode(conflictExamples, "versionConflict")).isEqualTo("VERSION_CONFLICT");
+        assertThat(errorExampleCode(conflictExamples, "idempotencyConflict")).isEqualTo("IDEMPOTENCY_CONFLICT");
+        assertThat(errorExampleCode(conflictExamples, "workflowStateConflict")).isEqualTo("COMMAND_CONFLICT");
+
+        Map<String, Object> invalidRequest = (Map<String, Object>) workflowResponses.get("InvalidRequest");
+        Map<String, Object> invalidContent = (Map<String, Object>) invalidRequest.get("content");
+        Map<String, Object> invalidJson = (Map<String, Object>) invalidContent.get("application/json");
+        Map<String, Object> invalidExamples = (Map<String, Object>) invalidJson.get("examples");
+        assertThat(invalidExamples.keySet()).containsExactlyInAnyOrder(
+                "fieldValidation", "malformedJsonOrBinding", "unsupportedCreateField");
+        Map<String, Object> fieldErrorExample = (Map<String, Object>) ((Map<String, Object>) invalidExamples
+                .get("fieldValidation")).get("value");
+        assertThat(fieldErrorExample.get("code")).isEqualTo("INVALID_REQUEST");
+        assertThat((List<Map<String, Object>>) fieldErrorExample.get("fieldErrors"))
+                .containsExactly(Map.of("field", "description", "reason", "Size"));
+        for (String genericBadRequest : List.of("malformedJsonOrBinding", "unsupportedCreateField")) {
+            Map<String, Object> example = (Map<String, Object>) ((Map<String, Object>) invalidExamples
+                    .get(genericBadRequest)).get("value");
+            assertThat(example.get("code")).isEqualTo("INVALID_QUERY");
+            assertThat(example.get("fieldErrors")).isEqualTo(List.of());
+        }
+
+        Map<String, Object> workflowSchemas = (Map<String, Object>) workflowComponents.get("schemas");
+        Map<String, Object> createSchema = (Map<String, Object>) workflowSchemas.get("CreateFindingRequest");
+        assertThat(createSchema.get("additionalProperties")).isEqualTo(false);
+        assertThat(createSchema.get("description").toString())
+                .contains("rejects unknown properties at runtime");
+        for (String lifecycleRequest : List.of("VersionedCommandRequest", "DispatchRequest",
+                "RemediationSubmissionRequest", "VerificationRequest")) {
+            Map<String, Object> lifecycleSchema = (Map<String, Object>) workflowSchemas.get(lifecycleRequest);
+            assertThat(lifecycleSchema.get("additionalProperties")).isEqualTo(false);
+            assertThat(lifecycleSchema.get("description").toString())
+                    .contains("current runtime ignores unknown properties on lifecycle commands")
+                    .contains("additionalProperties false describes the client contract");
+        }
+
+        Map<String, Object> shared = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "entity-query.yaml")));
+        Map<String, Object> sharedComponents = (Map<String, Object>) shared.get("components");
+        Map<String, Object> sharedSchemas = (Map<String, Object>) sharedComponents.get("schemas");
+        Map<String, Object> fieldError = (Map<String, Object>) sharedSchemas.get("FieldError");
+        Map<String, Object> fieldErrorProperties = (Map<String, Object>) fieldError.get("properties");
+        assertThat(((Map<String, Object>) fieldErrorProperties.get("field")).get("description").toString())
+                .contains("JSON request field path");
+        assertThat(((Map<String, Object>) fieldErrorProperties.get("reason")).get("description").toString())
+                .contains("Stable machine-readable validation code")
+                .contains("never validation prose or a rejected value");
+    }
+
+    private static String errorExampleCode(Map<String, Object> examples, String key) {
+        Map<String, Object> example = (Map<String, Object>) examples.get(key);
+        Map<String, Object> value = (Map<String, Object>) example.get("value");
+        return value.get("code").toString();
+    }
+
+    @Test
+    void findingNumberMigrationCreatesTheRlsIsolatedTenantSequence() throws Exception {
+        String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
+                "V7__finding_business_number_sequence.sql"));
+        assertThat(migration).contains(
+                "create table public.finding_number_sequence",
+                "primary key (tenant_id, business_day)",
+                "enable row level security",
+                "force row level security",
+                "current_setting('app.tenant_id', true)")
+                .doesNotContain("grant select", "grant insert", "grant update", "grant all");
+    }
+
+    @Test
     void newMigrationAddsTenantIsolatedAppendOnlyWorkflowRecordsWithoutChangingV2() throws Exception {
         String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
                 "V5__finding_workflow_commands.sql"));

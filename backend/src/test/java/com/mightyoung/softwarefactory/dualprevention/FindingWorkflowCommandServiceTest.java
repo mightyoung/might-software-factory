@@ -29,6 +29,10 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.OffsetDateTime;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -66,8 +70,7 @@ class FindingWorkflowCommandServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new FindingWorkflowCommandService(new SessionContextResolver(), repository,
-                accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add);
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
         asMember(CREATOR, TENANT_A);
     }
 
@@ -174,15 +177,78 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CommandResult replay = service.create(key, request);
 
         assertThat(replay).isEqualTo(first);
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
         assertThat(repository.findingCount()).isEqualTo(1);
         assertThat(workflow.startedProcesses).hasSize(1);
         assertThat(publishedEvents).hasSize(1);
 
         FindingWorkflowContracts.CreateFinding different = new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "FND-TEST-02", "Changed request", DISCOVERED_AT, null, null, "GENERAL");
+                ORGANIZATION_ID, "Changed request", DISCOVERED_AT, null, null, "UNKNOWN");
         assertThatThrownBy(() -> service.create(key, different))
                 .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
         assertThat(repository.findingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void differentFindingsUseTheNextTenantBusinessDaySequence() {
+        FindingWorkflowContracts.CommandResult first = service.create(
+                command("60000000-0000-0000-0000-000000000013"), newFinding());
+        FindingWorkflowContracts.CommandResult second = service.create(
+                command("60000000-0000-0000-0000-000000000014"), newFinding());
+
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
+        assertThat(second.code()).isEqualTo("YH-20261031-0002");
+    }
+
+    @Test
+    void findingNumberSequencesAreIsolatedByTenantForTheSameBusinessDay() {
+        FindingWorkflowContracts.CommandResult tenantA = service.create(
+                command("60000000-0000-0000-0000-000000000019"), newFinding());
+
+        accessPolicy.permittedTenants.add(TENANT_B);
+        asMember(CREATOR, TENANT_B);
+        FindingWorkflowContracts.CommandResult tenantB = service.create(
+                command("60000000-0000-0000-0000-000000000020"), newFinding());
+
+        assertThat(tenantA.code()).isEqualTo("YH-20261031-0001");
+        assertThat(tenantB.code()).isEqualTo("YH-20261031-0001");
+        assertThat(repository.numberSequences)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 1L)
+                .containsEntry(new SequenceKey(TENANT_B, LocalDate.of(2026, 10, 31)), 1L);
+    }
+
+    @Test
+    void sequenceExpandsPastFourDigitsWithoutTruncatingTheBusinessNumber() {
+        repository.numberSequences.put(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 9_998L);
+
+        FindingWorkflowContracts.CommandResult lastFourDigit = service.create(
+                command("60000000-0000-0000-0000-000000000015"), newFinding());
+        FindingWorkflowContracts.CommandResult firstFiveDigit = service.create(
+                command("60000000-0000-0000-0000-000000000016"), newFinding());
+
+        assertThat(lastFourDigit.code()).isEqualTo("YH-20261031-9999");
+        assertThat(firstFiveDigit.code()).isEqualTo("YH-20261031-10000");
+        assertThat(firstFiveDigit.code()).hasSizeLessThanOrEqualTo(64);
+    }
+
+    @Test
+    void retryingTheSameKeyAfterShanghaiMidnightReplaysTheOriginalCode() {
+        UUID key = command("60000000-0000-0000-0000-000000000017");
+        FindingWorkflowContracts.CreateFinding request = newFinding();
+        FindingWorkflowContracts.CommandResult first = service.create(key, request);
+
+        FindingWorkflowCommandService nextShanghaiDay =
+                serviceAt(Instant.parse("2026-10-31T16:00:00Z"));
+        FindingWorkflowContracts.CommandResult crossDayReplay = nextShanghaiDay.create(key, request);
+        FindingWorkflowContracts.CommandResult nextDayCreate = nextShanghaiDay.create(
+                command("60000000-0000-0000-0000-000000000018"), request);
+
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
+        assertThat(crossDayReplay).isEqualTo(first);
+        assertThat(nextDayCreate.code()).isEqualTo("YH-20261101-0001");
+        assertThat(repository.numberSequences)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 1L)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 11, 1)), 1L);
     }
 
     @Test
@@ -196,6 +262,138 @@ class FindingWorkflowCommandServiceTest {
         assertThat(repository.findingCount()).isZero();
         assertThat(workflow.startedProcesses).isEmpty();
         assertThat(repository.transitions).isEmpty();
+    }
+
+    @Test
+    void creationBlocksTheSameMemberAssignedToBothConfirmationStages() {
+        assignmentResolver.route = new FindingWorkflowContracts.InitialRoute(
+                PERSON_CONFIRMER, PERSON_CONFIRMER, SAFETY_MEMBER, SAFETY_MEMBER);
+
+        assertThatThrownBy(() -> service.create(
+                command("60000000-0000-0000-0000-000000000061"), newFinding()))
+                .isInstanceOf(FindingWorkflowConfigurationException.class);
+
+        assertThat(repository.findingCount()).isZero();
+        assertThat(repository.transitions).isEmpty();
+        assertThat(workflow.startedProcesses).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+    }
+
+    @Test
+    void creationBlocksTheReporterAssignedToEitherConfirmationStage() {
+        List<FindingWorkflowContracts.InitialRoute> invalidRoutes = List.of(
+                new FindingWorkflowContracts.InitialRoute(CREATOR, SAFETY_MEMBER, SAFETY_MEMBER, SAFETY_MEMBER),
+                new FindingWorkflowContracts.InitialRoute(PERSON_CONFIRMER, CREATOR, SAFETY_MEMBER, SAFETY_MEMBER));
+
+        for (FindingWorkflowContracts.InitialRoute route : invalidRoutes) {
+            assignmentResolver.route = route;
+
+            assertThatThrownBy(() -> service.create(
+                    command(UUID.randomUUID().toString()), newFinding()))
+                    .isInstanceOf(FindingWorkflowConfigurationException.class);
+
+            assertThat(repository.findingCount()).isZero();
+            assertThat(workflow.startedProcesses).isEmpty();
+        }
+        assertThat(repository.transitions).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+    }
+
+    @Test
+    void legacyDiscoveredInitializationBlocksDuplicateConfirmationAssignments() {
+        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000061");
+        repository.seed(new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID, "YH-20261031-0061",
+                "Legacy finding", DISCOVERED_AT, null, null, "UNKNOWN", FindingWorkflowState.DISCOVERED,
+                1, 1, CREATOR, CREATOR));
+        assignmentResolver.route = new FindingWorkflowContracts.InitialRoute(
+                PERSON_CONFIRMER, PERSON_CONFIRMER, SAFETY_MEMBER, SAFETY_MEMBER);
+
+        assertThatThrownBy(() -> service.initializeDiscoveredWorkflow(
+                command("60000000-0000-0000-0000-000000000070"), findingId, 1L))
+                .isInstanceOf(FindingWorkflowConfigurationException.class);
+
+        assertThat(repository.finding(TENANT_A, findingId).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.DISCOVERED);
+        assertThat(repository.transitions).isEmpty();
+        assertThat(workflow.startedProcesses).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+    }
+
+    @Test
+    void safetyConfirmationCannotSkipMissingPersonConfirmationHistory() {
+        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000062");
+        repository.seed(new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID, "YH-20261031-0062",
+                "Legacy safety-pending finding", DISCOVERED_AT, null, null, "UNKNOWN",
+                FindingWorkflowState.SAFETY_CONFIRM_PENDING, 1, 2, CREATOR, PERSON_CONFIRMER));
+        workflow.tasks.put(findingId, new MemoryWorkflowFacade.Task("safetyConfirm", SAFETY_MEMBER.toString()));
+        asMember(SAFETY_MEMBER, TENANT_A);
+
+        assertThatThrownBy(() -> service.confirmSafety(
+                command("60000000-0000-0000-0000-000000000071"), findingId, 2L))
+                .isInstanceOf(FindingWorkflowConfigurationException.class);
+
+        assertThat(repository.finding(TENANT_A, findingId).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.SAFETY_CONFIRM_PENDING);
+        assertThat(repository.transitions).isEmpty();
+        assertThat(repository.confirmations).isEmpty();
+        assertThat(workflow.completedTasks).isEmpty();
+    }
+
+    @Test
+    void reporterCannotConfirmTheirOwnFindingEvenWhenTheWorkflowTaskIsMisassigned() {
+        FindingWorkflowContracts.CommandResult created = service.create(
+                command("60000000-0000-0000-0000-000000000062"), newFinding());
+        workflow.assignCurrentTask(created.findingId(), CREATOR);
+        asMember(CREATOR, TENANT_A);
+
+        assertThatThrownBy(() -> service.confirmPerson(
+                command("60000000-0000-0000-0000-000000000063"), created.findingId(), 1L))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(repository.finding(TENANT_A, created.findingId()).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.PERSON_CONFIRM_PENDING);
+        assertThat(repository.transitions).hasSize(1);
+        assertThat(repository.confirmations).isEmpty();
+        assertThat(workflow.completedTasks).isEmpty();
+    }
+
+    @Test
+    void reporterCannotPerformSafetyConfirmationEvenWhenTheWorkflowTaskIsMisassigned() {
+        FindingWorkflowContracts.CommandResult created = service.create(
+                command("60000000-0000-0000-0000-000000000064"), newFinding());
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        service.confirmPerson(command("60000000-0000-0000-0000-000000000065"), created.findingId(), 1L);
+        workflow.assignCurrentTask(created.findingId(), CREATOR);
+        asMember(CREATOR, TENANT_A);
+
+        assertThatThrownBy(() -> service.confirmSafety(
+                command("60000000-0000-0000-0000-000000000066"), created.findingId(), 2L))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(repository.finding(TENANT_A, created.findingId()).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.SAFETY_CONFIRM_PENDING);
+        assertThat(repository.transitions).hasSize(2);
+        assertThat(repository.confirmations).hasSize(1);
+        assertThat(workflow.completedTasks).containsExactly("personConfirm");
+    }
+
+    @Test
+    void safetyConfirmationIsBlockedWhenItsActorAlreadyConfirmedAsPerson() {
+        FindingWorkflowContracts.CommandResult created = service.create(
+                command("60000000-0000-0000-0000-000000000067"), newFinding());
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        service.confirmPerson(command("60000000-0000-0000-0000-000000000068"), created.findingId(), 1L);
+        workflow.assignCurrentTask(created.findingId(), PERSON_CONFIRMER);
+
+        assertThatThrownBy(() -> service.confirmSafety(
+                command("60000000-0000-0000-0000-000000000069"), created.findingId(), 2L))
+                .isInstanceOf(AccessDeniedException.class);
+
+        assertThat(repository.finding(TENANT_A, created.findingId()).orElseThrow().state())
+                .isEqualTo(FindingWorkflowState.SAFETY_CONFIRM_PENDING);
+        assertThat(repository.transitions).hasSize(2);
+        assertThat(repository.confirmations).hasSize(1);
+        assertThat(workflow.completedTasks).containsExactly("personConfirm");
     }
 
     @Test
@@ -342,8 +540,14 @@ class FindingWorkflowCommandServiceTest {
 
     private static FindingWorkflowContracts.CreateFinding newFinding() {
         return new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "FND-TEST-01", "Synthetic defect", DISCOVERED_AT,
-                null, null, "GENERAL");
+                ORGANIZATION_ID, "Synthetic defect", DISCOVERED_AT,
+                null, null, "UNKNOWN");
+    }
+
+    private FindingWorkflowCommandService serviceAt(Instant instant) {
+        return new FindingWorkflowCommandService(new SessionContextResolver(), repository,
+                accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add,
+                Clock.fixed(instant, ZoneOffset.UTC));
     }
 
     private static UUID command(String value) {
@@ -358,11 +562,12 @@ class FindingWorkflowCommandServiceTest {
 
     private static final class MemoryAccessPolicy implements FindingWorkflowAccessPolicy {
         private boolean allowed = true;
+        private final Set<UUID> permittedTenants = new java.util.HashSet<>(Set.of(TENANT_A));
         private final Set<UUID> inactiveMembers = new java.util.HashSet<>();
 
         @Override
         public void requireAction(CurrentTenantContext context, String permissionCode, UUID organizationId) {
-            if (!allowed || !TENANT_A.equals(context.tenantId()) || organizationId == null) {
+            if (!allowed || !permittedTenants.contains(context.tenantId()) || organizationId == null) {
                 throw new AccessDeniedException("The current member is not authorized");
             }
         }
@@ -436,6 +641,12 @@ class FindingWorkflowCommandServiceTest {
         private final List<String> completedTasks = new ArrayList<>();
         private boolean failNextCompletion;
 
+        private void assignCurrentTask(UUID findingId, UUID memberId) {
+            Task current = tasks.get(findingId);
+            if (current == null) throw new IllegalStateException("No active synthetic workflow task");
+            tasks.put(findingId, new Task(current.key(), memberId.toString()));
+        }
+
         @Override
         public void startProcess(UUID tenantId, String businessType, UUID businessId, int businessRevision,
                                  String processDefinitionKey, Map<String, Object> variables) {
@@ -491,10 +702,12 @@ class FindingWorkflowCommandServiceTest {
         private Map<UUID, FindingWorkflowCase> findings = new HashMap<>();
         private Map<String, StoredCommand> commands = new HashMap<>();
         private List<FindingWorkflowContracts.Transition> transitions = new ArrayList<>();
+        private List<FindingWorkflowContracts.Confirmation> confirmations = new ArrayList<>();
         private List<FindingWorkflowContracts.Notice> notices = new ArrayList<>();
         private List<FindingWorkflowContracts.Submission> submissions = new ArrayList<>();
         private List<FindingWorkflowContracts.Verification> verifications = new ArrayList<>();
         private Map<String, String> rounds = new HashMap<>();
+        private Map<SequenceKey, Long> numberSequences = new HashMap<>();
 
         @Override
         public <T> T inTenantTransaction(UUID tenantId,
@@ -502,20 +715,24 @@ class FindingWorkflowCommandServiceTest {
             Map<UUID, FindingWorkflowCase> priorFindings = new HashMap<>(findings);
             Map<String, StoredCommand> priorCommands = new HashMap<>(commands);
             List<FindingWorkflowContracts.Transition> priorTransitions = new ArrayList<>(transitions);
+            List<FindingWorkflowContracts.Confirmation> priorConfirmations = new ArrayList<>(confirmations);
             List<FindingWorkflowContracts.Notice> priorNotices = new ArrayList<>(notices);
             List<FindingWorkflowContracts.Submission> priorSubmissions = new ArrayList<>(submissions);
             List<FindingWorkflowContracts.Verification> priorVerifications = new ArrayList<>(verifications);
             Map<String, String> priorRounds = new HashMap<>(rounds);
+            Map<SequenceKey, Long> priorSequences = new HashMap<>(numberSequences);
             try {
                 return work.apply(new Tx(tenantId));
             } catch (RuntimeException failure) {
                 findings = priorFindings;
                 commands = priorCommands;
                 transitions = priorTransitions;
+                confirmations = priorConfirmations;
                 notices = priorNotices;
                 submissions = priorSubmissions;
                 verifications = priorVerifications;
                 rounds = priorRounds;
+                numberSequences = priorSequences;
                 throw failure;
             }
         }
@@ -544,6 +761,13 @@ class FindingWorkflowCommandServiceTest {
                 if (!finding.tenantId().equals(tenantId) || findings.putIfAbsent(finding.id(), finding) != null) {
                     throw new IllegalStateException("Duplicate finding");
                 }
+            }
+
+            @Override
+            public String nextFindingCode(LocalDate businessDay) {
+                long next = numberSequences.merge(new SequenceKey(tenantId, businessDay), 1L, Long::sum);
+                return "YH-" + businessDay.toString().replace("-", "")
+                        + "-" + String.format(java.util.Locale.ROOT, "%04d", next);
             }
 
             @Override
@@ -586,7 +810,15 @@ class FindingWorkflowCommandServiceTest {
 
             @Override
             public void appendConfirmation(FindingWorkflowContracts.Confirmation confirmation) {
-                // Domain confirmation records are represented in the workflow transition fixture.
+                confirmations.add(confirmation);
+            }
+
+            @Override
+            public Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage) {
+                return confirmations.stream()
+                        .filter(value -> value.findingId().equals(findingId) && value.stage().equals(stage))
+                        .map(FindingWorkflowContracts.Confirmation::actorMemberId)
+                        .findFirst();
             }
 
             @Override
@@ -634,4 +866,6 @@ class FindingWorkflowCommandServiceTest {
         private record StoredCommand(UUID actorId, String action, String hash,
                                      FindingWorkflowContracts.CommandResult result) {}
     }
+
+    private record SequenceKey(UUID tenantId, LocalDate businessDay) {}
 }

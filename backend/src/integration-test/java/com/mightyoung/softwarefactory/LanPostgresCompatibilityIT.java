@@ -27,7 +27,13 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
 import java.net.URI;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -42,6 +48,9 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 class LanPostgresCompatibilityIT {
 
     private static final String CONFIRMATION_PREFIX = "I_UNDERSTAND_THIS_IS_A_DISPOSABLE_DB:";
+    private static final String TRUSTED_TARGET_ALLOWLIST = "LAN_PG_TRUSTED_TEST_TARGET_ALLOWLIST";
+    private static final String TUNNEL_LOCAL_PORT = "PG18_TUNNEL_LOCAL_PORT";
+    private static final String APPROVED_PG18_DATABASE = "might_software_factory_pg18_test";
     private static final String TIMER_PROCESS = "p0TimerProjectionRollback";
     private static final String TIMER_PROCESS_XML = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -84,7 +93,7 @@ class LanPostgresCompatibilityIT {
 
     @DynamicPropertySource
     static void lanPostgresProperties(DynamicPropertyRegistry properties) {
-        DatabaseTarget target = DatabaseTarget.fromEnvironment(System.getenv());
+        DatabaseTarget target = DatabaseTarget.preflightFromEnvironment(System.getenv());
         properties.add("spring.datasource.url", target::jdbcUrl);
         properties.add("spring.datasource.username", () -> required("LAN_PG_USERNAME"));
         properties.add("spring.datasource.password", () -> required("LAN_PG_PASSWORD"));
@@ -99,6 +108,9 @@ class LanPostgresCompatibilityIT {
                 "LAN_PG_PASSWORD", "not-used-by-this-test",
                 "LAN_PG_TEST_DATABASE_NAME", testDatabase,
                 "LAN_PG_DEDICATED_TEST_DB_ACK", CONFIRMATION_PREFIX + testDatabase,
+                TRUSTED_TARGET_ALLOWLIST,
+                "jdbc:postgresql://192.0.2.10:5432/" + testDatabase,
+                "LAN_PG_APP_USERNAME", "test-application",
                 "LAN_PG_TEST_JDBC_URL", "jdbc:postgresql://192.0.2.10:5432/might_software_factory_dev");
 
         assertThatThrownBy(() -> DatabaseTarget.forAppRole(misconfiguredEnvironment))
@@ -504,8 +516,89 @@ class LanPostgresCompatibilityIT {
                 throw new IllegalStateException(
                         "LAN_PG_TEST_JDBC_URL must match the URL accepted by the disposable-test database gate");
             }
+            String migrationRole = requiredFrom(environment, "LAN_PG_USERNAME");
+            String applicationRole = requiredFrom(environment, "LAN_PG_APP_USERNAME");
+            if (migrationRole.equals(applicationRole)) {
+                throw new IllegalStateException("Migration and application PostgreSQL roles must be separate");
+            }
             return acceptedTarget;
         }
+
+        static DatabaseTarget preflightFromEnvironment(java.util.Map<String, String> environment) {
+            DatabaseTarget target = forAppRole(environment);
+            validateRoleOnTarget(target, requiredFrom(environment, "LAN_PG_USERNAME"),
+                    requiredFrom(environment, "LAN_PG_PASSWORD"), true);
+            validateRoleOnTarget(target, requiredFrom(environment, "LAN_PG_APP_USERNAME"),
+                    requiredFrom(environment, "LAN_PG_APP_PASSWORD"), false);
+            return target;
+        }
+
+        private static void validateRoleOnTarget(DatabaseTarget target, String username,
+                String password, boolean migrationRole) {
+            String label = migrationRole ? "migration" : "application";
+            RolePreflight state;
+            try (Connection connection = DriverManager.getConnection(target.jdbcUrl(), username, password);
+                    PreparedStatement query = connection.prepareStatement("""
+                            select current_database(), current_user, session_user,
+                                   pg_get_userbyid(database_info.datdba), pg_get_userbyid(public_schema.nspowner),
+                                   role_info.rolsuper, role_info.rolbypassrls, role_info.rolcreatedb,
+                                   role_info.rolcreaterole, role_info.rolreplication, role_info.rolinherit,
+                                   exists(select 1 from pg_auth_members membership
+                                           where membership.member = role_info.oid),
+                                   has_database_privilege(current_user, current_database(), 'CONNECT'),
+                                   has_schema_privilege(current_user, 'public', 'USAGE'),
+                                   has_schema_privilege(current_user, 'public', 'CREATE')
+                              from pg_roles role_info
+                              join pg_database database_info on database_info.datname = current_database()
+                              join pg_namespace public_schema on public_schema.nspname = 'public'
+                             where role_info.rolname = current_user
+                            """)) {
+                try (ResultSet result = query.executeQuery()) {
+                    if (!result.next()) {
+                        throw new IllegalStateException("Read-only PostgreSQL target preflight returned no role row");
+                    }
+                    state = new RolePreflight(
+                            result.getString(1), result.getString(2), result.getString(3),
+                            result.getString(4), result.getString(5),
+                            result.getBoolean(6), result.getBoolean(7), result.getBoolean(8),
+                            result.getBoolean(9), result.getBoolean(10), result.getBoolean(11),
+                            result.getBoolean(12), result.getBoolean(13), result.getBoolean(14),
+                            result.getBoolean(15));
+                }
+            } catch (SQLException exception) {
+                throw new IllegalStateException(
+                        "Read-only PostgreSQL target preflight could not inspect the " + label + " role", exception);
+            }
+            assertRolePreflight(state, target.databaseName(), username, migrationRole);
+        }
+
+        static void assertRolePreflight(RolePreflight state, String expectedDatabase,
+                String expectedRole, boolean migrationRole) {
+            String label = migrationRole ? "migration" : "application";
+            if (!expectedDatabase.equals(state.databaseName())) {
+                throw new IllegalStateException("Connected PostgreSQL database does not match the trusted test target");
+            }
+            if (!expectedRole.equals(state.currentUser()) || !expectedRole.equals(state.sessionUser())) {
+                throw new IllegalStateException("Connected PostgreSQL identity does not match the configured " + label + " role");
+            }
+            if (expectedRole.equals(state.databaseOwner()) || expectedRole.equals(state.schemaOwner())) {
+                throw new IllegalStateException("PostgreSQL " + label + " role must not own the target database or public schema");
+            }
+            if (state.superuser() || state.bypassRls() || state.createDatabase() || state.createRole()
+                    || state.replication() || state.inherit() || state.memberOfAnotherRole()) {
+                throw new IllegalStateException("PostgreSQL " + label + " role must be non-elevated, NOINHERIT, and have no memberships");
+            }
+            if (!state.connect() || !state.schemaUsage() || state.schemaCreate() != migrationRole) {
+                throw new IllegalStateException(migrationRole
+                        ? "Migration role requires database CONNECT and public USAGE/CREATE"
+                        : "Application role requires database CONNECT and public USAGE, with no public CREATE");
+            }
+        }
+
+        record RolePreflight(String databaseName, String currentUser, String sessionUser,
+                String databaseOwner, String schemaOwner, boolean superuser, boolean bypassRls,
+                boolean createDatabase, boolean createRole, boolean replication, boolean inherit,
+                boolean memberOfAnotherRole, boolean connect, boolean schemaUsage, boolean schemaCreate) { }
 
         static DatabaseTarget fromEnvironment(java.util.Map<String, String> environment) {
             String url = requiredFrom(environment, "LAN_PG_JDBC_URL");
@@ -525,8 +618,8 @@ class LanPostgresCompatibilityIT {
                 if (uri.getUserInfo() != null || url.toLowerCase(java.util.Locale.ROOT).contains("password=")) {
                     throw new IllegalStateException("Credentials must be supplied separately from LAN_PG_JDBC_URL");
                 }
-                if (host == null || host.isBlank() || isLoopbackLiteral(host) || path == null || path.length() < 2) {
-                    throw new IllegalStateException("LAN_PG_JDBC_URL must name a PostgreSQL host and database; literal loopback hosts are rejected");
+                if (host == null || host.isBlank() || path == null || path.length() < 2) {
+                    throw new IllegalStateException("LAN_PG_JDBC_URL must name a PostgreSQL host and database");
                 }
                 String database = path.substring(1);
                 String expected = requiredFrom(environment, "LAN_PG_TEST_DATABASE_NAME");
@@ -536,6 +629,22 @@ class LanPostgresCompatibilityIT {
                 }
                 if (!confirmation.equals(CONFIRMATION_PREFIX + database)) {
                     throw new IllegalStateException("Dedicated disposable test database confirmation is missing or does not match the database name");
+                }
+                String trustedTargets = environment.get(TRUSTED_TARGET_ALLOWLIST);
+                if (trustedTargets == null || trustedTargets.isBlank()) {
+                    throw new IllegalStateException("Trusted PostgreSQL test target allowlist is missing");
+                }
+                Set<String> trustedJdbcTargets = Arrays.stream(trustedTargets.split(",", -1))
+                        .map(String::trim)
+                        .filter(name -> !name.isEmpty())
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                if (!trustedJdbcTargets.contains(url)) {
+                    throw new IllegalStateException(
+                            "LAN_PG_JDBC_URL target is not in LAN_PG_TRUSTED_TEST_TARGET_ALLOWLIST");
+                }
+                if (isLoopbackLiteral(host) && !isApprovedPg18SshTunnel(environment, uri, database)) {
+                    throw new IllegalStateException(
+                            "Loopback PostgreSQL targets require the approved PG18 database, wrapper tunnel-port match, and exact allowlisted URL");
                 }
                 return new DatabaseTarget(url, database);
             } catch (IllegalArgumentException exception) {
@@ -551,6 +660,14 @@ class LanPostgresCompatibilityIT {
             return normalized.equals("localhost") || normalized.startsWith("127.")
                     || normalized.equals("0.0.0.0") || normalized.equals("::1")
                     || normalized.equals("[::1]") || normalized.startsWith("[::ffff:127.");
+        }
+
+        private static boolean isApprovedPg18SshTunnel(
+                java.util.Map<String, String> environment, URI uri, String database) {
+            String localPort = environment.get(TUNNEL_LOCAL_PORT);
+            return APPROVED_PG18_DATABASE.equals(database)
+                    && uri.getPort() > 0
+                    && Integer.toString(uri.getPort()).equals(localPort);
         }
 
         private static String requiredFrom(java.util.Map<String, String> environment, String name) {

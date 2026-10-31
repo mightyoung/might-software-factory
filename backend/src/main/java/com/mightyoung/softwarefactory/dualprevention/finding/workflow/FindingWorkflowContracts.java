@@ -15,7 +15,6 @@ public final class FindingWorkflowContracts {
 
     public record CreateFinding(
             UUID organizationId,
-            String code,
             String description,
             OffsetDateTime discoveredAt,
             UUID sourceEventId,
@@ -35,9 +34,10 @@ public final class FindingWorkflowContracts {
     public record Verify(VerificationDecision decision, String reason) {
     }
 
-    public record CommandResult(UUID findingId, FindingWorkflowState state, int roundNo, long version) {
+    public record CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version) {
         public CommandResult {
             Objects.requireNonNull(findingId, "findingId");
+            Objects.requireNonNull(code, "code");
             Objects.requireNonNull(state, "state");
             if (roundNo < 1 || version < 1) {
                 throw new IllegalArgumentException("Finding round and version must be positive");
@@ -45,7 +45,7 @@ public final class FindingWorkflowContracts {
         }
 
         public static CommandResult from(FindingWorkflowCase finding) {
-            return new CommandResult(finding.id(), finding.state(), finding.roundNo(), finding.version());
+            return new CommandResult(finding.id(), finding.code(), finding.state(), finding.roundNo(), finding.version());
         }
     }
 

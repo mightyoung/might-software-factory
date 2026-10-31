@@ -98,7 +98,9 @@ export interface components {
             currentVersion?: number;
         };
         FieldError: {
+            /** @description JSON request field path using the request's property names, such as description or items[0].name. */
             field: string;
+            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, or Size; never validation prose or a rejected value. */
             reason: string;
         };
     };

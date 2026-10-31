@@ -47,9 +47,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(controllers = AuthenticationSessionController.class)
+@WebMvcTest(controllers = {AuthenticationSessionController.class, CurrentSessionController.class})
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Import({SecurityConfiguration.class, SessionContextResolver.class,
+        CurrentSessionService.class,
+        com.mightyoung.softwarefactory.dualprevention.FindingApiExceptionHandler.class,
         IdentityAuthenticationHttpTest.TestEndpoints.class,
         IdentityAuthenticationHttpTest.TestDependencies.class})
 class IdentityAuthenticationHttpTest {
@@ -59,6 +61,7 @@ class IdentityAuthenticationHttpTest {
     private static final String LOGOUT_PATH = "/api/v1/auth/logout";
     private static final String CONTEXT_PATH = "/api/v1/test/auth-context";
     private static final String FINDING_READ_PATH = "/api/v1/test/finding-read";
+    private static final String CURRENT_SESSION_PATH = "/api/v1/session/current";
     private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID ACCOUNT_ID = UUID.fromString("11000000-0000-0000-0000-000000000001");
     private static final UUID TENANT_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
@@ -71,9 +74,13 @@ class IdentityAuthenticationHttpTest {
     @Autowired
     private AuthorizationSnapshotState authorizationSnapshotState;
 
+    @Autowired
+    private CurrentSessionReadState currentSessionReadState;
+
     @BeforeEach
     void resetAuthorizationSnapshot() {
         authorizationSnapshotState.snapshot.set(snapshot("ACTIVE", "HUMAN", ACTOR_ID, ACCOUNT_ID));
+        currentSessionReadState.current.set(Optional.of(syntheticCurrentSession()));
     }
 
     @Test
@@ -81,6 +88,33 @@ class IdentityAuthenticationHttpTest {
         mvc.perform(get(CSRF_PATH))
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().exists("XSRF-TOKEN"));
+    }
+
+    @Test
+    void currentSessionEndpointReturnsTheVerifiedCurrentMembership() throws Exception {
+        MockHttpSession session = authenticatedSession();
+
+        mvc.perform(get(CURRENT_SESSION_PATH).session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.actorId").value(ACTOR_ID.toString()))
+                .andExpect(jsonPath("$.data.accountId").value(ACCOUNT_ID.toString()))
+                .andExpect(jsonPath("$.data.tenantId").value(TENANT_ID.toString()))
+                .andExpect(jsonPath("$.data.tenantCode").value("north-plant"))
+                .andExpect(jsonPath("$.data.tenantName").value("North plant"))
+                .andExpect(jsonPath("$.data.memberId").value(MEMBER_ID.toString()))
+                .andExpect(jsonPath("$.data.displayName").value("Synthetic Operator"));
+    }
+
+    @Test
+    void currentSessionEndpointUses401ForMissingSessionAnd403ForRevokedMembership() throws Exception {
+        mvc.perform(get(CURRENT_SESSION_PATH))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
+
+        currentSessionReadState.current.set(Optional.empty());
+        mvc.perform(get(CURRENT_SESSION_PATH).session(authenticatedSession()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
     }
 
     @Test
@@ -211,6 +245,16 @@ class IdentityAuthenticationHttpTest {
                 .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
     }
 
+    @Test
+    void logoutWithoutAnActiveSessionIsIdempotentButStillRequiresCsrf() throws Exception {
+        mvc.perform(post(LOGOUT_PATH))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post(LOGOUT_PATH).with(validCsrf()))
+                .andExpect(status().isNoContent())
+                .andExpect(cookie().maxAge("SESSION", 0));
+    }
+
     private static MockHttpSession authenticatedSession() {
         MockHttpSession session = new MockHttpSession();
         SecurityContext context = SecurityContextHolder.createEmptyContext();
@@ -272,6 +316,16 @@ class IdentityAuthenticationHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        @Bean
+        CurrentSessionReadState currentSessionReadState() {
+            return new CurrentSessionReadState();
+        }
+
+        @Bean
+        CurrentSessionReadRepository currentSessionReadRepository(CurrentSessionReadState state) {
+            return context -> state.current.get();
+        }
+
         /** Exercise the production provider/filter wiring against in-memory synthetic identity rows. */
         @Bean
         AuthenticationProvider localPasswordAuthenticationProvider(PasswordEncoder passwordEncoder) {
@@ -314,6 +368,16 @@ class IdentityAuthenticationHttpTest {
     static final class AuthorizationSnapshotState {
         private final AtomicReference<FindingReadAuthorizationSnapshot> snapshot =
                 new AtomicReference<>(snapshot("ACTIVE", "HUMAN", ACTOR_ID, ACCOUNT_ID));
+    }
+
+    static final class CurrentSessionReadState {
+        private final AtomicReference<Optional<CurrentSessionDetails>> current =
+                new AtomicReference<>(Optional.of(syntheticCurrentSession()));
+    }
+
+    private static CurrentSessionDetails syntheticCurrentSession() {
+        return new CurrentSessionDetails(
+                ACTOR_ID, ACCOUNT_ID, TENANT_ID, "north-plant", "North plant", MEMBER_ID, "Synthetic Operator");
     }
 
     private static FindingReadAuthorizationSnapshot snapshot(
