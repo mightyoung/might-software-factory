@@ -1,6 +1,9 @@
 spring:
   application:
     name: might-software-factory
+  aop:
+    # Repository exception translation uses interface proxies; repository implementations are final.
+    proxy-target-class: false
   datasource:
     url: ${LAN_PG_APP_JDBC_URL}
     username: ${LAN_PG_APP_USERNAME}
