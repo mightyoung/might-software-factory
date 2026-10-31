@@ -11,7 +11,8 @@ import type { FindingDraft } from "../domain/findingDraft";
 
 const NOW = new Date(2026, 9, 30, 14, 30);
 const RESULT: FindingSubmitResult = {
-  id: "DEMO-HZ-008",
+  id: "00000000-0000-4000-8000-000000000008",
+  code: "DEMO-HZ-008",
   state: "PERSON_CONFIRM_PENDING",
   submittedAt: "2026-10-30T14:30:00",
   backfill: false,
@@ -306,7 +307,7 @@ describe("新建上报表单", () => {
     await screen.findByText("已提交上报");
 
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
-    expect(props.onOpenSubmitted).toHaveBeenCalledWith("DEMO-HZ-008");
+    expect(props.onOpenSubmitted).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000008");
 
     fireEvent.click(screen.getByRole("button", { name: "继续上报" }));
     expect(field(/隐患描述/)).toHaveValue("");

@@ -12,6 +12,7 @@ export interface FindingSubmitContext {
 
 export interface FindingSubmitResult {
   id: string;
+  code: string;
   state: FindingState;
   submittedAt: string;
   backfill: boolean;

@@ -36,11 +36,17 @@ export interface FindingLedgerAdapter {
   get(id: string, options?: FindingReadOptions): Promise<FindingRecord | null>;
 }
 
+/** 合成数据的内部标识，形态与契约的 UUID 一致，但明显是演示值。 */
+export function syntheticFindingId(sequence: number): string {
+  return `00000000-0000-4000-8000-${String(sequence).padStart(12, "0")}`;
+}
+
 const demoHistory = (at: string, title: string, note: string) => [{ at, title, note }];
 
 export const syntheticFindings: readonly FindingRecord[] = [
   {
-    id: "DEMO-HZ-001",
+    id: syntheticFindingId(1),
+    code: "DEMO-HZ-001",
     description: "搬运区域隔离设施损坏",
     location: "演示工房 A · 搬运区",
     state: "PERSON_CONFIRM_PENDING",
@@ -52,7 +58,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-29 09:14", "发现上报", "合成样例；流程尚待一人确认。"),
   },
   {
-    id: "DEMO-HZ-002",
+    id: syntheticFindingId(2),
+    code: "DEMO-HZ-002",
     description: "设备防护罩固定件松动",
     location: "演示工房 B · 设备 03",
     state: "SAFETY_CONFIRM_PENDING",
@@ -64,7 +71,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-28 16:05", "一人确认", "合成样例；现处于安全部门确认节点。"),
   },
   {
-    id: "DEMO-HZ-003",
+    id: syntheticFindingId(3),
+    code: "DEMO-HZ-003",
     description: "通道临时堆放周转物料",
     location: "演示仓库 · 东侧通道",
     state: "SAFETY_DISPATCH_PENDING",
@@ -76,7 +84,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-27 13:30", "安全确认", "合成样例；等待安全部门分派整改任务。"),
   },
   {
-    id: "DEMO-HZ-004",
+    id: syntheticFindingId(4),
+    code: "DEMO-HZ-004",
     description: "作业点防护标识需要补充",
     location: "演示产线 01 · 工位 4",
     state: "RECTIFYING",
@@ -88,7 +97,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-27 09:10", "整改处理中", "合成样例；未提交真实整改证据。"),
   },
   {
-    id: "DEMO-HZ-005",
+    id: syntheticFindingId(5),
+    code: "DEMO-HZ-005",
     description: "防护设施维护后等待复核",
     location: "演示工房 A · 设备 06",
     state: "ACCEPTANCE_PENDING",
@@ -100,7 +110,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-28 17:20", "提交验收", "合成样例第二轮；等待安全部门验收。"),
   },
   {
-    id: "DEMO-HZ-006",
+    id: syntheticFindingId(6),
+    code: "DEMO-HZ-006",
     description: "测试点位围挡已按样例完成复核",
     location: "演示工房 C · 测试点",
     state: "CLOSED",
@@ -112,7 +123,8 @@ export const syntheticFindings: readonly FindingRecord[] = [
     history: demoHistory("2026-10-26 16:45", "示例流程结束", "仅为流程展示，不代表现场风险已消除。"),
   },
   {
-    id: "DEMO-HZ-007",
+    id: syntheticFindingId(7),
+    code: "DEMO-HZ-007",
     description: "工具柜附近地面物品待整理",
     location: "演示仓库 · 工具柜旁",
     state: "RECTIFYING",

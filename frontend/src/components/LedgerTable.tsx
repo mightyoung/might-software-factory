@@ -4,6 +4,8 @@ interface LedgerTableProps<T> {
   columns: readonly LedgerColumn<T>[];
   rows: readonly T[];
   getKey: (row: T) => string;
+  /** 勾选框等控件的可读名称；缺省使用 getKey。 */
+  getLabel?: (row: T) => string;
   selectedIds: ReadonlySet<string>;
   onToggleRow: (id: string) => void;
   onTogglePage: () => void;
@@ -14,6 +16,7 @@ export function LedgerTable<T>({
   columns,
   rows,
   getKey,
+  getLabel,
   selectedIds,
   onToggleRow,
   onTogglePage,
@@ -53,7 +56,7 @@ export function LedgerTable<T>({
                 <td className="selection-column" onClick={(event) => event.stopPropagation()}>
                   <input
                     type="checkbox"
-                    aria-label={`选择 ${id}`}
+                    aria-label={`选择 ${getLabel ? getLabel(row) : id}`}
                     checked={selectedIds.has(id)}
                     onChange={() => onToggleRow(id)}
                   />

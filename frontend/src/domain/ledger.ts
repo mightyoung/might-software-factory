@@ -69,6 +69,8 @@ export interface LedgerSchema<T> {
   queryFields: readonly LedgerQueryField<T>[];
   columns: readonly LedgerColumn<T>[];
   recordKey: (record: T) => string;
+  /** 给人看（含读屏）的记录名称，例如业务编号；缺省时退回 recordKey。键可能是 UUID，不适合直接朗读。 */
+  recordLabel?: (record: T) => string;
 }
 
 export interface PageRequest {

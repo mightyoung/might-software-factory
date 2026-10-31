@@ -249,7 +249,7 @@ export function FindingReportForm({
         <section className="report-success" role="status">
           <h3>已提交上报</h3>
           <p>
-            编号 <strong>{result.id}</strong>，当前状态：待一人确认。
+            编号 <strong>{result.code}</strong>，当前状态：待一人确认。
           </p>
           {result.backfill && <p>发现时间早于当前时间超过 24 小时，已按补报处理：发现时间和上报时间分别保存。</p>}
           <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>

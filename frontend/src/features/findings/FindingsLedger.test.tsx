@@ -21,7 +21,8 @@ import { navigate } from "../../routing/router";
 function createPagedFixtureAdapter(): FindingLedgerAdapter {
   const rows: FindingRecord[] = Array.from({ length: 23 }, (_, index) => ({
     ...syntheticFindings[index % syntheticFindings.length]!,
-    id: `TEST-HZ-${String(index + 1).padStart(3, "0")}`,
+    id: `00000000-0000-4000-9000-${String(index + 1).padStart(12, "0")}`,
+    code: `TEST-HZ-${String(index + 1).padStart(3, "0")}`,
   }));
   return {
     async list({ query, page }) {
@@ -239,7 +240,7 @@ describe("隐患台账分页与详情", () => {
     expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
 
     await traverseHistory("forward");
-    await waitFor(() => expect(window.location.search).toBe("?caseId=DEMO-HZ-001"));
+    await waitFor(() => expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000001"));
     expect(await within(screen.getByRole("complementary", { name: "隐患详情面板" })).findByText("DEMO-HZ-001"))
       .toBeInTheDocument();
   });
@@ -259,7 +260,7 @@ describe("隐患台账分页与详情", () => {
     };
 
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={adapter} />);
-    await screen.findByText(record.id);
+    await screen.findByText(record.code);
     fireEvent.click(screen.getAllByRole("button", { name: "详情" })[0]!);
     await waitFor(() => expect(detailSignal).toBeDefined());
 
@@ -297,10 +298,10 @@ describe("隐患台账分页与详情", () => {
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={adapter} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法加载隐患记录");
     expect(screen.queryByText("正在加载演示记录…")).not.toBeInTheDocument();
-    expect(screen.queryByText(record.id)).not.toBeInTheDocument();
+    expect(screen.queryByText(record.code)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重试加载" }));
-    expect(await screen.findByText(record.id)).toBeInTheDocument();
+    expect(await screen.findByText(record.code)).toBeInTheDocument();
     expect(attempts).toBe(2);
   });
 
@@ -331,7 +332,7 @@ describe("隐患台账分页与详情", () => {
     expect(listAlert).not.toHaveTextContent("Finding ledger read");
     expect(screen.queryByText("正在加载演示记录…")).not.toBeInTheDocument();
 
-    navigate("/safety/findings?caseId=DEMO-HZ-001");
+    navigate("/safety/findings?caseId=00000000-0000-4000-8000-000000000001");
     const detail = await screen.findByRole("complementary", { name: "隐患详情面板" });
     const detailAlert = await within(detail).findByRole("alert");
     expect(detailAlert).toHaveTextContent(detailMessage);
@@ -373,7 +374,7 @@ describe("隐患台账分页与详情", () => {
         return record;
       },
     };
-    navigate("/safety/findings?caseId=DEMO-HZ-001", true);
+    navigate("/safety/findings?caseId=00000000-0000-4000-8000-000000000001", true);
 
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={adapter} />);
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
@@ -419,13 +420,13 @@ describe("隐患台账分页与详情", () => {
     secondRequest.resolve(secondRecord);
 
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
-    expect(await within(detail).findByText(secondRecord.id)).toBeInTheDocument();
+    expect(await within(detail).findByText(secondRecord.code)).toBeInTheDocument();
     firstRequest.reject(new Error("stale detail failure"));
     await act(async () => {
       await firstRequest.promise.catch(() => undefined);
     });
     expect(within(detail).queryByRole("alert")).not.toBeInTheDocument();
-    expect(within(detail).getByText(secondRecord.id)).toBeInTheDocument();
+    expect(within(detail).getByText(secondRecord.code)).toBeInTheDocument();
   });
 
 
@@ -463,14 +464,14 @@ describe("隐患台账分页与详情", () => {
     secondRequest.resolve(secondRecord);
 
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
-    expect(await within(detail).findByText(secondRecord.id)).toBeInTheDocument();
+    expect(await within(detail).findByText(secondRecord.code)).toBeInTheDocument();
     firstRequest.resolve(firstRecord);
     await act(async () => {
       await firstRequest.promise;
     });
 
-    expect(within(detail).getByText(secondRecord.id)).toBeInTheDocument();
-    expect(within(detail).queryByText(firstRecord.id)).not.toBeInTheDocument();
+    expect(within(detail).getByText(secondRecord.code)).toBeInTheDocument();
+    expect(within(detail).queryByText(firstRecord.code)).not.toBeInTheDocument();
   });
 
   it("忽略迟到的旧列表成功响应", async () => {
@@ -517,7 +518,7 @@ describe("隐患台账分页与详情", () => {
       total: 1,
       pageCount: 1,
     });
-    await screen.findByText(filteredRecord.id);
+    await screen.findByText(filteredRecord.code);
     firstRequest.resolve({
       items: [firstRecord],
       page: { index: 1, size: 20 },
@@ -528,8 +529,8 @@ describe("隐患台账分页与详情", () => {
       await firstRequest.promise;
     });
 
-    expect(screen.getByText(filteredRecord.id)).toBeInTheDocument();
-    expect(screen.queryByText(firstRecord.id)).not.toBeInTheDocument();
+    expect(screen.getByText(filteredRecord.code)).toBeInTheDocument();
+    expect(screen.queryByText(firstRecord.code)).not.toBeInTheDocument();
     expect(screen.getByText("共 1 条演示记录")).toBeInTheDocument();
   });
 });

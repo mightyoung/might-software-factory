@@ -251,6 +251,7 @@ export function FindingsLedger({
               columns={findingLedgerSchema.columns}
               rows={page.items}
               getKey={(record) => findingLedgerSchema.recordKey(record)}
+              getLabel={(record) => findingLedgerSchema.recordLabel?.(record) ?? findingLedgerSchema.recordKey(record)}
               selectedIds={selectedIds}
               onToggleRow={(id) => setSelectedIds((current) => toggleRow(current, id))}
               onTogglePage={() => setSelectedIds((current) => toggleVisibleRows(current, visibleIds))}

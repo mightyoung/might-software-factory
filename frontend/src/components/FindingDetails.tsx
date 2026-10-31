@@ -24,7 +24,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry }: Fi
       <div className="detail-heading">
         <div>
           <h2>隐患详情</h2>
-          {finding && <p>{finding.id}</p>}
+          {finding && <p>{finding.code}</p>}
         </div>
         <button className="icon-button" type="button" aria-label="关闭详情" onClick={onClose}>
           ×

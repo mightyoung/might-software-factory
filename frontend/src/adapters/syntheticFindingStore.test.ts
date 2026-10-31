@@ -36,7 +36,7 @@ describe("合成隐患存储 · 上报提交", () => {
   it("成功提交创建“待一人确认”的记录，编号接在种子数据之后，并出现在台账首位", async () => {
     const store = storeAt();
     const result = await store.submit.submit(draft(), { idempotencyKey: "k1" });
-    expect(result).toMatchObject({ id: "DEMO-HZ-008", state: "PERSON_CONFIRM_PENDING", backfill: false });
+    expect(result).toMatchObject({ id: "00000000-0000-4000-8000-000000000008", code: "DEMO-HZ-008", state: "PERSON_CONFIRM_PENDING", backfill: false });
 
     const list = await store.ledger.list({
       query: {},
@@ -46,7 +46,8 @@ describe("合成隐患存储 · 上报提交", () => {
     expect(list.total).toBe(syntheticFindings.length + 1);
     const created = list.items[0]!;
     expect(created).toMatchObject({
-      id: "DEMO-HZ-008",
+      id: "00000000-0000-4000-8000-000000000008",
+      code: "DEMO-HZ-008",
       description: "通道护栏连接件松动",
       state: "PERSON_CONFIRM_PENDING",
       responsible: "待分派",
@@ -58,7 +59,7 @@ describe("合成隐患存储 · 上报提交", () => {
       interimMeasure: "已拉警戒线",
       reportedAt: "2026-10-30T14:30:45",
     });
-    expect((await store.ledger.get("DEMO-HZ-008"))?.history[0]?.note).toContain("未通知任何人");
+    expect((await store.ledger.get("00000000-0000-4000-8000-000000000008"))?.history[0]?.note).toContain("未通知任何人");
   });
 
   it("新记录属于“待确认”视图，而不属于“整改验收”视图", async () => {
@@ -67,8 +68,8 @@ describe("合成隐患存储 · 上报提交", () => {
     const base = { query: {}, page: { index: 1, size: 20 } };
     const inbox = await store.ledger.list({ ...base, view: "confirmation" });
     const acceptance = await store.ledger.list({ ...base, view: "acceptance" });
-    expect(inbox.items.some((record) => record.id === "DEMO-HZ-008")).toBe(true);
-    expect(acceptance.items.some((record) => record.id === "DEMO-HZ-008")).toBe(false);
+    expect(inbox.items.some((record) => record.code === "DEMO-HZ-008")).toBe(true);
+    expect(acceptance.items.some((record) => record.code === "DEMO-HZ-008")).toBe(false);
   });
 
   it("同一幂等键 + 同一内容重复提交只创建一条记录，并返回同一结果", async () => {
@@ -122,7 +123,7 @@ describe("合成隐患存储 · 上报提交", () => {
     const store = storeAt();
     await failureOf(store.submit.submit(draft({ location: "" }), { idempotencyKey: "retry" }));
     const result = await store.submit.submit(draft(), { idempotencyKey: "retry" });
-    expect(result.id).toBe("DEMO-HZ-008");
+    expect(result.code).toBe("DEMO-HZ-008");
   });
 
   it("发现时间早于 24 小时按补报处理：发现时间保持原值，历史里注明补报", async () => {
