@@ -51,12 +51,23 @@ const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   unavailable: "服务暂时不可用，上报尚未确认成功。可以直接重试，重试不会重复创建记录。",
 };
 
+/**
+ * 当前后端的创建接口没有这些字段（来源、所在位置、紧急程度、临时措施；见 docs/frontend-contract-gap.md）。
+ * 后端要求：不要塞进描述，也不要提交后静默丢弃，未接线的项要明确标识。
+ */
+const NOT_WIRED_TAG = "后端暂未接入";
+
+function NotWiredTag() {
+  return <span className="inline-tag"> {NOT_WIRED_TAG}</span>;
+}
+
 function Field({
   id,
   label,
   error,
   hint,
   required,
+  notWired,
   children,
 }: {
   id: string;
@@ -64,6 +75,8 @@ function Field({
   error?: string;
   hint?: ReactNode;
   required?: boolean;
+  /** 当前后端没有对应字段，真实写入后不会被保存。 */
+  notWired?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -71,6 +84,7 @@ function Field({
       <label htmlFor={id}>
         {label}
         {required && <span className="required-mark" aria-hidden="true"> *</span>}
+        {notWired && <NotWiredTag />}
       </label>
       {children}
       {hint && <p className="field-hint" id={`${id}-hint`}>{hint}</p>}
@@ -138,7 +152,9 @@ export function FindingReportForm({
   }, [pendingFocus, phase.name]);
 
   // 有未提交内容时，刷新或关闭标签页由浏览器给出原生确认。
-  useEffect(() => {
+  // 用 useLayoutEffect：守卫要和成功页的 DOM 在同一次提交里同步解除；被动 effect 的清理会晚于 DOM，
+  // 留下“页面已显示提交成功，关闭标签页却仍被拦截”的窗口。
+  useLayoutEffect(() => {
     if (!dirty || phase.name === "submitted") return;
     function onBeforeUnload(event: BeforeUnloadEvent) {
       event.preventDefault();
@@ -252,6 +268,7 @@ export function FindingReportForm({
             编号 <strong>{result.code}</strong>，当前状态：待一人确认。
           </p>
           {result.backfill && <p>发现时间早于当前时间超过 24 小时，已按补报处理：发现时间和上报时间分别保存。</p>}
+          <p className="field-hint">“来源”“所在位置 / 设备”“紧急程度”“临时措施”标注为后端暂未接入：真实后端目前没有对应字段，接入后这些内容不会被保存。</p>
           <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>
         </section>
         <div className="report-actions">
@@ -283,6 +300,8 @@ export function FindingReportForm({
 
       <p className="report-banner" role="note">
         <strong>合成演示：</strong>提交只写入本页内存中的演示数据，不会通知任何人，也不形成真实记录。发现紧急危险请先通过现场应急渠道处理。
+        <br />
+        标有“后端暂未接入”的项目：当前后端的创建接口没有对应字段，接入真实后端后这些内容目前不会被保存。
       </p>
 
       <form className="report-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
@@ -297,7 +316,7 @@ export function FindingReportForm({
           </p>
         )}
 
-        <Field id={ids.source} label="来源" required error={errors.source}>
+        <Field id={ids.source} label="来源" required notWired error={errors.source}>
           <select
             id={ids.source}
             ref={(node) => {
@@ -343,7 +362,7 @@ export function FindingReportForm({
           />
         </Field>
 
-        <Field id={ids.location} label="所在位置 / 设备" required error={errors.location}>
+        <Field id={ids.location} label="所在位置 / 设备" required notWired error={errors.location}>
           <input
             id={ids.location}
             ref={(node) => {
@@ -388,6 +407,7 @@ export function FindingReportForm({
         >
           <legend>
             紧急程度<span className="required-mark" aria-hidden="true"> *</span>
+            <NotWiredTag />
           </legend>
           <div className="report-radio-row">
             {findingUrgencies.map((urgency, index) => (
@@ -425,6 +445,7 @@ export function FindingReportForm({
         <Field
           id={ids.interimMeasure}
           label="已采取的临时措施（选填）"
+          notWired
           error={errors.interimMeasure}
           hint={`${draft.interimMeasure.trim().length}/${DRAFT_LIMITS.interimMeasureMax}`}
         >
