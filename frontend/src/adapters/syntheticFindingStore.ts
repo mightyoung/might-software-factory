@@ -2,12 +2,12 @@ import { listFindingRecords, syntheticFindingId, syntheticFindings, type Finding
 import { FindingSubmitError, type FindingSubmitAdapter, type FindingSubmitResult } from "./findingSubmit";
 import type { FindingRecord } from "../domain/finding";
 import {
-  formatLocalDateTime,
   hasDraftErrors,
   isBackfill,
   normalizeDraft,
   validateFindingDraft,
 } from "../domain/findingDraft";
+import { toIsoWithOffset, toWallTime, wallTimeToIso } from "../domain/time";
 
 export interface SyntheticFindingStore {
   ledger: FindingLedgerAdapter;
@@ -71,14 +71,14 @@ export function createSyntheticFindingStore(options: SyntheticFindingStoreOption
       sequence += 1;
       const id = syntheticFindingId(sequence);
       const code = `DEMO-HZ-${String(sequence).padStart(3, "0")}`;
-      const stamp = formatLocalDateTime(submittedAt);
+      const stamp = toWallTime(submittedAt);
       const record: FindingRecord = {
         id,
         code,
         description: draft.description,
         location: draft.location,
         state: "PERSON_CONFIRM_PENDING",
-        reportedAt: `${stamp}:${String(submittedAt.getSeconds()).padStart(2, "0")}`,
+        reportedAt: toIsoWithOffset(submittedAt),
         reporter: "本人（演示）",
         responsible: "待分派",
         riskLabel: "待专业评估",
@@ -90,7 +90,7 @@ export function createSyntheticFindingStore(options: SyntheticFindingStoreOption
             note: `合成演示：由你在本页创建${backfill ? "（补报：发现时间与上报时间分别保存）" : ""}；未通知任何人，也不形成真实记录。`,
           },
         ],
-        foundAt: draft.foundAt,
+        foundAt: wallTimeToIso(draft.foundAt) ?? draft.foundAt,
         source: draft.source,
         urgency: draft.urgency,
         interimMeasure: draft.interimMeasure || undefined,

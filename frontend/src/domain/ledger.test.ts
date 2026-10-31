@@ -17,10 +17,26 @@ describe("字段类型驱动的查询模型", () => {
 
   it("按字段类型过滤文字、状态和含端点的日期区间", () => {
     const row = syntheticFindings[0];
-    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "隔离", state: "", reportedAt: { from: "2026-10-29", to: "2026-10-29" } })).toBe(true);
+    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "HZ-001", state: "", reportedAt: { from: "2026-10-29", to: "2026-10-29" } })).toBe(true);
     expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "demo-hz-001", state: "PERSON_CONFIRM_PENDING", reportedAt: { from: "", to: "2026-10-29" } })).toBe(true);
-    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "隔离", state: "CLOSED", reportedAt: { from: "", to: "" } })).toBe(false);
-    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "隔离", state: "", reportedAt: { from: "2026-10-30", to: "" } })).toBe(false);
+    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "HZ-001", state: "CLOSED", reportedAt: { from: "", to: "" } })).toBe(false);
+    expect(matchesQuery(row, findingLedgerSchema.queryFields, { keyword: "HZ-001", state: "", reportedAt: { from: "2026-10-30", to: "" } })).toBe(false);
+  });
+
+  it("关键词只匹配隐患编号，不匹配描述（后端不支持描述筛选，不能在已返回的一页上假装过滤）", () => {
+    const row = syntheticFindings[0]!;
+    expect(row.description).toContain("隔离");
+    const query = (keyword: string) => ({ keyword, state: "", reportedAt: { from: "", to: "" } });
+    expect(matchesQuery(row, findingLedgerSchema.queryFields, query("隔离"))).toBe(false);
+    expect(matchesQuery(row, findingLedgerSchema.queryFields, query("hz-001"))).toBe(true);
+  });
+
+  it("上报日期按上海日期归属：UTC 16:30 已是上海次日，筛选与日期列一致", () => {
+    const record = { ...syntheticFindings[0]!, reportedAt: "2026-10-28T16:30:00Z" };
+    const range = (from: string, to: string) => ({ keyword: "", state: "", reportedAt: { from, to } });
+    expect(matchesQuery(record, findingLedgerSchema.queryFields, range("2026-10-29", "2026-10-29"))).toBe(true);
+    expect(matchesQuery(record, findingLedgerSchema.queryFields, range("2026-10-28", "2026-10-28"))).toBe(false);
+    expect(findingLedgerSchema.columns.find((column) => column.key === "reportedAt")?.read(record)).toBe("2026-10-29");
   });
 
   it("schema field selector stays typed to a record field", () => {

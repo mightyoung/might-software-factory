@@ -10,7 +10,7 @@ import {
   type FindingDraft,
 } from "./findingDraft";
 
-const NOW = new Date(2026, 9, 30, 14, 30); // 2026-10-30 14:30 本地时间
+const NOW = new Date("2026-10-30T14:30:00+08:00"); // 上海时间 2026-10-30 14:30，与机器时区无关
 
 function valid(overrides: Partial<FindingDraft> = {}): FindingDraft {
   return {

@@ -58,7 +58,7 @@ afterEach(cleanup);
 describe("通用台账查询表单", () => {
   it("按字段类型生成输入、选择器和日期区间，重置会清空全部条件", () => {
     render(<QueryHarness />);
-    const keyword = screen.getByRole("searchbox", { name: "隐患编号 / 描述" });
+    const keyword = screen.getByRole("searchbox", { name: "隐患编号" });
     const state = screen.getByRole("combobox", { name: "状态" });
     const from = screen.getByLabelText("上报日期起");
     const to = screen.getByLabelText("上报日期止");

@@ -4,7 +4,7 @@ import { createSyntheticFindingStore } from "./syntheticFindingStore";
 import { syntheticFindings } from "./findingLedger";
 import type { FindingDraft } from "../domain/findingDraft";
 
-const NOW = new Date(2026, 9, 30, 14, 30, 45);
+const NOW = new Date("2026-10-30T14:30:45+08:00");
 
 function draft(overrides: Partial<FindingDraft> = {}): FindingDraft {
   return {
@@ -53,11 +53,11 @@ describe("合成隐患存储 · 上报提交", () => {
       responsible: "待分派",
       riskLabel: "待专业评估",
       reporter: "本人（演示）",
-      foundAt: "2026-10-30T13:50",
+      foundAt: "2026-10-30T13:50:00+08:00",
       source: "INSPECTION",
       urgency: "URGENT",
       interimMeasure: "已拉警戒线",
-      reportedAt: "2026-10-30T14:30:45",
+      reportedAt: "2026-10-30T14:30:45+08:00",
     });
     expect((await store.ledger.get("00000000-0000-4000-8000-000000000008"))?.history[0]?.note).toContain("未通知任何人");
   });
@@ -131,7 +131,7 @@ describe("合成隐患存储 · 上报提交", () => {
     const result = await store.submit.submit(draft({ foundAt: "2026-10-27T09:00" }), { idempotencyKey: "late" });
     expect(result.backfill).toBe(true);
     const record = await store.ledger.get(result.id);
-    expect(record?.foundAt).toBe("2026-10-27T09:00");
+    expect(record?.foundAt).toBe("2026-10-27T09:00:00+08:00");
     expect(record?.reportedAt.startsWith("2026-10-30")).toBe(true);
     expect(record?.history[0]?.note).toContain("补报");
   });

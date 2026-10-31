@@ -9,7 +9,7 @@ import {
 } from "../adapters/findingSubmit";
 import type { FindingDraft } from "../domain/findingDraft";
 
-const NOW = new Date(2026, 9, 30, 14, 30);
+const NOW = new Date("2026-10-30T14:30:00+08:00"); // 上海时间
 const RESULT: FindingSubmitResult = {
   id: "00000000-0000-4000-8000-000000000008",
   code: "DEMO-HZ-008",
