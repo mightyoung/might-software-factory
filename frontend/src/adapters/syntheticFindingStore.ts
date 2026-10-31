@@ -1,4 +1,4 @@
-import { listFindingRecords, syntheticFindings, type FindingLedgerAdapter } from "./findingLedger";
+import { listFindingRecords, syntheticFindingId, syntheticFindings, type FindingLedgerAdapter } from "./findingLedger";
 import { FindingSubmitError, type FindingSubmitAdapter, type FindingSubmitResult } from "./findingSubmit";
 import type { FindingRecord } from "../domain/finding";
 import {
@@ -25,7 +25,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function nextSequence(records: readonly FindingRecord[]): number {
   return records.reduce((max, record) => {
-    const match = /^DEMO-HZ-(\d+)$/.exec(record.id);
+    const match = /^DEMO-HZ-(\d+)$/.exec(record.code);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
 }
@@ -69,10 +69,12 @@ export function createSyntheticFindingStore(options: SyntheticFindingStoreOption
       const submittedAt = now();
       const backfill = isBackfill(draft.foundAt, submittedAt);
       sequence += 1;
-      const id = `DEMO-HZ-${String(sequence).padStart(3, "0")}`;
+      const id = syntheticFindingId(sequence);
+      const code = `DEMO-HZ-${String(sequence).padStart(3, "0")}`;
       const stamp = formatLocalDateTime(submittedAt);
       const record: FindingRecord = {
         id,
+        code,
         description: draft.description,
         location: draft.location,
         state: "PERSON_CONFIRM_PENDING",
@@ -98,6 +100,7 @@ export function createSyntheticFindingStore(options: SyntheticFindingStoreOption
 
       const result: FindingSubmitResult = {
         id,
+        code,
         state: record.state,
         submittedAt: record.reportedAt,
         backfill,

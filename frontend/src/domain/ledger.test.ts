@@ -28,7 +28,7 @@ describe("字段类型驱动的查询模型", () => {
       key: "recordId",
       label: "编号",
       kind: "text",
-      read: (record) => record.id,
+      read: (record) => record.code,
     };
     expect(matchesQuery(syntheticFindings[0], [typedField], { recordId: "DEMO-HZ" })).toBe(true);
   });

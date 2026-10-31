@@ -5,13 +5,14 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
   entityKey: "safety.finding",
   title: "隐患台账",
   recordKey: (record) => record.id,
+  recordLabel: (record) => record.code,
   queryFields: [
     {
       key: "keyword",
       label: "隐患编号 / 描述",
       kind: "text",
       placeholder: "输入编号或描述关键词",
-      read: (record) => `${record.id} ${record.description}`,
+      read: (record) => `${record.code} ${record.description}`,
     },
     {
       key: "state",
@@ -36,7 +37,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
     },
   ],
   columns: [
-    { key: "id", label: "隐患编号", kind: "text", read: (record) => record.id },
+    { key: "code", label: "隐患编号", kind: "text", read: (record) => record.code },
     { key: "description", label: "隐患摘要", kind: "text", read: (record) => record.description },
     { key: "location", label: "所在位置 / 设备", kind: "text", read: (record) => record.location },
     {

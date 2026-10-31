@@ -76,7 +76,7 @@ describe("上报流程", () => {
     expect(within(panel).getByText("已拉警戒线")).toBeInTheDocument();
     expect(within(panel).getByText("本人（演示）")).toBeInTheDocument();
     expect(within(panel).getAllByText("待一人确认").length).toBeGreaterThan(0);
-    expect(window.location.search).toBe("?caseId=DEMO-HZ-008");
+    expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000008");
 
     expect(await screen.findByText("共 8 条演示记录")).toBeInTheDocument();
     const rows = screen.getAllByRole("row");
@@ -100,7 +100,7 @@ describe("上报流程", () => {
   });
 
   it("上报与详情共用右侧面板：已打开详情时点“新建上报”会先关闭详情", async () => {
-    renderAs("demo.safety", `${T}/safety/findings?caseId=DEMO-HZ-001`);
+    renderAs("demo.safety", `${T}/safety/findings?caseId=00000000-0000-4000-8000-000000000001`);
     expect(await screen.findByRole("complementary", { name: "隐患详情面板" })).toBeInTheDocument();
     fireEvent.click(openButton()!);
     expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();

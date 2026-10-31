@@ -31,10 +31,10 @@ describe("已登录时的应用路由与导航", () => {
   beforeEach(() => setPath("/safety/findings"));
 
   it("旧的无租户路径被规范化为带租户前缀的路径，并保留查询串", async () => {
-    renderSignedIn("demo.manager", "/safety/findings?caseId=DEMO-HZ-001");
+    renderSignedIn("demo.manager", "/safety/findings?caseId=00000000-0000-4000-8000-000000000001");
     expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
-    expect(window.location.search).toBe("?caseId=DEMO-HZ-001");
+    expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000001");
   });
 
   it("根路径进入第一个有权应用的入口", async () => {
