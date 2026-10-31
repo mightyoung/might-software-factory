@@ -77,4 +77,4 @@ PR #10 将 finding schema 升至 v2，加入组织字段并调整默认投影与
 
 历史验证记录来自旧固定快照 `a10f7e61ac5a7051307ae313279277a9a0006623`：当时 Surefire 35 项和 Failsafe `FindingPostgresReadIT` 1 项通过；另一个旧快照的后端单测为 69 项通过。这些记录不代表当前提交的测试结果。
 
-PR #12 中间快照在后端单独运行 `./mvnw --offline --batch-mode --no-transfer-progress -pl backend test` 为 189 项通过、失败 0、错误 0、跳过 0。该数字是 PR #12 与 PR #10 基线组合的中间记录，不代表 PR #11 加入后的最终组合计数。前端 TypeScript 检查、生产构建、Vitest 16 个文件共 176 项通过及 4 个 OpenAPI 生成文件漂移检查通过；LAN PostgreSQL 兼容集成测试源码编译通过，但测试与 IT 均跳过，没有连接数据库。PR #10 已合入，当前 PR #12 已 retarget 到 `dev`；真实数据库、RLS、身份表或 JDBC Session 验收未运行。V8 migration 尚未应用，且须在应用前解决其与已应用 V9 的迁移顺序。
+PR #12 中间快照的后端测试记录为 189 项通过；这不是 PR #10、#11、#12 组合后的测试数。该组合的本地模拟树后端测试为 208 项通过，失败 0、错误 0、跳过 0。前端 TypeScript 检查、生产构建、176 项 Vitest（16 个文件）及 4 个 OpenAPI 生成文件漂移检查均通过；LAN PostgreSQL 兼容测试源码编译通过，但测试与 IT 均跳过，没有连接数据库。详见[PR #10–#12 组合验证回执](pr10-pr11-pr12-integration-validation.md)。PR #10 与 PR #12 已合入 `dev`；PR #11 的集成更新包含确认等级逻辑及组合冲突修正。最新迁移交接记录为 V9 Session/Flowable 已在 NAS 测试库应用、V8 尚未应用；应用 V8 前需另行协调顺序。本次集成和 CI 未操作数据库，也未部署；真实 RLS、身份表或 JDBC Session 验收仍未完成。

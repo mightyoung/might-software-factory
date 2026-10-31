@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.dualprevention;
 
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.PersonConfirmationRequest;
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.SafetyConfirmationRequest;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowAccessPolicy;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowAssignmentResolver;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowCase;
@@ -42,6 +44,8 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import jakarta.validation.Validator;
+
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -73,6 +77,9 @@ class FindingWorkflowControllerHttpTest {
 
     @Autowired
     private TestRepository repository;
+
+    @Autowired
+    private Validator validator;
 
     @BeforeEach
     void resetRepository() {
@@ -244,7 +251,7 @@ class FindingWorkflowControllerHttpTest {
                         .with(validCsrf())
                         .header("Idempotency-Key", IDEMPOTENCY_KEY)
                         .contentType("application/json")
-                        .content("{\"expectedVersion\":1}"))
+                        .content("{\"expectedVersion\":1,\"reason\":\"Reviewed\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
                 .andExpect(jsonPath("$.traceId").isString())
@@ -257,7 +264,7 @@ class FindingWorkflowControllerHttpTest {
                         .with(validCsrf())
                         .header("Idempotency-Key", IDEMPOTENCY_KEY)
                         .contentType("application/json")
-                        .content("{\"expectedVersion\":1}"))
+                        .content("{\"expectedVersion\":1,\"reason\":\"Reviewed\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("COMMAND_CONFLICT"));
     }
@@ -326,14 +333,92 @@ class FindingWorkflowControllerHttpTest {
     }
 
     @Test
-    void unknownFieldsRemainScopedToFindingCreateAndDoNotChangeOtherRequestDtos() throws Exception {
+    void personConfirmationRejectsSafetyOnlyGradeField() throws Exception {
         mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/person")
                         .with(authenticatedMember())
                         .with(validCsrf())
                         .header("Idempotency-Key", IDEMPOTENCY_KEY)
                         .contentType("application/json")
-                        .content("{\"expectedVersion\":1,\"note\":\"ignored by legacy DTO binding\"}"))
-                .andExpect(status().isNotFound());
+                        .content("{\"expectedVersion\":1,\"reason\":\"Reviewed\",\"grade\":\"GENERAL\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"));
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void personConfirmationRequiresNonblankOpinion() throws Exception {
+        for (String body : new String[] {
+                "{\"expectedVersion\":1}",
+                "{\"expectedVersion\":1,\"reason\":\"   \"}",
+                "{\"expectedVersion\":1,\"reason\":\"" + "x".repeat(4001) + "\"}",
+                "{\"expectedVersion\":1,\"reason\":\" " + "x".repeat(3999) + " \"}"
+        }) {
+            mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/person")
+                            .with(authenticatedMember())
+                            .with(validCsrf())
+                            .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                            .contentType("application/json")
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        }
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void confirmationOpinionApiLimitIncludesExactly4000RawCharacters() {
+        PersonConfirmationRequest exactLimit = new PersonConfirmationRequest(1L, "x".repeat(4000));
+        PersonConfirmationRequest rawOverLimit = new PersonConfirmationRequest(1L, " " + "x".repeat(3999) + " ");
+        SafetyConfirmationRequest exactSafetyLimit = new SafetyConfirmationRequest(1L, "x".repeat(4000), "MAJOR");
+        SafetyConfirmationRequest rawSafetyOverLimit = new SafetyConfirmationRequest(
+                1L, " " + "x".repeat(3999) + " ", "MAJOR");
+
+        assertThat(validator.validate(exactLimit)).isEmpty();
+        assertThat(validator.validate(rawOverLimit))
+                .anySatisfy(violation -> assertThat(violation.getPropertyPath().toString()).isEqualTo("reason"));
+        assertThat(validator.validate(exactSafetyLimit)).isEmpty();
+        assertThat(validator.validate(rawSafetyOverLimit))
+                .anySatisfy(violation -> assertThat(violation.getPropertyPath().toString()).isEqualTo("reason"));
+    }
+
+    @Test
+    void safetyConfirmationRequiresNonblankOpinionAndProfessionalGrade() throws Exception {
+        for (String body : new String[] {
+                "{\"expectedVersion\":1,\"reason\":\"Reviewed\"}",
+                "{\"expectedVersion\":1,\"reason\":\" \" ,\"grade\":\"GENERAL\"}",
+                "{\"expectedVersion\":1,\"reason\":\"Reviewed\",\"grade\":\"UNKNOWN\"}",
+                "{\"expectedVersion\":1,\"reason\":\"Reviewed\",\"grade\":\"INVALID\"}"
+        }) {
+            mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/safety")
+                            .with(authenticatedMember())
+                            .with(validCsrf())
+                            .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                            .contentType("application/json")
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        }
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void personConfirmationRejectsArbitraryUnknownFieldsWithStableQueryError() throws Exception {
+        mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/person")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("{\"expectedVersion\":1,\"reason\":\"Reviewed\",\"note\":\"unknown\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        assertThat(repository.transactionCalls).isZero();
     }
 
     private static String validCreateRequest() {

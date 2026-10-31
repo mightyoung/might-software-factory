@@ -34,7 +34,7 @@ class FindingWorkflowLifecycleTest {
         assertThat(safetyPending.state()).isEqualTo(FindingWorkflowState.SAFETY_CONFIRM_PENDING);
         assertThat(safetyPending.version()).isEqualTo(2L);
 
-        FindingWorkflowCase dispatchPending = safetyPending.confirmBySafety(MEMBER_ID, 2L);
+        FindingWorkflowCase dispatchPending = safetyPending.confirmBySafety(MEMBER_ID, 2L, "GENERAL");
         assertThat(dispatchPending.state()).isEqualTo(FindingWorkflowState.SAFETY_DISPATCH_PENDING);
         assertThat(dispatchPending.version()).isEqualTo(3L);
 
@@ -56,7 +56,7 @@ class FindingWorkflowLifecycleTest {
     void failedVerificationReturnsToRectificationAndStartsANewRound() {
         FindingWorkflowCase acceptancePending = createdFinding()
                 .confirmByPerson(MEMBER_ID, 1L)
-                .confirmBySafety(MEMBER_ID, 2L)
+                .confirmBySafety(MEMBER_ID, 2L, "GENERAL")
                 .dispatch(MEMBER_ID, 3L)
                 .submitForAcceptance(MEMBER_ID, 4L);
 
@@ -69,10 +69,19 @@ class FindingWorkflowLifecycleTest {
     }
 
     @Test
+    void safetyConfirmationMustSetAProfessionalGrade() {
+        FindingWorkflowCase safetyPending = createdFinding().confirmByPerson(MEMBER_ID, 1L);
+
+        assertThatThrownBy(() -> safetyPending.confirmBySafety(MEMBER_ID, 2L, "UNKNOWN"))
+                .isInstanceOf(FindingWorkflowRuleException.class);
+        assertThat(safetyPending.confirmBySafety(MEMBER_ID, 2L, "MAJOR").grade()).isEqualTo("MAJOR");
+    }
+
+    @Test
     void outOfOrderCommandsAndStaleVersionsAreRejected() {
         FindingWorkflowCase finding = createdFinding();
 
-        assertThatThrownBy(() -> finding.confirmBySafety(MEMBER_ID, 1L))
+        assertThatThrownBy(() -> finding.confirmBySafety(MEMBER_ID, 1L, "GENERAL"))
                 .isInstanceOf(FindingWorkflowRuleException.class);
         assertThatThrownBy(() -> finding.dispatch(MEMBER_ID, 1L))
                 .isInstanceOf(FindingWorkflowRuleException.class);
@@ -81,7 +90,7 @@ class FindingWorkflowLifecycleTest {
 
         FindingWorkflowCase acceptancePending = finding
                 .confirmByPerson(MEMBER_ID, 1L)
-                .confirmBySafety(MEMBER_ID, 2L)
+                .confirmBySafety(MEMBER_ID, 2L, "GENERAL")
                 .dispatch(MEMBER_ID, 3L)
                 .submitForAcceptance(MEMBER_ID, 4L)
                 .verify(MEMBER_ID, 5L, VerificationDecision.PASS);

@@ -4,10 +4,13 @@ import com.mightyoung.softwarefactory.dualprevention.FindingNotVisibleException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandClaim;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.ConfirmationDecision;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CreateFinding;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Dispatch;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.InitialRoute;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Notice;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.PersonConfirmationCommand;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.SafetyConfirmationCommand;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Submission;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.SubmitRemediation;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Transition;
@@ -46,6 +49,7 @@ public final class FindingWorkflowCommandService {
     private static final String INITIALIZE_DISCOVERED = "finding.workflow.initialize";
     private static final String PERSON_CONFIRM = "finding.confirm.person";
     private static final String SAFETY_CONFIRM = "finding.confirm.safety";
+    private static final String CONFIRMATION_FINGERPRINT_VERSION = "confirmation-payload-v2";
     private static final String DISPATCH = "finding.dispatch";
     private static final String REMEDIATE = "finding.remediate";
     private static final String VERIFY = "finding.verify";
@@ -148,12 +152,18 @@ public final class FindingWorkflowCommandService {
         });
     }
 
-    public CommandResult confirmPerson(UUID commandId, UUID findingId, long expectedVersion) {
-        return confirm(commandId, findingId, expectedVersion, PERSON_CONFIRM, "PERSON", "personConfirm");
+    public CommandResult confirmPerson(
+            UUID commandId, UUID findingId, long expectedVersion, PersonConfirmationCommand request) {
+        Objects.requireNonNull(request, "request");
+        return confirm(commandId, findingId, expectedVersion, PERSON_CONFIRM, "PERSON", "personConfirm",
+                request.reason(), null);
     }
 
-    public CommandResult confirmSafety(UUID commandId, UUID findingId, long expectedVersion) {
-        return confirm(commandId, findingId, expectedVersion, SAFETY_CONFIRM, "SAFETY", "safetyConfirm");
+    public CommandResult confirmSafety(
+            UUID commandId, UUID findingId, long expectedVersion, SafetyConfirmationCommand request) {
+        Objects.requireNonNull(request, "request");
+        return confirm(commandId, findingId, expectedVersion, SAFETY_CONFIRM, "SAFETY", "safetyConfirm",
+                request.reason(), request.grade());
     }
 
     public CommandResult dispatch(UUID commandId, UUID findingId, long expectedVersion, Dispatch request) {
@@ -292,7 +302,11 @@ public final class FindingWorkflowCommandService {
             long expectedVersion,
             String permission,
             String stage,
-            String taskKey) {
+            String taskKey,
+            String requestedReason,
+            String requestedGrade) {
+        String reason = confirmationReason(requestedReason);
+        String grade = "SAFETY".equals(stage) ? professionalGrade(requestedGrade) : null;
         CurrentTenantContext context = sessionContextResolver.currentTenant();
         return repository.inTenantTransaction(context.tenantId(), tx -> {
             FindingWorkflowCase current = visibleForCommand(tx, findingId);
@@ -310,17 +324,19 @@ public final class FindingWorkflowCommandService {
                             "The safety confirmer must be different from the person confirmer");
                 }
             }
-            WorkflowCommand command = command(commandId, context, permission, findingId, expectedVersion);
+            WorkflowCommand command = command(commandId, context, permission, findingId, expectedVersion,
+                    CONFIRMATION_FINGERPRINT_VERSION, reason, grade);
             CommandClaim claim = tx.claimCommand(command);
             if (!claim.acquired()) return claim.replay();
             requireExpectedVersion(current, expectedVersion);
             FindingWorkflowCase updated = "PERSON".equals(stage)
                     ? current.confirmByPerson(context.memberId(), expectedVersion)
-                    : current.confirmBySafety(context.memberId(), expectedVersion);
-            tx.appendConfirmation(new Confirmation(findingId, stage, context.memberId(), now(),
-                    expectedVersion, commandId));
+                    : current.confirmBySafety(context.memberId(), expectedVersion, grade);
+            OffsetDateTime decidedAt = now();
+            tx.appendConfirmation(new Confirmation(findingId, stage, context.memberId(),
+                    ConfirmationDecision.APPROVE, reason, decidedAt, expectedVersion, commandId));
             tx.updateFinding(updated, current.version());
-            appendTransition(tx, current, updated, commandId, context.actorId(), null);
+            appendTransition(tx, current, updated, commandId, context.actorId(), reason, decidedAt);
             workflowFacade.completeTask(context.tenantId(), BUSINESS_TYPE, findingId, taskKey,
                     context.memberId(), Map.of());
             CommandResult result = CommandResult.from(updated);
@@ -382,9 +398,21 @@ public final class FindingWorkflowCommandService {
             UUID commandId,
             UUID actorId,
             String reason) {
+        appendTransition(tx, previous, updated, commandId, actorId, reason, now());
+    }
+
+    private static void appendTransition(
+            FindingWorkflowRepository.Transaction tx,
+            FindingWorkflowCase previous,
+            FindingWorkflowCase updated,
+            UUID commandId,
+            UUID actorId,
+            String reason,
+            OffsetDateTime occurredAt) {
         tx.appendTransition(new Transition(updated.id(), previous == null ? null : previous.state(),
-                updated.state(), commandId, actorId, now(), reason,
-                previous == null ? 0 : previous.version(), updated.version()));
+                updated.state(), commandId, actorId, occurredAt, reason,
+                previous == null ? 0 : previous.version(), updated.version(),
+                previous == null ? null : previous.grade(), updated.grade()));
     }
 
     private void publishChange(
@@ -425,6 +453,24 @@ public final class FindingWorkflowCommandService {
 
     private static String cleanReason(String reason) {
         return reason == null || reason.isBlank() ? null : reason.trim();
+    }
+
+    private static String confirmationReason(String reason) {
+        if (reason == null || reason.length() > FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) {
+            throw new FindingWorkflowRuleException("A confirmation opinion cannot exceed 4000 characters");
+        }
+        String normalized = reason.strip();
+        if (normalized.isEmpty()) {
+            throw new FindingWorkflowRuleException("A confirmation opinion is required");
+        }
+        return normalized;
+    }
+
+    private static String professionalGrade(String grade) {
+        if (!"GENERAL".equals(grade) && !"MAJOR".equals(grade)) {
+            throw new FindingWorkflowRuleException("Safety confirmation requires a GENERAL or MAJOR grade");
+        }
+        return grade;
     }
 
     private static OffsetDateTime now() {

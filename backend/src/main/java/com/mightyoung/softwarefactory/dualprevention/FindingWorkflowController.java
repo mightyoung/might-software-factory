@@ -1,11 +1,13 @@
 package com.mightyoung.softwarefactory.dualprevention;
 
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.CommandResponse;
-import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.ConfirmRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.CreateRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.DispatchRequest;
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.PersonConfirmationRequest;
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.SafetyConfirmationRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.SubmitRemediationRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.VerifyRequest;
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.WorkflowInitializationRequest;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowCommandService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,7 +39,7 @@ public final class FindingWorkflowController {
     public CommandResponse initializeLegacyWorkflow(
             @PathVariable UUID id,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @Valid @RequestBody ConfirmRequest request) {
+            @Valid @RequestBody WorkflowInitializationRequest request) {
         return response(service.initializeDiscoveredWorkflow(
                 parseIdempotencyKey(idempotencyKey), id, request.expectedVersion()));
     }
@@ -46,16 +48,18 @@ public final class FindingWorkflowController {
     public CommandResponse confirmPerson(
             @PathVariable UUID id,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @Valid @RequestBody ConfirmRequest request) {
-        return response(service.confirmPerson(parseIdempotencyKey(idempotencyKey), id, request.expectedVersion()));
+            @Valid @RequestBody PersonConfirmationRequest request) {
+        return response(service.confirmPerson(parseIdempotencyKey(idempotencyKey), id,
+                request.expectedVersion(), request.toCommand()));
     }
 
     @PostMapping("/api/v1/findings/{id}/confirm/safety")
     public CommandResponse confirmSafety(
             @PathVariable UUID id,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @Valid @RequestBody ConfirmRequest request) {
-        return response(service.confirmSafety(parseIdempotencyKey(idempotencyKey), id, request.expectedVersion()));
+            @Valid @RequestBody SafetyConfirmationRequest request) {
+        return response(service.confirmSafety(parseIdempotencyKey(idempotencyKey), id,
+                request.expectedVersion(), request.toCommand()));
     }
 
     @PostMapping("/api/v1/findings/{id}/dispatch")

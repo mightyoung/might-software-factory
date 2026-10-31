@@ -92,7 +92,87 @@ public final class FindingWorkflowApiModels {
         }
     }
 
-    public record ConfirmRequest(@Min(1) long expectedVersion) {
+    public record WorkflowInitializationRequest(@Min(1) long expectedVersion) {
+    }
+
+    @JsonDeserialize(using = PersonConfirmationRequestDeserializer.class)
+    public record PersonConfirmationRequest(
+            @Min(1) long expectedVersion,
+            @NotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason) {
+        FindingWorkflowContracts.PersonConfirmationCommand toCommand() {
+            return new FindingWorkflowContracts.PersonConfirmationCommand(reason);
+        }
+    }
+
+    @JsonDeserialize(using = SafetyConfirmationRequestDeserializer.class)
+    public record SafetyConfirmationRequest(
+            @Min(1) long expectedVersion,
+            @NotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason,
+            @NotBlank @Pattern(regexp = "GENERAL|MAJOR") String grade) {
+        FindingWorkflowContracts.SafetyConfirmationCommand toCommand() {
+            return new FindingWorkflowContracts.SafetyConfirmationCommand(reason, grade);
+        }
+    }
+
+    /** Rejects extra person-confirmation fields so only the safety stage can submit a grade. */
+    public static final class PersonConfirmationRequestDeserializer
+            extends StdDeserializer<PersonConfirmationRequest> {
+
+        private static final Set<String> FIELDS = Set.of("expectedVersion", "reason");
+
+        public PersonConfirmationRequestDeserializer() {
+            super(PersonConfirmationRequest.class);
+        }
+
+        @Override
+        public PersonConfirmationRequest deserialize(JsonParser parser, DeserializationContext context)
+                throws JacksonException {
+            JsonNode node = object(parser, context, PersonConfirmationRequest.class, FIELDS);
+            Long expectedVersion = value(node.get("expectedVersion"), Long.class, context);
+            return new PersonConfirmationRequest(expectedVersion == null ? 0 : expectedVersion,
+                    value(node.get("reason"), String.class, context));
+        }
+    }
+
+    /** Rejects extra safety-confirmation fields and leaves grade validation to bean and service rules. */
+    public static final class SafetyConfirmationRequestDeserializer
+            extends StdDeserializer<SafetyConfirmationRequest> {
+
+        private static final Set<String> FIELDS = Set.of("expectedVersion", "reason", "grade");
+
+        public SafetyConfirmationRequestDeserializer() {
+            super(SafetyConfirmationRequest.class);
+        }
+
+        @Override
+        public SafetyConfirmationRequest deserialize(JsonParser parser, DeserializationContext context)
+                throws JacksonException {
+            JsonNode node = object(parser, context, SafetyConfirmationRequest.class, FIELDS);
+            Long expectedVersion = value(node.get("expectedVersion"), Long.class, context);
+            return new SafetyConfirmationRequest(expectedVersion == null ? 0 : expectedVersion,
+                    value(node.get("reason"), String.class, context),
+                    value(node.get("grade"), String.class, context));
+        }
+    }
+
+    private static JsonNode object(
+            JsonParser parser, DeserializationContext context, Class<?> requestType, Set<String> fields)
+            throws JacksonException {
+        JsonNode node = context.readTree(parser);
+        if (node == null || !node.isObject()) {
+            return context.reportInputMismatch(requestType, "Finding confirmation request must be a JSON object");
+        }
+        for (String field : node.propertyNames()) {
+            if (!fields.contains(field)) {
+                return context.reportInputMismatch(requestType, "Unsupported field in finding confirmation request");
+            }
+        }
+        return node;
+    }
+
+    private static <T> T value(JsonNode node, Class<T> type, DeserializationContext context)
+            throws JacksonException {
+        return node == null || node.isNull() ? null : context.readTreeAsValue(node, type);
     }
 
     public record DispatchRequest(
