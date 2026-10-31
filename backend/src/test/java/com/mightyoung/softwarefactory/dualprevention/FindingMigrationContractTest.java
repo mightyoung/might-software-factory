@@ -29,4 +29,42 @@ class FindingMigrationContractTest {
                 .contains("organization_id, discovered_at desc, id");
         assertThat(executableSql).doesNotContain("grant ", "insert into", "update ", "delete from");
     }
+
+    @Test
+    void reportedMetadataMigrationKeepsAllNewFieldsNullableForLegacyRows() throws IOException {
+        String sql = Files.readString(Path.of("src/main/resources/db/migration/V8__finding_reported_metadata.sql"))
+                .toLowerCase(java.util.Locale.ROOT);
+        String executableSql = sql.lines()
+                .filter(line -> !line.stripLeading().startsWith("--"))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        String normalizedSql = executableSql.replaceAll("\\s+", " ");
+
+        assertThat(executableSql).contains(
+                "alter table public.finding",
+                "add column source_category varchar(32)",
+                "add column urgency varchar(16)",
+                "add column location text",
+                "add column interim_measure text",
+                "add column backfill boolean",
+                "constraint finding_source_category_valid",
+                "constraint finding_urgency_valid",
+                "constraint finding_location_length",
+                "constraint finding_interim_measure_length",
+                "constraint finding_report_metadata_legacy_or_complete");
+        assertThat(executableSql).doesNotContain(" update public.finding", "grant ", "create policy");
+        String unicodeWhiteSpaceCodePoints = java.util.stream.IntStream.of(
+                        9, 10, 11, 12, 13, 32, 133, 160, 5760,
+                        8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+                        8232, 8233, 8239, 8287, 12288)
+                .mapToObj(codePoint -> "chr(" + codePoint + ")")
+                .collect(java.util.stream.Collectors.joining(" || "));
+        assertThat(normalizedSql).contains("translate(location, " + unicodeWhiteSpaceCodePoints + ", '') <> ''")
+                .doesNotContain("[:space:]", "location ~");
+        assertThat(executableSql).doesNotContain(
+                "add column source_category varchar(32) not null",
+                "add column urgency varchar(16) not null",
+                "add column location text not null",
+                "add column interim_measure text not null",
+                "add column backfill boolean not null");
+    }
 }

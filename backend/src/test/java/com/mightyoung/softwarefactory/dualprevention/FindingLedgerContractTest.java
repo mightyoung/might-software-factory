@@ -65,7 +65,7 @@ class FindingLedgerContractTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void registersFindingV2WithOnlyLogicalSchemaFieldsAndExactPageSemantics() throws IOException {
+    void registersFindingV3WithOnlyLogicalSchemaFieldsAndExactPageSemantics() throws IOException {
         Map<String, Object> contract = readContract();
         Map<String, Object> schemas = schemas(contract);
         Map<String, Object> findingSchema = (Map<String, Object>) schemas.get("FindingEntitySchema");
@@ -74,19 +74,31 @@ class FindingLedgerContractTest {
         assertThat(((Map<String, Object>) schemaProperties.get("key")).get("const")).isEqualTo("finding");
         assertThat(((Map<String, Object>) schemaProperties.get("schemaVersion")).get("const"))
                 .isEqualTo(FindingEntitySchema.SCHEMA_VERSION);
-        assertThat(Integer.parseInt(FindingEntitySchema.SCHEMA_VERSION)).isGreaterThan(1);
+        assertThat(FindingEntitySchema.SCHEMA_VERSION).isEqualTo("3");
         assertThat(new FindingEntitySchema().schema().schemaVersion()).isEqualTo(FindingEntitySchema.SCHEMA_VERSION);
         assertThat(((Map<String, Object>) schemaProperties.get("schemaVersion")).get("description").toString())
                 .contains("Cache schema metadata by", "discard the older cached schema", "default ordering changes");
         assertThat(((Map<String, Object>) schemaProperties.get("idField")).get("const")).isEqualTo("id");
         assertThat((List<String>) ((Map<String, Object>) schemaProperties.get("defaultFields")).get("const"))
                 .containsExactly("id", "code", "organizationId", "organizationName", "description",
-                        "discoveredAt", "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
+                        "discoveredAt", "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
+                        "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
         Map<String, Object> fieldsObject = (Map<String, Object>) schemaProperties.get("fields");
         Map<String, Object> fields = (Map<String, Object>) fieldsObject.get("properties");
         assertThat(fields.keySet()).containsExactlyInAnyOrder(
                 "id", "code", "organizationId", "organizationName", "description", "discoveredAt",
+                "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
                 "sourceEventId", "riskId", "grade", "state", "roundNo", "version", "createdAt", "updatedAt");
+        Map<String, Object> componentSchemas = schemas(contract);
+        Map<String, Object> sourceCategory = (Map<String, Object>) componentSchemas.get("FindingSourceCategoryField");
+        Map<String, Object> sourceValues = (Map<String, Object>) ((Map<String, Object>) sourceCategory.get("properties"))
+                .get("enumValues");
+        assertThat((List<String>) sourceValues.get("const"))
+                .containsExactly("FIELD_OBSERVATION", "INSPECTION", "PERSON_REPORT");
+        Map<String, Object> urgency = (Map<String, Object>) componentSchemas.get("FindingUrgencyField");
+        Map<String, Object> urgencyValues = (Map<String, Object>) ((Map<String, Object>) urgency.get("properties"))
+                .get("enumValues");
+        assertThat((List<String>) urgencyValues.get("const")).containsExactly("NORMAL", "URGENT");
         assertThat(contract.get("x-pagination-semantics").toString())
                 .contains("one-based offset", "exact", "after tenant and data-scope predicates",
                         "pageCount = ceil(total / size)", "pageCount is 0 when total is 0");
@@ -96,7 +108,6 @@ class FindingLedgerContractTest {
                 .containsExactly(Map.of("field", "createdAt", "direction", "DESC"),
                         Map.of("field", "id", "direction", "ASC"));
 
-        Map<String, Object> componentSchemas = schemas(contract);
         Map<String, Object> state = (Map<String, Object>) componentSchemas.get("FindingStateField");
         Map<String, Object> stateProperties = (Map<String, Object>) state.get("properties");
         assertThat((List<String>) ((Map<String, Object>) stateProperties.get("enumValues")).get("const"))
@@ -156,21 +167,34 @@ class FindingLedgerContractTest {
 
         assertValid(listResponse, """
                 {"data":{"items":[{"id":"00112233-4455-6677-8899-aabbccddeeff","code":"FND-1001",
-                  "discoveredAt":"2026-10-30T10:00:00Z","grade":"GENERAL","state":"PERSON_CONFIRM_PENDING","roundNo":1}],
+                  "discoveredAt":"2026-10-30T10:00:00Z","sourceCategory":"FIELD_OBSERVATION","urgency":"URGENT",
+                  "location":"North loading dock","interimMeasure":"Temporary barrier installed","backfill":true,
+                  "grade":"GENERAL","state":"PERSON_CONFIRM_PENDING","roundNo":1}],
                   "page":{"number":1,"size":50,"total":101,"pageCount":3}},
-                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"2"}}
+                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"3"}}
                 """);
         assertInvalid(listResponse, """
                 {"data":{"items":[],"page":{"number":1,"size":50,"pageCount":0}},
-                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"2"}}
+                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"3"}}
                 """);
         assertValid(detailResponse, """
                 {"data":{"id":"00112233-4455-6677-8899-aabbccddeeff","code":"FND-1001",
                   "organizationId":"11112233-4455-6677-8899-aabbccddeeff","organizationName":"安全一部",
                   "description":"Test-only synthetic finding","discoveredAt":"2026-10-30T10:00:00Z",
+                  "sourceCategory":"INSPECTION","urgency":"NORMAL","location":"Workshop floor",
+                  "interimMeasure":null,"backfill":false,
                   "sourceEventId":null,"riskId":null,"grade":"UNKNOWN","state":"PERSON_CONFIRM_PENDING",
                   "roundNo":1,"version":1,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
-                 "meta":{"requestId":"req-2","traceId":"trace-2","schemaVersion":"2"}}
+                 "meta":{"requestId":"req-2","traceId":"trace-2","schemaVersion":"3"}}
+                """);
+        assertValid(detailResponse, """
+                {"data":{"id":"00112233-4455-6677-8899-aabbccddeeff","code":"FND-1002",
+                  "organizationId":"11112233-4455-6677-8899-aabbccddeeff","organizationName":"安全一部",
+                  "description":"Legacy synthetic finding","discoveredAt":"2026-10-30T10:00:00Z",
+                  "sourceCategory":null,"urgency":null,"location":null,"interimMeasure":null,"backfill":null,
+                  "sourceEventId":null,"riskId":null,"grade":"UNKNOWN","state":"DISCOVERED",
+                  "roundNo":1,"version":1,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
+                 "meta":{"requestId":"req-3","traceId":"trace-3","schemaVersion":"3"}}
                 """);
     }
 
@@ -241,8 +265,8 @@ class FindingLedgerContractTest {
 
     private static String findingSchemaFixture() {
         return """
-                {"key":"finding","schemaVersion":"2","idField":"id",
-                 "defaultFields":["id","code","organizationId","organizationName","description","discoveredAt","sourceEventId","riskId","grade","state","roundNo","createdAt"],
+                {"key":"finding","schemaVersion":"3","idField":"id",
+                 "defaultFields":["id","code","organizationId","organizationName","description","discoveredAt","sourceCategory","urgency","location","interimMeasure","backfill","sourceEventId","riskId","grade","state","roundNo","createdAt"],
                  "fields":{
                    "id":{"type":"UUID","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":[]},
                    "code":{"type":"TEXT","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","CONTAINS"],"maxLength":64,"enumValues":[]},
@@ -250,6 +274,11 @@ class FindingLedgerContractTest {
                    "organizationName":{"type":"TEXT","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
                    "description":{"type":"TEXT","nullable":false,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
                    "discoveredAt":{"type":"DATETIME","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","GT","GTE","LT","LTE","BETWEEN"],"maxLength":0,"enumValues":[]},
+                   "sourceCategory":{"type":"ENUM","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":["FIELD_OBSERVATION","INSPECTION","PERSON_REPORT"]},
+                   "urgency":{"type":"ENUM","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":["NORMAL","URGENT"]},
+                   "location":{"type":"TEXT","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
+                   "interimMeasure":{"type":"TEXT","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
+                   "backfill":{"type":"BOOLEAN","nullable":true,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
                    "sourceEventId":{"type":"UUID","nullable":true,"selectable":true,"sortable":false,"operators":["EQ","IN","IS_NULL","IS_NOT_NULL"],"maxLength":0,"enumValues":[]},
                    "riskId":{"type":"UUID","nullable":true,"selectable":true,"sortable":false,"operators":["EQ","IN","IS_NULL","IS_NOT_NULL"],"maxLength":0,"enumValues":[]},
                    "grade":{"type":"ENUM","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":["UNKNOWN","GENERAL","MAJOR"]},

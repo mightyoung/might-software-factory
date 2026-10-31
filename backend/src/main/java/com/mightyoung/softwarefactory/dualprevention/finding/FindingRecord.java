@@ -20,7 +20,12 @@ public record FindingRecord(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
         UUID organizationId,
-        String organizationName) {
+        String organizationName,
+        String sourceCategory,
+        String urgency,
+        String location,
+        String interimMeasure,
+        Boolean backfill) {
 
     public Map<String, Object> toApiMap() {
         Map<String, Object> values = new LinkedHashMap<>();
@@ -38,6 +43,11 @@ public record FindingRecord(
         values.put("updatedAt", updatedAt);
         values.put("organizationId", organizationId);
         values.put("organizationName", organizationName);
+        values.put("sourceCategory", sourceCategory);
+        values.put("urgency", urgency);
+        values.put("location", location);
+        values.put("interimMeasure", interimMeasure);
+        values.put("backfill", backfill);
         return values;
     }
 }

@@ -1,6 +1,8 @@
 package com.mightyoung.softwarefactory.dualprevention;
 
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowCase;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingSourceCategory;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingUrgency;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRuleException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowState;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
@@ -87,9 +89,22 @@ class FindingWorkflowLifecycleTest {
                 .isInstanceOf(FindingWorkflowRuleException.class);
     }
 
+    @Test
+    void aggregateRejectsUnicodeWhiteSpaceOnlyLocation() {
+        assertThatThrownBy(() -> new FindingWorkflowCase(
+                TENANT_ID, FINDING_ID, ORGANIZATION_ID, "FND-2026-001", "Synthetic defect",
+                DISCOVERED_AT, null, null, "GENERAL", FindingWorkflowState.DISCOVERED, 1, 1,
+                MEMBER_ID, MEMBER_ID, FindingSourceCategory.FIELD_OBSERVATION, FindingUrgency.NORMAL,
+                "\u00A0", null, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("metadata");
+    }
+
     private static FindingWorkflowCase createdFinding() {
         return FindingWorkflowCase.create(
                 TENANT_ID, FINDING_ID, ORGANIZATION_ID, "FND-2026-001", "Synthetic defect",
-                DISCOVERED_AT, null, null, "GENERAL", MEMBER_ID);
+                DISCOVERED_AT, null, null, "GENERAL", MEMBER_ID,
+                FindingSourceCategory.FIELD_OBSERVATION, FindingUrgency.NORMAL,
+                "Loading dock", null, false);
     }
 }

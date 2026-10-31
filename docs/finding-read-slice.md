@@ -4,9 +4,11 @@
 
 ## 本地实现
 
-- `GET /api/v1/entities/finding/schema`：返回 `finding` v1 的字段目录。端点先验证当前会话和服务端读取授权。
-- `POST /api/v1/entities/finding/query`：严格解析 JSON；只接受一开始的 offset page，size 为 20/50/100、offset 不超过 10,000。字段、排序、过滤运算符和值由 `FindingEntitySchema` 和 `EntityQueryValidator` 白名单控制。默认排序 `discoveredAt DESC, id ASC`，每行始终含 `id`，响应提供精确 `total` 和 `pageCount`。
+- `GET /api/v1/entities/finding/schema`：返回 `finding` schemaVersion 3 字段目录。端点先验证当前会话和服务端读取授权。
+- `POST /api/v1/entities/finding/query`：严格解析 JSON；只接受一开始的 offset page，size 为 20/50/100、offset 不超过 10,000。字段、排序、过滤运算符和值由 `FindingEntitySchema` 和 `EntityQueryValidator` 白名单控制。默认排序 `createdAt DESC, id ASC`，每行始终含 `id`，响应提供精确 `total` 和 `pageCount`。
 - `GET /api/v1/entities/finding/{id}`：详情只按 UUID 读取。不存在与不在可见范围统一为 `404 RESOURCE_NOT_VISIBLE`。
+
+Finding 创建字段包括来源 `FIELD_OBSERVATION`、`INSPECTION`、`PERSON_REPORT`，紧急程度 `NORMAL`、`URGENT`，必填 location（最多 200 个 Unicode 码点）和选填 interimMeasure（最多 2000 个 Unicode 码点）。location 至少包含一个非 Unicode White_Space 码点；空白集合固定为 U+0009–U+000D、U+0020、U+0085、U+00A0、U+1680、U+2000–U+200A、U+2028、U+2029、U+202F、U+205F、U+3000。紧急程度是处置时效，不代替隐患等级。`backfill` 由服务端计算：发现时间严格早于提交时刻超过 24 小时才为 true；等于 24 小时及未来发现时间为 false。此次不增加未来时间校验。创建请求不能提供 `backfill`。
 
 查询范围取自验证过的 `VerifiedSessionPrincipal`，请求 body 和 `X-Tenant-Id` 不参与选租户。授权策略返回当前会话 tenant 与显式组织范围，列表 count、列表和详情查询同时应用 `tenant_id`、`organization_id` 条件。仓储使用参数化 jOOQ 查询，在一个只读 `REPEATABLE_READ` 事务内设置事务级 `app.tenant_id`，以便 RLS 生效；没有动态 SQL 字段名。
 
@@ -26,6 +28,8 @@
 
 新增 `backend/src/main/resources/db/migration/V4__identity_password_login.sql`：规范化 login key 索引，以及 `principal`、`credential` 表和租户登录 code 的 SELECT policy。此 migration 只定义结构，不创建账号、密码或授权数据，也未在任何数据库执行。
 
+新增 `backend/src/main/resources/db/migration/V8__finding_reported_metadata.sql`：为 finding 增加可空来源、紧急程度、位置、临时措施和补报字段，并校验允许值与长度。V2–V7 历史行不回填推断值；新增字段对这些行保持 null。V8 仅写入 migration 文件，本分支未应用数据库，也未变更数据库授权。
+
 默认运行配置只使用 `LAN_PG_APP_JDBC_URL` / `LAN_PG_APP_USERNAME` / `LAN_PG_APP_PASSWORD`，并关闭 runtime Flyway。P0 兼容测试 profile 仍显式使用自己的迁移配置与 `flyway_schema_history`；应用 migration 使用独立的 `flyway_schema_history_app`，避免 P0 probe migration 与业务 migration 混为一条历史。
 
 本轮只在 `might_software_factory_test` 执行了 app history 的 version 1 baseline 和 V2 finding migration。测试库已有其他 history 管理的 P0/Session 对象；baseline 只记录现存 schema 基线，不表示 app history 接管这些对象。使用既有测试管理连接执行 migration、合成数据写入和清理，没有改角色或访问其他库。对既有低权限应用角色只执行 `GRANT SELECT ON TABLE public.finding`。未在 dev 库或其他数据库迁移或授权。
@@ -43,9 +47,9 @@
 
 |用途|方法与路径|前端响应要点|
 |---|---|---|
-|字段目录|`GET /api/v1/entities/finding/schema`|`data.key=finding`、`data.schemaVersion="1"`、`data.fields`、`meta`|
+|字段目录|`GET /api/v1/entities/finding/schema`|`data.key=finding`、`data.schemaVersion="3"`、`data.fields`、`meta`|
 |分页列表|`POST /api/v1/entities/finding/query`|请求 `filterAST/sort/page.number/size/fields`；响应 `data.items`、`data.page.number/size/total/pageCount`、`meta`|
-|详情|`GET /api/v1/entities/finding/{id}`|`data` 为 finding v1 字段；`meta`|
+|详情|`GET /api/v1/entities/finding/{id}`|`data` 为 finding schemaVersion 3 字段；`meta`|
 
 ### 已封存整改证据内容
 
@@ -59,7 +63,9 @@
 
 列表使用接口基线定义的实体级注册查询路径 `/api/v1/entities/{key}/query`。这不是大屏/页面批量查询协调器；后者唯一入口仍是 `/api/v1/page-queries`，其 pageKey、widget 请求拆分、预算、缓存和渐进结果本阶段均未实现。
 
-字段 key 是 `id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影为 `id, code, discoveredAt, grade, state, roundNo`；`description` 可读但不可筛选或排序。请求体和返回投影都不包括租户/组织控制列。
+字段 key 是 `id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt`。默认投影包含创建输入、服务端业务编号、组织 ID 与租户范围内组织名称、报告元数据、状态及创建时间；历史来源、紧急程度、位置、临时措施与补报状态不推断，旧行对应字段为 null。默认排序是 `createdAt DESC, id ASC`。`description`、`organizationName` 和报告文本字段可读但不可筛选或排序。读模型以 `finding.tenant_id + organization_id` 限定数据，再按相同 tenant 条件左连接 `org_unit` 取名称；缺失的历史目录项不应隐藏隐患，`organizationName` 此时返回 null。租户控制列不对外返回；`organizationId` 是业务字段，也用于可见范围展示。
+
+PR #10 将 finding schema 升至 v2，加入组织字段并调整默认投影与排序；本堆叠字段切片继续升至 `schemaVersion="3"`，加入来源、紧急程度、位置、临时措施和补报字段。缓存键应包含调用方权限范围、entity key 与 schemaVersion；版本变化时丢弃旧缓存并重新读取字段目录。该版本号不是授权凭据。严格按 v1 或 v2 响应结构校验的客户端可能拒绝新增字段；先合并 PR #10、协调这些消费者后再部署本变更。服务端不协商返回旧版响应。
 
 浏览器使用同源 `SESSION` cookie。列表 POST 要带 `X-XSRF-TOKEN`。无有效会话是 401，读取权限或 CSRF 拒绝是 403，详情不可见统一 404，查询形状错误 400，安全读取失败 503。菜单可见性不代替服务端授权。
 
@@ -69,4 +75,6 @@
 
 本地 HTTP 登录测试使用实际 `LocalPasswordAuthenticationProvider` 与合成凭证/租户仓储；授权变化测试使用合成授权快照。新增时序测试在本请求解析授权后、读取事务完成前合成撤权，只说明请求快照语义，不是 PostgreSQL 并发/可见性证据。jOOQ MockDataProvider 检查查询形状和参数。它们不运行 PostgreSQL parser、RLS policy、连接池回收、真实身份表查询或 JDBC Session 持久化。
 
-固定基础提交 `a10f7e61ac5a7051307ae313279277a9a0006623` 的原工作区测试记录：`./mvnw -pl backend -P lan-postgres-compatibility -Dit.test=FindingPostgresReadIT verify -q` 的 Surefire 35 项与 Failsafe `FindingPostgresReadIT` 1 项通过，失败、错误、跳过均为 0。该记录不覆盖本分支的 V3/V4 或生产 provider。本分支复核后的 `./mvnw -pl backend test -q` 共 69 项通过，失败、错误、跳过均为 0；HTTP 登录使用真实 provider 与合成仓储。兼容 profile 的集成测试源码仅编译命令为 `./mvnw -pl backend -P lan-postgres-compatibility -DskipTests -DskipITs test-compile`，会编译集成测试和共享夹具；这一步不运行集成测试或连接数据库。此分支本地验证不覆盖 V3/V4 的 PostgreSQL 执行、RLS、真实身份表、JDBC Session 或应用运行角色授权。未运行 Redis、媒体服务、视频处理或负载测试；没有推送分支、创建 PR 或改 main。
+历史验证记录来自旧固定快照 `a10f7e61ac5a7051307ae313279277a9a0006623`：当时 Surefire 35 项和 Failsafe `FindingPostgresReadIT` 1 项通过；另一个旧快照的后端单测为 69 项通过。这些记录不代表当前提交的测试结果。
+
+PR #12 中间快照在后端单独运行 `./mvnw --offline --batch-mode --no-transfer-progress -pl backend test` 为 189 项通过、失败 0、错误 0、跳过 0。该数字是 PR #12 与 PR #10 基线组合的中间记录，不代表 PR #11 加入后的最终组合计数。前端 TypeScript 检查、生产构建、Vitest 16 个文件共 176 项通过及 4 个 OpenAPI 生成文件漂移检查通过；LAN PostgreSQL 兼容集成测试源码编译通过，但测试与 IT 均跳过，没有连接数据库。PR #10 已合入，当前 PR #12 已 retarget 到 `dev`；真实数据库、RLS、身份表或 JDBC Session 验收未运行。V8 migration 尚未应用，且须在应用前解决其与已应用 V9 的迁移顺序。

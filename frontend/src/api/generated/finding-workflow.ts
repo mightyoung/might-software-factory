@@ -17,7 +17,7 @@ export interface paths {
         put?: never;
         /**
          * Create a finding and start its required confirmation workflow
-         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code.
+         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code. The server calculates backfill as true only when discoveredAt is more than 24 hours before its submission time; exactly 24 hours and future timestamps produce false. This uses the compared instants, independent of the submitted offsets. No new future-time restriction is introduced. The server owns backfill and rejects it in create requests.
          */
         post: operations["createFinding"];
         delete?: never;
@@ -164,7 +164,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code. */
+        /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code and the backfill flag. Source and urgency are reporter choices and do not set the professional grade. */
         CreateFindingRequest: {
             /** Format: uuid */
             organizationId: string;
@@ -180,6 +180,20 @@ export interface components {
              * @enum {string}
              */
             grade: "UNKNOWN";
+            /**
+             * @description 现场发现 (FIELD_OBSERVATION), 检查发现 (INSPECTION), or 人员举报 (PERSON_REPORT). Describes the source of the report, not its grade.
+             * @enum {string}
+             */
+            sourceCategory: "FIELD_OBSERVATION" | "INSPECTION" | "PERSON_REPORT";
+            /**
+             * @description 普通 (NORMAL) or 需立即处置 (URGENT); independent of finding grade.
+             * @enum {string}
+             */
+            urgency: "NORMAL" | "URGENT";
+            /** @description Required location using a maximum of 200 Unicode code points. It must contain a code point outside Unicode White_Space: U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, or U+3000. */
+            location: string;
+            /** @description Optional temporary measure using a maximum of 2000 Unicode code points. */
+            interimMeasure?: string;
         };
         /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         VersionedCommandRequest: {
@@ -223,7 +237,7 @@ export interface components {
         FieldError: {
             /** @description JSON request field path using the request's property names, such as description or items[0].name. */
             field: string;
-            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, or Size; never validation prose or a rejected value. */
+            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, Size, or CodePointSize for Unicode code-point length; never validation prose or a rejected value. */
             reason: string;
         };
         ErrorResponse: {

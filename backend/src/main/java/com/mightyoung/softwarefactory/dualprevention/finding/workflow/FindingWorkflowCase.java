@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.dualprevention.validation.UnicodeWhiteSpace;
+
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -19,7 +21,12 @@ public record FindingWorkflowCase(
         int roundNo,
         long version,
         UUID createdByMemberId,
-        UUID updatedByMemberId) {
+        UUID updatedByMemberId,
+        FindingSourceCategory sourceCategory,
+        FindingUrgency urgency,
+        String location,
+        String interimMeasure,
+        Boolean backfill) {
 
     public FindingWorkflowCase {
         Objects.requireNonNull(tenantId, "tenantId");
@@ -37,6 +44,19 @@ public record FindingWorkflowCase(
         }
         Objects.requireNonNull(createdByMemberId, "createdByMemberId");
         Objects.requireNonNull(updatedByMemberId, "updatedByMemberId");
+        boolean legacyMetadata = sourceCategory == null && urgency == null && location == null
+                && interimMeasure == null && backfill == null;
+        boolean completeMetadata = sourceCategory != null && urgency != null
+                && UnicodeWhiteSpace.containsNonWhiteSpace(location) && backfill != null;
+        if (!legacyMetadata && !completeMetadata) {
+            throw new IllegalArgumentException("Finding report metadata must be fully present or legacy-null");
+        }
+        if (location != null && codePointLength(location) > 200) {
+            throw new IllegalArgumentException("Finding location exceeds 200 Unicode code points");
+        }
+        if (interimMeasure != null && codePointLength(interimMeasure) > 2000) {
+            throw new IllegalArgumentException("Finding interim measure exceeds 2000 Unicode code points");
+        }
     }
 
     public static FindingWorkflowCase create(
@@ -49,10 +69,15 @@ public record FindingWorkflowCase(
             UUID sourceEventId,
             UUID riskId,
             String grade,
-            UUID createdByMemberId) {
+            UUID createdByMemberId,
+            FindingSourceCategory sourceCategory,
+            FindingUrgency urgency,
+            String location,
+            String interimMeasure,
+            boolean backfill) {
         return new FindingWorkflowCase(tenantId, id, organizationId, code, description, discoveredAt,
                 sourceEventId, riskId, grade, FindingWorkflowState.PERSON_CONFIRM_PENDING, 1, 1,
-                createdByMemberId, createdByMemberId);
+                createdByMemberId, createdByMemberId, sourceCategory, urgency, location, interimMeasure, backfill);
     }
 
     /** Explicitly adopts one legacy DISCOVERED row into the person-confirmation workflow. */
@@ -112,7 +137,11 @@ public record FindingWorkflowCase(
         }
         return new FindingWorkflowCase(tenantId, id, organizationId, code, description, discoveredAt,
                 sourceEventId, riskId, grade, next, nextRound, Math.addExact(version, 1),
-                createdByMemberId, memberId);
+                createdByMemberId, memberId, sourceCategory, urgency, location, interimMeasure, backfill);
+    }
+
+    private static int codePointLength(String value) {
+        return value.codePointCount(0, value.length());
     }
 
     private static String required(String value, String field) {

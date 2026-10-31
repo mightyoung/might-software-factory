@@ -19,7 +19,11 @@ public final class FindingWorkflowContracts {
             OffsetDateTime discoveredAt,
             UUID sourceEventId,
             UUID riskId,
-            String grade) {
+            String grade,
+            FindingSourceCategory sourceCategory,
+            FindingUrgency urgency,
+            String location,
+            String interimMeasure) {
     }
 
     public record Dispatch(

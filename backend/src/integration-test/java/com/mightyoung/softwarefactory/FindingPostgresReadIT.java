@@ -102,9 +102,21 @@ class FindingPostgresReadIT {
             assertThat(page.data().items()).hasSize(1);
             assertThat(page.data().items().getFirst()).containsEntry("id", findingA);
             assertThat(page.data().items().getFirst()).doesNotContainKeys("tenant_id", "organization_id");
+            assertThat(page.data().items().getFirst())
+                    .containsEntry("sourceCategory", "FIELD_OBSERVATION")
+                    .containsEntry("urgency", "NORMAL")
+                    .containsEntry("location", "Tenant A loading dock")
+                    .containsEntry("interimMeasure", "Tenant A temporary barrier")
+                    .containsEntry("backfill", false);
 
             var detail = findingReadService.detail(findingA);
             assertThat(detail.data()).containsEntry("id", findingA);
+            assertThat(detail.data())
+                    .containsEntry("sourceCategory", "FIELD_OBSERVATION")
+                    .containsEntry("urgency", "NORMAL")
+                    .containsEntry("location", "Tenant A loading dock")
+                    .containsEntry("interimMeasure", "Tenant A temporary barrier")
+                    .containsEntry("backfill", false);
             assertThatThrownBy(() -> findingReadService.detail(findingB))
                     .isInstanceOf(FindingNotVisibleException.class);
 
@@ -129,6 +141,8 @@ class FindingPostgresReadIT {
                                to_regclass('public.flyway_schema_history_app') is not null,
                                exists(select 1 from public.flyway_schema_history_app
                                       where version = '2' and success),
+                               exists(select 1 from public.flyway_schema_history_app
+                                      where version = '8' and success),
                                has_table_privilege(?, 'public.finding', 'SELECT'),
                                has_table_privilege(current_user, 'public.finding', 'INSERT'),
                                has_table_privilege(current_user, 'public.finding', 'DELETE')
@@ -142,9 +156,10 @@ class FindingPostgresReadIT {
                 assertThat(result.getBoolean(4)).isTrue();
                 assertThat(result.getBoolean(5)).isTrue();
                 assertThat(result.getBoolean(6)).isTrue();
-                assertThat(result.getBoolean(7)).isTrue();
+                assertThat(result.getBoolean(7)).as("V8 must be applied before metadata read acceptance").isTrue();
                 assertThat(result.getBoolean(8)).isTrue();
                 assertThat(result.getBoolean(9)).isTrue();
+                assertThat(result.getBoolean(10)).isTrue();
             }
         }
     }
@@ -221,16 +236,21 @@ class FindingPostgresReadIT {
                 PreparedStatement insert = connection.prepareStatement("""
                         insert into public.finding (
                             tenant_id, id, organization_id, code, description, discovered_at,
-                            grade, state, round_no, version, created_by_member_id, updated_by_member_id
-                        ) values (?, ?, ?, ?, ?, ?, 'GENERAL', 'DISCOVERED', 1, 1, ?, ?)
+                            grade, state, round_no, version, created_by_member_id, updated_by_member_id,
+                            source_category, urgency, location, interim_measure, backfill
+                        ) values (?, ?, ?, ?, ?, ?, 'GENERAL', 'DISCOVERED', 1, 1, ?, ?, ?, ?, ?, ?, ?)
                         """)) {
             connection.setAutoCommit(false);
             try {
                 setTenantContext(connection, tenantA);
-                insertSyntheticFinding(insert, tenantA, findingA, organizationA, "FINDING-IT-A");
+                insertSyntheticFinding(insert, tenantA, findingA, organizationA, "FINDING-IT-A",
+                        "FIELD_OBSERVATION", "NORMAL", "Tenant A loading dock",
+                        "Tenant A temporary barrier", false);
                 assertThat(insert.executeUpdate()).isEqualTo(1);
                 setTenantContext(connection, tenantB);
-                insertSyntheticFinding(insert, tenantB, findingB, organizationB, "FINDING-IT-B");
+                insertSyntheticFinding(insert, tenantB, findingB, organizationB, "FINDING-IT-B",
+                        "PERSON_REPORT", "URGENT", "Tenant B west entrance",
+                        "Tenant B area closed", true);
                 assertThat(insert.executeUpdate()).isEqualTo(1);
                 connection.commit();
             } catch (Exception exception) {
@@ -252,7 +272,8 @@ class FindingPostgresReadIT {
     }
 
     private static void insertSyntheticFinding(PreparedStatement insert, UUID tenantId, UUID findingId,
-            UUID organizationId, String code) throws Exception {
+            UUID organizationId, String code, String sourceCategory, String urgency, String location,
+            String interimMeasure, boolean backfill) throws Exception {
         UUID fixtureMember = UUID.randomUUID();
         insert.setObject(1, tenantId);
         insert.setObject(2, findingId);
@@ -262,6 +283,11 @@ class FindingPostgresReadIT {
         insert.setObject(6, OffsetDateTime.now(ZoneOffset.UTC).withNano(0));
         insert.setObject(7, fixtureMember);
         insert.setObject(8, fixtureMember);
+        insert.setString(9, sourceCategory);
+        insert.setString(10, urgency);
+        insert.setString(11, location);
+        insert.setString(12, interimMeasure);
+        insert.setBoolean(13, backfill);
     }
 
     private static void runAsTenant(UUID tenantId) {

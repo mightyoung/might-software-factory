@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -81,10 +82,14 @@ public final class FindingWorkflowCommandService {
         Objects.requireNonNull(commandId, "commandId");
         Objects.requireNonNull(request, "request");
         CurrentTenantContext context = sessionContextResolver.currentTenant();
-        LocalDate businessDay = LocalDate.now(clock.withZone(ZoneId.of("Asia/Shanghai")));
+        OffsetDateTime submittedAt = OffsetDateTime.now(clock);
+        LocalDate businessDay = submittedAt.toInstant().atZone(ZoneId.of("Asia/Shanghai")).toLocalDate();
+        boolean backfill = Duration.between(request.discoveredAt().toInstant(), submittedAt.toInstant())
+                .compareTo(Duration.ofHours(24)) > 0;
         WorkflowCommand command = command(commandId, context, CREATE,
                 request.organizationId(), request.description(), request.discoveredAt(),
-                request.sourceEventId(), request.riskId(), request.grade());
+                request.sourceEventId(), request.riskId(), request.grade(), request.sourceCategory(),
+                request.urgency(), request.location(), request.interimMeasure());
 
         return repository.inTenantTransaction(context.tenantId(), tx -> {
             accessPolicy.requireAction(context, CREATE, request.organizationId());
@@ -98,7 +103,8 @@ public final class FindingWorkflowCommandService {
             FindingWorkflowCase finding = FindingWorkflowCase.create(
                     context.tenantId(), findingId, request.organizationId(), code, request.description(),
                     request.discoveredAt(), request.sourceEventId(), request.riskId(), request.grade(),
-                    context.memberId());
+                    context.memberId(), request.sourceCategory(), request.urgency(), request.location(),
+                    request.interimMeasure(), backfill);
             tx.insertFinding(finding);
             workflowFacade.startProcess(context.tenantId(), BUSINESS_TYPE, findingId, 1,
                     PROCESS_DEFINITION_KEY, Map.of(
