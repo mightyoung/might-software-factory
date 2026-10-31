@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: Might Software Factory Session API
+  version: 1.0.0
+  description: Same-origin session authentication and the minimum identity choices for finding reports.
+x-implementation-status: csrf-login-logout-current-session-and-scoped-reportable-organizations
+x-session-policy: >-
+  The browser uses the server-issued SESSION cookie and XSRF-TOKEN double-submit cookie. Login
+  succeeds with 204 No Content. Tenant, account, actor, and member identity are resolved by the
+  server and never selected by finding requests.
+servers:
+  - url: /
+paths:
+  /api/v1/auth/csrf:
+    get:
+      operationId: bootstrapCsrf
+      summary: Issue the CSRF cookie needed for same-origin writes
+      responses:
+        '204':
+          description: CSRF token cookie was issued or refreshed.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Contains the XSRF-TOKEN cookie readable by the same-origin browser client.
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Start a session using local credentials and a tenant code
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '204':
+          description: Login succeeded. The server established a session; no response body is returned.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Session cookie. Login rotates the session identifier and clears the old CSRF token.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/CsrfDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: End the current session, if one is active
+      description: Idempotently invalidates any active session cookie and clears the session/CSRF cookies.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Session invalidated if present; session/CSRF cookies are cleared.
+        '403':
+          $ref: '#/components/responses/CsrfDenied'
+  /api/v1/session/current:
+    get:
+      operationId: getCurrentSession
+      summary: Read and revalidate the current member identity
+      security:
+        - sessionCookieAuth: []
+      responses:
+        '200':
+          description: Current active human member and tenant display information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+  /api/v1/organizations/reportable:
+    get:
+      operationId: listReportableOrganizations
+      summary: List organizations where the current member can create findings
+      description: >-
+        Returns only active organizations in the current member's effective finding.create action
+        scope. It is not a tenant-wide organization directory. The create command independently
+        rechecks the current permission and organization scope.
+      security:
+        - sessionCookieAuth: []
+      responses:
+        '200':
+          description: Active reportable organizations; an empty array means none are currently authorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportableOrganizationsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+components:
+  securitySchemes:
+    sessionCookieAuth:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: Server-issued, HttpOnly session cookie.
+  parameters:
+    CsrfToken:
+      in: header
+      name: X-XSRF-TOKEN
+      required: true
+      description: Must match the same-origin XSRF-TOKEN cookie.
+      schema:
+        type: string
+  schemas:
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [loginKey, password, tenantCode]
+      properties:
+        loginKey: { type: string, minLength: 1, maxLength: 200 }
+        password: { type: string, minLength: 1, maxLength: 1024, writeOnly: true }
+        tenantCode: { type: string, minLength: 1, maxLength: 64 }
+    CurrentSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CurrentSession'
+    CurrentSession:
+      type: object
+      additionalProperties: false
+      required: [actorId, accountId, tenantId, tenantCode, tenantName, memberId, displayName]
+      properties:
+        actorId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        memberId: { type: string, format: uuid }
+        displayName: { type: string }
+    ReportableOrganizationsResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportableOrganization'
+    ReportableOrganization:
+      type: object
+      additionalProperties: false
+      required: [id, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+  responses:
+    InvalidRequest:
+      description: Login request is malformed or outside the accepted limits.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: The credentials are invalid or a verified active session is required.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    CsrfDenied:
+      description: CSRF token is missing or does not match the cookie.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    ActionDenied:
+      description: The current account, tenant, or membership is inactive or no longer authorized.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    DependencyUnavailable:
+      description: Required identity or authorization data could not be safely read.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'

@@ -21,10 +21,13 @@ import com.mightyoung.softwarefactory.workflow.WorkflowFacade;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +56,7 @@ public final class FindingWorkflowCommandService {
     private final FindingWorkflowEvidencePolicy evidencePolicy;
     private final WorkflowFacade workflowFacade;
     private final FindingWorkflowEventPublisher eventPublisher;
+    private final Clock clock;
 
     public FindingWorkflowCommandService(
             SessionContextResolver sessionContextResolver,
@@ -61,7 +65,8 @@ public final class FindingWorkflowCommandService {
             FindingWorkflowAssignmentResolver assignmentResolver,
             FindingWorkflowEvidencePolicy evidencePolicy,
             WorkflowFacade workflowFacade,
-            FindingWorkflowEventPublisher eventPublisher) {
+            FindingWorkflowEventPublisher eventPublisher,
+            Clock clock) {
         this.sessionContextResolver = Objects.requireNonNull(sessionContextResolver, "sessionContextResolver");
         this.repository = Objects.requireNonNull(repository, "repository");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
@@ -69,14 +74,16 @@ public final class FindingWorkflowCommandService {
         this.evidencePolicy = Objects.requireNonNull(evidencePolicy, "evidencePolicy");
         this.workflowFacade = Objects.requireNonNull(workflowFacade, "workflowFacade");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public CommandResult create(UUID commandId, CreateFinding request) {
         Objects.requireNonNull(commandId, "commandId");
         Objects.requireNonNull(request, "request");
         CurrentTenantContext context = sessionContextResolver.currentTenant();
+        LocalDate businessDay = LocalDate.now(clock.withZone(ZoneId.of("Asia/Shanghai")));
         WorkflowCommand command = command(commandId, context, CREATE,
-                request.organizationId(), request.code(), request.description(), request.discoveredAt(),
+                request.organizationId(), request.description(), request.discoveredAt(),
                 request.sourceEventId(), request.riskId(), request.grade());
 
         return repository.inTenantTransaction(context.tenantId(), tx -> {
@@ -86,9 +93,10 @@ public final class FindingWorkflowCommandService {
 
             InitialRoute route = assignmentResolver.resolve(context.tenantId(), request.organizationId());
             requireRouteMembers(context, route, request.organizationId());
+            String code = tx.nextFindingCode(businessDay);
             UUID findingId = UUID.randomUUID();
             FindingWorkflowCase finding = FindingWorkflowCase.create(
-                    context.tenantId(), findingId, request.organizationId(), request.code(), request.description(),
+                    context.tenantId(), findingId, request.organizationId(), code, request.description(),
                     request.discoveredAt(), request.sourceEventId(), request.riskId(), request.grade(),
                     context.memberId());
             tx.insertFinding(finding);

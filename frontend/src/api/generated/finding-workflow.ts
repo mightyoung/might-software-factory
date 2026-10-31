@@ -17,7 +17,7 @@ export interface paths {
         put?: never;
         /**
          * Create a finding and start its required confirmation workflow
-         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
+         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code.
          */
         post: operations["createFinding"];
         delete?: never;
@@ -167,7 +167,6 @@ export interface components {
         CreateFindingRequest: {
             /** Format: uuid */
             organizationId: string;
-            code: string;
             description: string;
             /** Format: date-time */
             discoveredAt: string;
@@ -175,8 +174,11 @@ export interface components {
             sourceEventId?: string;
             /** Format: uuid */
             riskId?: string;
-            /** @enum {string} */
-            grade: "UNKNOWN" | "GENERAL" | "MAJOR";
+            /**
+             * @description The reporter cannot assign a professional finding grade.
+             * @enum {string}
+             */
+            grade: "UNKNOWN";
         };
         VersionedCommandRequest: {
             expectedVersion: number;
@@ -206,6 +208,7 @@ export interface components {
             data: {
                 /** Format: uuid */
                 findingId: string;
+                code: string;
                 /** @enum {string} */
                 state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "CLOSED";
                 roundNo: number;

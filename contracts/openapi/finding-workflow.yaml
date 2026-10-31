@@ -32,6 +32,8 @@ paths:
       description: >-
         Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each
         confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
+        The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission
+        day sequence. A completed idempotent replay returns the original finding ID and code.
       security:
         - sessionCookieAuth: []
       parameters:
@@ -424,15 +426,17 @@ components:
     CreateFindingRequest:
       type: object
       additionalProperties: false
-      required: [organizationId, code, description, discoveredAt, grade]
+      required: [organizationId, description, discoveredAt, grade]
       properties:
         organizationId: { type: string, format: uuid }
-        code: { type: string, minLength: 1, maxLength: 64 }
         description: { type: string, minLength: 1, maxLength: 20000 }
         discoveredAt: { type: string, format: date-time }
         sourceEventId: { type: string, format: uuid }
         riskId: { type: string, format: uuid }
-        grade: { type: string, enum: [UNKNOWN, GENERAL, MAJOR] }
+        grade:
+          type: string
+          enum: [UNKNOWN]
+          description: The reporter cannot assign a professional finding grade.
     VersionedCommandRequest:
       type: object
       additionalProperties: false
@@ -473,9 +477,12 @@ components:
       properties:
         data:
           type: object
-          required: [findingId, state, roundNo, version]
+          required: [findingId, code, state, roundNo, version]
           properties:
             findingId: { type: string, format: uuid }
+            code:
+              type: string
+              pattern: '^YH-[0-9]{8}-[0-9]{4,}$'
             state:
               type: string
               enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING,

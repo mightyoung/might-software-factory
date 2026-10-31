@@ -29,6 +29,10 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.OffsetDateTime;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -66,8 +70,7 @@ class FindingWorkflowCommandServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new FindingWorkflowCommandService(new SessionContextResolver(), repository,
-                accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add);
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
         asMember(CREATOR, TENANT_A);
     }
 
@@ -174,15 +177,78 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CommandResult replay = service.create(key, request);
 
         assertThat(replay).isEqualTo(first);
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
         assertThat(repository.findingCount()).isEqualTo(1);
         assertThat(workflow.startedProcesses).hasSize(1);
         assertThat(publishedEvents).hasSize(1);
 
         FindingWorkflowContracts.CreateFinding different = new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "FND-TEST-02", "Changed request", DISCOVERED_AT, null, null, "GENERAL");
+                ORGANIZATION_ID, "Changed request", DISCOVERED_AT, null, null, "UNKNOWN");
         assertThatThrownBy(() -> service.create(key, different))
                 .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
         assertThat(repository.findingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void differentFindingsUseTheNextTenantBusinessDaySequence() {
+        FindingWorkflowContracts.CommandResult first = service.create(
+                command("60000000-0000-0000-0000-000000000013"), newFinding());
+        FindingWorkflowContracts.CommandResult second = service.create(
+                command("60000000-0000-0000-0000-000000000014"), newFinding());
+
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
+        assertThat(second.code()).isEqualTo("YH-20261031-0002");
+    }
+
+    @Test
+    void findingNumberSequencesAreIsolatedByTenantForTheSameBusinessDay() {
+        FindingWorkflowContracts.CommandResult tenantA = service.create(
+                command("60000000-0000-0000-0000-000000000019"), newFinding());
+
+        accessPolicy.permittedTenants.add(TENANT_B);
+        asMember(CREATOR, TENANT_B);
+        FindingWorkflowContracts.CommandResult tenantB = service.create(
+                command("60000000-0000-0000-0000-000000000020"), newFinding());
+
+        assertThat(tenantA.code()).isEqualTo("YH-20261031-0001");
+        assertThat(tenantB.code()).isEqualTo("YH-20261031-0001");
+        assertThat(repository.numberSequences)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 1L)
+                .containsEntry(new SequenceKey(TENANT_B, LocalDate.of(2026, 10, 31)), 1L);
+    }
+
+    @Test
+    void sequenceExpandsPastFourDigitsWithoutTruncatingTheBusinessNumber() {
+        repository.numberSequences.put(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 9_998L);
+
+        FindingWorkflowContracts.CommandResult lastFourDigit = service.create(
+                command("60000000-0000-0000-0000-000000000015"), newFinding());
+        FindingWorkflowContracts.CommandResult firstFiveDigit = service.create(
+                command("60000000-0000-0000-0000-000000000016"), newFinding());
+
+        assertThat(lastFourDigit.code()).isEqualTo("YH-20261031-9999");
+        assertThat(firstFiveDigit.code()).isEqualTo("YH-20261031-10000");
+        assertThat(firstFiveDigit.code()).hasSizeLessThanOrEqualTo(64);
+    }
+
+    @Test
+    void retryingTheSameKeyAfterShanghaiMidnightReplaysTheOriginalCode() {
+        UUID key = command("60000000-0000-0000-0000-000000000017");
+        FindingWorkflowContracts.CreateFinding request = newFinding();
+        FindingWorkflowContracts.CommandResult first = service.create(key, request);
+
+        FindingWorkflowCommandService nextShanghaiDay =
+                serviceAt(Instant.parse("2026-10-31T16:00:00Z"));
+        FindingWorkflowContracts.CommandResult crossDayReplay = nextShanghaiDay.create(key, request);
+        FindingWorkflowContracts.CommandResult nextDayCreate = nextShanghaiDay.create(
+                command("60000000-0000-0000-0000-000000000018"), request);
+
+        assertThat(first.code()).isEqualTo("YH-20261031-0001");
+        assertThat(crossDayReplay).isEqualTo(first);
+        assertThat(nextDayCreate.code()).isEqualTo("YH-20261101-0001");
+        assertThat(repository.numberSequences)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 10, 31)), 1L)
+                .containsEntry(new SequenceKey(TENANT_A, LocalDate.of(2026, 11, 1)), 1L);
     }
 
     @Test
@@ -342,8 +408,14 @@ class FindingWorkflowCommandServiceTest {
 
     private static FindingWorkflowContracts.CreateFinding newFinding() {
         return new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "FND-TEST-01", "Synthetic defect", DISCOVERED_AT,
-                null, null, "GENERAL");
+                ORGANIZATION_ID, "Synthetic defect", DISCOVERED_AT,
+                null, null, "UNKNOWN");
+    }
+
+    private FindingWorkflowCommandService serviceAt(Instant instant) {
+        return new FindingWorkflowCommandService(new SessionContextResolver(), repository,
+                accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add,
+                Clock.fixed(instant, ZoneOffset.UTC));
     }
 
     private static UUID command(String value) {
@@ -358,11 +430,12 @@ class FindingWorkflowCommandServiceTest {
 
     private static final class MemoryAccessPolicy implements FindingWorkflowAccessPolicy {
         private boolean allowed = true;
+        private final Set<UUID> permittedTenants = new java.util.HashSet<>(Set.of(TENANT_A));
         private final Set<UUID> inactiveMembers = new java.util.HashSet<>();
 
         @Override
         public void requireAction(CurrentTenantContext context, String permissionCode, UUID organizationId) {
-            if (!allowed || !TENANT_A.equals(context.tenantId()) || organizationId == null) {
+            if (!allowed || !permittedTenants.contains(context.tenantId()) || organizationId == null) {
                 throw new AccessDeniedException("The current member is not authorized");
             }
         }
@@ -495,6 +568,7 @@ class FindingWorkflowCommandServiceTest {
         private List<FindingWorkflowContracts.Submission> submissions = new ArrayList<>();
         private List<FindingWorkflowContracts.Verification> verifications = new ArrayList<>();
         private Map<String, String> rounds = new HashMap<>();
+        private Map<SequenceKey, Long> numberSequences = new HashMap<>();
 
         @Override
         public <T> T inTenantTransaction(UUID tenantId,
@@ -506,6 +580,7 @@ class FindingWorkflowCommandServiceTest {
             List<FindingWorkflowContracts.Submission> priorSubmissions = new ArrayList<>(submissions);
             List<FindingWorkflowContracts.Verification> priorVerifications = new ArrayList<>(verifications);
             Map<String, String> priorRounds = new HashMap<>(rounds);
+            Map<SequenceKey, Long> priorSequences = new HashMap<>(numberSequences);
             try {
                 return work.apply(new Tx(tenantId));
             } catch (RuntimeException failure) {
@@ -516,6 +591,7 @@ class FindingWorkflowCommandServiceTest {
                 submissions = priorSubmissions;
                 verifications = priorVerifications;
                 rounds = priorRounds;
+                numberSequences = priorSequences;
                 throw failure;
             }
         }
@@ -544,6 +620,13 @@ class FindingWorkflowCommandServiceTest {
                 if (!finding.tenantId().equals(tenantId) || findings.putIfAbsent(finding.id(), finding) != null) {
                     throw new IllegalStateException("Duplicate finding");
                 }
+            }
+
+            @Override
+            public String nextFindingCode(LocalDate businessDay) {
+                long next = numberSequences.merge(new SequenceKey(tenantId, businessDay), 1L, Long::sum);
+                return "YH-" + businessDay.toString().replace("-", "")
+                        + "-" + String.format(java.util.Locale.ROOT, "%04d", next);
             }
 
             @Override
@@ -634,4 +717,6 @@ class FindingWorkflowCommandServiceTest {
         private record StoredCommand(UUID actorId, String action, String hash,
                                      FindingWorkflowContracts.CommandResult result) {}
     }
+
+    private record SequenceKey(UUID tenantId, LocalDate businessDay) {}
 }

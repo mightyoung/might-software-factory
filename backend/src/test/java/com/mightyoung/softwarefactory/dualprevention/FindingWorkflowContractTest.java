@@ -63,6 +63,42 @@ class FindingWorkflowContractTest {
     }
 
     @Test
+    void createContractUsesServerNumberingAndPreventsReporterRiskGrading() throws Exception {
+        Map<String, Object> document = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));
+        Map<String, Object> components = (Map<String, Object>) document.get("components");
+        Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
+        Map<String, Object> createRequest = (Map<String, Object>) schemas.get("CreateFindingRequest");
+        Map<String, Object> createProperties = (Map<String, Object>) createRequest.get("properties");
+
+        assertThat((List<String>) createRequest.get("required"))
+                .contains("organizationId", "description", "discoveredAt", "grade")
+                .doesNotContain("code");
+        assertThat(createProperties).doesNotContainKey("code");
+        assertThat((Map<String, Object>) createProperties.get("grade"))
+                .containsEntry("enum", List.of("UNKNOWN"));
+
+        Map<String, Object> response = (Map<String, Object>) schemas.get("CommandResponse");
+        Map<String, Object> responseProperties = (Map<String, Object>) response.get("properties");
+        Map<String, Object> data = (Map<String, Object>) responseProperties.get("data");
+        assertThat((List<String>) data.get("required")).contains("code");
+        assertThat((Map<String, Object>) data.get("properties")).containsKey("code");
+    }
+
+    @Test
+    void findingNumberMigrationCreatesTheRlsIsolatedTenantSequence() throws Exception {
+        String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
+                "V7__finding_business_number_sequence.sql"));
+        assertThat(migration).contains(
+                "create table public.finding_number_sequence",
+                "primary key (tenant_id, business_day)",
+                "enable row level security",
+                "force row level security",
+                "current_setting('app.tenant_id', true)")
+                .doesNotContain("grant select", "grant insert", "grant update", "grant all");
+    }
+
+    @Test
     void newMigrationAddsTenantIsolatedAppendOnlyWorkflowRecordsWithoutChangingV2() throws Exception {
         String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
                 "V5__finding_workflow_commands.sql"));
