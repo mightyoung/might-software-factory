@@ -300,6 +300,47 @@ describe("新建上报表单", () => {
     expect(done.defaultPrevented).toBe(false);
   });
 
+  it("后端没有对应字段的四项带“后端暂未接入”标记，发现时间和描述不带", () => {
+    setup();
+    const tags = screen.getAllByText("后端暂未接入");
+    expect(tags).toHaveLength(4);
+
+    // 标记在标签 / 图例内，读屏会和字段名一起读到。
+    expect(field(/来源.*后端暂未接入/)).toBeInTheDocument();
+    expect(field(/所在位置.*后端暂未接入/)).toBeInTheDocument();
+    expect(field(/已采取的临时措施.*后端暂未接入/)).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /紧急程度.*后端暂未接入/ })).toBeInTheDocument();
+
+    expect((field(/发现时间/) as HTMLInputElement).labels?.[0]).not.toHaveTextContent("后端暂未接入");
+    expect((field(/隐患描述/) as HTMLTextAreaElement).labels?.[0]).not.toHaveTextContent("后端暂未接入");
+  });
+
+  it("成功页写明：未接入的四项接入真实后端后目前不会被保存", async () => {
+    setup();
+    fillValid();
+    fireEvent.click(submitButton());
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(/来源.*所在位置.*紧急程度.*临时措施.*后端暂未接入.*不会被保存/);
+  });
+
+  it("成功页出现的那一刻刷新确认就已解除，不留下“已提交却仍拦截关闭标签页”的窗口", async () => {
+    setup();
+    fillValid();
+    // DOM 一变化就同步检查守卫（微任务早于 React 的被动 effect 清理），所以不依赖时序运气。
+    let guardWhenSuccessAppeared: boolean | null = null;
+    const observer = new MutationObserver(() => {
+      if (guardWhenSuccessAppeared !== null || !screen.queryByText("已提交上报")) return;
+      const probe = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(probe);
+      guardWhenSuccessAppeared = probe.defaultPrevented;
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    fireEvent.click(submitButton());
+    await screen.findByText("已提交上报");
+    observer.disconnect();
+    expect(guardWhenSuccessAppeared).toBe(false);
+  });
+
   it("成功后可查看详情、继续上报（重置表单并换新的幂等键）或关闭", async () => {
     const { props, submit } = setup();
     fillValid();
