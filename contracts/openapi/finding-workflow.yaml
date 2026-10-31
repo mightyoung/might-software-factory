@@ -61,7 +61,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotVisible'
         '409':
-          $ref: '#/components/responses/CommandConflict'
+          $ref: '#/components/responses/IdempotencyConflict'
         '422':
           $ref: '#/components/responses/WorkflowRule'
         '503':
@@ -381,23 +381,69 @@ components:
           schema:
             $ref: '#/components/schemas/CommandResponse'
     InvalidRequest:
-      description: Invalid body, version, identifier, or idempotency key.
+      description: >-
+        Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request
+        binding failures return INVALID_QUERY with an empty fieldErrors array. Unsupported create fields also
+        return INVALID_QUERY; lifecycle command DTOs currently ignore unknown properties for compatibility.
       content:
         application/json:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            fieldValidation:
+              summary: Field validation error
+              value:
+                code: INVALID_REQUEST
+                message: The finding command request is invalid
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors:
+                  - field: description
+                    reason: Size
+            malformedJsonOrBinding:
+              summary: Malformed JSON or JSON-to-request type binding failure
+              value:
+                code: INVALID_QUERY
+                message: The finding request is invalid
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
+            unsupportedCreateField:
+              summary: The create command contains an unsupported field
+              value:
+                code: INVALID_QUERY
+                message: The finding request is invalid
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
     Unauthenticated:
       description: A verified session is required.
       content:
         application/json:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            genericAuthenticationFailure:
+              value:
+                code: AUTH_REQUIRED
+                message: A verified session is required
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
     ActionDenied:
       description: Current member, action permission, assignment, or CSRF check failed.
       content:
         application/json:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            genericCsrfFailure:
+              value:
+                code: ACTION_DENIED
+                message: The request is not allowed
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
     NotVisible:
       description: The finding is missing or outside current tenant/organization scope.
       content:
@@ -405,11 +451,53 @@ components:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
     CommandConflict:
-      description: Expected version is stale or idempotency key conflicts with a prior command.
+      description: >-
+        A lifecycle command can fail because the expected version is stale, the idempotency key was
+        reused for a different command, or the workflow task state changed. Use code to distinguish
+        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, and the compatible generic COMMAND_CONFLICT.
       content:
         application/json:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            versionConflict:
+              summary: The expected version is stale
+              value:
+                code: VERSION_CONFLICT
+                message: The finding version is stale
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
+            idempotencyConflict:
+              summary: The key was reused for a different command
+              value:
+                code: IDEMPOTENCY_CONFLICT
+                message: The idempotency key conflicts with a prior command
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
+            workflowStateConflict:
+              summary: The workflow task state conflicts with the command
+              value:
+                code: COMMAND_CONFLICT
+                message: The finding changed or this command key conflicts with a previous command
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
+    IdempotencyConflict:
+      description: The idempotency key was reused for a different command.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            idempotencyConflict:
+              value:
+                code: IDEMPOTENCY_CONFLICT
+                message: The idempotency key conflicts with a prior command
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: false
+                fieldErrors: []
     WorkflowRule:
       description: Current state, required evidence, or assignment configuration blocks the command.
       content:
@@ -422,10 +510,19 @@ components:
         application/json:
           schema:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+          examples:
+            retryableDependencyFailure:
+              value:
+                code: DEPENDENCY_UNAVAILABLE
+                message: The finding command could not be completed safely
+                traceId: 4bc63d9e-73f5-4f58-a79a-e8e22fa0c2d7
+                retryable: true
+                fieldErrors: []
   schemas:
     CreateFindingRequest:
       type: object
       additionalProperties: false
+      description: The create endpoint rejects unknown properties at runtime; the server assigns the business code.
       required: [organizationId, description, discoveredAt, grade]
       properties:
         organizationId: { type: string, format: uuid }
@@ -440,12 +537,20 @@ components:
     VersionedCommandRequest:
       type: object
       additionalProperties: false
+      description: >-
+        Client requests must contain only documented properties. For compatibility, the current runtime ignores
+        unknown properties on lifecycle commands; additionalProperties false describes the client contract and
+        does not promise that the current server rejects unknown properties.
       required: [expectedVersion]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
     DispatchRequest:
       type: object
       additionalProperties: false
+      description: >-
+        Client requests must contain only documented properties. For compatibility, the current runtime ignores
+        unknown properties on lifecycle commands; additionalProperties false describes the client contract and
+        does not promise that the current server rejects unknown properties.
       required: [expectedVersion, assigneeMemberId, dueAt, requirements]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
@@ -455,6 +560,10 @@ components:
     RemediationSubmissionRequest:
       type: object
       additionalProperties: false
+      description: >-
+        Client requests must contain only documented properties. For compatibility, the current runtime ignores
+        unknown properties on lifecycle commands; additionalProperties false describes the client contract and
+        does not promise that the current server rejects unknown properties.
       required: [expectedVersion, evidenceSetId, statement]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
@@ -463,6 +572,10 @@ components:
     VerificationRequest:
       type: object
       additionalProperties: false
+      description: >-
+        Client requests must contain only documented properties. For compatibility, the current runtime ignores
+        unknown properties on lifecycle commands; additionalProperties false describes the client contract and
+        does not promise that the current server rejects unknown properties.
       required: [expectedVersion, decision]
       properties:
         expectedVersion: { type: integer, minimum: 1 }

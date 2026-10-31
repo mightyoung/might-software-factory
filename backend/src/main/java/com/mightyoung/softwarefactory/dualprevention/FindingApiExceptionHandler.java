@@ -23,6 +23,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -50,9 +51,19 @@ public final class FindingApiExceptionHandler {
         return error(HttpStatus.NOT_FOUND, "RESOURCE_NOT_VISIBLE", "The finding is not visible", false, List.of());
     }
 
-    @ExceptionHandler({FindingWorkflowVersionConflictException.class,
-            FindingWorkflowIdempotencyConflictException.class, WorkflowTaskStateConflictException.class})
-    ResponseEntity<ErrorResponse> conflict() {
+    @ExceptionHandler(FindingWorkflowVersionConflictException.class)
+    ResponseEntity<ErrorResponse> versionConflict() {
+        return error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "The finding version is stale", false, List.of());
+    }
+
+    @ExceptionHandler(FindingWorkflowIdempotencyConflictException.class)
+    ResponseEntity<ErrorResponse> idempotencyConflict() {
+        return error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT",
+                "The idempotency key conflicts with a prior command", false, List.of());
+    }
+
+    @ExceptionHandler(WorkflowTaskStateConflictException.class)
+    ResponseEntity<ErrorResponse> workflowTaskConflict() {
         return error(HttpStatus.CONFLICT, "COMMAND_CONFLICT",
                 "The finding changed or this command key conflicts with a previous command", false, List.of());
     }
@@ -71,9 +82,13 @@ public final class FindingApiExceptionHandler {
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    ResponseEntity<ErrorResponse> invalidBody() {
+    ResponseEntity<ErrorResponse> invalidBody(MethodArgumentNotValidException exception) {
+        List<FieldError> fieldErrors = exception.getBindingResult().getFieldErrors().stream()
+                .map(fieldError -> new FieldError(fieldError.getField(), validationCode(fieldError)))
+                .sorted(Comparator.comparing(FieldError::field).thenComparing(FieldError::reason))
+                .toList();
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "The finding command request is invalid",
-                false, List.of());
+                false, fieldErrors);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, HttpMessageNotReadableException.class,
@@ -93,5 +108,13 @@ public final class FindingApiExceptionHandler {
             HttpStatus status, String code, String message, boolean retryable, List<FieldError> fields) {
         return ResponseEntity.status(status).body(new ErrorResponse(
                 code, message, UUID.randomUUID().toString(), retryable, fields, null));
+    }
+
+    private static String validationCode(org.springframework.validation.FieldError fieldError) {
+        String[] codes = fieldError.getCodes();
+        if (codes == null || codes.length == 0) {
+            return "Invalid";
+        }
+        return codes[codes.length - 1];
     }
 }

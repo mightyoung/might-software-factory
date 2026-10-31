@@ -36,6 +36,8 @@ public interface FindingWorkflowRepository {
 
         void appendConfirmation(Confirmation confirmation);
 
+        Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage);
+
         void openRound(UUID findingId, int roundNo, UUID commandId);
 
         void closeRound(UUID findingId, int roundNo, String state, UUID commandId);

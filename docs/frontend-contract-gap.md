@@ -1,8 +1,8 @@
 # 前端与后端 OpenAPI 契约差异清单（隐患台账 / 上报）
 
-状态：本地切片以远端 `dev` `6b0c2ee55741f9dd610742dd0e277288534ac432` 的源码树为基线，增加 session、reportable organizations 和 finding.create 的最小服务端闭环契约与实现。后端 Surefire 162 项通过，LAN 集成测试源码编译通过；前端 API 类型由锁定的生成器生成，`check:api`、TypeScript typecheck 与 Vitest 176 项通过。以上均为本地/合成验证，**本切片未连接 PostgreSQL，也未进行真实 API 或前后端联调**。前端仍使用合成适配器，没有 HTTP 适配器。
+状态：本地集成分支基于远端 `dev` `6b0c2ee55741f9dd610742dd0e277288534ac432` 的源码树，包含 session、reportable organizations、finding.create、确认人隔离与统一错误契约；对应代码正通过 Draft PR #9 评审。当前本地后端 Surefire 175 项通过；LAN PG18 profile 的安全静态测试 12 项通过、58 个测试源编译通过；锁定生成器 `gen:api` / `check:api`、TypeScript typecheck 与 Vitest 176 项通过。以上本地/合成结果不代表本分支连接了 PostgreSQL；本地没有运行真实 API、完整 Flowable 事务或前后端联调。前端仍使用合成适配器，没有 HTTP 适配器。
 
-本轮变更：新增 `session-api.yaml`；`/api/v1/session/current` 复核账号、租户、成员状态与授权纪元；`/api/v1/organizations/reportable` 只返回当前会话 `finding.create` 权限范围内的有效组织；创建由服务端按租户和上海提交日生成 `YH-YYYYMMDD-NNNN`，响应含业务编号，重放读取原隐患编号。已生成 `finding-workflow.ts` 与 `session-api.ts`；生成器依赖锁文件未改。
+本轮变更：新增 `session-api.yaml`；`/api/v1/session/current` 复核账号、租户、成员状态与授权纪元；`/api/v1/organizations/reportable` 只返回当前会话 `finding.create` 权限范围内的有效组织；创建由服务端按租户和上海提交日生成 `YH-YYYYMMDD-NNNN`，响应含业务编号，重放读取原隐患编号。创建和流程初始化阻止上报人担任确认人、两阶段使用同一确认人；执行确认时再次核验当前操作者和安全确认的人员确认历史。错误响应含安全的字段路径与稳定校验码，并区分 `VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT` 与任务状态 `COMMAND_CONFLICT`。已按最终 OpenAPI 重新生成四份 TypeScript 契约类型；生成器依赖锁文件未改。
 
 对照对象：
 
@@ -35,7 +35,7 @@
 | R5 | 契约没有 `source`、`urgency`、`interimMeasure`、`backfill` | 详情里这四项没有来源 | 同上 |
 | R6 | ~~契约 `description` 不可筛选、不可排序；`code` 只支持 `EQ` / `CONTAINS`~~ **已处理（前端）**：查询框改为“隐患编号”，只按编号匹配，不在已返回的一页上过滤描述 | 后端确认：描述检索与“编号 OR 描述”尚未实现 | 是否开放需单独补契约、校验与性能验证 |
 | R7 | 契约分页：请求 `page.number` + 顶层 `size`；偏移量不得超过 10000；响应 `page.number/size/total/pageCount` | 100 条/页时最多约 100 页；超出会 400 | 适配器负责映射；界面要处理 400 |
-| R8 | 契约错误：400 / 401 / 403 / 404 / 429（带 `Retry-After`）/ 503，响应体含 `code`、`message`、`traceId`、`retryable`、`fieldErrors` | 前端读取失败只分 `unauthenticated` / `forbidden` / `unknown`，429 与 503 没有区分，也不展示 `traceId` | 接入 HTTP 适配器时一起补；`traceId` 展示给用户便于排障 |
+| R8 | 契约错误：400 / 401 / 403 / 404 / 429（带 `Retry-After`）/ 503，响应体含 `code`、`message`、`traceId`、`retryable`、`fieldErrors`；finding 命令已提供稳定字段错误与 409 子码 | 前端读取失败只分 `unauthenticated` / `forbidden` / `unknown`，429 与 503 没有区分，也不展示 `traceId` | 后端 finding 错误契约已对齐；前端 HTTP 适配器仍需映射错误并呈现 `traceId` |
 | R9 | 列表 POST 需要 `X-XSRF-TOKEN`（取自同源 `XSRF-TOKEN` cookie），并带同源凭证 | 适配器必须实现 | 在 HTTP 适配器里统一处理 |
 
 ### 写入（上报）
@@ -50,7 +50,7 @@
 | W4 | 请求没有 `location`、`source`、`urgency`、`interimMeasure` | 现有表单的这些值不能持久保存 | **仍未实现**。真实写入切换前须另批匹配数据库、响应和幂等回执；不要塞进描述或静默丢弃 |
 | W5 | `description` 长度 1–20000；前端 5–500 | 前端限制更严，属于产品假设 | 保留前端限制，不与契约冲突 |
 | W6 | 响应已有 `findingId`、`code`、`state`、`roundNo`、`version`；尚无 `submittedAt` / `backfill` | 成功页不能依据后端显示补报 | 不在前端推断补报；其阈值和持久字段尚未确认，本轮不报告该能力可用 |
-| W7 | 错误：400 请求无效、409 版本或幂等键冲突、422 流程规则不满足、503 依赖不可用 | 前端 `FindingSubmitError` 没有"流程规则"这一类 | 增加 `workflow-rule` 类并映射 422；400 对应 `validation` |
+| W7 | 错误：400 校验错误带字段路径与稳定校验码；409 分为 `VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT`，任务状态冲突保留 `COMMAND_CONFLICT`；422 流程规则不满足；503 依赖不可用 | 前端 `FindingSubmitError` 没有"流程规则"这一类，也尚未接入后端错误结构 | 后端 OpenAPI、异常映射与 HTTP 测试已对齐；前端 adapter 接入时映射 422 与各 409 子码 |
 
 ### 会话与菜单
 
@@ -61,22 +61,22 @@
 
 ## 三、已有契约、前端尚未使用
 
-`finding-workflow.yaml` 已有后续流程命令：确认（本人 / 安全部门）、派单、提交整改、验收，均要求 `expectedVersion`、`Idempotency-Key`、`X-XSRF-TOKEN`。前端目前这些按钮都是禁用的演示状态；接入时详情必须带 `version`（读取契约已提供）。
+`finding-workflow.yaml` 已有后续流程命令：确认（本人 / 安全部门）、派单、提交整改、验收，均要求 `expectedVersion`、`Idempotency-Key`、`X-XSRF-TOKEN`。后端已阻止上报人执行两阶段确认，阻止同一成员同时确认两阶段，并要求安全确认有不同成员的人员确认历史；“不成立”关闭及退回补充仍未实现。前端目前这些按钮都是禁用的演示状态；接入时详情必须带 `version`（读取契约已提供）。
 
 ## 四、后端自己声明的阻塞（会影响联调时间）
 
 远端交接报告记录 NAS PostgreSQL 18.6 上 V2–V6 已在 `might_software_factory_test` 验证，Finding read probe 通过并清理合成记录；之后 V7 与精确列授权已在另一个隔离库 `might_software_factory_pg18_test` 应用，独立提交 `ff276290cc497650007e3a6106c2c5327f59539f` 的 allocator IT 1 项通过，覆盖租户隔离、并发、溢出和回滚。该证据来自独立运行，不是本地切片的数据库重跑。本切片没有连接 NAS；当前用户、组织、完整 finding.create HTTP/幂等流程与 Flowable 联合事务仍未做真实 PG18 验收。
 
-## 五、后端对 issue #8 的回复（2026-10-31，针对 dev `cd1a8fd`）
+## 五、issue #8 初始回复及当前实现状态（回复时基于 dev `cd1a8fd`）
 
 | 问题 | 回复摘要 | 前端状态 |
 |---|---|---|
-| W1 `organizationId` | 由创建请求显式提供，服务端复核 `finding.create` 范围；**没有**“可创建隐患的组织”读取接口，具体契约未定稿，不要硬编码组织 UUID | 等后端出组织选项契约 |
-| W2 `code` | 当前请求必须传；服务端没有编号生成器。建议改为服务端生成，规则、租户内唯一性、并发与幂等行为待定 | 等新契约，暂不改上报表单 |
+| W1 `organizationId` | 创建请求显式提供；新增 reportable organizations 接口只返回当前会话 `finding.create` 范围内的有效组织，创建时再次核验 | 契约与后端查询已实现；前端尚未接入 |
+| W2 `code` | 请求不再传业务编号；服务端按租户及上海提交日生成，幂等重放返回原编号 | 契约与代码已实现；PG18 并发/回滚证据来自独立 V7 测试，不代表本 PR 完整事务已实测 |
 | R4/W4 缺失字段与历史 | 位置、紧急程度、临时措施、来源分类、当前轮责任人、历史读取均**尚不支持**；不建议取消需求，也**不要把它们塞进 description，不要提交后静默丢弃** | 真实写入切换前须明确首期字段；未接线的项要标明“演示 / 不可用” |
-| R3 时区 | 带偏移时间，服务端用 UTC；建议界面按 Asia/Shanghai，发送带 Z 或 +08:00 的 ISO | 已按此实现 |
-| S1 会话 | 已有 `GET /api/v1/auth/csrf`、`POST /api/v1/auth/login`（`loginKey`、`password`、`tenantCode`）、`POST /api/v1/auth/logout`；缺认证 OpenAPI、当前用户 / 菜单 / 权限 / 组织选项接口；前端 `safety.finding.report` 与后端 `finding.create` 的映射待定；无完成日期承诺 | 合成 `SessionAdapter` 不能当真实登录 |
-| 补充 A `grade` | 前端固定 `UNKNOWN` 可以保留，但服务端**目前不会拒绝** `GENERAL` / `MAJOR`，是待修的后端约束 | 前端不提供定级入口 |
+| R3 时区 | 带偏移时间；编号业务日按 Asia/Shanghai 的接收日期生成 | 前端按上海时间显示；没有租户时区配置 |
+| S1 会话 | CSRF、204 login/logout、current session 与 reportable organizations 已有 OpenAPI；菜单与权限目录接口仍缺 | 契约/后端已实现；前端 adapter 仍合成，能力码映射待定 |
+| 补充 A `grade` | 创建端点只接受 `UNKNOWN`，拒绝 `GENERAL` / `MAJOR` | 后端 DTO 校验、HTTP 测试和 OpenAPI 已锁定 |
 | 补充 B 描述筛选 | 确认不支持；应标“隐患编号” | 已处理 |
 
 单元测试 / CI 不代表真实登录、RLS、Flowable 联合事务或前后端联调已通过。当前批次未发表评论或更改 issue。
@@ -88,10 +88,10 @@
 **业务安全**
 
 - 确实不成立：新增“不成立关闭”出口，必须填写理由，保留记录和审计；“退回补充”只用于信息不足。
-- 上报人不得确认自己上报的隐患（含组织确认与安全确认），兼任角色不豁免；无人符合条件时转交其他有权限人员，不自动放行。
+- 上报人不得确认自己上报的隐患（含组织确认与安全确认），兼任角色不豁免；两阶段确认人必须不同。此身份隔离规则已在本地后端实现并通过单元/HTTP 测试；无人符合条件时阻断，不自动放行。真实 PG18/Flowable 并发验收仍待进行。
 - “需立即处置”必须配通知（通知该组织配置的安全值班人员，记录送达、确认与失败，无人确认时升级）。通知闭环落地前，前端保留醒目的现场应急提示，**不显示“已通知”**。接收人、渠道、升级时限另行配置。
 
-**接口契约（本地批次已定稿；尚未推送）**
+**接口契约（PR #9 的本地集成批次；Draft 待评审）**
 
 - 创建响应返回 `findingId`、`code`、`state`、`roundNo`、`version`；`backfill` 暂不定义，补报阈值未经确认。
 - 安全确认提交“等级 + 意见”；人员确认、不成立关闭及各种退回均携带意见，拒绝或退回理由必填。
@@ -102,11 +102,11 @@
 - 补报由后端计算（建议发现时间距提交超过 24 小时），阈值写入契约。
 - 新建入口以“可上报组织列表非空”为条件；权限标识直接使用后端的 `finding.create` 等；403 后刷新用户、组织和菜单。
 
-**前端待办（等契约接入后）**：接入组织选择（单个自动选中但仍展示，零个则不显示入口并说明）；创建结果展示服务端 `code`；补报展示要等阈值与持久字段定稿；新增“不成立关闭”等操作入口；会话、权限改用后端标识。
+**前端待办**：接入真实 HTTP adapter 和组织选择（单个自动选中但仍展示，零个则不显示入口并说明）；创建结果展示服务端 `code`；呈现后端字段错误和冲突子码；补报展示要等阈值与持久字段定稿；新增“不成立关闭”等操作入口；菜单和权限改用后端标识。
 
 ## 七、仍需处理的接入问题
 
 1. R4/W4：位置、责任人、来源、紧急程度、临时措施、历史时间线仍需另外定稿并与写入/读取存储一起实现。
 2. S2：菜单及权限接口、前端能力码到 `finding.create` 的映射仍需产品/接口批次确认。
 3. 为最小闭环接入前端 HTTP adapter，并进行同源 CSRF/session 联调。
-4. 使用现有 NAS PostgreSQL 18 实例完成授权角色下的当前用户、组织权限、创建编号并发/回滚、列表/详情及会话撤权验收；本轮未执行。
+4. 使用现有 NAS PostgreSQL 18 实例完成授权角色下的当前用户、组织权限、完整创建幂等/并发/回滚、列表/详情及会话撤权验收；当前本地验证未连接 NAS。独立 V7 allocator IT 已在 PG18.6 通过，但不等同完整 finding/auth/Flowable 闭环验收。

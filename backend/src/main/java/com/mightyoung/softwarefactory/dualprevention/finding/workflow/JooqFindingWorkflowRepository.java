@@ -240,6 +240,19 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         }
 
         @Override
+        public Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage) {
+            Record row = dsl.fetchOne("""
+                    select actor_member_id
+                      from public.finding_confirmation
+                     where tenant_id = cast(? as uuid)
+                       and finding_id = cast(? as uuid)
+                       and stage = ?
+                    """, tenantId, findingId, stage);
+            UUID actorMemberId = row == null ? null : row.get("actor_member_id", UUID.class);
+            return Optional.ofNullable(actorMemberId);
+        }
+
+        @Override
         public void openRound(UUID findingId, int roundNo, UUID commandId) {
             int inserted = dsl.execute("""
                     insert into public.remediation_round

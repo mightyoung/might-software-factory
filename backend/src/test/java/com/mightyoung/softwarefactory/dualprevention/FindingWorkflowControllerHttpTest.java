@@ -16,12 +16,16 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEventPublisher;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRepository;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowCommandService;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import com.mightyoung.softwarefactory.identity.SecurityConfiguration;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipalTestFixture;
 import com.mightyoung.softwarefactory.workflow.WorkflowFacade;
+import com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,6 +77,7 @@ class FindingWorkflowControllerHttpTest {
     @BeforeEach
     void resetRepository() {
         repository.transactionCalls = 0;
+        repository.nextTransactionFailure = null;
     }
 
     @Test
@@ -85,7 +90,27 @@ class FindingWorkflowControllerHttpTest {
                         .content(validCreateRequest().replace("\"grade\":\"UNKNOWN\"}",
                                 "\"grade\":\"UNKNOWN\",\"code\":\"CLIENT-CODE\"}")))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("INVALID_QUERY"));
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.message").value("The finding request is invalid"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void malformedJsonUsesGenericQueryErrorWithoutFieldDetails() throws Exception {
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.message").value("The finding request is invalid"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
 
         assertThat(repository.transactionCalls).isZero();
     }
@@ -100,9 +125,123 @@ class FindingWorkflowControllerHttpTest {
                             .contentType("application/json")
                             .content(validCreateRequest().replace("UNKNOWN", grade)))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.fieldErrors[0].field").value("grade"))
+                    .andExpect(jsonPath("$.fieldErrors[0].reason").value("Pattern"))
+                    .andExpect(jsonPath("$.retryable").value(false));
         }
         assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void fieldValidationReportsJsonFieldAndStableConstraintCodeWithoutEchoingRejectedValue() throws Exception {
+        String rejectedValue = "SENSITIVE_REJECTED_VALUE".repeat(1000);
+        String request = validCreateRequest().replace("Synthetic finding", rejectedValue);
+
+        var result = mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(request))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("description"))
+                .andExpect(jsonPath("$.fieldErrors[0].reason").value("Size"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).doesNotContain(rejectedValue);
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void versionAndIdempotencyConflictsUseDistinct409CodesAndKeepTaskConflictsCompatible() throws Exception {
+        repository.nextTransactionFailure = new FindingWorkflowIdempotencyConflictException();
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        repository.nextTransactionFailure = new FindingWorkflowVersionConflictException();
+        mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/person")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("{\"expectedVersion\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        repository.nextTransactionFailure = new WorkflowTaskStateConflictException();
+        mvc.perform(post("/api/v1/findings/40000000-0000-0000-0000-000000000002/confirm/person")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("{\"expectedVersion\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("COMMAND_CONFLICT"));
+    }
+
+    @Test
+    void unauthenticatedAndCsrfDeniedResponsesKeepGenericSecurityEnvelope() throws Exception {
+        mvc.perform(post("/api/v1/findings")
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"))
+                .andExpect(jsonPath("$.message").value("A verified session is required"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACTION_DENIED"))
+                .andExpect(jsonPath("$.message").value("The request is not allowed"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void dependencyFailuresStayGenericRetryable503Responses() throws Exception {
+        repository.nextTransactionFailure = new DataAccessResourceFailureException("internal SQL failure");
+
+        var result = mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("DEPENDENCY_UNAVAILABLE"))
+                .andExpect(jsonPath("$.message").value("The finding command could not be completed safely"))
+                .andExpect(jsonPath("$.traceId").isString())
+                .andExpect(jsonPath("$.retryable").value(true))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("internal SQL failure");
     }
 
     @Test
@@ -190,7 +329,11 @@ class FindingWorkflowControllerHttpTest {
             return new FindingWorkflowAssignmentResolver() {
                 @Override
                 public InitialRoute resolve(UUID tenantId, UUID organizationId) {
-                    return new InitialRoute(MEMBER, MEMBER, MEMBER, MEMBER);
+                    return new InitialRoute(
+                            UUID.fromString("20000000-0000-0000-0000-000000000002"),
+                            UUID.fromString("20000000-0000-0000-0000-000000000003"),
+                            UUID.fromString("20000000-0000-0000-0000-000000000004"),
+                            UUID.fromString("20000000-0000-0000-0000-000000000005"));
                 }
                 @Override
                 public UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId) { return MEMBER; }
@@ -268,6 +411,10 @@ class FindingWorkflowControllerHttpTest {
             @Override
             public void appendConfirmation(Confirmation confirmation) { }
             @Override
+            public Optional<UUID> findConfirmationActorMemberId(UUID findingId, String stage) {
+                return Optional.empty();
+            }
+            @Override
             public void openRound(UUID findingId, int roundNo, UUID commandId) { }
             @Override
             public void closeRound(UUID findingId, int roundNo, String state, UUID commandId) { }
@@ -283,10 +430,16 @@ class FindingWorkflowControllerHttpTest {
             public void insertVerification(Verification verification) { }
         };
         private int transactionCalls;
+        private RuntimeException nextTransactionFailure;
 
         @Override
         public <T> T inTenantTransaction(UUID tenantId, Function<Transaction, T> work) {
             transactionCalls++;
+            if (nextTransactionFailure != null) {
+                RuntimeException failure = nextTransactionFailure;
+                nextTransactionFailure = null;
+                throw failure;
+            }
             return work.apply(transaction);
         }
     }
