@@ -199,6 +199,21 @@ export interface components {
         VersionedCommandRequest: {
             expectedVersion: number;
         };
+        PersonConfirmationRequest: {
+            expectedVersion: number;
+            /** @description Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank. */
+            reason: string;
+        };
+        SafetyConfirmationRequest: {
+            expectedVersion: number;
+            /** @description Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank. */
+            reason: string;
+            /**
+             * @description Professional grade assigned by the safety confirmer.
+             * @enum {string}
+             */
+            grade: "GENERAL" | "MAJOR";
+        };
         /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         DispatchRequest: {
             expectedVersion: number;
@@ -434,7 +449,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["VersionedCommandRequest"];
+                "application/json": components["schemas"]["PersonConfirmationRequest"];
             };
         };
         responses: {
@@ -464,7 +479,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["VersionedCommandRequest"];
+                "application/json": components["schemas"]["SafetyConfirmationRequest"];
             };
         };
         responses: {

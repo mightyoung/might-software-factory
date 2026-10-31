@@ -123,7 +123,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/VersionedCommandRequest'
+              $ref: '#/components/schemas/PersonConfirmationRequest'
       responses:
         '200':
           $ref: '#/components/responses/CommandSucceeded'
@@ -157,7 +157,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/VersionedCommandRequest'
+              $ref: '#/components/schemas/SafetyConfirmationRequest'
       responses:
         '200':
           $ref: '#/components/responses/CommandSucceeded'
@@ -573,6 +573,32 @@ components:
       required: [expectedVersion]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
+    PersonConfirmationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+    SafetyConfirmationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason, grade]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+        grade:
+          type: string
+          enum: [GENERAL, MAJOR]
+          description: Professional grade assigned by the safety confirmer.
     DispatchRequest:
       type: object
       additionalProperties: false

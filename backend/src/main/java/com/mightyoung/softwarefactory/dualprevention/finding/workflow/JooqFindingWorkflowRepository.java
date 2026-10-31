@@ -131,10 +131,10 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         public void updateFinding(FindingWorkflowCase finding, long expectedVersion) {
             int updated = dsl.execute("""
                     update public.finding
-                       set state = ?, round_no = ?, version = ?, updated_at = current_timestamp,
+                       set grade = ?, state = ?, round_no = ?, version = ?, updated_at = current_timestamp,
                            updated_by_member_id = cast(? as uuid)
                      where tenant_id = cast(? as uuid) and id = cast(? as uuid) and version = ?
-                    """, finding.state().name(), finding.roundNo(), finding.version(),
+                    """, finding.grade(), finding.state().name(), finding.roundNo(), finding.version(),
                     finding.updatedByMemberId(), tenantId, finding.id(), expectedVersion);
             if (updated != 1) throw new FindingWorkflowVersionConflictException();
         }
@@ -218,7 +218,9 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                                'fromState', cast(? as text),
                                'toState', cast(? as text),
                                'fromVersion', cast(? as bigint),
-                               'toVersion', cast(? as bigint)),
+                               'toVersion', cast(? as bigint),
+                               'fromGrade', cast(? as text),
+                               'toGrade', cast(? as text)),
                            cast(? as varchar), 'finding-workflow-v1', ?
                       from public.finding_command_receipt receipt
                      where receipt.tenant_id = cast(? as uuid)
@@ -227,6 +229,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     """, tenantId, UUID.randomUUID(), transition.actorId(), transition.findingId(),
                     transition.reason(), transition.fromState() == null ? null : transition.fromState().name(),
                     transition.toState().name(), transition.fromVersion(), transition.toVersion(),
+                    transition.fromGrade(), transition.toGrade(),
                     org.slf4j.MDC.get("traceId"), transition.occurredAt(), tenantId,
                     transition.commandId(), transition.actorId());
             if (audited != 1) throw new IllegalStateException("Finding audit event did not persist");
@@ -236,11 +239,12 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         public void appendConfirmation(Confirmation confirmation) {
             int inserted = dsl.execute("""
                     insert into public.finding_confirmation
-                        (tenant_id, finding_id, stage, actor_member_id, decision, decided_at,
+                        (tenant_id, finding_id, stage, actor_member_id, decision, reason, decided_at,
                          expected_version, command_id)
-                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), 'APPROVE', ?, ?, cast(? as uuid))
+                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), ?, ?, ?, ?, cast(? as uuid))
                     """, tenantId, confirmation.findingId(), confirmation.stage(), confirmation.actorMemberId(),
-                    confirmation.decidedAt(), confirmation.expectedVersion(), confirmation.commandId());
+                    confirmation.decision().name(), confirmation.reason(), confirmation.decidedAt(),
+                    confirmation.expectedVersion(), confirmation.commandId());
             if (inserted != 1) throw new IllegalStateException("Finding confirmation did not persist");
         }
 

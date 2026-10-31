@@ -1,7 +1,7 @@
-# 隐患复核身份隔离与“不成立”记录契约
+# 隐患复核确认输入与身份隔离契约
 
-状态：身份隔离已实现于本地分支；“不成立”关联新建契约为设计定稿，尚未加入 API/DB/BPMN 运行时。
-基线：`ba200f73ad6f9901224eb9e6f2dfa7b75ae75413`。本文件不修改 `contracts/openapi/*` 或前端生成类型，避免与主实施线程冲突。
+状态：确认意见/等级和身份隔离实现在独立集成分支；“不成立”关联新建契约仍是设计，尚未加入 API/DB/BPMN 运行时。
+基线：远端 `dev` `61c83651b1a35340ef814524095686ae784d0d37`。本切片同步更新 OpenAPI；部署前仍须盘点旧客户端和历史幂等回执。
 
 ## 已批准的规则
 
@@ -13,6 +13,9 @@
 - 安全阶段要求找不到先前 PERSON 确认历史时拒绝继续；不以状态字段推定第一确认已经发生。
 - 被拒绝的确认不变更状态/版本、不追加确认/转移/审计、不完成流程任务；确认的身份与历史检查先于幂等回执领取。创建/旧记录初始化中的无效确认路由在领取回执后检查，但异常会回滚事务中的回执和业务写入。
 - 既有的租户/当前权限检查、版本比较和任务 assignee 校验继续生效。当前 Flowable 适配器会校验正在完成的 task actor 与 assignee 一致。
+- PERSON 确认请求为 `{ expectedVersion, reason }`；SAFETY 确认请求为 `{ expectedVersion, reason, grade }`。两者 `reason` 去首尾空白后必须非空，原始 JSON 字符串长度最多 4000 个 Java 字符单元；SAFETY 的 `grade` 只能是 `GENERAL` 或 `MAJOR`，PERSON 请求拒绝 `grade` 等未知字段。
+- 确认意见写入确认记录、状态转移和审计；SAFETY 意见及等级也写入工作流审计与 finding 等级。意见/等级和阶段/版本进入确认命令指纹版本 `confirmation-payload-v2`；相同键重放同一完整请求返回既有结果，更改内容返回 409 `IDEMPOTENCY_CONFLICT`。
+- 缺少必填意见、无效等级或缺少等级返回 400 `INVALID_REQUEST`；确认请求带未知字段返回 400 `INVALID_QUERY`。这类输入错误在事务及领取幂等回执前拒绝。
 
 ## “不成立”与退回补充的分离契约
 
@@ -25,15 +28,13 @@
 
 ## 实现边界与版本兼容
 
-本切片只实现身份隔离。现有 V2 的状态 CHECK 不含 `NOT_ESTABLISHED`；现有 V1 BPMN 只有正常确认/整改/验收路径。Flowable 运行版本在根 `pom.xml` 固定为 8.0.0；工作流绑定保存精确的 `definition_id`，完成任务时也校验实例定义 ID 与绑定相同。因此仅部署新 BPMN 不会自动把在途 V1 实例迁到新路径。新增状态/关系必须等追加迁移、V2 流程和针对运行实例的迁移/阻断策略都通过集成测试后再启用。
+本切片不新增迁移、BPMN 或状态值。现有 V2 的状态 CHECK 不含 `NOT_ESTABLISHED`；现有 V1 BPMN 只有正常确认/整改/验收路径。Flowable 运行版本在根 `pom.xml` 固定为 8.0.0；工作流绑定保存精确的 `definition_id`，完成任务时也校验实例定义 ID 与绑定相同。因此仅部署新 BPMN 不会自动把在途 V1 实例迁到新路径。新增状态/关系必须等追加迁移、V2 流程和针对运行实例的迁移/阻断策略都通过集成测试后再启用。
 
-本分支没有新增 V8 迁移、BPMN 或状态值；没有连接、改写或应用 NAS/数据库迁移。主实施线程正在处理 OpenAPI/生成器，后续如要修改 `finding-workflow.yaml`，可基于本节第 3–5 条单独合入 `relatedFindingId` 与新状态契约；本分支未改该文件。
+兼容发布门槛：旧确认请求若缺少 `reason` 或 SAFETY `grade` 会被拒绝（400）；PERSON 请求若发送等级等未知字段也会被拒绝（400）。旧幂等回执使用旧请求指纹；同一旧键配新完整请求可能返回 409 `IDEMPOTENCY_CONFLICT`，本切片不重写旧回执，也没有 V1 透明重放桥接。发布前须核实实际旧客户端与未过期回执；若仍需无感重放，先实现并测试兼容方案再部署。`confirmation-payload-v2` 不代表整个 API schemaVersion 改版。
 
-## 后续契约验收
+没有连接、改写或应用 NAS/数据库迁移；当前变化仅为代码与契约，不能据此声称真实 PostgreSQL/Flowable 流程验收通过。
 
-- PERSON 与 SAFETY 指派相同，或任一指派等于上报人：拒绝且无 finding/task/transition 写入。
-- legacy `DISCOVERED` 初始化遇到不合格确认路由：保持 `DISCOVERED`、版本不变、无流程实例。
-- 上报人本人调用 PERSON 或 SAFETY，即使测试将当前 BPMN task 直接改派给其成员：403 拒绝且无副作用。
-- SAFETY actor 与存档的 PERSON confirmer 相同：403 拒绝且不完成 SAFETY task。
-- `NOT_ESTABLISHED` 后任何同记录确认/派单/整改/验收命令都拒绝；新报告只新增并关联，不改旧 finding。
-- `RETURN_FOR_INFORMATION` 只等上报人补充，补充后新复核周期回到 PERSON；不进入终态。
+## 当前测试覆盖与后续契约验收
+
+- 已覆盖：重复/不合格确认人路由、上报人自审、跨租户 PERSON 历史隔离、SAFETY 缺 PERSON 历史、确认意见/等级校验与持久化、同键重放及改动意见/等级后的幂等冲突、OpenAPI 请求 schema 和稳定 HTTP 错误映射。
+- 仍待开发验收：`NOT_ESTABLISHED` 后的终态限制与新证据关联；`RETURN_FOR_INFORMATION` 的上报人补充、复核周期、状态和流程迁移。

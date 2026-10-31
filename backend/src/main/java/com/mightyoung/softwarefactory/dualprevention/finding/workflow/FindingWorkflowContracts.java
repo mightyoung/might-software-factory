@@ -10,6 +10,8 @@ import java.util.UUID;
 /** Request and result contracts for server-side finding workflow commands. */
 public final class FindingWorkflowContracts {
 
+    public static final int MAX_CONFIRMATION_OPINION_LENGTH = 4000;
+
     private FindingWorkflowContracts() {
     }
 
@@ -36,6 +38,17 @@ public final class FindingWorkflowContracts {
     }
 
     public record Verify(VerificationDecision decision, String reason) {
+    }
+
+    public record PersonConfirmationCommand(String reason) {
+    }
+
+    public record SafetyConfirmationCommand(String reason, String grade) {
+    }
+
+    /** Current confirmation endpoints approve only; later decisions require an explicit workflow change. */
+    public enum ConfirmationDecision {
+        APPROVE
     }
 
     public record CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version) {
@@ -158,13 +171,16 @@ public final class FindingWorkflowContracts {
             OffsetDateTime occurredAt,
             String reason,
             long fromVersion,
-            long toVersion) {
+            long toVersion,
+            String fromGrade,
+            String toGrade) {
         public Transition {
             Objects.requireNonNull(findingId, "findingId");
             Objects.requireNonNull(toState, "toState");
             Objects.requireNonNull(commandId, "commandId");
             Objects.requireNonNull(actorId, "actorId");
             Objects.requireNonNull(occurredAt, "occurredAt");
+            Objects.requireNonNull(toGrade, "toGrade");
         }
     }
 
@@ -172,6 +188,8 @@ public final class FindingWorkflowContracts {
             UUID findingId,
             String stage,
             UUID actorMemberId,
+            ConfirmationDecision decision,
+            String reason,
             OffsetDateTime decidedAt,
             long expectedVersion,
             UUID commandId) {
@@ -179,6 +197,11 @@ public final class FindingWorkflowContracts {
             Objects.requireNonNull(findingId, "findingId");
             Objects.requireNonNull(stage, "stage");
             Objects.requireNonNull(actorMemberId, "actorMemberId");
+            Objects.requireNonNull(decision, "decision");
+            Objects.requireNonNull(reason, "reason");
+            if (reason.isBlank() || reason.length() > MAX_CONFIRMATION_OPINION_LENGTH) {
+                throw new IllegalArgumentException("A confirmation opinion between 1 and 4000 characters is required");
+            }
             Objects.requireNonNull(decidedAt, "decidedAt");
             Objects.requireNonNull(commandId, "commandId");
         }
