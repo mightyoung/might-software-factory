@@ -127,7 +127,7 @@ public final class FindingReadService {
 
         List<SortField> effectiveSort = request.sort();
         if (effectiveSort == null || effectiveSort.isEmpty()) {
-            effectiveSort = List.of(new SortField("discoveredAt", Direction.DESC));
+            effectiveSort = List.of(new SortField("createdAt", Direction.DESC));
         }
 
         List<String> effectiveFields = request.fields();
@@ -174,7 +174,8 @@ public final class FindingReadService {
         }
     }
 
-    private static Metadata metadata() {
-        return new Metadata(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "1");
+    private Metadata metadata() {
+        return new Metadata(UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                entitySchema.schema().schemaVersion());
     }
 }

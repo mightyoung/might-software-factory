@@ -147,17 +147,42 @@ class FindingControllerHttpTest {
                         .content("{\"page\":{\"number\":1},\"size\":20}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].id").value(synthetic.id().toString()))
+                .andExpect(jsonPath("$.data.items[0].organizationId").value(ORG_A.toString()))
+                .andExpect(jsonPath("$.data.items[0].organizationName").value("安全一部"))
+                .andExpect(jsonPath("$.data.items[0].description").value(synthetic.description()))
+                .andExpect(jsonPath("$.data.items[0].sourceEventId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.items[0].riskId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.items[0].createdAt").exists())
                 .andExpect(jsonPath("$.data.page.total").value(11))
                 .andExpect(jsonPath("$.data.page.pageCount").value(1))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("1"));
+                .andExpect(jsonPath("$.meta.schemaVersion").value("2"));
 
         assertThat(repository.lastScope.tenantId()).isEqualTo(TENANT_A);
         assertThat(repository.lastScope.organizationIds()).containsExactly(ORG_A);
         assertThat(repository.lastQuery.sort()).extracting("field")
-                .containsExactly("discoveredAt", "id");
+                .containsExactly("createdAt", "id");
         assertThat(repository.lastQuery.sort()).extracting("direction")
                 .containsExactly(Direction.DESC, Direction.ASC);
-        assertThat(repository.lastQuery.fields()).contains("id", "code", "discoveredAt");
+        assertThat(repository.lastQuery.fields()).contains("id", "code", "organizationId", "organizationName",
+                "description", "sourceEventId", "riskId", "discoveredAt", "createdAt");
+    }
+
+    @Test
+    void detailReturnsCreationFieldsAndReadableOrganizationName() throws Exception {
+        FindingRecord synthetic = syntheticFinding();
+        repository.visible = Optional.of(synthetic);
+
+        mvc.perform(get(DETAIL_PATH + synthetic.id()).with(authenticationFor(TENANT_A)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.organizationId").value(ORG_A.toString()))
+                .andExpect(jsonPath("$.data.organizationName").value("安全一部"))
+                .andExpect(jsonPath("$.data.code").value(synthetic.code()))
+                .andExpect(jsonPath("$.data.description").value(synthetic.description()))
+                .andExpect(jsonPath("$.data.discoveredAt").exists())
+                .andExpect(jsonPath("$.data.sourceEventId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.riskId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.grade").value(synthetic.grade()))
+                .andExpect(jsonPath("$.meta.schemaVersion").value("2"));
     }
 
     @Test
@@ -206,8 +231,12 @@ class FindingControllerHttpTest {
         mvc.perform(get(SCHEMA_PATH).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.key").value("finding"))
-                .andExpect(jsonPath("$.data.schemaVersion").value("1"))
+                .andExpect(jsonPath("$.data.schemaVersion").value("2"))
                 .andExpect(jsonPath("$.data.fields.organization_id").doesNotExist())
+                .andExpect(jsonPath("$.data.fields.organizationId.type").value("UUID"))
+                .andExpect(jsonPath("$.data.fields.organizationName.type").value("TEXT"))
+                .andExpect(jsonPath("$.data.defaultFields").value(org.hamcrest.Matchers.hasItems(
+                        "organizationId", "organizationName", "description", "sourceEventId", "riskId", "createdAt")))
                 .andExpect(jsonPath("$.data.fields.description.sortable").value(false));
     }
 
@@ -216,7 +245,7 @@ class FindingControllerHttpTest {
         return new FindingRecord(
                 UUID.fromString("40000000-0000-0000-0000-000000000001"),
                 "FND-TEST-01", "Synthetic test finding", now, null, null,
-                "GENERAL", "PERSON_CONFIRM_PENDING", 1, 1L, now, now);
+                "GENERAL", "PERSON_CONFIRM_PENDING", 1, 1L, now, now, ORG_A, "安全一部");
     }
 
     private static RequestPostProcessor authenticationFor(UUID tenantId) {

@@ -15,7 +15,7 @@ export interface paths {
         };
         /**
          * Read the caller's effective finding schema
-         * @description Requires the caller's authenticated session and finding read permission. Version 1 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant.
+         * @description Requires the caller's authenticated session and finding read permission. Version 2 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant. Version 2 adds organizationId and organizationName, expands the default projection, and changes the omitted-sort default to createdAt DESC then id ASC.
          */
         get: operations["getFindingEntitySchema"];
         put?: never;
@@ -37,7 +37,7 @@ export interface paths {
         put?: never;
         /**
          * Read one page of authorized finding summaries
-         * @description Read-only operation. Requires an authenticated session and the entity's registered read action. Server-side tenant and data-scope predicates are applied before the exact total count and page are computed. The server always includes id in each item and appends id ASC as a stable tie-breaker when it is not already in the requested sort. Tenant identity is never read from the request body or headers.
+         * @description Read-only operation. Requires an authenticated session and the entity's registered read action. Server-side tenant and data-scope predicates are applied before the exact total count and page are computed. The default order is createdAt DESC then id ASC. The server always includes id in each item and appends id ASC as a stable tie-breaker when it is not already in the requested sort. Tenant identity is never read from the request body or headers.
          */
         post: operations["queryFindings"];
         delete?: never;
@@ -80,22 +80,33 @@ export interface components {
         FindingEntitySchema: {
             /** @constant */
             key: "finding";
-            /** @constant */
-            schemaVersion: "1";
+            /**
+             * @description Monotonic version of this entity's fields and query defaults; it is not an authorization token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share entries across tenant or authorization scopes. When this value changes, discard the older cached schema and fetch this endpoint before validating requests or responses. Increment it when field shape, nullability, default projection, or default ordering changes.
+             * @constant
+             */
+            schemaVersion: "2";
             /** @constant */
             idField: "id";
             /** @constant */
             defaultFields: [
                 "id",
                 "code",
+                "organizationId",
+                "organizationName",
+                "description",
                 "discoveredAt",
+                "sourceEventId",
+                "riskId",
                 "grade",
                 "state",
-                "roundNo"
+                "roundNo",
+                "createdAt"
             ];
             fields: {
                 id: components["schemas"]["UuidField"];
                 code: components["schemas"]["CodeField"];
+                organizationId: components["schemas"]["OrganizationIdField"];
+                organizationName: components["schemas"]["OrganizationNameField"];
                 description: components["schemas"]["DescriptionField"];
                 discoveredAt: components["schemas"]["DateTimeField"];
                 sourceEventId: components["schemas"]["NullableUuidField"];
@@ -150,6 +161,39 @@ export interface components {
             operators: ("EQ" | "CONTAINS")[];
             /** @constant */
             maxLength: 64;
+            /** @constant */
+            enumValues: never[];
+        };
+        OrganizationIdField: {
+            /** @constant */
+            type: "UUID";
+            /** @constant */
+            nullable: false;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            /** @constant */
+            operators: never[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: never[];
+        };
+        /** @description Display name resolved from the tenant-scoped organization directory. Null is possible only when a legacy finding references a directory row that is not visible or no longer present. */
+        OrganizationNameField: {
+            /** @constant */
+            type: "TEXT";
+            /** @constant */
+            nullable: true;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            /** @constant */
+            operators: never[];
+            /** @constant */
+            maxLength: 0;
             /** @constant */
             enumValues: never[];
         };
@@ -253,6 +297,9 @@ export interface components {
             /** Format: uuid */
             id: string;
             code?: string;
+            /** Format: uuid */
+            organizationId?: string;
+            organizationName?: string | null;
             description?: string;
             /** Format: date-time */
             discoveredAt?: string;
@@ -286,13 +333,16 @@ export interface components {
             /** Format: uuid */
             id: string;
             code: string;
+            /** Format: uuid */
+            organizationId: string;
+            organizationName: string | null;
             description: string;
             /** Format: date-time */
             discoveredAt: string;
             /** Format: uuid */
-            sourceEventId?: string | null;
+            sourceEventId: string | null;
             /** Format: uuid */
-            riskId?: string | null;
+            riskId: string | null;
             /** @enum {unknown} */
             grade: "UNKNOWN" | "GENERAL" | "MAJOR";
             /** @enum {unknown} */

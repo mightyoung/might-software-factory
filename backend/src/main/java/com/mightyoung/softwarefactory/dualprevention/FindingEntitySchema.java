@@ -25,12 +25,14 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LT;
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LTE;
 
-/** Finding v1 field allowlist shared by schema discovery, query validation, and SQL projection. */
+/** Finding v2 field allowlist shared by schema discovery, query validation, and SQL projection. */
 @Component
 public final class FindingEntitySchema {
 
+    public static final String SCHEMA_VERSION = "2";
     public static final List<String> DEFAULT_FIELDS =
-            List.of("id", "code", "discoveredAt", "grade", "state", "roundNo");
+            List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
+                    "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
 
     private final EntitySchema schema;
 
@@ -38,6 +40,8 @@ public final class FindingEntitySchema {
         Map<String, FieldSchema> fields = new LinkedHashMap<>();
         fields.put("id", field(FieldType.UUID, false, true, 0, List.of(EQ, IN), List.of()));
         fields.put("code", field(FieldType.TEXT, false, true, 64, List.of(EQ, CONTAINS), List.of()));
+        fields.put("organizationId", field(FieldType.UUID, false, false, 0, List.of(), List.of()));
+        fields.put("organizationName", field(FieldType.TEXT, true, false, 0, List.of(), List.of()));
         fields.put("description", field(FieldType.TEXT, false, false, 0, List.of(), List.of()));
         fields.put("discoveredAt", field(FieldType.DATETIME, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
@@ -58,7 +62,7 @@ public final class FindingEntitySchema {
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
         fields.put("updatedAt", field(FieldType.DATETIME, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
-        this.schema = new EntitySchema("finding", "1", "id", DEFAULT_FIELDS,
+        this.schema = new EntitySchema("finding", SCHEMA_VERSION, "id", DEFAULT_FIELDS,
                 Collections.unmodifiableMap(fields));
     }
 
