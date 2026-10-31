@@ -55,7 +55,8 @@ class FindingRepositorySqlTest {
                 {"filterAST":{"operator":"AND","conditions":[
                   {"field":"grade","operator":"EQ","value":"MAJOR"}]},
                  "sort":[{"field":"createdAt","direction":"DESC"}],
-                 "page":{"number":2},"size":20,"fields":["id","code","organizationId","organizationName"]}
+                 "page":{"number":2},"size":20,"fields":["id","code","organizationId","organizationName",
+                   "sourceCategory","urgency","location","interimMeasure","backfill"]}
                 """), new FindingEntitySchema().schema());
 
         var result = repository.findPage(new FindingReadScope(
@@ -64,6 +65,12 @@ class FindingRepositorySqlTest {
         assertThat(result.total()).isEqualTo(1L);
         assertThat(result.items().getFirst().organizationId()).isEqualTo(ORG);
         assertThat(result.items().getFirst().organizationName()).isEqualTo("安全一部");
+        assertThat(result.items().getFirst().toApiMap())
+                .containsEntry("sourceCategory", "FIELD_OBSERVATION")
+                .containsEntry("urgency", "URGENT")
+                .containsEntry("location", "North loading dock")
+                .containsEntry("interimMeasure", "Temporary barrier installed")
+                .containsEntry("backfill", true);
         assertThat(statements).hasSize(3);
         assertThat(statements.get(0).toLowerCase(java.util.Locale.ROOT)).contains("set_config");
         List<String> queries = statements.stream()
@@ -89,19 +96,16 @@ class FindingRepositorySqlTest {
         List<Field<?>> fields = List.of(
                 DSL.field("id", UUID.class), DSL.field("code", String.class),
                 DSL.field("organization_id", UUID.class), DSL.field("organization_name", String.class),
-                DSL.field("description", String.class), DSL.field("discovered_at", OffsetDateTime.class),
-                DSL.field("source_event_id", UUID.class), DSL.field("risk_id", UUID.class),
-                DSL.field("grade", String.class), DSL.field("state", String.class),
-                DSL.field("round_no", Integer.class), DSL.field("version", Long.class),
-                DSL.field("created_at", OffsetDateTime.class), DSL.field("updated_at", OffsetDateTime.class));
+                DSL.field("source_category", String.class), DSL.field("urgency", String.class),
+                DSL.field("location", String.class), DSL.field("interim_measure", String.class),
+                DSL.field("backfill", Boolean.class));
         var result = dsl.newResult(fields);
         Record row = dsl.newRecord(fields);
         OffsetDateTime now = OffsetDateTime.parse("2026-10-30T10:00:00Z");
         List<Object> values = Arrays.asList(
                 UUID.fromString("40000000-0000-0000-0000-000000000001"), "FND-TEST-01",
                 ORG, "安全一部",
-                "Synthetic test finding", now, null, null, "MAJOR", "PERSON_CONFIRM_PENDING", 1,
-                1L, now, now);
+                "FIELD_OBSERVATION", "URGENT", "North loading dock", "Temporary barrier installed", true);
         for (int i = 0; i < fields.size(); i++) {
             set(row, fields.get(i), values.get(i));
         }

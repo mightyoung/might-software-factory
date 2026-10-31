@@ -15,7 +15,7 @@ export interface paths {
         };
         /**
          * Read the caller's effective finding schema
-         * @description Requires the caller's authenticated session and finding read permission. Version 2 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant. Version 2 adds organizationId and organizationName, expands the default projection, and changes the omitted-sort default to createdAt DESC then id ASC.
+         * @description Requires the caller's authenticated session and finding read permission. Version 2 grants the registered finding fields as one read bundle; row-level data scope is still enforced. This schema is not a global access grant. Version 2 added organizationId and organizationName, expanded the default projection, and changed the omitted-sort default to createdAt DESC then id ASC. Version 3 adds the reported source, urgency, location, interim measure, and backfill fields. Existing rows expose null for values that cannot be inferred.
          */
         get: operations["getFindingEntitySchema"];
         put?: never;
@@ -84,7 +84,7 @@ export interface components {
              * @description Monotonic version of this entity's fields and query defaults; it is not an authorization token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share entries across tenant or authorization scopes. When this value changes, discard the older cached schema and fetch this endpoint before validating requests or responses. Increment it when field shape, nullability, default projection, or default ordering changes.
              * @constant
              */
-            schemaVersion: "2";
+            schemaVersion: "3";
             /** @constant */
             idField: "id";
             /** @constant */
@@ -95,6 +95,11 @@ export interface components {
                 "organizationName",
                 "description",
                 "discoveredAt",
+                "sourceCategory",
+                "urgency",
+                "location",
+                "interimMeasure",
+                "backfill",
                 "sourceEventId",
                 "riskId",
                 "grade",
@@ -109,6 +114,11 @@ export interface components {
                 organizationName: components["schemas"]["OrganizationNameField"];
                 description: components["schemas"]["DescriptionField"];
                 discoveredAt: components["schemas"]["DateTimeField"];
+                sourceCategory: components["schemas"]["FindingSourceCategoryField"];
+                urgency: components["schemas"]["FindingUrgencyField"];
+                location: components["schemas"]["NullableReportTextField"];
+                interimMeasure: components["schemas"]["NullableReportTextField"];
+                backfill: components["schemas"]["NullableBackfillField"];
                 sourceEventId: components["schemas"]["NullableUuidField"];
                 riskId: components["schemas"]["NullableUuidField"];
                 grade: components["schemas"]["FindingGradeField"];
@@ -214,6 +224,78 @@ export interface components {
             /** @constant */
             enumValues: never[];
         };
+        /** @description Null only for findings created before source metadata was captured. */
+        FindingSourceCategoryField: {
+            /** @constant */
+            type: "ENUM";
+            /** @constant */
+            nullable: true;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            operators: ("EQ" | "IN" | "IS_NULL" | "IS_NOT_NULL")[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: [
+                "FIELD_OBSERVATION",
+                "INSPECTION",
+                "PERSON_REPORT"
+            ];
+        };
+        /** @description Null only for findings created before urgency metadata was captured. */
+        FindingUrgencyField: {
+            /** @constant */
+            type: "ENUM";
+            /** @constant */
+            nullable: true;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            operators: ("EQ" | "IN" | "IS_NULL" | "IS_NOT_NULL")[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: [
+                "NORMAL",
+                "URGENT"
+            ];
+        };
+        /** @description Read-only report metadata. Values are null only for legacy findings whose original source, urgency, location, and backfill status cannot be inferred. */
+        NullableReportTextField: {
+            /** @constant */
+            type: "TEXT";
+            /** @constant */
+            nullable: true;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            /** @constant */
+            operators: never[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: never[];
+        };
+        /** @description Server-computed flag. Null only for legacy findings; true means discoveredAt is strictly more than 24 hours before the backend submission time. */
+        NullableBackfillField: {
+            /** @constant */
+            type: "BOOLEAN";
+            /** @constant */
+            nullable: true;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            operators: ("EQ" | "IS_NULL" | "IS_NOT_NULL")[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: never[];
+        };
         DateTimeField: {
             /** @constant */
             type: "DATETIME";
@@ -303,6 +385,11 @@ export interface components {
             description?: string;
             /** Format: date-time */
             discoveredAt?: string;
+            sourceCategory?: ("FIELD_OBSERVATION" | "INSPECTION" | "PERSON_REPORT") | null;
+            urgency?: ("NORMAL" | "URGENT") | null;
+            location?: string | null;
+            interimMeasure?: string | null;
+            backfill?: boolean | null;
             /** Format: uuid */
             sourceEventId?: string | null;
             /** Format: uuid */
@@ -339,6 +426,11 @@ export interface components {
             description: string;
             /** Format: date-time */
             discoveredAt: string;
+            sourceCategory: ("FIELD_OBSERVATION" | "INSPECTION" | "PERSON_REPORT") | null;
+            urgency: ("NORMAL" | "URGENT") | null;
+            location: string | null;
+            interimMeasure: string | null;
+            backfill: boolean | null;
             /** Format: uuid */
             sourceEventId: string | null;
             /** Format: uuid */
@@ -366,7 +458,7 @@ export interface components {
         FieldError: {
             /** @description JSON request field path using the request's property names, such as description or items[0].name. */
             field: string;
-            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, or Size; never validation prose or a rejected value. */
+            /** @description Stable machine-readable validation code, such as NotBlank, Pattern, Size, or CodePointSize for Unicode code-point length; never validation prose or a rejected value. */
             reason: string;
         };
         ErrorResponse: {

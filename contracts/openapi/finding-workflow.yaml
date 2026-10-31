@@ -34,6 +34,10 @@ paths:
         confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
         The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission
         day sequence. A completed idempotent replay returns the original finding ID and code.
+        The server calculates backfill as true only when discoveredAt is more than 24 hours before
+        its submission time; exactly 24 hours and future timestamps produce false. This uses the
+        compared instants, independent of the submitted offsets. No new future-time restriction is
+        introduced. The server owns backfill and rejects it in create requests.
       security:
         - sessionCookieAuth: []
       parameters:
@@ -522,8 +526,10 @@ components:
     CreateFindingRequest:
       type: object
       additionalProperties: false
-      description: The create endpoint rejects unknown properties at runtime; the server assigns the business code.
-      required: [organizationId, description, discoveredAt, grade]
+      description: >-
+        The create endpoint rejects unknown properties at runtime; the server assigns the business code
+        and the backfill flag. Source and urgency are reporter choices and do not set the professional grade.
+      required: [organizationId, description, discoveredAt, grade, sourceCategory, urgency, location]
       properties:
         organizationId: { type: string, format: uuid }
         description: { type: string, minLength: 1, maxLength: 20000 }
@@ -534,6 +540,29 @@ components:
           type: string
           enum: [UNKNOWN]
           description: The reporter cannot assign a professional finding grade.
+        sourceCategory:
+          type: string
+          enum: [FIELD_OBSERVATION, INSPECTION, PERSON_REPORT]
+          description: >-
+            现场发现 (FIELD_OBSERVATION), 检查发现 (INSPECTION), or 人员举报 (PERSON_REPORT).
+            Describes the source of the report, not its grade.
+        urgency:
+          type: string
+          enum: [NORMAL, URGENT]
+          description: 普通 (NORMAL) or 需立即处置 (URGENT); independent of finding grade.
+        location:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '[\s\S]*[^\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000][\s\S]*'
+          description: >-
+            Required location using a maximum of 200 Unicode code points. It must contain a code point
+            outside Unicode White_Space: U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A,
+            U+2028, U+2029, U+202F, U+205F, or U+3000.
+        interimMeasure:
+          type: string
+          maxLength: 2000
+          description: Optional temporary measure using a maximum of 2000 Unicode code points.
     VersionedCommandRequest:
       type: object
       additionalProperties: false

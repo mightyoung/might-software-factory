@@ -87,13 +87,80 @@ class FindingWorkflowControllerHttpTest {
                         .with(validCsrf())
                         .header("Idempotency-Key", IDEMPOTENCY_KEY)
                         .contentType("application/json")
-                        .content(validCreateRequest().replace("\"grade\":\"UNKNOWN\"}",
-                                "\"grade\":\"UNKNOWN\",\"code\":\"CLIENT-CODE\"}")))
+                        .content(validCreateRequest().replace("\"grade\":\"UNKNOWN\",",
+                                "\"grade\":\"UNKNOWN\",\"code\":\"CLIENT-CODE\",")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
                 .andExpect(jsonPath("$.message").value("The finding request is invalid"))
                 .andExpect(jsonPath("$.retryable").value(false))
                 .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void createRejectsClientSuppliedBackfillFlag() throws Exception {
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest().replace("\"grade\":\"UNKNOWN\",",
+                                "\"grade\":\"UNKNOWN\",\"backfill\":false,")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void createReturnsFieldValidationForUnsupportedReportSource() throws Exception {
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest().replace("FIELD_OBSERVATION", "INTERNAL")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("sourceCategory"))
+                .andExpect(jsonPath("$.fieldErrors[0].reason").value("Pattern"));
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void createReportsStableUnicodeCodePointLengthErrorForLocation() throws Exception {
+        String tooLongLocation = "场".repeat(201);
+        String response = mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest().replace("North loading dock", tooLongLocation)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("location"))
+                .andExpect(jsonPath("$.fieldErrors[0].reason").value("CodePointSize"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(response).doesNotContain(tooLongLocation);
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void createRejectsUnicodeWhiteSpaceOnlyLocationWithPatternFieldError() throws Exception {
+        mvc.perform(post("/api/v1/findings")
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content(validCreateRequest().replace("North loading dock", "\u00A0")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("location"))
+                .andExpect(jsonPath("$.fieldErrors[0].reason").value("Pattern"));
 
         assertThat(repository.transactionCalls).isZero();
     }
@@ -271,7 +338,9 @@ class FindingWorkflowControllerHttpTest {
 
     private static String validCreateRequest() {
         return "{\"organizationId\":\"" + ORGANIZATION + "\",\"description\":\"Synthetic finding\","
-                + "\"discoveredAt\":\"2026-10-31T00:30:00+08:00\",\"grade\":\"UNKNOWN\"}";
+                + "\"discoveredAt\":\"2026-10-31T00:30:00+08:00\",\"grade\":\"UNKNOWN\","
+                + "\"sourceCategory\":\"FIELD_OBSERVATION\",\"urgency\":\"NORMAL\","
+                + "\"location\":\"North loading dock\",\"interimMeasure\":\"Temporary barrier installed\"}";
     }
 
     private static RequestPostProcessor authenticatedMember() {

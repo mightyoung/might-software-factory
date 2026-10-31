@@ -25,13 +25,14 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LT;
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LTE;
 
-/** Finding v2 field allowlist shared by schema discovery, query validation, and SQL projection. */
+/** Finding v3 field allowlist shared by schema discovery, query validation, and SQL projection. */
 @Component
 public final class FindingEntitySchema {
 
-    public static final String SCHEMA_VERSION = "2";
+    public static final String SCHEMA_VERSION = "3";
     public static final List<String> DEFAULT_FIELDS =
             List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
+                    "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
                     "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
 
     private final EntitySchema schema;
@@ -45,6 +46,15 @@ public final class FindingEntitySchema {
         fields.put("description", field(FieldType.TEXT, false, false, 0, List.of(), List.of()));
         fields.put("discoveredAt", field(FieldType.DATETIME, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
+        fields.put("sourceCategory", field(FieldType.ENUM, true, false, 0,
+                List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of(
+                        "FIELD_OBSERVATION", "INSPECTION", "PERSON_REPORT")));
+        fields.put("urgency", field(FieldType.ENUM, true, false, 0,
+                List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of("NORMAL", "URGENT")));
+        fields.put("location", field(FieldType.TEXT, true, false, 0, List.of(), List.of()));
+        fields.put("interimMeasure", field(FieldType.TEXT, true, false, 0, List.of(), List.of()));
+        fields.put("backfill", field(FieldType.BOOLEAN, true, false, 0,
+                List.of(EQ, IS_NULL, IS_NOT_NULL), List.of()));
         fields.put("sourceEventId", field(FieldType.UUID, true, false, 0,
                 List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of()));
         fields.put("riskId", field(FieldType.UUID, true, false, 0,

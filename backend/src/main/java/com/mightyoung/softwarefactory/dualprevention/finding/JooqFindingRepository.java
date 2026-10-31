@@ -63,6 +63,11 @@ public final class JooqFindingRepository implements FindingRepository {
             field(name("finding", "discovered_at"), OffsetDateTime.class);
     private static final Field<UUID> SOURCE_EVENT_ID = field(name("finding", "source_event_id"), UUID.class);
     private static final Field<UUID> RISK_ID = field(name("finding", "risk_id"), UUID.class);
+    private static final Field<String> SOURCE_CATEGORY = field(name("finding", "source_category"), String.class);
+    private static final Field<String> URGENCY = field(name("finding", "urgency"), String.class);
+    private static final Field<String> LOCATION = field(name("finding", "location"), String.class);
+    private static final Field<String> INTERIM_MEASURE = field(name("finding", "interim_measure"), String.class);
+    private static final Field<Boolean> BACKFILL = field(name("finding", "backfill"), Boolean.class);
     private static final Field<String> GRADE = field(name("finding", "grade"), String.class);
     private static final Field<String> STATE = field(name("finding", "state"), String.class);
     private static final Field<Integer> ROUND_NO = field(name("finding", "round_no"), Integer.class);
@@ -215,7 +220,9 @@ public final class JooqFindingRepository implements FindingRepository {
         return switch (key) {
             case "id", "organizationId", "sourceEventId", "riskId" -> FieldType.UUID;
             case "code", "description", "organizationName" -> FieldType.TEXT;
-            case "grade", "state" -> FieldType.ENUM;
+            case "grade", "state", "sourceCategory", "urgency" -> FieldType.ENUM;
+            case "location", "interimMeasure" -> FieldType.TEXT;
+            case "backfill" -> FieldType.BOOLEAN;
             case "discoveredAt", "createdAt", "updatedAt" -> FieldType.DATETIME;
             case "roundNo", "version" -> FieldType.NUMBER;
             default -> throw new IllegalArgumentException("Finding field is not registered");
@@ -228,7 +235,9 @@ public final class JooqFindingRepository implements FindingRepository {
                 selectedValue(row, DISCOVERED_AT), selectedValue(row, SOURCE_EVENT_ID), selectedValue(row, RISK_ID),
                 selectedValue(row, GRADE), selectedValue(row, STATE), selectedValue(row, ROUND_NO),
                 selectedValue(row, VERSION), selectedValue(row, CREATED_AT), selectedValue(row, UPDATED_AT),
-                selectedValue(row, ORGANIZATION_ID), selectedValue(row, ORGANIZATION_NAME));
+                selectedValue(row, ORGANIZATION_ID), selectedValue(row, ORGANIZATION_NAME),
+                selectedValue(row, SOURCE_CATEGORY), selectedValue(row, URGENCY), selectedValue(row, LOCATION),
+                selectedValue(row, INTERIM_MEASURE), selectedValue(row, BACKFILL));
     }
 
     private static <T> T selectedValue(Record row, Field<T> field) {
@@ -254,6 +263,11 @@ public final class JooqFindingRepository implements FindingRepository {
         fields.put("discoveredAt", DISCOVERED_AT);
         fields.put("sourceEventId", SOURCE_EVENT_ID);
         fields.put("riskId", RISK_ID);
+        fields.put("sourceCategory", SOURCE_CATEGORY);
+        fields.put("urgency", URGENCY);
+        fields.put("location", LOCATION);
+        fields.put("interimMeasure", INTERIM_MEASURE);
+        fields.put("backfill", BACKFILL);
         fields.put("grade", GRADE);
         fields.put("state", STATE);
         fields.put("roundNo", ROUND_NO);

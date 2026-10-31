@@ -41,9 +41,10 @@ paths:
       description: >-
         Requires the caller's authenticated session and finding read permission. Version 2 grants
         the registered finding fields as one read bundle; row-level data scope is still enforced.
-        This schema is not a global access grant. Version 2 adds organizationId and organizationName,
-        expands the default projection, and changes the omitted-sort default to createdAt DESC then
-        id ASC.
+        This schema is not a global access grant. Version 2 added organizationId and organizationName,
+        expanded the default projection, and changed the omitted-sort default to createdAt DESC then
+        id ASC. Version 3 adds the reported source, urgency, location, interim measure, and backfill
+        fields. Existing rows expose null for values that cannot be inferred.
       security:
         - sessionCookieAuth: []
       responses:
@@ -215,7 +216,7 @@ components:
           const: finding
         schemaVersion:
           type: string
-          const: '2'
+          const: '3'
           description: >-
             Monotonic version of this entity's fields and query defaults; it is not an authorization
             token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share
@@ -227,13 +228,13 @@ components:
           const: id
         defaultFields:
           type: array
-          const: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, createdAt]
+          const: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, createdAt]
           items:
             type: string
         fields:
           type: object
           additionalProperties: false
-          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
           properties:
             id:
               $ref: '#/components/schemas/UuidField'
@@ -247,6 +248,16 @@ components:
               $ref: '#/components/schemas/DescriptionField'
             discoveredAt:
               $ref: '#/components/schemas/DateTimeField'
+            sourceCategory:
+              $ref: '#/components/schemas/FindingSourceCategoryField'
+            urgency:
+              $ref: '#/components/schemas/FindingUrgencyField'
+            location:
+              $ref: '#/components/schemas/NullableReportTextField'
+            interimMeasure:
+              $ref: '#/components/schemas/NullableReportTextField'
+            backfill:
+              $ref: '#/components/schemas/NullableBackfillField'
             sourceEventId:
               $ref: '#/components/schemas/NullableUuidField'
             riskId:
@@ -341,6 +352,68 @@ components:
       description: >-
         Description is readable but is not filterable or sortable in schema version 1. maxLength 0
         does not constrain stored text; it represents the absence of text filter input.
+    FindingSourceCategoryField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { type: array, items: { enum: [EQ, IN, IS_NULL, IS_NOT_NULL] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues:
+          type: array
+          const: [FIELD_OBSERVATION, INSPECTION, PERSON_REPORT]
+          items: { type: string }
+      description: Null only for findings created before source metadata was captured.
+    FindingUrgencyField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { type: array, items: { enum: [EQ, IN, IS_NULL, IS_NOT_NULL] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues:
+          type: array
+          const: [NORMAL, URGENT]
+          items: { type: string }
+      description: Null only for findings created before urgency metadata was captured.
+    NullableReportTextField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: TEXT }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+      description: >-
+        Read-only report metadata. Values are null only for legacy findings whose original source,
+        urgency, location, and backfill status cannot be inferred.
+    NullableBackfillField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: BOOLEAN }
+        nullable: { const: true }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { type: array, items: { enum: [EQ, IS_NULL, IS_NOT_NULL] }, uniqueItems: true }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+      description: >-
+        Server-computed flag. Null only for legacy findings; true means discoveredAt is strictly
+        more than 24 hours before the backend submission time.
     DateTimeField:
       type: object
       additionalProperties: false
@@ -424,6 +497,19 @@ components:
         organizationName: { type: [string, 'null'] }
         description: { type: string }
         discoveredAt: { type: string, format: date-time }
+        sourceCategory:
+          anyOf:
+            - type: string
+              enum: [FIELD_OBSERVATION, INSPECTION, PERSON_REPORT]
+            - type: 'null'
+        urgency:
+          anyOf:
+            - type: string
+              enum: [NORMAL, URGENT]
+            - type: 'null'
+        location: { type: [string, 'null'], maxLength: 200 }
+        interimMeasure: { type: [string, 'null'], maxLength: 2000 }
+        backfill: { type: [boolean, 'null'] }
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
@@ -453,7 +539,7 @@ components:
     FindingDetail:
       type: object
       additionalProperties: false
-      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -461,6 +547,19 @@ components:
         organizationName: { type: [string, 'null'] }
         description: { type: string }
         discoveredAt: { type: string, format: date-time }
+        sourceCategory:
+          anyOf:
+            - type: string
+              enum: [FIELD_OBSERVATION, INSPECTION, PERSON_REPORT]
+            - type: 'null'
+        urgency:
+          anyOf:
+            - type: string
+              enum: [NORMAL, URGENT]
+            - type: 'null'
+        location: { type: [string, 'null'], maxLength: 200 }
+        interimMeasure: { type: [string, 'null'], maxLength: 2000 }
+        backfill: { type: [boolean, 'null'] }
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }

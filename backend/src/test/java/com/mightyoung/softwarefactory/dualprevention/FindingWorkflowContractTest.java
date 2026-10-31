@@ -1,5 +1,6 @@
 package com.mightyoung.softwarefactory.dualprevention;
 
+import com.mightyoung.softwarefactory.dualprevention.validation.UnicodeWhiteSpace;
 import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 import org.w3c.dom.Document;
@@ -72,9 +73,28 @@ class FindingWorkflowContractTest {
         Map<String, Object> createProperties = (Map<String, Object>) createRequest.get("properties");
 
         assertThat((List<String>) createRequest.get("required"))
-                .contains("organizationId", "description", "discoveredAt", "grade")
+                .contains("organizationId", "description", "discoveredAt", "grade",
+                        "sourceCategory", "urgency", "location")
                 .doesNotContain("code");
         assertThat(createProperties).doesNotContainKey("code");
+        assertThat((Map<String, Object>) createProperties.get("sourceCategory"))
+                .containsEntry("enum", List.of("FIELD_OBSERVATION", "INSPECTION", "PERSON_REPORT"));
+        assertThat((Map<String, Object>) createProperties.get("urgency"))
+                .containsEntry("enum", List.of("NORMAL", "URGENT"));
+        assertThat(((Map<String, Object>) createProperties.get("location")).get("maxLength")).isEqualTo(200);
+        assertThat(((Map<String, Object>) createProperties.get("location")).get("pattern"))
+                .isEqualTo("[\\s\\S]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680"
+                        + "\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000][\\s\\S]*")
+                .isEqualTo(UnicodeWhiteSpace.HAS_NON_WHITE_SPACE_CODE_POINT_PATTERN);
+        assertThat(((Map<String, Object>) createProperties.get("interimMeasure")).get("maxLength")).isEqualTo(2000);
+        assertThat(createProperties).doesNotContainKey("backfill");
+        assertThat(createRequest.get("description").toString())
+                .contains("server assigns the business code and the backfill flag", "not set the professional grade");
+        Map<String, Object> paths = (Map<String, Object>) document.get("paths");
+        Map<String, Object> createPost = (Map<String, Object>) ((Map<String, Object>) paths
+                .get("/api/v1/findings")).get("post");
+        assertThat(createPost.get("description").toString())
+                .contains("more than 24 hours", "exactly 24 hours", "future timestamps", "Asia/Shanghai");
         assertThat((Map<String, Object>) createProperties.get("grade"))
                 .containsEntry("enum", List.of("UNKNOWN"));
 
@@ -156,6 +176,7 @@ class FindingWorkflowContractTest {
                 .contains("JSON request field path");
         assertThat(((Map<String, Object>) fieldErrorProperties.get("reason")).get("description").toString())
                 .contains("Stable machine-readable validation code")
+                .contains("CodePointSize")
                 .contains("never validation prose or a rejected value");
     }
 
@@ -234,6 +255,32 @@ class FindingWorkflowContractTest {
         String originalFindingMigration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
                 "V2__dualprevention_finding_read.sql"));
         assertThat(originalFindingMigration).contains("'PERSON_CONFIRM_PENDING'", "'SAFETY_CONFIRM_PENDING'");
+    }
+
+    @Test
+    void reportedMetadataMigrationPreservesLegacyRowsAsUnknownAndDoesNotGrantOrBackfill() throws Exception {
+        String migration = Files.readString(Path.of("src", "main", "resources", "db", "migration",
+                "V8__finding_reported_metadata.sql"));
+        String normalized = migration.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        assertThat(normalized).contains(
+                "alter table public.finding",
+                "add column source_category varchar(32)",
+                "add column urgency varchar(16)",
+                "add column location text",
+                "add column interim_measure text",
+                "add column backfill boolean",
+                "source_category is null",
+                "urgency is null",
+                "location is null",
+                "backfill is null",
+                "field_observation", "inspection", "person_report", "normal", "urgent",
+                "char_length(location) between 1 and 200", "char_length(interim_measure) <= 2000")
+                .doesNotContain("update public.finding", "grant ", "create policy",
+                        "add column source_category varchar(32) not null",
+                        "add column urgency varchar(16) not null",
+                        "add column location text not null",
+                        "add column interim_measure text not null",
+                        "add column backfill boolean not null");
     }
 
     @Test

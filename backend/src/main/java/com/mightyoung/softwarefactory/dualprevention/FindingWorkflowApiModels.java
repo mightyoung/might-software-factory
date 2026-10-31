@@ -1,7 +1,11 @@
 package com.mightyoung.softwarefactory.dualprevention;
 
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingSourceCategory;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingUrgency;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.VerificationDecision;
+import com.mightyoung.softwarefactory.dualprevention.validation.CodePointSize;
+import com.mightyoung.softwarefactory.dualprevention.validation.UnicodeWhiteSpace;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.JsonParser;
 import tools.jackson.databind.DeserializationContext;
@@ -31,10 +35,17 @@ public final class FindingWorkflowApiModels {
             @NotNull OffsetDateTime discoveredAt,
             UUID sourceEventId,
             UUID riskId,
-            @NotBlank @Pattern(regexp = "UNKNOWN") String grade) {
+            @NotBlank @Pattern(regexp = "UNKNOWN") String grade,
+            @NotBlank @Pattern(regexp = "FIELD_OBSERVATION|INSPECTION|PERSON_REPORT") String sourceCategory,
+            @NotBlank @Pattern(regexp = "NORMAL|URGENT") String urgency,
+            @NotNull @Pattern(regexp = UnicodeWhiteSpace.HAS_NON_WHITE_SPACE_CODE_POINT_PATTERN)
+                    @CodePointSize(max = 200) String location,
+            @CodePointSize(max = 2000) String interimMeasure) {
         FindingWorkflowContracts.CreateFinding toCommand() {
             return new FindingWorkflowContracts.CreateFinding(
-                    organizationId, description, discoveredAt, sourceEventId, riskId, grade);
+                    organizationId, description, discoveredAt, sourceEventId, riskId, grade,
+                    FindingSourceCategory.valueOf(sourceCategory), FindingUrgency.valueOf(urgency),
+                    location, interimMeasure);
         }
     }
 
@@ -42,7 +53,8 @@ public final class FindingWorkflowApiModels {
     public static final class CreateRequestDeserializer extends StdDeserializer<CreateRequest> {
 
         private static final Set<String> FIELDS = Set.of(
-                "organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade");
+                "organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade",
+                "sourceCategory", "urgency", "location", "interimMeasure");
 
         public CreateRequestDeserializer() {
             super(CreateRequest.class);
@@ -67,7 +79,11 @@ public final class FindingWorkflowApiModels {
                     value(node.get("discoveredAt"), OffsetDateTime.class, context),
                     value(node.get("sourceEventId"), UUID.class, context),
                     value(node.get("riskId"), UUID.class, context),
-                    value(node.get("grade"), String.class, context));
+                    value(node.get("grade"), String.class, context),
+                    value(node.get("sourceCategory"), String.class, context),
+                    value(node.get("urgency"), String.class, context),
+                    value(node.get("location"), String.class, context),
+                    value(node.get("interimMeasure"), String.class, context));
         }
 
         private static <T> T value(JsonNode node, Class<T> type, DeserializationContext context)

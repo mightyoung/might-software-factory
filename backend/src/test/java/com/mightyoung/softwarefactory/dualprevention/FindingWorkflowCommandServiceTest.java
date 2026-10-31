@@ -8,6 +8,8 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEvidencePolicy;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEvidenceException;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingSourceCategory;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingUrgency;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowChangedEvent;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRepository;
@@ -175,18 +177,64 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CreateFinding request = newFinding();
         FindingWorkflowContracts.CommandResult first = service.create(key, request);
         FindingWorkflowContracts.CommandResult replay = service.create(key, request);
+        FindingWorkflowContracts.CommandResult crossDayReplay =
+                serviceAt(Instant.parse("2026-10-31T16:00:00Z")).create(key, request);
 
         assertThat(replay).isEqualTo(first);
+        assertThat(crossDayReplay).isEqualTo(first);
         assertThat(first.code()).isEqualTo("YH-20261031-0001");
+        FindingWorkflowCase stored = repository.finding(TENANT_A, first.findingId()).orElseThrow();
+        assertThat(stored.sourceCategory()).isEqualTo(FindingSourceCategory.FIELD_OBSERVATION);
+        assertThat(stored.urgency()).isEqualTo(FindingUrgency.NORMAL);
+        assertThat(stored.location()).isEqualTo("North loading dock");
+        assertThat(stored.interimMeasure()).isEqualTo("Temporary barrier installed");
+        assertThat(stored.backfill()).isFalse();
         assertThat(repository.findingCount()).isEqualTo(1);
         assertThat(workflow.startedProcesses).hasSize(1);
         assertThat(publishedEvents).hasSize(1);
 
         FindingWorkflowContracts.CreateFinding different = new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "Changed request", DISCOVERED_AT, null, null, "UNKNOWN");
+                ORGANIZATION_ID, "Synthetic defect", DISCOVERED_AT, null, null, "UNKNOWN",
+                FindingSourceCategory.INSPECTION, FindingUrgency.NORMAL,
+                "North loading dock", "Temporary barrier installed");
         assertThatThrownBy(() -> service.create(key, different))
                 .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
         assertThat(repository.findingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void computesBackfillOnlyWhenDiscoveryIsStrictlyMoreThanTwentyFourHoursEarlier() {
+        OffsetDateTime submittedAt = OffsetDateTime.parse("2026-10-30T16:30:00Z");
+        FindingWorkflowCase exactlyTwentyFourHours = createAndRead(
+                "60000000-0000-0000-0000-000000000021", newFinding(submittedAt.minusHours(24)));
+        FindingWorkflowCase olderThanTwentyFourHours = createAndRead(
+                "60000000-0000-0000-0000-000000000022", newFinding(submittedAt.minusHours(24).minusNanos(1)));
+        FindingWorkflowCase discoveredInTheFuture = createAndRead(
+                "60000000-0000-0000-0000-000000000023", newFinding(submittedAt.plusNanos(1)));
+
+        assertThat(exactlyTwentyFourHours.backfill()).isFalse();
+        assertThat(olderThanTwentyFourHours.backfill()).isTrue();
+        assertThat(discoveredInTheFuture.backfill()).isFalse();
+    }
+
+    @Test
+    void workflowTransitionsPreserveNewReportMetadata() {
+        FindingWorkflowContracts.CommandResult created = service.create(
+                command("60000000-0000-0000-0000-000000000024"), newFinding());
+        FindingWorkflowCase stored = repository.finding(TENANT_A, created.findingId()).orElseThrow();
+
+        FindingWorkflowCase confirmed = stored.confirmByPerson(PERSON_CONFIRMER, stored.version());
+
+        assertThat(confirmed.sourceCategory()).isEqualTo(stored.sourceCategory());
+        assertThat(confirmed.urgency()).isEqualTo(stored.urgency());
+        assertThat(confirmed.location()).isEqualTo(stored.location());
+        assertThat(confirmed.interimMeasure()).isEqualTo(stored.interimMeasure());
+        assertThat(confirmed.backfill()).isEqualTo(stored.backfill());
+    }
+
+    private FindingWorkflowCase createAndRead(String commandId, FindingWorkflowContracts.CreateFinding request) {
+        FindingWorkflowContracts.CommandResult result = service.create(command(commandId), request);
+        return repository.finding(TENANT_A, result.findingId()).orElseThrow();
     }
 
     @Test
@@ -304,7 +352,7 @@ class FindingWorkflowCommandServiceTest {
         UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000061");
         repository.seed(new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID, "YH-20261031-0061",
                 "Legacy finding", DISCOVERED_AT, null, null, "UNKNOWN", FindingWorkflowState.DISCOVERED,
-                1, 1, CREATOR, CREATOR));
+                1, 1, CREATOR, CREATOR, null, null, null, null, null));
         assignmentResolver.route = new FindingWorkflowContracts.InitialRoute(
                 PERSON_CONFIRMER, PERSON_CONFIRMER, SAFETY_MEMBER, SAFETY_MEMBER);
 
@@ -324,7 +372,8 @@ class FindingWorkflowCommandServiceTest {
         UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000062");
         repository.seed(new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID, "YH-20261031-0062",
                 "Legacy safety-pending finding", DISCOVERED_AT, null, null, "UNKNOWN",
-                FindingWorkflowState.SAFETY_CONFIRM_PENDING, 1, 2, CREATOR, PERSON_CONFIRMER));
+                FindingWorkflowState.SAFETY_CONFIRM_PENDING, 1, 2, CREATOR, PERSON_CONFIRMER,
+                null, null, null, null, null));
         workflow.tasks.put(findingId, new MemoryWorkflowFacade.Task("safetyConfirm", SAFETY_MEMBER.toString()));
         asMember(SAFETY_MEMBER, TENANT_A);
 
@@ -509,7 +558,8 @@ class FindingWorkflowCommandServiceTest {
         UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000099");
         FindingWorkflowCase legacy = new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID,
                 "FND-LEGACY-01", "Preserved legacy row", DISCOVERED_AT, null, null, "GENERAL",
-                FindingWorkflowState.DISCOVERED, 1, 1, CREATOR, CREATOR);
+                FindingWorkflowState.DISCOVERED, 1, 1, CREATOR, CREATOR,
+                null, null, null, null, null);
         repository.seed(legacy);
         UUID key = command("60000000-0000-0000-0000-000000000059");
 
@@ -539,9 +589,14 @@ class FindingWorkflowCommandServiceTest {
     }
 
     private static FindingWorkflowContracts.CreateFinding newFinding() {
+        return newFinding(DISCOVERED_AT);
+    }
+
+    private static FindingWorkflowContracts.CreateFinding newFinding(OffsetDateTime discoveredAt) {
         return new FindingWorkflowContracts.CreateFinding(
-                ORGANIZATION_ID, "Synthetic defect", DISCOVERED_AT,
-                null, null, "UNKNOWN");
+                ORGANIZATION_ID, "Synthetic defect", discoveredAt, null, null, "UNKNOWN",
+                FindingSourceCategory.FIELD_OBSERVATION, FindingUrgency.NORMAL,
+                "North loading dock", "Temporary barrier installed");
     }
 
     private FindingWorkflowCommandService serviceAt(Instant instant) {
