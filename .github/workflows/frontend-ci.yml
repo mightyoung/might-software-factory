@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "frontend/**"
+      - "contracts/**"
       - ".github/workflows/frontend-ci.yml"
   push:
     branches:
@@ -11,6 +12,7 @@ on:
       - dev
     paths:
       - "frontend/**"
+      - "contracts/**"
       - ".github/workflows/frontend-ci.yml"
   workflow_dispatch:
 
