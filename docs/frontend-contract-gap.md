@@ -27,10 +27,10 @@
 |---|---|---|---|
 | R1 | ~~契约 `id` 是 UUID，业务编号是 `code`；前端把 `DEMO-HZ-001` 同时当主键、路由参数和展示编号~~ **已处理（前端）**：记录拆成 `id`（路由、勾选、读取详情）和 `code`（展示、关键词查询）；勾选框的读屏名称改用 `code`（新增 `recordLabel`），避免朗读 UUID | 合成数据的 `id` 是形如 UUID 的演示值 | 接入真实接口时只需映射字段 |
 | R2 | 契约有 `grade`（`UNKNOWN` / `GENERAL` / `MAJOR`）；前端固定显示"待专业评估" | 真实数据会出现等级 | `UNKNOWN` 显示"待专业评估"，其余按契约显示；等级文案需要业务确认 |
-| R3 | 时间：契约是带时区的 `discoveredAt` / `createdAt` / `updatedAt`；前端是无时区的本地字符串 `reportedAt` / `foundAt` | 时区解释不统一，"上报日期"列与日期筛选会错位 | "上报时间"取 `createdAt`，"发现时间"取 `discoveredAt`；显示时区策略需要决定 |
+| R3 | ~~时间：契约是带时区的 `discoveredAt` / `createdAt` / `updatedAt`；前端是无时区的本地字符串~~ **已处理（前端）**：按后端建议，界面一律按 Asia/Shanghai 显示；记录里的时间是带 +08:00 的 ISO；日期筛选与日期列按上海日期归属；上报表单提示“按北京时间填写” | 这仍是约定：后端说明目前没有已验证的租户时区配置 | 接入时“上报时间”取 `createdAt`，“发现时间”取 `discoveredAt` |
 | R4 | 契约列表和详情**没有** `location`、`reporter`、`responsible`、`history` | 台账列"所在位置 / 设备""责任人"、详情时间线没有数据来源 | 需要后端补字段或补接口，否则这几列只能去掉（见"待决定"） |
 | R5 | 契约没有 `source`、`urgency`、`interimMeasure`、`backfill` | 详情里这四项没有来源 | 同上 |
-| R6 | 契约 `description` **不可筛选、不可排序**；`code` 只支持 `EQ` / `CONTAINS` | 现在的"编号 / 描述"关键词会缩成"只能查编号" | 查询框改成"隐患编号"，或请后端开放描述筛选 |
+| R6 | ~~契约 `description` 不可筛选、不可排序；`code` 只支持 `EQ` / `CONTAINS`~~ **已处理（前端）**：查询框改为“隐患编号”，只按编号匹配，不在已返回的一页上过滤描述 | 后端确认：描述检索与“编号 OR 描述”尚未实现 | 是否开放需单独补契约、校验与性能验证 |
 | R7 | 契约分页：请求 `page.number` + 顶层 `size`；偏移量不得超过 10000；响应 `page.number/size/total/pageCount` | 100 条/页时最多约 100 页；超出会 400 | 适配器负责映射；界面要处理 400 |
 | R8 | 契约错误：400 / 401 / 403 / 404 / 429（带 `Retry-After`）/ 503，响应体含 `code`、`message`、`traceId`、`retryable`、`fieldErrors` | 前端读取失败只分 `unauthenticated` / `forbidden` / `unknown`，429 与 503 没有区分，也不展示 `traceId` | 接入 HTTP 适配器时一起补；`traceId` 展示给用户便于排障 |
 | R9 | 列表 POST 需要 `X-XSRF-TOKEN`（取自同源 `XSRF-TOKEN` cookie），并带同源凭证 | 适配器必须实现 | 在 HTTP 适配器里统一处理 |
@@ -64,7 +64,21 @@
 
 摘自 `finding-ledger.yaml` 的 `x-runtime-blockers`：没有生产登录与会话签发配置；V3 / V4 迁移未应用到任何数据库；运行身份对身份与授权表没有 SELECT 权限；V2 只在测试库验证过。后端 handler 默认**拒绝访问**，所以当前即使写了 HTTP 适配器，也读不到真实数据。
 
-## 五、需要业务 / 后端回答的问题
+## 五、后端对 issue #8 的回复（2026-10-31，针对 dev `cd1a8fd`）
+
+| 问题 | 回复摘要 | 前端状态 |
+|---|---|---|
+| W1 `organizationId` | 由创建请求显式提供，服务端复核 `finding.create` 范围；**没有**“可创建隐患的组织”读取接口，具体契约未定稿，不要硬编码组织 UUID | 等后端出组织选项契约 |
+| W2 `code` | 当前请求必须传；服务端没有编号生成器。建议改为服务端生成，规则、租户内唯一性、并发与幂等行为待定 | 等新契约，暂不改上报表单 |
+| R4/W4 缺失字段与历史 | 位置、紧急程度、临时措施、来源分类、当前轮责任人、历史读取均**尚不支持**；不建议取消需求，也**不要把它们塞进 description，不要提交后静默丢弃** | 真实写入切换前须明确首期字段；未接线的项要标明“演示 / 不可用” |
+| R3 时区 | 带偏移时间，服务端用 UTC；建议界面按 Asia/Shanghai，发送带 Z 或 +08:00 的 ISO | 已按此实现 |
+| S1 会话 | 已有 `GET /api/v1/auth/csrf`、`POST /api/v1/auth/login`（`loginKey`、`password`、`tenantCode`）、`POST /api/v1/auth/logout`；缺认证 OpenAPI、当前用户 / 菜单 / 权限 / 组织选项接口；前端 `safety.finding.report` 与后端 `finding.create` 的映射待定；无完成日期承诺 | 合成 `SessionAdapter` 不能当真实登录 |
+| 补充 A `grade` | 前端固定 `UNKNOWN` 可以保留，但服务端**目前不会拒绝** `GENERAL` / `MAJOR`，是待修的后端约束 | 前端不提供定级入口 |
+| 补充 B 描述筛选 | 确认不支持；应标“隐患编号” | 已处理 |
+
+后端同时提醒：单元测试 / CI 通过不代表真实登录、RLS、Flowable 联合事务或前后端联调已通过；issue #8 保持打开。
+
+## 六、仍需回答的问题
 
 1. W1：`organizationId` 从哪里来？
 2. W2：隐患业务编号 `code` 由谁生成？
