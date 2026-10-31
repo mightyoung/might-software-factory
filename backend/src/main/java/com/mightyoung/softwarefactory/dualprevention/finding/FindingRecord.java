@@ -25,7 +25,18 @@ public record FindingRecord(
         String urgency,
         String location,
         String interimMeasure,
-        Boolean backfill) {
+        Boolean backfill,
+        UUID relatedFindingId) {
+
+    public FindingRecord(UUID id, String code, String description, OffsetDateTime discoveredAt,
+                         UUID sourceEventId, UUID riskId, String grade, String state, Integer roundNo,
+                         Long version, OffsetDateTime createdAt, OffsetDateTime updatedAt,
+                         UUID organizationId, String organizationName, String sourceCategory,
+                         String urgency, String location, String interimMeasure, Boolean backfill) {
+        this(id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version,
+                createdAt, updatedAt, organizationId, organizationName, sourceCategory, urgency, location,
+                interimMeasure, backfill, null);
+    }
 
     public Map<String, Object> toApiMap() {
         Map<String, Object> values = new LinkedHashMap<>();
@@ -48,6 +59,7 @@ public record FindingRecord(
         values.put("location", location);
         values.put("interimMeasure", interimMeasure);
         values.put("backfill", backfill);
+        values.put("relatedFindingId", relatedFindingId);
         return values;
     }
 }

@@ -159,10 +159,12 @@ describe("隐患台账分页与详情", () => {
   });
 
   it.each(findingStates)("状态 %s 的详情映射和业务动作保持受限", async (state) => {
-    // DISCOVERED 是契约里的旧数据状态，种子数据没有它：从现有样例派生，避免改动台账总数和新记录编号。
+    // 用现有演示行派生边界状态，避免改动台账总数和编号。
     const record =
       syntheticFindings.find((item) => item.state === state) ??
-      (state === "DISCOVERED" ? { ...syntheticFindings[0]!, state } : undefined);
+      (state === "DISCOVERED" || state === "NOT_ESTABLISHED"
+        ? { ...syntheticFindings[0]!, state }
+        : undefined);
     if (!record) throw new Error(`Missing synthetic record for state ${state}`);
 
     let detailReads = 0;
@@ -184,9 +186,13 @@ describe("隐患台账分页与详情", () => {
 
     const workflow = within(detail).getByRole("list", { name: "隐患流程节点" });
     expect(within(workflow).getAllByRole("listitem")).toHaveLength(workflowSteps.length);
-    if (state === "CLOSED") {
+    if (state === "CLOSED" || state === "NOT_ESTABLISHED") {
       expect(within(workflow).queryByText("当前节点")).not.toBeInTheDocument();
-      expect(within(detail).getByText("此示例状态不可变更")).toBeInTheDocument();
+      if (state === "CLOSED") {
+        expect(within(detail).getByText("此示例状态不可变更")).toBeInTheDocument();
+      } else {
+        expect(within(detail).getByText("未成立记录已终止；新证据应创建关联记录")).toBeInTheDocument();
+      }
     } else {
       const currentNode = within(workflow).getByText("当前节点");
       expect(currentNode.closest("li")?.querySelector(".workflow-step-name")?.textContent)
@@ -198,7 +204,7 @@ describe("隐患台账分页与详情", () => {
     expect(actionHint).toHaveTextContent("正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据");
 
     const actions = getFindingActions(state);
-    if (state === "CLOSED") {
+    if (state === "CLOSED" || state === "NOT_ESTABLISHED") {
       expect(actions).toHaveLength(0);
     }
     for (const action of actions) {

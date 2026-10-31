@@ -11,6 +11,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FindingMigrationContractTest {
 
     @Test
+    void notEstablishedMigrationAddsTerminalStateDecisionAndTenantSafeRelatedFindingLink() throws IOException {
+        Path migrationPath = Path.of("src/main/resources/db/migration/V10__finding_not_established_close_and_relation.sql");
+        assertThat(Files.exists(migrationPath)).isTrue();
+        String sql = Files.readString(migrationPath).toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("\\s+", " ");
+
+        assertThat(sql).contains("'not_established'", "decision in ('approve', 'not_established')",
+                "related_finding_id", "foreign key (tenant_id, related_finding_id)",
+                "finding_related_finding_not_self", "finding_related_finding_immutable",
+                "prevent_not_established_finding_reopen", "related finding must be not established",
+                "decision <> 'not_established' or (reason is not null and length(btrim(reason, u&'\\0009\\000a\\000b\\000c\\000d\\0020\\0085\\00a0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200a\\2028\\2029\\202f\\205f\\3000')) > 0)");
+    }
+
+    @Test
     void productionFindingMigrationDefinesTenantAndOrganizationGuardsWithoutGrantingTheAppRole()
             throws IOException {
         String sql = Files.readString(Path.of("src/main/resources/db/migration/V2__dualprevention_finding_read.sql"))

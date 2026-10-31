@@ -25,7 +25,16 @@ public final class FindingWorkflowContracts {
             FindingSourceCategory sourceCategory,
             FindingUrgency urgency,
             String location,
-            String interimMeasure) {
+            String interimMeasure,
+            UUID relatedFindingId) {
+        public CreateFinding(UUID organizationId, String description, OffsetDateTime discoveredAt,
+                             UUID sourceEventId, UUID riskId, String grade,
+                             FindingSourceCategory sourceCategory, FindingUrgency urgency,
+                             String location, String interimMeasure) {
+            this(organizationId, description, discoveredAt, sourceEventId, riskId, grade,
+                    sourceCategory, urgency, location, interimMeasure, null);
+        }
+
     }
 
     public record Dispatch(
@@ -46,9 +55,17 @@ public final class FindingWorkflowContracts {
     public record SafetyConfirmationCommand(String reason, String grade) {
     }
 
-    /** Current confirmation endpoints approve only; later decisions require an explicit workflow change. */
+    public record NotEstablishedCommand(ConfirmationStage stage, String reason) {
+    }
+
+    public enum ConfirmationStage {
+        PERSON,
+        SAFETY
+    }
+
     public enum ConfirmationDecision {
-        APPROVE
+        APPROVE,
+        NOT_ESTABLISHED
     }
 
     public record CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version) {
@@ -199,7 +216,7 @@ public final class FindingWorkflowContracts {
             Objects.requireNonNull(actorMemberId, "actorMemberId");
             Objects.requireNonNull(decision, "decision");
             Objects.requireNonNull(reason, "reason");
-            if (reason.isBlank() || reason.length() > MAX_CONFIRMATION_OPINION_LENGTH) {
+            if (!ConfirmationOpinionText.hasContent(reason) || reason.length() > MAX_CONFIRMATION_OPINION_LENGTH) {
                 throw new IllegalArgumentException("A confirmation opinion between 1 and 4000 characters is required");
             }
             Objects.requireNonNull(decidedAt, "decidedAt");

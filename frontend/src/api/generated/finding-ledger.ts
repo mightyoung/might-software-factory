@@ -84,7 +84,7 @@ export interface components {
              * @description Monotonic version of this entity's fields and query defaults; it is not an authorization token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share entries across tenant or authorization scopes. When this value changes, discard the older cached schema and fetch this endpoint before validating requests or responses. Increment it when field shape, nullability, default projection, or default ordering changes.
              * @constant
              */
-            schemaVersion: "3";
+            schemaVersion: "4";
             /** @constant */
             idField: "id";
             /** @constant */
@@ -102,6 +102,7 @@ export interface components {
                 "backfill",
                 "sourceEventId",
                 "riskId",
+                "relatedFindingId",
                 "grade",
                 "state",
                 "roundNo",
@@ -121,6 +122,7 @@ export interface components {
                 backfill: components["schemas"]["NullableBackfillField"];
                 sourceEventId: components["schemas"]["NullableUuidField"];
                 riskId: components["schemas"]["NullableUuidField"];
+                relatedFindingId: components["schemas"]["NullableUuidField"];
                 grade: components["schemas"]["FindingGradeField"];
                 state: components["schemas"]["FindingStateField"];
                 roundNo: components["schemas"]["NumberField"];
@@ -365,6 +367,7 @@ export interface components {
                 "SAFETY_DISPATCH_PENDING",
                 "RECTIFYING",
                 "ACCEPTANCE_PENDING",
+                "NOT_ESTABLISHED",
                 "CLOSED"
             ];
         };
@@ -397,7 +400,9 @@ export interface components {
             /** @enum {unknown} */
             grade?: "UNKNOWN" | "GENERAL" | "MAJOR";
             /** @enum {unknown} */
-            state?: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "CLOSED";
+            state?: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
+            /** Format: uuid */
+            relatedFindingId?: string | null;
             roundNo?: number;
             version?: number;
             /** Format: date-time */
@@ -438,7 +443,9 @@ export interface components {
             /** @enum {unknown} */
             grade: "UNKNOWN" | "GENERAL" | "MAJOR";
             /** @enum {unknown} */
-            state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "CLOSED";
+            state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
+            /** Format: uuid */
+            relatedFindingId: string | null;
             roundNo: number;
             version: number;
             /** Format: date-time */

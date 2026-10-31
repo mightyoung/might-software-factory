@@ -14,10 +14,23 @@ x-tenant-context: >-
 x-workflow-order:
   - PERSON_CONFIRM_PENDING
   - SAFETY_CONFIRM_PENDING
+  - NOT_ESTABLISHED
   - SAFETY_DISPATCH_PENDING
   - RECTIFYING
   - ACCEPTANCE_PENDING
   - CLOSED
+x-confirmation-terminal-outcomes:
+  NOT_ESTABLISHED: >-
+    Either confirmation stage may end its review branch as not established with a required opinion.
+    This is distinct from CLOSED, which remains the successful remediation acceptance outcome.
+x-confirmation-idempotency-compatibility: >-
+  Existing confirmation command receipts are immutable. This contract retains the
+  confirmation-payload-v2 fingerprint name while normalizing opinions with Unicode White_Space
+  trimming. A receipt produced by the earlier String.strip normalization can conflict when the
+  original opinion has leading or trailing Unicode White_Space such as NBSP. Before rollout,
+  clients must read back the finding, confirmation opinion, grade, and version to reconcile any
+  previously completed action; they must not overwrite or assume absence of an old receipt. Use a
+  new idempotency key only for an action the current state still accepts, after reconciliation.
 x-remediation-loop: >-
   A failed safety verification requires a reason, retains the failed round, and routes through a
   safety re-dispatch before the new remediation notice is issued. Only a passing safety verification
@@ -31,13 +44,18 @@ paths:
       summary: Create a finding and start its required confirmation workflow
       description: >-
         Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each
-        confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
+        confirmation/dispatch stage. PERSON and SAFETY confirmers must be distinct from one another
+        and from the reporter; missing or ambiguous route configuration fails closed.
         The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission
         day sequence. A completed idempotent replay returns the original finding ID and code.
         The server calculates backfill as true only when discoveredAt is more than 24 hours before
         its submission time; exactly 24 hours and future timestamps produce false. This uses the
         compared instants, independent of the submitted offsets. No new future-time restriction is
-        introduced. The server owns backfill and rejects it in create requests.
+        introduced. The server owns backfill and rejects it in create requests. An optional
+        relatedFindingId links new evidence to a same-tenant parent in NOT_ESTABLISHED; the caller
+        needs finding.create for the new record and finding.read for the parent. A missing,
+        cross-tenant, or unreadable parent has the same 404 response. A visible parent in another
+        state returns 422 WORKFLOW_RULE. Creating the related record never updates or reopens its parent.
       security:
         - sessionCookieAuth: []
       parameters:
@@ -158,6 +176,51 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/SafetyConfirmationRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/CommandSucceeded'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /api/v1/findings/{id}/close-not-established:
+    post:
+      operationId: closeFindingAsNotEstablished
+      summary: Close a finding as not established at the current confirmation stage
+      description: >-
+        The stage must match the current pending confirmation state. PERSON requires
+        finding.confirm.person and SAFETY requires finding.confirm.safety; neither confirmer may be
+        the reporter, and the SAFETY confirmer must differ from the recorded PERSON confirmer. This
+        command does not accept a grade; the finding's existing grade is preserved. Normal SAFETY
+        approval still requires a GENERAL or MAJOR grade. The required opinion is retained in the
+        confirmation, transition, and audit record. Stage, opinion, expectedVersion, and the
+        authenticated actor participate in idempotency. Existing findingRemediationV1 instances are
+        not migrated automatically; this command returns 409 COMMAND_CONFLICT for them before writing
+        a receipt. Continue the existing V1 approval path or use a separately reviewed instance
+        migration; do not retry the close with a new key.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotEstablishedRequest'
       responses:
         '200':
           $ref: '#/components/responses/CommandSucceeded'
@@ -387,8 +450,10 @@ components:
     InvalidRequest:
       description: >-
         Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request
-        binding failures return INVALID_QUERY with an empty fieldErrors array. Unsupported create fields also
-        return INVALID_QUERY; lifecycle command DTOs currently ignore unknown properties for compatibility.
+        binding failures return INVALID_QUERY with an empty fieldErrors array. Opinion-only Unicode
+        White_Space returns INVALID_REQUEST with reason OpinionNotBlank. Unsupported create, person
+        confirmation, safety confirmation, and not-established close fields return INVALID_QUERY;
+        other lifecycle command DTOs currently ignore unknown properties for compatibility.
       content:
         application/json:
           schema:
@@ -529,6 +594,8 @@ components:
       description: >-
         The create endpoint rejects unknown properties at runtime; the server assigns the business code
         and the backfill flag. Source and urgency are reporter choices and do not set the professional grade.
+        relatedFindingId is optional and only accepts a same-tenant NOT_ESTABLISHED parent; the parent
+        is not reopened or changed.
       required: [organizationId, description, discoveredAt, grade, sourceCategory, urgency, location]
       properties:
         organizationId: { type: string, format: uuid }
@@ -563,6 +630,10 @@ components:
           type: string
           maxLength: 2000
           description: Optional temporary measure using a maximum of 2000 Unicode code points.
+        relatedFindingId:
+          type: string
+          format: uuid
+          description: Optional same-tenant NOT_ESTABLISHED parent to associate with new evidence.
     VersionedCommandRequest:
       type: object
       additionalProperties: false
@@ -583,7 +654,10 @@ components:
           type: string
           minLength: 1
           maxLength: 4000
-          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
+            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
+            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
     SafetyConfirmationRequest:
       type: object
       additionalProperties: false
@@ -594,11 +668,33 @@ components:
           type: string
           minLength: 1
           maxLength: 4000
-          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
+            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
+            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
         grade:
           type: string
           enum: [GENERAL, MAJOR]
           description: Professional grade assigned by the safety confirmer.
+    NotEstablishedRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        The stage must match the pending confirmation. This action does not accept or assign a grade;
+        the finding's existing grade is preserved. The reason is recorded in the confirmation,
+        transition, and audit event.
+      required: [expectedVersion, stage, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        stage: { type: string, enum: [PERSON, SAFETY] }
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
+            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
+            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
     DispatchRequest:
       type: object
       additionalProperties: false

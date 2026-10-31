@@ -3,6 +3,7 @@ package com.mightyoung.softwarefactory.dualprevention;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.CommandResponse;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.CreateRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.DispatchRequest;
+import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.NotEstablishedRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.PersonConfirmationRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.SafetyConfirmationRequest;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowApiModels.SubmitRemediationRequest;
@@ -59,6 +60,15 @@ public final class FindingWorkflowController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody SafetyConfirmationRequest request) {
         return response(service.confirmSafety(parseIdempotencyKey(idempotencyKey), id,
+                request.expectedVersion(), request.toCommand()));
+    }
+
+    @PostMapping("/api/v1/findings/{id}/close-not-established")
+    public CommandResponse closeNotEstablished(
+            @PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody NotEstablishedRequest request) {
+        return response(service.closeNotEstablished(parseIdempotencyKey(idempotencyKey), id,
                 request.expectedVersion(), request.toCommand()));
     }
 

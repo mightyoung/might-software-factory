@@ -40,12 +40,20 @@ public final class FindingWorkflowApiModels {
             @NotBlank @Pattern(regexp = "NORMAL|URGENT") String urgency,
             @NotNull @Pattern(regexp = UnicodeWhiteSpace.HAS_NON_WHITE_SPACE_CODE_POINT_PATTERN)
                     @CodePointSize(max = 200) String location,
-            @CodePointSize(max = 2000) String interimMeasure) {
+            @CodePointSize(max = 2000) String interimMeasure,
+            UUID relatedFindingId) {
+        public CreateRequest(UUID organizationId, String description, OffsetDateTime discoveredAt,
+                             UUID sourceEventId, UUID riskId, String grade, String sourceCategory,
+                             String urgency, String location, String interimMeasure) {
+            this(organizationId, description, discoveredAt, sourceEventId, riskId, grade, sourceCategory,
+                    urgency, location, interimMeasure, null);
+        }
+
         FindingWorkflowContracts.CreateFinding toCommand() {
             return new FindingWorkflowContracts.CreateFinding(
                     organizationId, description, discoveredAt, sourceEventId, riskId, grade,
                     FindingSourceCategory.valueOf(sourceCategory), FindingUrgency.valueOf(urgency),
-                    location, interimMeasure);
+                    location, interimMeasure, relatedFindingId);
         }
     }
 
@@ -54,7 +62,7 @@ public final class FindingWorkflowApiModels {
 
         private static final Set<String> FIELDS = Set.of(
                 "organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade",
-                "sourceCategory", "urgency", "location", "interimMeasure");
+                "sourceCategory", "urgency", "location", "interimMeasure", "relatedFindingId");
 
         public CreateRequestDeserializer() {
             super(CreateRequest.class);
@@ -83,7 +91,8 @@ public final class FindingWorkflowApiModels {
                     value(node.get("sourceCategory"), String.class, context),
                     value(node.get("urgency"), String.class, context),
                     value(node.get("location"), String.class, context),
-                    value(node.get("interimMeasure"), String.class, context));
+                    value(node.get("interimMeasure"), String.class, context),
+                    value(node.get("relatedFindingId"), UUID.class, context));
         }
 
         private static <T> T value(JsonNode node, Class<T> type, DeserializationContext context)
@@ -98,7 +107,7 @@ public final class FindingWorkflowApiModels {
     @JsonDeserialize(using = PersonConfirmationRequestDeserializer.class)
     public record PersonConfirmationRequest(
             @Min(1) long expectedVersion,
-            @NotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason) {
+            @OpinionNotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason) {
         FindingWorkflowContracts.PersonConfirmationCommand toCommand() {
             return new FindingWorkflowContracts.PersonConfirmationCommand(reason);
         }
@@ -107,10 +116,41 @@ public final class FindingWorkflowApiModels {
     @JsonDeserialize(using = SafetyConfirmationRequestDeserializer.class)
     public record SafetyConfirmationRequest(
             @Min(1) long expectedVersion,
-            @NotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason,
+            @OpinionNotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason,
             @NotBlank @Pattern(regexp = "GENERAL|MAJOR") String grade) {
         FindingWorkflowContracts.SafetyConfirmationCommand toCommand() {
             return new FindingWorkflowContracts.SafetyConfirmationCommand(reason, grade);
+        }
+    }
+
+    @JsonDeserialize(using = NotEstablishedRequestDeserializer.class)
+    public record NotEstablishedRequest(
+            @Min(1) long expectedVersion,
+            @NotNull @Pattern(regexp = "PERSON|SAFETY") String stage,
+            @OpinionNotBlank @Size(max = FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) String reason) {
+        FindingWorkflowContracts.NotEstablishedCommand toCommand() {
+            return new FindingWorkflowContracts.NotEstablishedCommand(
+                    FindingWorkflowContracts.ConfirmationStage.valueOf(stage), reason);
+        }
+    }
+
+    /** Rejects unknown fields so the close command cannot accept a caller-supplied grade or identity override. */
+    public static final class NotEstablishedRequestDeserializer extends StdDeserializer<NotEstablishedRequest> {
+
+        private static final Set<String> FIELDS = Set.of("expectedVersion", "stage", "reason");
+
+        public NotEstablishedRequestDeserializer() {
+            super(NotEstablishedRequest.class);
+        }
+
+        @Override
+        public NotEstablishedRequest deserialize(JsonParser parser, DeserializationContext context)
+                throws JacksonException {
+            JsonNode node = object(parser, context, NotEstablishedRequest.class, FIELDS);
+            Long expectedVersion = value(node.get("expectedVersion"), Long.class, context);
+            return new NotEstablishedRequest(expectedVersion == null ? 0 : expectedVersion,
+                    value(node.get("stage"), String.class, context),
+                    value(node.get("reason"), String.class, context));
         }
     }
 

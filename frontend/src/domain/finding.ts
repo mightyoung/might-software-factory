@@ -6,6 +6,7 @@ export const findingStates = [
   "SAFETY_DISPATCH_PENDING",
   "RECTIFYING",
   "ACCEPTANCE_PENDING",
+  "NOT_ESTABLISHED",
   "CLOSED",
 ] as const;
 
@@ -18,6 +19,7 @@ export const findingStateLabels: Record<FindingState, string> = {
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
   RECTIFYING: "整改中",
   ACCEPTANCE_PENDING: "待安全验收",
+  NOT_ESTABLISHED: "未成立",
   CLOSED: "已闭环",
 };
 
@@ -82,6 +84,7 @@ export function getFindingActions(state: FindingState): FindingAction[] {
     SAFETY_DISPATCH_PENDING: ["分派整改"],
     RECTIFYING: ["提交整改证据"],
     ACCEPTANCE_PENDING: ["验收通过", "退回整改"],
+    NOT_ESTABLISHED: [],
     CLOSED: [],
   };
 
@@ -99,6 +102,7 @@ export function workflowCurrentIndex(state: FindingState): number {
     SAFETY_DISPATCH_PENDING: 3,
     RECTIFYING: 4,
     ACCEPTANCE_PENDING: 5,
+    NOT_ESTABLISHED: 0,
     CLOSED: 5,
   };
   return indexByState[state];
