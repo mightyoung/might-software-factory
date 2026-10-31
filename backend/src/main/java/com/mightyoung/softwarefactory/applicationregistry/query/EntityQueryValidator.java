@@ -12,6 +12,7 @@ import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContr
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.Request;
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.SortField;
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.ValidationException;
+import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
@@ -47,6 +48,7 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
  * <p>The supplied schema must already be restricted to the caller's tenant and permissions.
  * This class is not an authorization check, SQL builder, or data access layer.</p>
  */
+@Component
 public final class EntityQueryValidator {
 
     private static final int MAX_PAGE_SIZE = 100;
