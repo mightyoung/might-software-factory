@@ -10,7 +10,9 @@
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:api": "npm ci --prefix tools/api-types --no-audit --no-fund && node tools/api-types/generate.mjs",
+    "check:api": "npm ci --prefix tools/api-types --no-audit --no-fund && node tools/api-types/generate.mjs --check"
   },
   "dependencies": {
     "react": "19.3.1",

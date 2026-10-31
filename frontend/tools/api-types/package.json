@@ -1,0 +1,14 @@
+{
+  "name": "might-software-factory-api-types-generator",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated generator: contracts/openapi -> frontend/src/api/generated. Kept apart because openapi-typescript needs TypeScript 5 while the frontend uses TypeScript 7.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

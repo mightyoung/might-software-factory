@@ -34,6 +34,10 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund
 
+      - name: Contract types are up to date
+        working-directory: frontend
+        run: npm run check:api
+
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
