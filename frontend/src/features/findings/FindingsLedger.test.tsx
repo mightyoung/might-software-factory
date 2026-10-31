@@ -84,7 +84,7 @@ describe("隐患台账分页与详情", () => {
     );
 
     await screen.findByText("DEMO-HZ-001");
-    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号 / 描述" }), { target: { value: "隔离" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号" }), { target: { value: "HZ-001" } });
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
     await screen.findByText("共 1 条演示记录");
     expect(screen.getByText("DEMO-HZ-001")).toBeInTheDocument();
@@ -94,7 +94,7 @@ describe("隐患台账分页与详情", () => {
     await screen.findByText("共 7 条演示记录");
     expect(screen.getByText("DEMO-HZ-001")).toBeInTheDocument();
     expect(screen.getByText("DEMO-HZ-006")).toBeInTheDocument();
-    expect(screen.getByRole("searchbox", { name: "隐患编号 / 描述" })).toHaveValue("");
+    expect(screen.getByRole("searchbox", { name: "隐患编号" })).toHaveValue("");
   });
 
   it("选择范围只包括当前页，翻页后清空选择", async () => {
@@ -145,7 +145,7 @@ describe("隐患台账分页与详情", () => {
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
     expect(await within(detail).findByText("TEST-HZ-021")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号 / 描述" }), {
+    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号" }), {
       target: { value: "TEST-HZ-023" },
     });
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
@@ -504,8 +504,8 @@ describe("隐患台账分页与详情", () => {
 
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={adapter} />);
     await waitFor(() => expect(listCalls).toBe(1));
-    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号 / 描述" }), {
-      target: { value: filteredRecord.id },
+    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号" }), {
+      target: { value: filteredRecord.code },
     });
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
     await waitFor(() => expect(listCalls).toBe(2));

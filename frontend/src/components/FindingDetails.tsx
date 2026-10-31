@@ -7,6 +7,7 @@ import {
   workflowSteps,
   type FindingRecord,
 } from "../domain/finding";
+import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
@@ -56,13 +57,13 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry }: Fi
               </div>
               <div>
                 <dt>上报时间</dt>
-                <dd>{finding.reportedAt.replace("T", " ")}</dd>
+                <dd>{formatDateTime(finding.reportedAt)}</dd>
               </div>
               {finding.foundAt && (
                 <div>
                   <dt>发现时间</dt>
                   <dd>
-                    {finding.foundAt.replace("T", " ")}
+                    {formatDateTime(finding.foundAt)}
                     {finding.backfill && <span className="inline-tag">补报</span>}
                   </dd>
                 </div>

@@ -1,3 +1,4 @@
+import { parseWallTime, toWallTime } from "./time";
 import {
   findingSources,
   findingUrgencies,
@@ -13,7 +14,7 @@ export interface FindingDraft {
   source: FindingSource;
   description: string;
   location: string;
-  /** 本地日期时间，格式 YYYY-MM-DDTHH:mm（来自 datetime-local）；时区解释待后端契约确定。 */
+  /** 上海墙上时间，格式 YYYY-MM-DDTHH:mm（来自 datetime-local）；提交时由适配器换算为带 +08:00 的 ISO。 */
   foundAt: string;
   urgency: FindingUrgency;
   interimMeasure: string;
@@ -34,29 +35,14 @@ export const DRAFT_LIMITS = {
   backfillAfterHours: 24,
 } as const;
 
-const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
-
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
+/** 草稿里的时间是上海“墙上时间”（YYYY-MM-DDTHH:mm），见 domain/time.ts。保留这两个名字以减少调用方改动。 */
 export function formatLocalDateTime(date: Date): string {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return toWallTime(date);
 }
 
 /** 严格解析：格式不符或日期不存在（如 2 月 31 日）返回 null。 */
 export function parseLocalDateTime(value: string): Date | null {
-  const match = LOCAL_DATE_TIME.exec(value);
-  if (!match) return null;
-  const [year, month, day, hour, minute] = match.slice(1).map(Number) as [number, number, number, number, number];
-  const date = new Date(year, month - 1, day, hour, minute);
-  const roundTrips =
-    date.getFullYear() === year &&
-    date.getMonth() === month - 1 &&
-    date.getDate() === day &&
-    date.getHours() === hour &&
-    date.getMinutes() === minute;
-  return roundTrips ? date : null;
+  return parseWallTime(value);
 }
 
 export function createEmptyDraft(now: Date): FindingDraft {

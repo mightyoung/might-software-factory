@@ -325,7 +325,7 @@ export function FindingReportForm({
           hint={
             isBackfill(draft.foundAt, now())
               ? "发现时间早于当前时间超过 24 小时，将按补报处理：发现时间和上报时间会分别保存。"
-              : "按本机时区填写；租户时区的处理待后端契约确定。"
+              : "按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。"
           }
         >
           <input

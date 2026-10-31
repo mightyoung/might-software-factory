@@ -1,4 +1,5 @@
 import type { LedgerSchema } from "../../domain/ledger";
+import { dateKey } from "../../domain/time";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
 
 export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
@@ -9,10 +10,11 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
   queryFields: [
     {
       key: "keyword",
-      label: "隐患编号 / 描述",
+      // 后端契约：code 支持 EQ/CONTAINS，description 不可筛选；因此只按编号查询，不在已返回的一页上做描述过滤。
+      label: "隐患编号",
       kind: "text",
-      placeholder: "输入编号或描述关键词",
-      read: (record) => `${record.code} ${record.description}`,
+      placeholder: "输入隐患编号",
+      read: (record) => record.code,
     },
     {
       key: "state",
@@ -33,7 +35,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
       key: "reportedAt",
       label: "上报日期",
       kind: "dateRange",
-      read: (record) => record.reportedAt,
+      read: (record) => dateKey(record.reportedAt),
     },
   ],
   columns: [
@@ -47,7 +49,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
       read: (record) => findingStateLabels[record.state],
       tone: (record) => record.state.toLowerCase().replaceAll("_", "-"),
     },
-    { key: "reportedAt", label: "上报日期", kind: "text", read: (record) => record.reportedAt.slice(0, 10) },
+    { key: "reportedAt", label: "上报日期", kind: "text", read: (record) => dateKey(record.reportedAt) },
     { key: "responsible", label: "责任人", kind: "text", read: (record) => record.responsible },
   ],
 };
