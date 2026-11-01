@@ -7,6 +7,7 @@ import org.springframework.core.io.ClassPathResource;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -15,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LanPostgresDatabaseTargetTest {
 
     private static final String DATABASE = "might_software_factory_pg18_test";
-    private static final String REMOTE_URL = "jdbc:postgresql://192.168.1.2:5432/" + DATABASE;
+    private static final String REMOTE_URL = "jdbc:postgresql://192.0.2.10:5432/" + DATABASE;
 
     @Test
     void requiresTheAllowedTargetAndKeepsMigrationAndRuntimeRolesSeparate() {
@@ -50,6 +51,54 @@ class LanPostgresDatabaseTargetTest {
         assertThatThrownBy(() -> LanPostgresCompatibilityIT.DatabaseTarget.forAppRole(environment))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Trusted PostgreSQL test target allowlist is missing");
+    }
+
+    @Test
+    void rejectsDriverOverridesEvenWhenTheWholeUrlIsAllowlisted() {
+        for (String suffix : new String[] {
+                "?PGHOST=192.0.2.99", "?PGPORT=1", "?PGDBNAME=another_database",
+                "?host=192.0.2.99", "?port=1", "?dbname=another_database",
+                "?user=another_role", "?password=another_password", "?pass%77ord=encoded_password",
+                "?service=another_service", "?options=-c%20role%3Danother_role",
+                "?currentSchema=another_schema", "?socketFactory=another_factory",
+                "?sslmode=require", "?", "#ignored", "#", "?user=another_role#ignored"
+        }) {
+            Map<String, String> environment = environment(REMOTE_URL + suffix);
+
+            assertThatThrownBy(() -> LanPostgresCompatibilityIT.DatabaseTarget.forAppRole(environment))
+                    .as("URL suffix %s must fail before connecting", suffix)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("LAN_PG_JDBC_URL must not contain query parameters or fragments");
+        }
+    }
+
+    @Test
+    void driverQueryPropertiesOverrideTheApparentTargetAndSeparateCredentialsWithoutConnecting() throws Exception {
+        Properties credentials = new Properties();
+        credentials.setProperty("user", "expected_role");
+        credentials.setProperty("password", "expected_placeholder");
+        // PostgreSQL is runtime-scoped; exercise its parser without opening a connection.
+        Properties parsed = (Properties) Class.forName("org.postgresql.Driver")
+                .getMethod("parseURL", String.class, Properties.class)
+                .invoke(null, REMOTE_URL
+                        + "?PGHOST=192.0.2.99&PGPORT=1&PGDBNAME=another_database"
+                        + "&user=another_role&password=another_placeholder", credentials);
+
+        assertThat(parsed.getProperty("PGHOST")).isEqualTo("192.0.2.99");
+        assertThat(parsed.getProperty("PGPORT")).isEqualTo("1");
+        assertThat(parsed.getProperty("PGDBNAME")).isEqualTo("another_database");
+        assertThat(parsed.getProperty("user")).isEqualTo("another_role");
+        assertThat(parsed.getProperty("password")).isEqualTo("another_placeholder");
+    }
+
+    @Test
+    void missingApplicationSecretFailsBeforeOpeningTheMigrationConnection() {
+        Map<String, String> environment = environment(REMOTE_URL);
+        environment.remove("LAN_PG_APP_PASSWORD");
+
+        assertThatThrownBy(() -> LanPostgresCompatibilityIT.DatabaseTarget.preflightFromEnvironment(environment))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Required LAN PostgreSQL test input is missing: LAN_PG_APP_PASSWORD");
     }
 
     @Test
