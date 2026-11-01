@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.modulith.events.ApplicationModuleListener;
 import org.springframework.stereotype.Component;
 
-/** Records a structured post-commit trace; future notification adapters can subscribe independently. */
+/** Records a structured post-commit trace; future notification adapters can subscribe independently.
+ * Must remain non-final so Spring can proxy the async, transactional Modulith listener.
+ */
 @Component
-public final class FindingWorkflowEventListener {
+public class FindingWorkflowEventListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(FindingWorkflowEventListener.class);
 
