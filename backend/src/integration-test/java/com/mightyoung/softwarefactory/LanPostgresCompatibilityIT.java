@@ -138,6 +138,8 @@ class LanPostgresCompatibilityIT {
                 .getTargetDataSource()).isSameAs(dataSource);
         assertThat(engineConfiguration).isInstanceOf(org.flowable.spring.SpringProcessEngineConfiguration.class);
         assertThat(((org.flowable.spring.SpringProcessEngineConfiguration) engineConfiguration)
+                .getDeploymentResources()).isNullOrEmpty();
+        assertThat(((org.flowable.spring.SpringProcessEngineConfiguration) engineConfiguration)
                 .getTransactionManager()).isSameAs(transactionManager);
         int expectedPostgresMajor = Integer.parseInt(
                 System.getenv().getOrDefault("LAN_PG_EXPECTED_MAJOR_VERSION", "18"));
@@ -151,11 +153,13 @@ class LanPostgresCompatibilityIT {
     @Test
     void flowableSessionJooqAndFlywayCanUseTheDedicatedPostgresDatabase() {
         String sessionId = persistProbeSession(sessionRepository);
-
-        Session reloaded = sessionRepository.findById(sessionId);
-        assertThat(reloaded).isNotNull();
-        assertThat((String) reloaded.getAttribute("p0CompatibilityProbe")).isEqualTo("jdbc-session-ok");
-        sessionRepository.deleteById(sessionId);
+        try {
+            Session reloaded = sessionRepository.findById(sessionId);
+            assertThat(reloaded).isNotNull();
+            assertThat((String) reloaded.getAttribute("p0CompatibilityProbe")).isEqualTo("jdbc-session-ok");
+        } finally {
+            sessionRepository.deleteById(sessionId);
+        }
 
         assertThat(jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where version = '1' and success",
@@ -543,6 +547,7 @@ class LanPostgresCompatibilityIT {
             String noContextInsertKey = "no-context-insert-" + suffix;
             String crossTenantInsertKey = "cross-insert-" + suffix;
             String crossTenantUpdatedKey = "cross-updated-" + suffix;
+            String[] probeKeys = {keyA, keyB, noContextInsertKey, crossTenantInsertKey, crossTenantUpdatedKey};
 
             try {
                 int backendPid = insertTenantProbe(appJdbc, appTransaction, tenantA, tenantA, keyA);
@@ -577,12 +582,17 @@ class LanPostgresCompatibilityIT {
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantA, keyA)).isEqualTo(1);
                 assertThat(readTenantProbeCount(appJdbc, appTransaction, tenantB, keyA)).isZero();
             } finally {
-                deleteTenantProbe(appJdbc, appTransaction, tenantA, keyA);
-                deleteTenantProbe(appJdbc, appTransaction, tenantA, noContextInsertKey);
-                deleteTenantProbe(appJdbc, appTransaction, tenantB, keyB);
-                deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantInsertKey);
-                deleteTenantProbe(appJdbc, appTransaction, tenantB, crossTenantUpdatedKey);
-                assertThat(jdbc.queryForObject("select count(*) from p0_tenant_probe", Integer.class)).isZero();
+                for (String tenant : new String[] {tenantA, tenantB}) {
+                    for (String key : probeKeys) {
+                        deleteTenantProbe(appJdbc, appTransaction, tenant, key);
+                    }
+                }
+                for (String tenant : new String[] {tenantA, tenantB}) {
+                    for (String key : probeKeys) {
+                        assertThat(readTenantProbeCount(appJdbc, appTransaction, tenant, key))
+                                .as("Owned probe %s in tenant %s must be removed", key, tenant).isZero();
+                    }
+                }
             }
         }
     }

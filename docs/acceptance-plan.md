@@ -1,12 +1,12 @@
 # 公共服务验收计划
 
-**状态：P0工程骨架/依赖图与模块契约的本地基础检查已执行；本文件列出的PG集成及其余门禁仍未执行。** 逐项结果与范围见[P0工程基线](p0-engineering-baseline.md)，不代表业务已实现或上线能力。对应[设计 v1.1](public-services-design.md)。
+**状态：P0工程骨架/依赖图与模块契约检查已执行；13项真实PG18基础探针已通过，完整业务与其余门禁仍待验收。** 精确范围见[PG基础验收记录](verification/p0-postgres-acceptance-2026-11-02.md)与[P0工程基线](p0-engineering-baseline.md)，不代表业务闭环或上线能力。对应[设计 v1.1](public-services-design.md)。
 
 ## P0 兼容
 - [ ] 固定JDK发行版、依赖锁、SBOM及许可证清单。
-- [ ] Boot/Modulith/Flowable组合启动、新库建表、旧库升级。
-- [ ] 主业务、审批引擎、审计和持久事件事务统一回滚。
-- [ ] Session、CSRF、流程计时器及任务重启恢复。
+- [ ] Boot/Modulith/Flowable组合启动、新库建表、旧库升级。专用库显式预置及组合启动已验证，旧库升级仍未验证。
+- [ ] 主业务、审批引擎、审计和持久事件事务统一回滚。Flowable/jOOQ/JDBC探针及真实Modulith registry联合回滚已验证；生产业务与audit表完整链路仍待验证。
+- [ ] Session、CSRF、流程计时器及任务重启恢复。Session独立事务、计时器及优雅引擎重建已验证；不等同于进程强杀或数据库故障恢复。
 
 ## 隔离与安全
 - [ ] 恶意tenant、跨租户对象/任务/文件ID、count/export/autocomplete不泄漏。

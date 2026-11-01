@@ -25,5 +25,7 @@ spring:
 
 flowable:
   database-schema-update: false
+  # Probes deploy their own definitions; never deploy application processes at startup.
+  check-process-definitions: false
   async-executor-activate: false
   async-history-executor-activate: false

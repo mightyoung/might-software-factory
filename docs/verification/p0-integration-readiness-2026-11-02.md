@@ -1,5 +1,7 @@
 # P0 integration candidate — 2026-11-02
 
+Follow-up: after explicit provisioning approval, the [13 selected PostgreSQL foundation probes passed](p0-postgres-acceptance-2026-11-02.md). The NOT RUN statements below preserve this earlier pre-provisioning checkpoint.
+
 Dev base: `845f191`. This candidate integrates the previously separate PR #17 transaction/retry checks, #18 target guard, and #19 Java21 platform/owned-cleanup changes before adding the checks below. They have not been merged into dev. Conflict resolution retains the two-connection failure-recording pool, strict target/identity gates, Java21 Linux capability enforcement, jOOQ rollback writes, retry metadata, and owned cleanup. There is one shared probe-cleanup helper.
 
 ## Parallel development slices

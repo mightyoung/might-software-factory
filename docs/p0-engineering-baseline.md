@@ -1,5 +1,7 @@
 # P0 engineering baseline
 
+Latest database evidence: [P0 PostgreSQL foundation receipt — 2026-11-02](verification/p0-postgres-acceptance-2026-11-02.md), **13 selected real-PostgreSQL foundation probes passed**. The earlier NOT RUN checkpoints below are historical. The receipt distinguishes this result from the remaining broader P0/business/recovery gates.
+
 Latest integrated candidate: [P0 integration readiness — 2026-11-02](verification/p0-integration-readiness-2026-11-02.md). It records the Session independent-transaction contract, disabled test-only expiry sweep, additional recovery/role probes, and fresh NAS read-only evidence. PostgreSQL execution remains NOT RUN for this candidate.
 
 Current Java21 runtime/platform and probe-cleanup evidence (2026-11-02) is recorded in [the Java21 verification note](verification/java21-environment-and-p0-cleanup-2026-11-02.md). The checkpoint descriptions below are historical; real PostgreSQL acceptance remains open.
