@@ -45,6 +45,7 @@ type Phase = { name: "editing" } | { name: "submitting" } | { name: "submitted";
 
 const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   validation: "服务端校验未通过，请修正标出的内容后再提交。",
+  workflow: "当前无法进入确认流程（例如没有可用的确认人），请联系管理员处理。",
   unauthenticated: "登录已失效，请重新登录。",
   forbidden: "你没有提交隐患上报的权限。",
   conflict: "这次提交与之前的一次提交内容不一致，已被拒绝。请关闭面板后重新上报。",

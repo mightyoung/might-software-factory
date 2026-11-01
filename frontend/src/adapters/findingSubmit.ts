@@ -14,8 +14,9 @@ export interface FindingSubmitResult {
   id: string;
   code: string;
   state: FindingState;
-  submittedAt: string;
-  backfill: boolean;
+  /** 后端回执目前不含提交时间和补报标记（frontend-contract-gap W6），HTTP 实现不推断。 */
+  submittedAt?: string;
+  backfill?: boolean;
 }
 
 /**
@@ -27,7 +28,7 @@ export interface FindingSubmitAdapter {
 }
 
 /** 仅为界面语义分类，对应设计里的 401/403/409/422/503；真实传输需显式映射服务端行为。 */
-export type FindingSubmitFailureKind = "validation" | "unauthenticated" | "forbidden" | "conflict" | "unavailable";
+export type FindingSubmitFailureKind = "validation" | "workflow" | "unauthenticated" | "forbidden" | "conflict" | "unavailable";
 
 export class FindingSubmitError extends Error {
   readonly kind: FindingSubmitFailureKind;
