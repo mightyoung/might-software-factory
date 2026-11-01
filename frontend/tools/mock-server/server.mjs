@@ -171,6 +171,48 @@ export function createMockServer() {
       receipts.set(key, { body: canonical, response });
       return send(res, 200, response);
     }
+    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|verifications)$/.exec(path);
+    if (req.method === "POST" && command) {
+      const key = req.headers["idempotency-key"];
+      if (typeof key !== "string" || !/^[0-9a-f-]{36}$/i.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
+      const b = await readJson(req);
+      if (!b || typeof b !== "object") return err(res, 400, "INVALID_REQUEST", "Malformed body");
+      const row = findings.find((r) => r.id === decodeURIComponent(command[1]));
+      if (!row) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const receiptKey = `${key}`;
+      const canonical = JSON.stringify([path, b]);
+      const prior = receipts.get(receiptKey);
+      if (prior) return prior.body === canonical ? send(res, 200, prior.response) : err(res, 409, "IDEMPOTENCY_CONFLICT", "Same key, different request");
+
+      const fieldErrors = [];
+      if (!Number.isInteger(b.expectedVersion) || b.expectedVersion < 1) fieldErrors.push({ field: "expectedVersion", reason: "Min" });
+      const reasonOk = typeof b.reason === "string" && cp(b.reason) <= 4000 && b.reason.trim().length > 0;
+      const op = command[2];
+      if (op === "confirm/person" && !reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
+      if (op === "confirm/safety") {
+        if (!reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
+        if (!["GENERAL", "MAJOR"].includes(b.grade)) fieldErrors.push({ field: "grade", reason: "Pattern" });
+      }
+      if (op === "verifications") {
+        if (!["PASS", "FAIL"].includes(b.decision)) fieldErrors.push({ field: "decision", reason: "Pattern" });
+        else if (b.decision === "FAIL" && !reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
+      }
+      if (fieldErrors.length) return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors });
+      if (b.expectedVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale version", { currentVersion: row.version });
+
+      const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING" }[op];
+      if (row.state !== from) return err(res, 409, "COMMAND_CONFLICT", "State does not allow this command");
+      if (op === "workflow-initialization") row.state = "PERSON_CONFIRM_PENDING";
+      else if (op === "confirm/person") row.state = "SAFETY_CONFIRM_PENDING";
+      else if (op === "confirm/safety") { row.state = "SAFETY_DISPATCH_PENDING"; row.grade = b.grade; }
+      else if (b.decision === "PASS") row.state = "CLOSED";
+      else { row.state = "RECTIFYING"; row.roundNo += 1; }
+      row.version += 1;
+      row.updatedAt = new Date().toISOString();
+      const response = { data: { findingId: row.id, code: row.code, state: row.state, roundNo: row.roundNo, version: row.version } };
+      receipts.set(receiptKey, { body: canonical, response });
+      return send(res, 200, response);
+    }
     return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not found");
   });
 }

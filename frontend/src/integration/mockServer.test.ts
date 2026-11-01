@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createMockServer, type MockServer } from "../../tools/mock-server/server.mjs";
+import { createHttpFindingCommands } from "../adapters/httpFindingCommands";
 import { createHttpFindingLedger } from "../adapters/httpFindingLedger";
 import { createHttpFindingSubmit } from "../adapters/httpFindingSubmit";
 import { createHttpSessionAdapter } from "../adapters/httpSessionAdapter";
@@ -120,5 +121,38 @@ describe("HTTP adapters × 契约模拟服务", () => {
       kind: "validation",
       fieldErrors: { location: expect.any(String) },
     });
+  });
+
+  it("流程命令：确认 → 安全确认 → 版本递增；旧版本 409；状态不符 409；验收通过关闭、退回需要意见", async () => {
+    const c = await signIn();
+    const submit = createHttpFindingSubmit(c);
+    const commands = createHttpFindingCommands(c);
+    const ledger = createHttpFindingLedger(c);
+    const orgs = await submit.listOrganizations!();
+    const created = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: orgs[0]!.id });
+    let record = (await ledger.get(created.id))!;
+    expect(record.version).toBe(1);
+
+    const stale = commands.run(created.id, 99, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: KEY() });
+    await expect(stale).rejects.toMatchObject({ kind: "versionConflict" });
+    const wrongState = commands.run(created.id, 1, { kind: "confirmSafety", reason: "x", grade: "GENERAL" }, { idempotencyKey: KEY() });
+    await expect(wrongState).rejects.toMatchObject({ kind: "stateConflict" });
+    await expect(commands.run(created.id, 1, { kind: "confirmPerson", reason: "  " }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "validation" });
+
+    const key = KEY();
+    const r1 = await commands.run(created.id, 1, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: key });
+    expect(r1).toEqual({ state: "SAFETY_CONFIRM_PENDING", roundNo: 1, version: 2 });
+    expect(await commands.run(created.id, 1, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: key })).toEqual(r1); // 同键重放
+    await expect(commands.run(created.id, 1, { kind: "confirmPerson", reason: "不同" }, { idempotencyKey: key })).rejects.toMatchObject({ kind: "idempotencyConflict" });
+    const r2 = await commands.run(created.id, 2, { kind: "confirmSafety", reason: "确认", grade: "MAJOR" }, { idempotencyKey: KEY() });
+    expect(r2.state).toBe("SAFETY_DISPATCH_PENDING");
+    record = (await ledger.get(created.id))!;
+    expect(record).toMatchObject({ state: "SAFETY_DISPATCH_PENDING", version: 3, riskLabel: "重大" });
+
+    const all = await ledger.list({ query: { keyword: "", state: "", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "acceptance" });
+    const pending = all.items[0]!;
+    await expect(commands.run(pending.id, pending.version!, { kind: "verify", decision: "FAIL" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "validation" });
+    const failed = await commands.run(pending.id, pending.version!, { kind: "verify", decision: "FAIL", reason: "未整改到位" }, { idempotencyKey: KEY() });
+    expect(failed).toMatchObject({ state: "RECTIFYING", roundNo: pending.round + 1 });
   });
 });

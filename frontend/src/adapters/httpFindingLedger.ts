@@ -49,6 +49,7 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
     responsible: NOT_PROVIDED,
     riskLabel: GRADE_LABELS[item.grade ?? "UNKNOWN"],
     round: item.roundNo ?? 1,
+    ...(item.version ? { version: item.version } : {}),
     history: [],
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),
     ...(item.sourceCategory ? { source: item.sourceCategory } : {}),

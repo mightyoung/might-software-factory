@@ -1,5 +1,6 @@
 import { createHttpClient } from "../api/httpClient";
 import type { FindingStore } from "../App";
+import { createHttpFindingCommands } from "./httpFindingCommands";
 import { createHttpFindingLedger } from "./httpFindingLedger";
 import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpSessionAdapter } from "./httpSessionAdapter";
@@ -25,6 +26,10 @@ export function createFindingStoreFactory(mode: string | undefined): (() => Find
   if (mode !== "http") return undefined;
   return () => {
     const client = createHttpClient();
-    return { ledger: createHttpFindingLedger(client), submit: createHttpFindingSubmit(client) };
+    return {
+      ledger: createHttpFindingLedger(client),
+      submit: createHttpFindingSubmit(client),
+      commands: createHttpFindingCommands(client),
+    };
   };
 }

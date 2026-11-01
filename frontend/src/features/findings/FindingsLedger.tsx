@@ -6,6 +6,7 @@ import {
   type FindingLedgerReadFailureKind,
   type FindingView,
 } from "../../adapters/findingLedger";
+import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetails } from "../../components/FindingDetails";
 import { FindingReportForm } from "../../components/FindingReportForm";
@@ -25,6 +26,8 @@ interface FindingsLedgerProps {
   adapter?: FindingLedgerAdapter;
   /** 提供上报端口且 canReport 为 true 时才显示“新建上报”（仅台账视图）。入口显隐只是呈现，服务端仍须鉴权。 */
   submitAdapter?: FindingSubmitAdapter;
+  /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
+  commandAdapter?: FindingCommandAdapter;
   canReport?: boolean;
   /** 读取或提交收到“未登录”时通知应用回到登录页。 */
   onUnauthenticated?: () => void;
@@ -43,6 +46,7 @@ export function FindingsLedger({
   description,
   adapter = mockFindingLedger,
   submitAdapter,
+  commandAdapter,
   canReport = false,
   onUnauthenticated,
 }: FindingsLedgerProps) {
@@ -108,7 +112,8 @@ export function FindingsLedger({
       };
     }
     const controller = new AbortController();
-    setDetail(null);
+    // 刷新同一条记录时保留旧内容直到新内容到达（流程命令成功后的提示不会被卸载）；换记录才清空。
+    setDetail((previous) => (previous?.id === selectedFindingId ? previous : null));
     setDetailError(null);
     setDetailLoading(true);
     void (async () => {
@@ -310,6 +315,12 @@ export function FindingsLedger({
           error={detailError}
           onClose={() => navigate(path, true)}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
+          commandAdapter={commandAdapter}
+          onCommandChanged={() => {
+            setDetailRefreshKey((value) => value + 1);
+            setRefreshKey((value) => value + 1);
+          }}
+          onUnauthenticated={onUnauthenticated}
         />
       )}
     </div>

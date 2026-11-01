@@ -7,6 +7,7 @@ async function signIn(page: Page) {
   await page.getByLabel("密码").fill("demo");
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("heading", { name: "隐患台账" })).toBeVisible();
+  await expect(page.locator(".ledger-row").first()).toBeVisible(); // 等列表加载完，否则“共 N 条”先显示 0
 }
 
 test("错误凭证被拒绝，且页面不含合成演示说明", async ({ page }) => {
@@ -58,4 +59,53 @@ test("按编号查询只保留匹配的记录", async ({ page }) => {
   await page.getByLabel("隐患编号").fill(firstCode);
   await page.getByRole("button", { name: "查询" }).click();
   await expect(page.getByText("共 1 条记录")).toBeVisible();
+});
+
+test("流程：新建上报 → 确认发现 → 安全确认（需选等级），状态与版本随服务端推进", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "新建上报" }).click();
+  await page.getByLabel(/所属组织/).selectOption({ label: "一车间" });
+  await page.getByLabel(/所在位置/).fill("流程测试工位");
+  await page.getByLabel(/隐患描述/).fill("流程端到端：护栏松动");
+  await page.getByRole("button", { name: "提交上报" }).click();
+  await page.getByRole("button", { name: "查看详情" }).click();
+
+  const detail = page.getByLabel("隐患详情面板");
+  await expect(detail.getByText("待一人确认")).toBeVisible();
+  await expect(detail.getByRole("button", { name: "分派整改" })).toHaveCount(0); // 当前节点不出现后续动作
+
+  await detail.getByRole("button", { name: "确认发现" }).click();
+  await detail.getByRole("button", { name: "确认确认发现" }).click();
+  await expect(detail.getByText("请填写意见")).toBeVisible();
+  await detail.getByLabel(/意见/).fill("现场核实属实");
+  await detail.getByRole("button", { name: "确认确认发现" }).click();
+  await expect(detail.getByRole("status").filter({ hasText: "已完成“确认发现”" })).toBeVisible();
+  await expect(detail.locator(".status-current")).toHaveText("待安全确认");
+
+  await detail.getByRole("button", { name: "安全确认", exact: true }).click();
+  await detail.getByLabel(/意见/).fill("同意");
+  await detail.getByRole("button", { name: "确认安全确认" }).click();
+  await expect(detail.getByText("请选择隐患等级")).toBeVisible();
+  await detail.getByLabel(/隐患等级/).selectOption("MAJOR");
+  await detail.getByRole("button", { name: "确认安全确认" }).click();
+  await expect(detail.locator(".status-current")).toHaveText("待安全部门派单");
+  await expect(detail.locator(".status-muted")).toHaveText("重大");
+  // 派单需要成员查询接口，契约暂缺：按钮禁用并写明原因，不假装可用。
+  await expect(detail.getByRole("button", { name: "分派整改" })).toBeDisabled();
+});
+
+test("验收：退回必须填意见，退回后进入下一轮整改", async ({ page }) => {
+  await signIn(page);
+  await page.getByLabel("状态").selectOption("ACCEPTANCE_PENDING");
+  await page.getByRole("button", { name: "查询" }).click();
+  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
+  const detail = page.getByLabel("隐患详情面板");
+  await expect(detail.locator(".status-current")).toHaveText("待安全验收");
+  await detail.getByRole("button", { name: "退回整改" }).click();
+  await detail.getByRole("button", { name: "确认退回整改" }).click();
+  await expect(detail.getByText("请填写意见")).toBeVisible();
+  await detail.getByLabel(/意见/).fill("防护罩仍未固定");
+  await detail.getByRole("button", { name: "确认退回整改" }).click();
+  await expect(detail.locator(".status-current")).toHaveText("整改中");
+  await expect(detail.getByText(/第 2 轮/)).toBeVisible();
 });
