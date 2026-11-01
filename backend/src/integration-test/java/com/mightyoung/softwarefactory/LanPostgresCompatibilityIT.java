@@ -4,6 +4,8 @@ import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
+import org.flowable.engine.TaskService;
+import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.flowable.job.api.Job;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +37,8 @@ import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.UUID;
+import java.time.Duration;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -78,17 +82,20 @@ class LanPostgresCompatibilityIT {
     @Autowired private ProcessEngine processEngine;
     @Autowired private RepositoryService repositoryService;
     @Autowired private RuntimeService runtimeService;
+    @Autowired private TaskService taskService;
     @Autowired private ManagementService managementService;
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired private FindByIndexNameSessionRepository<?> sessionRepository;
     @Autowired private P0FailingProjectionDelegate projectionDelegate;
 
     @BeforeEach
-    void constrainPoolAfterDatabaseInitializationToExerciseConnectionReuse() {
+    void retainCapacityForFlowableFailureRecording() {
         assertThat(hikariDataSource.getHikariPoolMXBean().getActiveConnections()).isZero();
-        hikariDataSource.setMaximumPoolSize(1);
+        // Flowable persists a failed job in REQUIRES_NEW while the original connection is held.
+        // The separate RLS application pool below remains at one connection for reuse checks.
+        hikariDataSource.setMaximumPoolSize(2);
         hikariDataSource.getHikariPoolMXBean().softEvictConnections();
-        assertThat(hikariDataSource.getMaximumPoolSize()).isEqualTo(1);
+        assertThat(hikariDataSource.getMaximumPoolSize()).isEqualTo(2);
     }
 
     @DynamicPropertySource
@@ -178,7 +185,7 @@ class LanPostgresCompatibilityIT {
             jdbc.update("insert into p0_finding_projection values (?, ?, ?, ?)",
                     process.getId(), "tenant-a", "PERSON_CONFIRM_PENDING", 1L);
             jdbc.update("insert into p0_finding_transition values (?, ?)", process.getId(), "transition-1");
-            jdbc.update("insert into p0_outbox values (?, ?)", process.getId() + ":event-1", "FINDING_CREATED");
+            dsl.execute("insert into p0_outbox values (?, ?)", process.getId() + ":event-1", "FINDING_CREATED");
             throw new DeliberateRollback();
         })).isInstanceOf(DeliberateRollback.class);
 
@@ -232,15 +239,19 @@ class LanPostgresCompatibilityIT {
                 Integer.class, process.getId() + ":%")).isZero();
         assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
                 .isNotNull();
-        Job executableAfterFailure = managementService.createJobQuery()
+        Job retryTimer = managementService.createTimerJobQuery()
                 .processInstanceId(process.getId())
                 .singleResult();
-        assertThat(executableAfterFailure).isNotNull();
-        assertThat(executableAfterFailure.getRetries()).isPositive();
+        assertThat(retryTimer).isNotNull();
+        assertThat(retryTimer.getRetries()).isEqualTo(firstAttempt.getRetries() - 1).isPositive();
+        assertThat(managementService.getTimerJobExceptionStacktrace(retryTimer.getId()))
+                .contains(P0FailingProjectionDelegate.ProjectionWriteFailure.class.getName());
+        assertThat(managementService.createJobQuery().processInstanceId(process.getId()).count()).isZero();
         assertThat(managementService.createDeadLetterJobQuery()
                 .processInstanceId(process.getId())
                 .count()).isZero();
-        managementService.executeJob(executableAfterFailure.getId());
+        Job secondAttempt = managementService.moveTimerToExecutableJob(retryTimer.getId());
+        managementService.executeJob(secondAttempt.getId());
 
         assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(6);
         assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
@@ -256,6 +267,182 @@ class LanPostgresCompatibilityIT {
                 Integer.class, process.getId() + ":%")).isEqualTo(1);
         assertThat(managementService.createJobQuery().processInstanceId(process.getId()).count()).isZero();
         assertThat(managementService.createDeadLetterJobQuery().processInstanceId(process.getId()).count()).isZero();
+    }
+
+    @Test
+    void completingAnExistingTaskRollsBackWithJooqWritesAndCanBeRetried() {
+        var deployment = repositoryService.createDeployment()
+                .name("P0 existing task transaction")
+                .tenantId("tenant-a")
+                .addString("p0-complete.bpmn20.xml", simpleUserTaskProcess("p0TaskCompletion"))
+                .deploy();
+        String processId = null;
+        try {
+            var process = runtimeService.createProcessInstanceBuilder()
+                    .processDefinitionId(repositoryService.createProcessDefinitionQuery()
+                            .deploymentId(deployment.getId()).singleResult().getId())
+                    .tenantId("tenant-a")
+                    .businessKey("p0-complete-" + UUID.randomUUID())
+                    .start();
+            String id = process.getId();
+            processId = id;
+            String taskId = taskService.createTaskQuery().processInstanceId(id).singleResult().getId();
+            jdbc.update("insert into p0_finding_projection values (?, ?, ?, ?)",
+                    id, "tenant-a", "PERSON_CONFIRM_PENDING", 1L);
+            TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+            Runnable completeWithProjection = () -> {
+                taskService.complete(taskId);
+                assertThat(dsl.execute("""
+                        update p0_finding_projection set state = ?, version = ?
+                        where process_instance_id = ? and version = ?
+                        """, "SAFETY_CONFIRM_PENDING", 2L, id, 1L)).isEqualTo(1);
+                jdbc.update("insert into p0_finding_transition values (?, ?)", id, "complete-1");
+                dsl.execute("insert into p0_outbox values (?, ?)", id + ":complete-1", "TASK_COMPLETED");
+            };
+
+            assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+                completeWithProjection.run();
+                throw new DeliberateRollback();
+            })).isInstanceOf(DeliberateRollback.class);
+
+            assertThat(taskService.createTaskQuery().taskId(taskId).singleResult()).isNotNull();
+            assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(id).count()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select version from p0_finding_projection where process_instance_id = ?",
+                    Long.class, id)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("select state from p0_finding_projection where process_instance_id = ?",
+                    String.class, id)).isEqualTo("PERSON_CONFIRM_PENDING");
+            assertProbeEventCounts(id, 0);
+
+            transaction.executeWithoutResult(status -> completeWithProjection.run());
+
+            assertThat(taskService.createTaskQuery().taskId(taskId).singleResult()).isNull();
+            assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(id).count()).isZero();
+            assertThat(jdbc.queryForObject("select version from p0_finding_projection where process_instance_id = ?",
+                    Long.class, id)).isEqualTo(2L);
+            assertThat(jdbc.queryForObject("select state from p0_finding_projection where process_instance_id = ?",
+                    String.class, id)).isEqualTo("SAFETY_CONFIRM_PENDING");
+            assertProbeEventCounts(id, 1);
+        } finally {
+            try {
+                repositoryService.deleteDeployment(deployment.getId(), true);
+            } finally {
+                if (processId != null) {
+                    deleteProbeWrites(processId);
+                }
+            }
+        }
+    }
+
+    @Test
+    void backgroundExecutorAutomaticallyRetriesAFailedTimerWithoutPartialBusinessWrites() throws InterruptedException {
+        DatabaseTarget.requireExclusiveAsyncDatabase(System.getenv());
+        assertThat(managementService.createTimerJobQuery().count())
+                .as("An exclusive P0 async database must have no pre-existing timers").isZero();
+        assertThat(managementService.createJobQuery().count())
+                .as("An exclusive P0 async database must have no pre-existing executable jobs").isZero();
+        var configuration = processEngine.getProcessEngineConfiguration();
+        var executor = configuration.getAsyncExecutor();
+        assertThat(executor.isActive()).isFalse();
+        int failedJobWait = configuration.getDefaultFailedJobWaitTime();
+        int asyncFailedJobWait = configuration.getAsyncFailedJobWaitTime();
+        int timerAcquireWait = executor.getDefaultTimerJobAcquireWaitTimeInMillis();
+        int asyncAcquireWait = executor.getDefaultAsyncJobAcquireWaitTimeInMillis();
+        int poolSize = hikariDataSource.getMaximumPoolSize();
+        Deployment deployment = null;
+        String processId = null;
+        P0FailingProjectionDelegate.RetryGate retryGate = null;
+        try {
+            // Acquisition and failure handling need connections while assertions poll.
+            hikariDataSource.setMaximumPoolSize(4);
+            configuration.setDefaultFailedJobWaitTime(1);
+            configuration.setAsyncFailedJobWaitTime(1);
+            executor.setDefaultTimerJobAcquireWaitTimeInMillis(100);
+            executor.setDefaultAsyncJobAcquireWaitTimeInMillis(100);
+            deployment = repositoryService.createDeployment()
+                    .name("P0 background timer retry")
+                    .tenantId("tenant-a")
+                    .addString("p0-background-timer.bpmn20.xml", TIMER_PROCESS_XML
+                            .replace(TIMER_PROCESS, "p0BackgroundTimerRetry")
+                            .replace("PT1H", "PT1S"))
+                    .deploy();
+            processId = runtimeService.createProcessInstanceBuilder()
+                    .processDefinitionId(repositoryService.createProcessDefinitionQuery()
+                            .deploymentId(deployment.getId()).singleResult().getId())
+                    .tenantId("tenant-a")
+                    .businessKey("p0-background-" + UUID.randomUUID())
+                    .start().getId();
+            String id = processId;
+            retryGate = projectionDelegate.pauseRetryFor(id);
+            P0FailingProjectionDelegate.RetryGate gate = retryGate;
+            Job originalTimer = managementService.createTimerJobQuery().processInstanceId(id).singleResult();
+            assertThat(originalTimer).isNotNull();
+            executor.start();
+
+            await("timer failure committed before any retry writes", Duration.ofSeconds(20), () -> {
+                Job retry = managementService.createTimerJobQuery().processInstanceId(id).singleResult();
+                return gate.isWaiting() || (retry != null && retry.getExceptionMessage() != null
+                        && retry.getRetries() == originalTimer.getRetries() - 1);
+            });
+            assertThat(projectionDelegate.successfulWriteStatementsFor(id)).isEqualTo(3);
+            assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(id).count()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from p0_finding_projection where process_instance_id = ?",
+                    Integer.class, id)).isZero();
+            assertProbeEventCounts(id, 0);
+            gate.release();
+
+            await("background retry committed exactly once", Duration.ofSeconds(30), () ->
+                    runtimeService.createProcessInstanceQuery().processInstanceId(id).count() == 0);
+            assertThat(projectionDelegate.successfulWriteStatementsFor(id)).isEqualTo(6);
+            assertThat(jdbc.queryForObject("select count(*) from p0_finding_projection where process_instance_id = ?",
+                    Integer.class, id)).isEqualTo(1);
+            assertProbeEventCounts(id, 1);
+            assertThat(managementService.createTimerJobQuery().processInstanceId(id).count()).isZero();
+            assertThat(managementService.createJobQuery().processInstanceId(id).count()).isZero();
+            assertThat(managementService.createDeadLetterJobQuery().processInstanceId(id).count()).isZero();
+        } finally {
+            if (retryGate != null) {
+                retryGate.release();
+            }
+            try {
+                executor.shutdown();
+            } finally {
+                configuration.setDefaultFailedJobWaitTime(failedJobWait);
+                configuration.setAsyncFailedJobWaitTime(asyncFailedJobWait);
+                executor.setDefaultTimerJobAcquireWaitTimeInMillis(timerAcquireWait);
+                executor.setDefaultAsyncJobAcquireWaitTimeInMillis(asyncAcquireWait);
+                hikariDataSource.setMaximumPoolSize(poolSize);
+                try {
+                    if (deployment != null) {
+                        repositoryService.deleteDeployment(deployment.getId(), true);
+                    }
+                } finally {
+                    if (processId != null) {
+                        deleteProbeWrites(processId);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void await(String description, Duration timeout, BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean()) {
+            assertThat(System.nanoTime()).as("Timed out waiting for %s", description).isLessThan(deadline);
+            Thread.sleep(50);
+        }
+    }
+
+    private void assertProbeEventCounts(String processId, int count) {
+        assertThat(jdbc.queryForObject("select count(*) from p0_finding_transition where process_instance_id = ?",
+                Integer.class, processId)).isEqualTo(count);
+        assertThat(jdbc.queryForObject("select count(*) from p0_outbox where event_key like ?",
+                Integer.class, processId + ":%")).isEqualTo(count);
+    }
+
+    private void deleteProbeWrites(String processId) {
+        jdbc.update("delete from p0_outbox where event_key like ?", processId + ":%");
+        jdbc.update("delete from p0_finding_transition where process_instance_id = ?", processId);
+        jdbc.update("delete from p0_finding_projection where process_instance_id = ?", processId);
     }
 
     @Test
@@ -522,6 +709,15 @@ class LanPostgresCompatibilityIT {
                 throw new IllegalStateException("Migration and application PostgreSQL roles must be separate");
             }
             return acceptedTarget;
+        }
+
+        static void requireExclusiveAsyncDatabase(java.util.Map<String, String> environment) {
+            DatabaseTarget target = fromEnvironment(environment);
+            String acknowledgement = environment.get("LAN_PG_EXCLUSIVE_ASYNC_TEST_DB_ACK");
+            if (!("I_CONFIRM_EXCLUSIVE_ASYNC_TEST_DB:" + target.databaseName()).equals(acknowledgement)) {
+                throw new IllegalStateException(
+                        "Background executor tests require an explicitly confirmed exclusive database; shared business databases are forbidden");
+            }
         }
 
         static DatabaseTarget preflightFromEnvironment(java.util.Map<String, String> environment) {

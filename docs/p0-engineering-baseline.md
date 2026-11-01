@@ -37,3 +37,7 @@ The compatibility profile uses a one-connection pool and a test-only Flyway migr
 This Mac has only the previously observed JBR 25 on `PATH`; the build compiles Java 21 bytecode via `--release 21`. No JDK or database was installed. PostgreSQL and Redis remain LAN dependencies. The LAN profile has not been executed because no connection parameters or dedicated test database were supplied, so Flowable timer and callback acceptance remains blocked. There is no callback application boundary in this skeleton yet; duplicate/late callback semantics, reconciliation/freeze/repair, production RLS policy coverage, and real tenant connection lifecycle still need implementation and live integration validation.
 
 The CI job does not receive LAN credentials and does not attempt any DB connection. GitHub Actions terminal status is recorded with the pull request review evidence, not inferred from a successful local build.
+
+## Dev-based transaction verification update — 2026-11-02
+
+The current dev-based patch fixes the one-connection failure-listener false positive, strengthens retry metadata checks, and adds existing-task and background-executor probes. Its fresh default/profile compilation evidence and exclusive-database execution requirements are recorded in [the dev verification note](verification/p0-transaction-dev-2026-11-02.md). Earlier test counts and live-results statements above describe their recorded checkpoint, not the current branch. The stricter dev role/target preflight and disabled startup DDL are preserved.

@@ -121,6 +121,19 @@ class LanPostgresDatabaseTargetTest {
                 .hasMessage("Application role requires database CONNECT and public USAGE, with no public CREATE");
     }
 
+    @Test
+    void backgroundExecutorRequiresADatabaseSpecificExclusiveUseAcknowledgement() {
+        Map<String, String> environment = environment(REMOTE_URL);
+        assertThatThrownBy(() -> LanPostgresCompatibilityIT.DatabaseTarget.requireExclusiveAsyncDatabase(environment))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("explicitly confirmed exclusive database");
+        environment.put("LAN_PG_EXCLUSIVE_ASYNC_TEST_DB_ACK", "I_CONFIRM_EXCLUSIVE_ASYNC_TEST_DB:some_other_test");
+        assertThatThrownBy(() -> LanPostgresCompatibilityIT.DatabaseTarget.requireExclusiveAsyncDatabase(environment))
+                .isInstanceOf(IllegalStateException.class);
+        environment.put("LAN_PG_EXCLUSIVE_ASYNC_TEST_DB_ACK", "I_CONFIRM_EXCLUSIVE_ASYNC_TEST_DB:" + DATABASE);
+        LanPostgresCompatibilityIT.DatabaseTarget.requireExclusiveAsyncDatabase(environment);
+    }
+
     private static Map<String, String> environment(String url) {
         Map<String, String> environment = new HashMap<>();
         environment.put("LAN_PG_JDBC_URL", url);
