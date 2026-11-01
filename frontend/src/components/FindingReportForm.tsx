@@ -5,6 +5,7 @@ import {
   type FindingSubmitAdapter,
   type FindingSubmitFailureKind,
   type FindingSubmitResult,
+  type ReportableOrganization,
 } from "../adapters/findingSubmit";
 import {
   findingSourceLabels,
@@ -123,6 +124,14 @@ export function FindingReportForm({
   const [phase, setPhase] = useState<Phase>({ name: "editing" });
   const [submitFailure, setSubmitFailure] = useState<FindingSubmitFailureKind | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // 组织选择：仅当适配器提供 listOrganizations 时启用。
+  const needsOrganization = adapter.listOrganizations !== undefined;
+  const [orgState, setOrgState] = useState<
+    { status: "loading" } | { status: "error" } | { status: "ready"; items: readonly ReportableOrganization[] }
+  >({ status: "loading" });
+  const [organizationId, setOrganizationId] = useState("");
+  const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgReloadTick, setOrgReloadTick] = useState(0);
   const [pendingFocus, setPendingFocus] = useState<FindingDraftField | null>(null);
 
   const fieldRefs = useRef<Partial<Record<FindingDraftField, HTMLElement | null>>>({});
@@ -143,6 +152,27 @@ export function FindingReportForm({
       controller.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (!adapter.listOrganizations) return;
+    const abort = new AbortController();
+    setOrgState({ status: "loading" });
+    adapter
+      .listOrganizations(abort.signal)
+      .then((items) => {
+        setOrgState({ status: "ready", items });
+        // 只有一个可选组织时直接选中，仍显示出来。
+        if (items.length === 1) setOrganizationId(items[0]!.id);
+      })
+      .catch((error: unknown) => {
+        if (abort.signal.aborted) return;
+        if (error instanceof FindingSubmitError && error.kind === "unauthenticated") onUnauthenticated?.();
+        setOrgState({ status: "error" });
+      });
+    return () => abort.abort();
+    // onUnauthenticated 是回调属性，不作为重新加载的依据。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adapter, orgReloadTick]);
 
   // 字段在提交期间是禁用的，禁用元素无法获得焦点：等重新渲染成可编辑后再聚焦出错字段。
   // 用 layout effect 在提交阶段同步聚焦，焦点不会比错误文字晚一帧出现。
@@ -206,10 +236,12 @@ export function FindingReportForm({
     const found = validateFindingDraft(draft, now());
     setErrors(found);
     setSubmitFailure(null);
+    if (needsOrganization && !organizationId) setOrgError("请选择所属组织");
     if (hasDraftErrors(found)) {
       focusFirstError(found);
       return;
     }
+    if (needsOrganization && !organizationId) return;
 
     const payload = normalizeDraft(draft);
     const abort = new AbortController();
@@ -217,7 +249,8 @@ export function FindingReportForm({
     setPhase({ name: "submitting" });
     try {
       const result = await adapter.submit(payload, {
-        idempotencyKey: keyFor(JSON.stringify(payload)),
+        idempotencyKey: keyFor(JSON.stringify({ ...payload, organizationId })),
+        ...(needsOrganization ? { organizationId } : {}),
         signal: abort.signal,
       });
       if (!mounted.current) return;
@@ -315,6 +348,48 @@ export function FindingReportForm({
           <p className="report-summary" role="alert">
             {SUBMIT_FAILURE_MESSAGE[submitFailure]}
           </p>
+        )}
+
+        {needsOrganization && (
+          <Field
+            id={`${uid}-org`}
+            label="所属组织"
+            required
+            error={orgError ?? undefined}
+            hint={
+              orgState.status === "ready" && orgState.items.length === 0
+                ? "你当前没有可上报的组织，无法提交。请联系管理员授权。"
+                : undefined
+            }
+          >
+            {orgState.status === "error" ? (
+              <p>
+                组织列表加载失败。
+                <button type="button" className="button button-subtle" onClick={() => setOrgReloadTick((n) => n + 1)}>
+                  重试
+                </button>
+              </p>
+            ) : (
+              <select
+                id={`${uid}-org`}
+                value={organizationId}
+                aria-invalid={Boolean(orgError)}
+                disabled={submitting || orgState.status !== "ready" || orgState.items.length === 0}
+                onChange={(event) => {
+                  setOrganizationId(event.target.value);
+                  setOrgError(null);
+                }}
+              >
+                <option value="">{orgState.status === "loading" ? "加载中…" : "请选择"}</option>
+                {orgState.status === "ready" &&
+                  orgState.items.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </Field>
         )}
 
         <Field id={ids.source} label="来源" required notWired error={errors.source}>
@@ -490,7 +565,11 @@ export function FindingReportForm({
             <button type="button" className="button button-subtle" onClick={requestClose} disabled={submitting}>
               取消
             </button>
-            <button type="submit" className="button button-primary" disabled={submitting}>
+            <button
+              type="submit"
+              className="button button-primary"
+              disabled={submitting || (needsOrganization && orgState.status === "ready" && orgState.items.length === 0)}
+            >
               {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : "提交上报"}
             </button>
           </div>

@@ -4,6 +4,7 @@ import type { FindingUrgency } from "../domain/finding";
 import { normalizeDraft, type FindingDraft, type FindingDraftErrors, type FindingDraftField } from "../domain/findingDraft";
 import { wallTimeToIso } from "../domain/time";
 import { FindingSubmitError, type FindingSubmitAdapter } from "./findingSubmit";
+import type { components as SessionComponents } from "../api/generated/session-api";
 
 type CreateRequest = components["schemas"]["CreateFindingRequest"];
 
@@ -55,12 +56,25 @@ function toSubmitError(error: ApiError): FindingSubmitError {
 }
 
 /**
- * POST /api/v1/findings。organizationId 须来自 GET /organizations/reportable 的选择，表单目前没有该选择器，
- * 所以由调用方提供；请求体不含租户、上报人、编号或补报标记，这些全由服务端决定。
+ * POST /api/v1/findings。organizationId 来自 GET /organizations/reportable 的选择（服务端创建时仍会复核）；
+ * 请求体不含租户、上报人、编号或补报标记，这些全由服务端决定。
  */
-export function createHttpFindingSubmit(client: HttpClient, organizationId: string): FindingSubmitAdapter {
+export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapter {
   return {
-    async submit(input, { idempotencyKey, signal }) {
+    async listOrganizations(signal) {
+      try {
+        const body = await client.get<SessionComponents["schemas"]["ReportableOrganizationsResponse"]>(
+          "/api/v1/organizations/reportable",
+          { signal },
+        );
+        return body.data;
+      } catch (error) {
+        if (error instanceof ApiError) throw toSubmitError(error);
+        throw error;
+      }
+    },
+    async submit(input, { idempotencyKey, organizationId, signal }) {
+      if (!organizationId) throw new FindingSubmitError("validation");
       const draft: FindingDraft = normalizeDraft(input);
       const urgency = URGENCY_MAP[draft.urgency];
       const discoveredAt = wallTimeToIso(draft.foundAt);
