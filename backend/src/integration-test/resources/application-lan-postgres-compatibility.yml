@@ -1,7 +1,8 @@
 spring:
   datasource:
     hikari:
-      # Keep startup and preflight connection inspection independent of the pool under test.
+      # Failed-job recording uses REQUIRES_NEW while the first connection is still held.
+      # Keep two main connections; the separate RLS application pool still uses one.
       maximum-pool-size: 2
       minimum-idle: 1
   flyway:
