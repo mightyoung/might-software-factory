@@ -9,6 +9,8 @@ import {
 export interface Credentials {
   username: string;
   password: string;
+  /** 真实后端登录必填；合成实现忽略。登录页尚无此输入。 */
+  tenantCode?: string;
 }
 
 /**
