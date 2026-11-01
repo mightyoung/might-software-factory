@@ -18,6 +18,7 @@ import {
 import {
   DRAFT_FIELD_ORDER,
   DRAFT_LIMITS,
+  codePointLength,
   createEmptyDraft,
   formatLocalDateTime,
   hasDraftErrors,
@@ -473,7 +474,7 @@ export function FindingReportForm({
           label="隐患描述"
           required
           error={errors.description}
-          hint={`写清楚看到了什么、在哪里。${draft.description.trim().length}/${DRAFT_LIMITS.descriptionMax}`}
+          hint={`写清楚看到了什么、在哪里。${codePointLength(draft.description.trim())}/${DRAFT_LIMITS.descriptionMax}`}
         >
           <textarea
             id={ids.description}
@@ -537,7 +538,7 @@ export function FindingReportForm({
           label="已采取的临时措施（选填）"
           notWired={!live}
           error={errors.interimMeasure}
-          hint={`${draft.interimMeasure.trim().length}/${DRAFT_LIMITS.interimMeasureMax}`}
+          hint={`${codePointLength(draft.interimMeasure.trim())}/${DRAFT_LIMITS.interimMeasureMax}`}
         >
           <textarea
             id={ids.interimMeasure}

@@ -56,6 +56,23 @@ export function createEmptyDraft(now: Date): FindingDraft {
   };
 }
 
+/** 后端按 Unicode 码点计长（emoji 等占一个）；不用 UTF-16 的 string.length。 */
+export function codePointLength(value: string): number {
+  let count = 0;
+  for (const _ of value) count += 1;
+  return count;
+}
+
+/**
+ * 与契约 location 的 pattern 一致：至少有一个码点不在 Unicode White_Space 内
+ * （U+0009–000D、0020、0085、00A0、1680、2000–200A、2028、2029、202F、205F、3000）。
+ * JS 的 trim() 不去除 U+0085，所以不能只靠 trim 后长度判断。
+ */
+const VISIBLE = /[^\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
+export function hasVisibleCharacter(value: string): boolean {
+  return VISIBLE.test(value);
+}
+
 export function normalizeDraft(draft: FindingDraft): FindingDraft {
   return {
     ...draft,
@@ -79,15 +96,15 @@ export function validateFindingDraft(input: FindingDraft, now: Date): FindingDra
   if (!findingSources.includes(draft.source)) errors.source = "请选择来源";
   if (!findingUrgencies.includes(draft.urgency)) errors.urgency = "请选择紧急程度";
 
-  if (draft.description.length === 0) errors.description = "请填写隐患描述";
-  else if (draft.description.length < DRAFT_LIMITS.descriptionMin) {
+  if (!hasVisibleCharacter(draft.description)) errors.description = "请填写隐患描述";
+  else if (codePointLength(draft.description) < DRAFT_LIMITS.descriptionMin) {
     errors.description = `描述至少 ${DRAFT_LIMITS.descriptionMin} 个字，请写清楚看到了什么`;
-  } else if (draft.description.length > DRAFT_LIMITS.descriptionMax) {
+  } else if (codePointLength(draft.description) > DRAFT_LIMITS.descriptionMax) {
     errors.description = `描述不能超过 ${DRAFT_LIMITS.descriptionMax} 个字`;
   }
 
-  if (draft.location.length === 0) errors.location = "请填写所在位置或设备";
-  else if (draft.location.length > DRAFT_LIMITS.locationMax) {
+  if (!hasVisibleCharacter(draft.location)) errors.location = "请填写所在位置或设备";
+  else if (codePointLength(draft.location) > DRAFT_LIMITS.locationMax) {
     errors.location = `位置不能超过 ${DRAFT_LIMITS.locationMax} 个字`;
   }
 
@@ -98,7 +115,7 @@ export function validateFindingDraft(input: FindingDraft, now: Date): FindingDra
     errors.foundAt = "发现时间不能晚于当前时间";
   }
 
-  if (draft.interimMeasure.length > DRAFT_LIMITS.interimMeasureMax) {
+  if (codePointLength(draft.interimMeasure) > DRAFT_LIMITS.interimMeasureMax) {
     errors.interimMeasure = `临时措施不能超过 ${DRAFT_LIMITS.interimMeasureMax} 个字`;
   }
 
