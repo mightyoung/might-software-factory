@@ -110,3 +110,20 @@
 2. S2：菜单及权限接口、前端能力码到 `finding.create` 的映射仍需产品/接口批次确认。
 3. 为最小闭环接入前端 HTTP adapter，并进行同源 CSRF/session 联调。
 4. 使用现有 NAS PostgreSQL 18 实例完成授权角色下的当前用户、组织权限、完整创建幂等/并发/回滚、列表/详情及会话撤权验收；当前本地验证未连接 NAS。独立 V7 allocator IT 已在 PG18.6 通过，但不等同完整 finding/auth/Flowable 闭环验收。
+
+## 六、HTTP adapter 落地后的差异与待决定（前端侧，未联调）
+
+前端已有 `httpClient`（CSRF、统一错误）、`httpSessionAdapter`、`httpFindingLedger`、`httpFindingSubmit`，单元测试用假客户端通过；**没有连过真实后端**。登录页可用 `VITE_API_MODE=http` 切换，台账与上报页仍是合成 adapter。以下是接线时暴露的、需要产品或后端拍板的差异：
+
+| # | 差异 | 前端现状 | 需要谁决定 |
+|---|---|---|---|
+| D1 | 紧急程度：契约 `NORMAL` / `URGENT`（URGENT=“需立即处置”）；表单有“一般 / 紧急 / 需立即处置”三档 | “需立即处置”→`URGENT`，“一般”→`NORMAL`；“紧急”无对应值，提交前拒绝并提示，不并入其他档 | 产品：去掉“紧急”档，或后端增加一档 |
+| D2 | 上报日期筛选：台账列“上报日期”对应 `createdAt`（DATETIME），查询映射器只把日期输入映射到 DATE 字段 | 绑定缺失，筛选时明确报错，不静默忽略 | 后端：提供 DATE 字段或 DATETIME 区间语义（含时区）；或前端改用 BETWEEN 并约定上海日界 |
+| D3 | 上报人、责任人、历史（R4）：契约仍无 | 显示“—”，详情时间线为空 | 后端补字段/接口，或产品删列 |
+| D4 | 提交回执无提交时间与补报标记（W6） | 回执里两项可选；成功页不显示补报提示；详情页可用读取到的 `backfill` | 后端回执或详情补充 |
+| D5 | 创建需 `organizationId`（W1）；表单无组织选择器 | `createHttpFindingSubmit(client, organizationId)` 由调用方传入 | 前端：加选择器，调用 `/organizations/reportable`；空列表时禁用上报 |
+| D6 | 登录需 `tenantCode`（S1） | 登录页在 http 模式多一个“租户编码” | 产品：租户码来源（手输、子域名还是记忆上次） |
+| D7 | 应用/权限/菜单接口缺失（S1/S2）；前端权限码 `safety.finding.*` 与后端 `finding.create` 无映射 | http 模式下应用、菜单、权限摘要是前端写死的呈现假设，不授权操作 | 后端：bootstrap/菜单接口与权限码清单 |
+| D8 | 隐患等级文案（R2）：`UNKNOWN`/`GENERAL`/`MAJOR` | 暂显示“待专业评估 / 一般 / 重大” | 业务确认文案 |
+| D9 | 会话到期：契约未给空闲/绝对到期时间 | 仅在收到 401 时回登录页 | 后端：到期时间字段或心跳约定 |
+| D10 | 契约 `minimum`/`maxLength`/`pattern` 不进入生成类型（如 `location` 的非空白 pattern、200 码点上限） | 前端限制更严（位置 100、描述 500）；未实现 pattern 与“码点”长度计数 | 前端：对齐码点计数与空白 pattern；其余靠后端测试 |
