@@ -1,5 +1,7 @@
 # P0 engineering baseline
 
+Latest integrated candidate: [P0 integration readiness — 2026-11-02](verification/p0-integration-readiness-2026-11-02.md). It records the Session independent-transaction contract, disabled test-only expiry sweep, additional recovery/role probes, and fresh NAS read-only evidence. PostgreSQL execution remains NOT RUN for this candidate.
+
 Current Java21 runtime/platform and probe-cleanup evidence (2026-11-02) is recorded in [the Java21 verification note](verification/java21-environment-and-p0-cleanup-2026-11-02.md). The checkpoint descriptions below are historical; real PostgreSQL acceptance remains open.
 
 Status: first engineering slice delivered for review; P0 remains open. This document records delivered checks and the next integration gate; it does not mark P0 complete.

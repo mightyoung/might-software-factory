@@ -20,6 +20,8 @@ spring:
     store-type: jdbc
     jdbc:
       initialize-schema: never
+      # Tests clean only their own sessions; never sweep other clients' expired sessions.
+      cleanup-cron: "-"
 
 flowable:
   database-schema-update: false

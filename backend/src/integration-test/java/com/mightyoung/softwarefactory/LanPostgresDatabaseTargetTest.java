@@ -145,6 +145,7 @@ class LanPostgresDatabaseTargetTest {
         assertThat(source.getProperty("spring.flyway.enabled")).isEqualTo(false);
         assertThat(source.getProperty("flowable.database-schema-update")).isEqualTo(false);
         assertThat(source.getProperty("spring.session.jdbc.initialize-schema")).isEqualTo("never");
+        assertThat(source.getProperty("spring.session.jdbc.cleanup-cron")).isEqualTo("-");
         assertThat(source.getProperty("spring.sql.init.mode")).isEqualTo("never");
         assertThat(source.getProperty("spring.modulith.events.jdbc.schema-initialization.enabled")).isEqualTo(false);
     }
