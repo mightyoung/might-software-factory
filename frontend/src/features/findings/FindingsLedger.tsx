@@ -208,12 +208,14 @@ export function FindingsLedger({
           )}
         </div>
 
+        {submitAdapter?.listOrganizations === undefined && (
         <div className="demo-notice" role="note">
           <span className="notice-mark" aria-hidden="true">i</span>
           <p>
             当前使用<strong>合成演示数据</strong>，只供浏览字段、列表和流程节点；不代表真实企业、人员、事件或审批结果。
           </p>
         </div>
+        )}
 
         {view !== "all" && (
           <p className="view-scope-note">

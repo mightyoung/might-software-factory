@@ -113,7 +113,7 @@
 
 ## 六、HTTP adapter 落地后的差异与待决定（前端侧，未联调）
 
-前端已有 `httpClient`（CSRF、统一错误）、`httpSessionAdapter`、`httpFindingLedger`、`httpFindingSubmit`，单元测试用假客户端通过；**没有连过真实后端**。登录页可用 `VITE_API_MODE=http` 切换，台账与上报页仍是合成 adapter。以下是接线时暴露的、需要产品或后端拍板的差异：
+前端已有 `httpClient`（CSRF、统一错误）、`httpSessionAdapter`、`httpFindingLedger`、`httpFindingSubmit`，单元测试用假客户端通过；**没有连过真实后端**。登录页可用 `VITE_API_MODE=http` 切换，`VITE_API_MODE=http` 时台账读取与上报提交也走 HTTP adapter（未联调）。以下是接线时暴露的、需要产品或后端拍板的差异：
 
 | # | 差异 | 前端现状 | 需要谁决定 |
 |---|---|---|---|
@@ -121,7 +121,7 @@
 | D2 | 上报日期筛选：台账列“上报日期”对应 `createdAt`（DATETIME），查询映射器只把日期输入映射到 DATE 字段 | 绑定缺失，筛选时明确报错，不静默忽略 | 后端：提供 DATE 字段或 DATETIME 区间语义（含时区）；或前端改用 BETWEEN 并约定上海日界 |
 | D3 | 上报人、责任人、历史（R4）：契约仍无 | 显示“—”，详情时间线为空 | 后端补字段/接口，或产品删列 |
 | D4 | 提交回执无提交时间与补报标记（W6） | 回执里两项可选；成功页不显示补报提示；详情页可用读取到的 `backfill` | 后端回执或详情补充 |
-| D5 | 创建需 `organizationId`（W1） | **已处理（前端）**：适配器提供 `listOrganizations` 时表单显示“所属组织”（单个自动选中、空列表禁用提交、加载失败可重试），选择随提交带上；台账与上报页尚未切到 HTTP adapter | — |
+| D5 | 创建需 `organizationId`（W1） | **已处理（前端）**：适配器提供 `listOrganizations` 时表单显示“所属组织”（单个自动选中、空列表禁用提交、加载失败可重试），选择随提交带上；http 模式下已接线 | — |
 | D6 | 登录需 `tenantCode`（S1） | 登录页在 http 模式多一个“租户编码” | 产品：租户码来源（手输、子域名还是记忆上次） |
 | D7 | 应用/权限/菜单接口缺失（S1/S2）；前端权限码 `safety.finding.*` 与后端 `finding.create` 无映射 | http 模式下应用、菜单、权限摘要是前端写死的呈现假设，不授权操作 | 后端：bootstrap/菜单接口与权限码清单 |
 | D8 | 隐患等级文案（R2）：`UNKNOWN`/`GENERAL`/`MAJOR` | 暂显示“待专业评估 / 一般 / 重大” | 业务确认文案 |

@@ -67,4 +67,6 @@ npm run build
 
 默认仍是合成演示。`VITE_API_MODE=http npm run dev` 切换为同源 `/api` 的真实 Cookie 会话（开发服务器把 `/api` 转发到 `127.0.0.1:8080`，见 `vite.config.ts`）：登录页多一个“租户编码”，演示账号说明隐藏。
 
-后端没有应用、权限、菜单接口，该模式下“只有生产安全应用、菜单沿用演示菜单、权限 `safety.finding.read/report`”是前端的**呈现假设**（`src/adapters/sessionAdapterFactory.ts`），不授权任何操作。台账与上报页仍使用合成 adapter，尚未切到 HTTP adapter。
+后端没有应用、权限、菜单接口，该模式下“只有生产安全应用、菜单沿用演示菜单、权限 `safety.finding.read/report`”是前端的**呈现假设**（`src/adapters/sessionAdapterFactory.ts`），不授权任何操作。
+
+台账读取与上报提交在该模式下也走 HTTP adapter（`createFindingStoreFactory`）：按登录身份和租户新建，避免跨账号复用字段 schema 缓存；页面上的“合成演示”标识和“后端暂未接入”标签随之隐藏。**尚未对真实后端联调过**，仅有假客户端的单元测试；已知差异见 `docs/frontend-contract-gap.md` 第六节（紧急程度“紧急”档、上报日期筛选、上报人/责任人/历史缺失等）。

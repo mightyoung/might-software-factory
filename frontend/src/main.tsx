@@ -2,9 +2,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
-import { createSessionAdapter } from "./adapters/sessionAdapterFactory";
+import { createFindingStoreFactory, createSessionAdapter } from "./adapters/sessionAdapterFactory";
 
 const sessionAdapter = createSessionAdapter(import.meta.env.VITE_API_MODE);
+const createFindingStore = createFindingStoreFactory(import.meta.env.VITE_API_MODE);
 
 const root = document.getElementById("root");
 
@@ -12,6 +13,6 @@ if (!root) throw new Error("Missing #root element");
 
 createRoot(root).render(
   <StrictMode>
-    <App sessionAdapter={sessionAdapter} />
+    <App sessionAdapter={sessionAdapter} createFindingStore={createFindingStore} />
   </StrictMode>,
 );

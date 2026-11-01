@@ -126,6 +126,8 @@ export function FindingReportForm({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
   const needsOrganization = adapter.listOrganizations !== undefined;
+  // 提供组织列表的适配器即真实服务端；合成演示不提供。
+  const live = needsOrganization;
   const [orgState, setOrgState] = useState<
     { status: "loading" } | { status: "error" } | { status: "ready"; items: readonly ReportableOrganization[] }
   >({ status: "loading" });
@@ -290,7 +292,7 @@ export function FindingReportForm({
         <div className="detail-heading">
           <div>
             <h2>新建上报</h2>
-            <p>隐患发现 · 合成演示</p>
+            <p>隐患发现{live ? "" : " · 合成演示"}</p>
           </div>
           <button className="icon-button" type="button" aria-label="关闭上报" onClick={onClose}>
             ×
@@ -302,8 +304,14 @@ export function FindingReportForm({
             编号 <strong>{result.code}</strong>，当前状态：待一人确认。
           </p>
           {result.backfill && <p>发现时间早于当前时间超过 24 小时，已按补报处理：发现时间和上报时间分别保存。</p>}
-          <p className="field-hint">“来源”“所在位置 / 设备”“紧急程度”“临时措施”标注为后端暂未接入：真实后端目前没有对应字段，接入后这些内容不会被保存。</p>
-          <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>
+          {live ? (
+            <p className="field-hint">已写入服务端，由服务端按流程指派确认人；上报人和租户以你的登录身份为准。</p>
+          ) : (
+            <>
+              <p className="field-hint">“来源”“所在位置 / 设备”“紧急程度”“临时措施”标注为后端暂未接入：真实后端目前没有对应字段，接入后这些内容不会被保存。</p>
+              <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>
+            </>
+          )}
         </section>
         <div className="report-actions">
           <button type="button" className="button button-primary" onClick={() => onOpenSubmitted(result.id)}>
@@ -333,9 +341,15 @@ export function FindingReportForm({
       </div>
 
       <p className="report-banner" role="note">
-        <strong>合成演示：</strong>提交只写入本页内存中的演示数据，不会通知任何人，也不形成真实记录。发现紧急危险请先通过现场应急渠道处理。
-        <br />
-        标有“后端暂未接入”的项目：当前后端的创建接口没有对应字段，接入真实后端后这些内容目前不会被保存。
+        {live ? (
+          <>发现紧急危险请先通过现场应急渠道处理，再来上报。提交后进入“待一人确认”，确认人由服务端按流程指派。</>
+        ) : (
+          <>
+            <strong>合成演示：</strong>提交只写入本页内存中的演示数据，不会通知任何人，也不形成真实记录。发现紧急危险请先通过现场应急渠道处理。
+            <br />
+            标有“后端暂未接入”的项目：当前后端的创建接口没有对应字段，接入真实后端后这些内容目前不会被保存。
+          </>
+        )}
       </p>
 
       <form className="report-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
@@ -392,7 +406,7 @@ export function FindingReportForm({
           </Field>
         )}
 
-        <Field id={ids.source} label="来源" required notWired error={errors.source}>
+        <Field id={ids.source} label="来源" required notWired={!live} error={errors.source}>
           <select
             id={ids.source}
             ref={(node) => {
@@ -438,7 +452,7 @@ export function FindingReportForm({
           />
         </Field>
 
-        <Field id={ids.location} label="所在位置 / 设备" required notWired error={errors.location}>
+        <Field id={ids.location} label="所在位置 / 设备" required notWired={!live} error={errors.location}>
           <input
             id={ids.location}
             ref={(node) => {
@@ -483,7 +497,7 @@ export function FindingReportForm({
         >
           <legend>
             紧急程度<span className="required-mark" aria-hidden="true"> *</span>
-            <NotWiredTag />
+            {!live && <NotWiredTag />}
           </legend>
           <div className="report-radio-row">
             {findingUrgencies.map((urgency, index) => (
@@ -521,7 +535,7 @@ export function FindingReportForm({
         <Field
           id={ids.interimMeasure}
           label="已采取的临时措施（选填）"
-          notWired
+          notWired={!live}
           error={errors.interimMeasure}
           hint={`${draft.interimMeasure.trim().length}/${DRAFT_LIMITS.interimMeasureMax}`}
         >

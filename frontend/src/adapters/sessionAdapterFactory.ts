@@ -1,4 +1,7 @@
 import { createHttpClient } from "../api/httpClient";
+import type { FindingStore } from "../App";
+import { createHttpFindingLedger } from "./httpFindingLedger";
+import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpSessionAdapter } from "./httpSessionAdapter";
 import { MENUS, syntheticSessionAdapter, type SessionAdapter } from "./sessionAdapter";
 
@@ -15,4 +18,13 @@ export function createSessionAdapter(mode: string | undefined): SessionAdapter {
     permissions: ["safety.finding.read", "safety.finding.report"],
     menus: { safety: MENUS.safety },
   });
+}
+
+/** http 模式：台账读取与上报提交都走服务端（每个登录身份新建一对，避免跨账号复用 schema 缓存）；其余为合成存储。 */
+export function createFindingStoreFactory(mode: string | undefined): (() => FindingStore) | undefined {
+  if (mode !== "http") return undefined;
+  return () => {
+    const client = createHttpClient();
+    return { ledger: createHttpFindingLedger(client), submit: createHttpFindingSubmit(client) };
+  };
 }
