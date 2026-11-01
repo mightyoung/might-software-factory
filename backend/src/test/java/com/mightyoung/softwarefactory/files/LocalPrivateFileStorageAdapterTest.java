@@ -52,6 +52,7 @@ class LocalPrivateFileStorageAdapterTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        SecureLocalStorageTestSupport.requireOrAssumeSecureStorage(root);
         Files.setPosixFilePermissions(root, PRIVATE_DIRECTORY_PERMISSIONS);
         Files.createDirectory(root.resolve(".receipt-registry"),
                 java.nio.file.attribute.PosixFilePermissions.asFileAttribute(PRIVATE_DIRECTORY_PERMISSIONS));

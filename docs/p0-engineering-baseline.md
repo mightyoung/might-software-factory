@@ -1,5 +1,7 @@
 # P0 engineering baseline
 
+Current Java21 runtime/platform and probe-cleanup evidence (2026-11-02) is recorded in [the Java21 verification note](verification/java21-environment-and-p0-cleanup-2026-11-02.md). The checkpoint descriptions below are historical; real PostgreSQL acceptance remains open.
+
 Status: first engineering slice delivered for review; P0 remains open. This document records delivered checks and the next integration gate; it does not mark P0 complete.
 
 ## Scope in this slice

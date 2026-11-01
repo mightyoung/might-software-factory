@@ -161,101 +161,133 @@ class LanPostgresCompatibilityIT {
     void springTransactionRollsBackFlowableEngineProjectionTransitionAndOutboxTogether() {
         String businessKey = "p0-rollback-" + UUID.randomUUID();
         AtomicReference<String> processInstanceId = new AtomicReference<>();
-        repositoryService.createDeployment()
+        var deployment = repositoryService.createDeployment()
                 .name("P0 transaction rollback " + businessKey)
                 .tenantId("tenant-a")
                 .addString("p0-rollback.bpmn20.xml", simpleUserTaskProcess("p0TransactionRollback"))
                 .deploy();
 
-        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
-        assertThatThrownBy(() -> transaction.execute(status -> {
-            var process = runtimeService.createProcessInstanceBuilder()
-                    .processDefinitionKey("p0TransactionRollback")
-                    .tenantId("tenant-a")
-                    .businessKey(businessKey)
-                    .start();
-            processInstanceId.set(process.getId());
-            jdbc.update("insert into p0_finding_projection values (?, ?, ?, ?)",
-                    process.getId(), "tenant-a", "PERSON_CONFIRM_PENDING", 1L);
-            jdbc.update("insert into p0_finding_transition values (?, ?)", process.getId(), "transition-1");
-            jdbc.update("insert into p0_outbox values (?, ?)", process.getId() + ":event-1", "FINDING_CREATED");
-            throw new DeliberateRollback();
-        })).isInstanceOf(DeliberateRollback.class);
+        try {
+            String processDefinitionId = repositoryService.createProcessDefinitionQuery()
+                    .deploymentId(deployment.getId()).singleResult().getId();
+            TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+            assertThatThrownBy(() -> transaction.execute(status -> {
+                var process = runtimeService.createProcessInstanceBuilder()
+                        .processDefinitionId(processDefinitionId)
+                        .tenantId("tenant-a")
+                        .businessKey(businessKey)
+                        .start();
+                processInstanceId.set(process.getId());
+                jdbc.update("insert into p0_finding_projection values (?, ?, ?, ?)",
+                        process.getId(), "tenant-a", "PERSON_CONFIRM_PENDING", 1L);
+                jdbc.update("insert into p0_finding_transition values (?, ?)", process.getId(), "transition-1");
+                jdbc.update("insert into p0_outbox values (?, ?)", process.getId() + ":event-1", "FINDING_CREATED");
+                throw new DeliberateRollback();
+            })).isInstanceOf(DeliberateRollback.class);
 
-        assertThat(runtimeService.createProcessInstanceQuery()
-                .processInstanceBusinessKey(businessKey, "tenant-a")
-                .singleResult()).isNull();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_projection where process_instance_id = ?",
-                Integer.class, processInstanceId.get())).isZero();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_transition where process_instance_id = ?",
-                Integer.class, processInstanceId.get())).isZero();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_outbox where event_key = ?",
-                Integer.class, processInstanceId.get() + ":event-1")).isZero();
+            assertThat(runtimeService.createProcessInstanceQuery()
+                    .processInstanceBusinessKey(businessKey, "tenant-a")
+                    .singleResult()).isNull();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_projection where process_instance_id = ?",
+                    Integer.class, processInstanceId.get())).isZero();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_transition where process_instance_id = ?",
+                    Integer.class, processInstanceId.get())).isZero();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_outbox where event_key = ?",
+                    Integer.class, processInstanceId.get() + ":event-1")).isZero();
+        } finally {
+            try {
+                repositoryService.deleteDeployment(deployment.getId(), true);
+            } finally {
+                if (processInstanceId.get() != null) {
+                    deleteProbeWrites(processInstanceId.get());
+                }
+            }
+        }
     }
 
     @Test
     void timerFailureRollsBackProjectionTransitionAndOutboxWhileKeepingTheEngineInstanceRetryable() {
         String businessKey = "p0-timer-" + UUID.randomUUID();
-        repositoryService.createDeployment()
+        var deployment = repositoryService.createDeployment()
                 .name("P0 timer rollback " + businessKey)
                 .tenantId("tenant-a")
                 .addString("p0-timer-rollback.bpmn20.xml", TIMER_PROCESS_XML)
                 .deploy();
 
-        var process = runtimeService.createProcessInstanceBuilder()
-                .processDefinitionKey(TIMER_PROCESS)
-                .tenantId("tenant-a")
-                .businessKey(businessKey)
-                .start();
-        Job timer = managementService.createTimerJobQuery()
-                .processInstanceId(process.getId())
-                .singleResult();
-        assertThat(timer).isNotNull();
+        String processInstanceId = null;
+        try {
+            String processDefinitionId = repositoryService.createProcessDefinitionQuery()
+                    .deploymentId(deployment.getId()).singleResult().getId();
+            var process = runtimeService.createProcessInstanceBuilder()
+                    .processDefinitionId(processDefinitionId)
+                    .tenantId("tenant-a")
+                    .businessKey(businessKey)
+                    .start();
+            processInstanceId = process.getId();
+            Job timer = managementService.createTimerJobQuery()
+                    .processInstanceId(process.getId())
+                    .singleResult();
+            assertThat(timer).isNotNull();
 
-        Job firstAttempt = managementService.moveTimerToExecutableJob(timer.getId());
-        assertThat(firstAttempt.getRetries()).isPositive();
-        assertThatThrownBy(() -> managementService.executeJob(firstAttempt.getId()))
-                .hasRootCauseInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
-        assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(3);
+            Job firstAttempt = managementService.moveTimerToExecutableJob(timer.getId());
+            assertThat(firstAttempt.getRetries()).isPositive();
+            assertThatThrownBy(() -> managementService.executeJob(firstAttempt.getId()))
+                    .hasRootCauseInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
+            assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(3);
 
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_projection where process_instance_id = ?",
-                Integer.class, process.getId())).isZero();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_transition where process_instance_id = ?",
-                Integer.class, process.getId())).isZero();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_outbox where event_key like ?",
-                Integer.class, process.getId() + ":%")).isZero();
-        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
-                .isNotNull();
-        Job executableAfterFailure = managementService.createJobQuery()
-                .processInstanceId(process.getId())
-                .singleResult();
-        assertThat(executableAfterFailure).isNotNull();
-        assertThat(executableAfterFailure.getRetries()).isPositive();
-        assertThat(managementService.createDeadLetterJobQuery()
-                .processInstanceId(process.getId())
-                .count()).isZero();
-        managementService.executeJob(executableAfterFailure.getId());
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_projection where process_instance_id = ?",
+                    Integer.class, process.getId())).isZero();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_transition where process_instance_id = ?",
+                    Integer.class, process.getId())).isZero();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_outbox where event_key like ?",
+                    Integer.class, process.getId() + ":%")).isZero();
+            assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
+                    .isNotNull();
+            Job executableAfterFailure = managementService.createJobQuery()
+                    .processInstanceId(process.getId())
+                    .singleResult();
+            assertThat(executableAfterFailure).isNotNull();
+            assertThat(executableAfterFailure.getRetries()).isPositive();
+            assertThat(managementService.createDeadLetterJobQuery()
+                    .processInstanceId(process.getId())
+                    .count()).isZero();
+            managementService.executeJob(executableAfterFailure.getId());
 
-        assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(6);
-        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
-                .isNull();
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_projection where process_instance_id = ?",
-                Integer.class, process.getId())).isEqualTo(1);
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_finding_transition where process_instance_id = ?",
-                Integer.class, process.getId())).isEqualTo(1);
-        assertThat(jdbc.queryForObject(
-                "select count(*) from p0_outbox where event_key like ?",
-                Integer.class, process.getId() + ":%")).isEqualTo(1);
-        assertThat(managementService.createJobQuery().processInstanceId(process.getId()).count()).isZero();
-        assertThat(managementService.createDeadLetterJobQuery().processInstanceId(process.getId()).count()).isZero();
+            assertThat(projectionDelegate.successfulWriteStatementsFor(process.getId())).isEqualTo(6);
+            assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(process.getId()).singleResult())
+                    .isNull();
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_projection where process_instance_id = ?",
+                    Integer.class, process.getId())).isEqualTo(1);
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_finding_transition where process_instance_id = ?",
+                    Integer.class, process.getId())).isEqualTo(1);
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from p0_outbox where event_key like ?",
+                    Integer.class, process.getId() + ":%")).isEqualTo(1);
+            assertThat(managementService.createJobQuery().processInstanceId(process.getId()).count()).isZero();
+            assertThat(managementService.createDeadLetterJobQuery().processInstanceId(process.getId()).count()).isZero();
+        } finally {
+            try {
+                repositoryService.deleteDeployment(deployment.getId(), true);
+            } finally {
+                if (processInstanceId != null) {
+                    deleteProbeWrites(processInstanceId);
+                }
+            }
+        }
+    }
+
+    private void deleteProbeWrites(String processInstanceId) {
+        jdbc.update("delete from p0_outbox where event_key like ?", processInstanceId + ":%");
+        jdbc.update("delete from p0_finding_transition where process_instance_id = ?", processInstanceId);
+        jdbc.update("delete from p0_finding_projection where process_instance_id = ?", processInstanceId);
     }
 
     @Test

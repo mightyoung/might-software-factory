@@ -55,7 +55,7 @@ class FileEvidenceVerificationAutoConfigurationTest {
     }
 
     @Test
-    void localStorageIsOptInAndRequiresBothAnExplicitRootAndSyntheticTrustKey() throws Exception {
+    void localStorageWithoutATrustKeyKeepsTheFailClosedDefaults() {
         contextRunner.withPropertyValues("software-factory.files.local.root=" + storageRoot)
                 .run(context -> {
                     assertThat(context.getBean(StorageContentVerificationPort.class))
@@ -66,7 +66,11 @@ class FileEvidenceVerificationAutoConfigurationTest {
                             .isInstanceOf(UnconfiguredTrustedContentReceiptIssuer.class);
                     assertThat(Files.exists(storageRoot.resolve(".receipt-registry"))).isFalse();
                 });
+    }
 
+    @Test
+    void configuredLocalStorageProvidesAllThreeTrustedPortsOnASupportedFilesystem() throws Exception {
+        SecureLocalStorageTestSupport.requireOrAssumeSecureStorage(storageRoot);
         String encodedKey = Base64.getEncoder().encodeToString("synthetic-test-key-material-32-bytes".getBytes());
         Set<PosixFilePermission> privateDirectoryPermissions = Set.of(PosixFilePermission.OWNER_READ,
                 PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);

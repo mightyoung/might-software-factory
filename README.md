@@ -58,6 +58,14 @@ Spring Boot 4.1.2、Modulith 2.1.1、Flowable 8.0.0 已纳入后端构建；Flow
 
 测试环境唯一规范见[测试环境决定](docs/test-environment.md)：Mac仅Java后台、LAN PostgreSQL/Redis、媒体执行环境待定。
 
+### 后端 Java 工具链
+
+后端构建、运行和 CI 使用 JDK 21；本地安装 Eclipse Temurin 21。先确认 `java -version` 和 `./mvnw -version` 显示 21，再执行 `./mvnw --batch-mode --no-transfer-progress clean verify`。
+
+macOS 可用 `export JAVA_HOME="$(/usr/libexec/java_home -v 21)"` 选择已安装的 JDK 21，并将 `$JAVA_HOME/bin` 放到 `PATH` 前部。编译目标版本不等于实际运行版本，不能用 JBR25 的运行结果代替 JDK21 验证。
+
+本地私有证据存储适配器要求文件系统提供 `SecureDirectoryStream`。Temurin21/macOS 实测不提供该能力，适配器会拒绝启用；本地相关正例明确跳过并验证拒绝行为。Linux CI 强制要求该能力并执行完整安全测试，不能用本地跳过代替验证。
+
 ## 全面设计基线索引
 
 当前请优先从[全面设计基线v1.0](docs/design-baseline.md)阅读，包含逻辑schema、接口/触发循环、设备地图大屏、环境事实、阶段依赖和未执行验收。旧规范在Git和变更记录追溯；各专题正文为现行规范，不再要求读者自行合并新旧规则。第一切片只做单一闭环验证，不缩减整体业务设计，也不推断不接真实算法。

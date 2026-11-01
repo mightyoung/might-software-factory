@@ -20,4 +20,6 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Verify backend
-        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+        run: ./mvnw --batch-mode --no-transfer-progress -Dsoftware-factory.test.require-secure-storage=true clean verify
+      - name: Verify LAN profile compilation and offline guards
+        run: ./mvnw --batch-mode --no-transfer-progress -Dsoftware-factory.test.require-secure-storage=true -Plan-postgres-compatibility -DskipITs verify
