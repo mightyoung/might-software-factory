@@ -526,10 +526,13 @@ class LanPostgresCompatibilityIT {
 
         static DatabaseTarget preflightFromEnvironment(java.util.Map<String, String> environment) {
             DatabaseTarget target = forAppRole(environment);
+            // Validate both secrets before opening either connection.
+            String migrationPassword = requiredFrom(environment, "LAN_PG_PASSWORD");
+            String applicationPassword = requiredFrom(environment, "LAN_PG_APP_PASSWORD");
             validateRoleOnTarget(target, requiredFrom(environment, "LAN_PG_USERNAME"),
-                    requiredFrom(environment, "LAN_PG_PASSWORD"), true);
+                    migrationPassword, true);
             validateRoleOnTarget(target, requiredFrom(environment, "LAN_PG_APP_USERNAME"),
-                    requiredFrom(environment, "LAN_PG_APP_PASSWORD"), false);
+                    applicationPassword, false);
             return target;
         }
 
@@ -615,6 +618,11 @@ class LanPostgresCompatibilityIT {
                 URI uri = URI.create(url.substring("jdbc:".length()));
                 String host = uri.getHost();
                 String path = uri.getPath();
+                // pgJDBC query properties override host/path and separately supplied credentials.
+                // This gate deliberately accepts only a literal endpoint, without URL properties.
+                if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                    throw new IllegalStateException("LAN_PG_JDBC_URL must not contain query parameters or fragments");
+                }
                 if (uri.getUserInfo() != null || url.toLowerCase(java.util.Locale.ROOT).contains("password=")) {
                     throw new IllegalStateException("Credentials must be supplied separately from LAN_PG_JDBC_URL");
                 }

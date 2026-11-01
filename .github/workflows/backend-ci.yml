@@ -21,3 +21,5 @@ jobs:
           cache: maven
       - name: Verify backend
         run: ./mvnw --batch-mode --no-transfer-progress clean verify
+      - name: Verify LAN profile compilation and offline guards
+        run: ./mvnw --batch-mode --no-transfer-progress -Plan-postgres-compatibility -DskipITs verify
