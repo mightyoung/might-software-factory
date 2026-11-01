@@ -62,3 +62,9 @@ npm run build
 - `src/api/contractAlignment.test.ts` 把前端的状态枚举和分页大小与生成类型做严格相等的编译期检查：后端改了枚举，`npm run typecheck` 会失败，提醒同步前端。
 
 **能力边界（事实）**：生成物只是类型，只能发现结构和枚举的变化。`minimum`、`maxLength`、`pattern` 等约束不会进入 TypeScript 类型，这类变化不会触发检查，仍要靠契约评审和后端测试。目前**没有任何 HTTP 适配器使用这些类型**，也没有契约模拟服务，前端运行时仍是合成适配器。
+
+## 连接真实后端（登录）
+
+默认仍是合成演示。`VITE_API_MODE=http npm run dev` 切换为同源 `/api` 的真实 Cookie 会话（开发服务器把 `/api` 转发到 `127.0.0.1:8080`，见 `vite.config.ts`）：登录页多一个“租户编码”，演示账号说明隐藏。
+
+后端没有应用、权限、菜单接口，该模式下“只有生产安全应用、菜单沿用演示菜单、权限 `safety.finding.read/report`”是前端的**呈现假设**（`src/adapters/sessionAdapterFactory.ts`），不授权任何操作。台账与上报页仍使用合成 adapter，尚未切到 HTTP adapter。

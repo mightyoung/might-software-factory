@@ -19,6 +19,8 @@ export interface Credentials {
  * 当前后端没有认证端点契约，仅提供下面的合成实现。
  */
 export interface SessionAdapter {
+  /** 真实后端登录需要租户码：登录页据此显示输入框并隐藏合成演示说明。 */
+  readonly requiresTenantCode?: boolean;
   login(credentials: Credentials, signal?: AbortSignal): Promise<SessionBootstrap>;
   /** 无有效会话时返回 null（对应服务端 401），其他故障抛 SessionError("unavailable")。 */
   restore(signal?: AbortSignal): Promise<SessionBootstrap | null>;
@@ -81,7 +83,7 @@ export const DEMO_ACCOUNTS: Readonly<Record<string, DemoAccount>> = {
   },
 };
 
-const MENUS: Record<ApplicationId, AppMenu> = {
+export const MENUS: Record<ApplicationId, AppMenu> = {
   safety: {
     applicationId: "safety",
     title: "安全管理",

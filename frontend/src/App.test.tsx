@@ -292,3 +292,25 @@ describe("头像菜单", () => {
     expect(screen.getByRole("button", { name: /个人会话/ })).toBeDisabled();
   });
 });
+
+describe("真实后端登录（需要租户码）", () => {
+  it("显示租户编码输入框、隐藏演示说明，并把租户码交给适配器", async () => {
+    const base = createSyntheticSessionAdapter();
+    const login = vi.fn().mockRejectedValue(new SessionError("invalid_credentials"));
+    setPath("/login");
+    render(<App sessionAdapter={{ ...base, requiresTenantCode: true, login }} />);
+    await screen.findByRole("heading", { name: "登录" });
+    expect(screen.queryByLabelText("合成演示说明")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("租户编码"), { target: { value: "acme" } });
+    fillAndSubmit("zhang", "pw");
+    await screen.findByRole("alert");
+    expect(login).toHaveBeenCalledWith({ username: "zhang", password: "pw", tenantCode: "acme" });
+  });
+
+  it("合成模式不显示租户编码", async () => {
+    setPath("/login");
+    render(<App sessionAdapter={createSyntheticSessionAdapter()} />);
+    await screen.findByRole("heading", { name: "登录" });
+    expect(screen.queryByLabelText("租户编码")).not.toBeInTheDocument();
+  });
+});

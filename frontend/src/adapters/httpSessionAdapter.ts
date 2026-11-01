@@ -1,17 +1,19 @@
 import type { components } from "../api/generated/session-api";
 import { ApiError, type HttpClient } from "../api/httpClient";
-import { SessionError, type ApplicationEntry, type SessionBootstrap } from "../domain/session";
+import { SessionError, type AppMenu, type ApplicationEntry, type ApplicationId, type SessionBootstrap } from "../domain/session";
 import type { Credentials, SessionAdapter } from "./sessionAdapter";
 
 type CurrentSession = components["schemas"]["CurrentSessionResponse"]["data"];
 
 /**
  * 后端目前没有应用列表/菜单/权限目录接口（见 docs/frontend-contract-gap.md S1/S2）。
- * 调用方必须显式提供这两项，本适配器不替后端臆造权限；菜单同样没有来源，loadMenu 一律 unavailable。
+ * 调用方必须显式提供，本适配器不替后端臆造；这些只用于界面呈现，服务端对每个请求仍须鉴权。
+ * 没有提供菜单的应用，loadMenu 返回 unavailable。
  */
 export interface HttpSessionCapabilities {
   applications: readonly ApplicationEntry[];
   permissions: readonly string[];
+  menus?: Readonly<Partial<Record<ApplicationId, AppMenu>>>;
 }
 
 function toSessionError(error: unknown): unknown {
@@ -37,6 +39,7 @@ export function createHttpSessionAdapter(client: HttpClient, capabilities: HttpS
   }
 
   return {
+    requiresTenantCode: true,
     async login({ username, password, tenantCode }: Credentials, signal) {
       // 与合成实现一致：缺少信息和凭证错误同一个错误，不暴露账号是否存在。
       if (!tenantCode?.trim() || !username.trim() || !password) throw new SessionError("invalid_credentials");
@@ -68,8 +71,10 @@ export function createHttpSessionAdapter(client: HttpClient, capabilities: HttpS
         throw toSessionError(error);
       }
     },
-    async loadMenu() {
-      throw new SessionError("unavailable", false);
+    async loadMenu(applicationId) {
+      const menu = capabilities.menus?.[applicationId];
+      if (!menu) throw new SessionError("unavailable", false);
+      return menu;
     },
   };
 }
