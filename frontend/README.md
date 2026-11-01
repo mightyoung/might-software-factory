@@ -70,3 +70,14 @@ npm run build
 后端没有应用、权限、菜单接口，该模式下“只有生产安全应用、菜单沿用演示菜单、权限 `safety.finding.read/report`”是前端的**呈现假设**（`src/adapters/sessionAdapterFactory.ts`），不授权任何操作。
 
 台账读取与上报提交在该模式下也走 HTTP adapter（`createFindingStoreFactory`）：按登录身份和租户新建，避免跨账号复用字段 schema 缓存；页面上的“合成演示”标识和“后端暂未接入”标签随之隐藏。**尚未对真实后端联调过**，仅有假客户端的单元测试；已知差异见 `docs/frontend-contract-gap.md` 第六节（紧急程度“紧急”档、上报日期筛选、上报人/责任人/历史缺失等）。
+
+## 契约模拟服务（无后端时联调前端）
+
+```sh
+npm run mock                 # 监听 127.0.0.1:8080（PORT 可改），账号 demo / demo，租户码 demo
+VITE_API_MODE=http npm run dev
+```
+
+`tools/mock-server/server.mjs` 按 `contracts/openapi` 的**书面描述**实现 CSRF 双提交、Cookie 会话、台账查询/详情、上报（含幂等键与同键异参 409、服务端校验、可上报组织），数据在内存里，重启即清空。**它不是后端**，只能证明前端自洽，不能证明与 Java 后端兼容；与真实后端不一致时以后端和契约为准。
+
+`src/integration/mockServer.test.ts` 用真实的 `httpClient` 和三个 HTTP adapter 对着它跑（含 CSRF、Cookie、幂等重放、越权组织、空白位置被拒）。
