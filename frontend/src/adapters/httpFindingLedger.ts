@@ -82,18 +82,22 @@ function withViewFilter(request: EntityQueryRequest, view: FindingView): EntityQ
 export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapter {
   let schemaPromise: Promise<RegisteredEntityV1> | null = null;
 
-  function registeredSchema(signal?: AbortSignal): Promise<RegisteredEntityV1> {
+  /**
+   * 共享请求不绑定任何一个调用方的取消信号：React StrictMode 会先挂载、卸载再挂载，
+   * 第一次调用的取消不能让第二次调用拿到一个已被取消的缓存请求。调用方各自在等待结束后检查自己的信号。
+   */
+  async function registeredSchema(signal?: AbortSignal): Promise<RegisteredEntityV1> {
     if (!schemaPromise) {
-      const pending = client
-        .get<{ data: RegisteredEntityV1 }>("/api/v1/entities/finding/schema", { signal })
-        .then((body) => body.data);
-      // 失败（含取消）不缓存，下次重试。
+      const pending = client.get<{ data: RegisteredEntityV1 }>("/api/v1/entities/finding/schema").then((body) => body.data);
+      // 失败不缓存，下次重试。
       pending.catch(() => {
         if (schemaPromise === pending) schemaPromise = null;
       });
       schemaPromise = pending;
     }
-    return schemaPromise;
+    const schema = await schemaPromise;
+    signal?.throwIfAborted();
+    return schema;
   }
 
   return {

@@ -49,6 +49,18 @@ describe("createHttpFindingLedger", () => {
     expect(result.items[0]).not.toHaveProperty("backfill");
   });
 
+  it("a cancelled first call does not poison the shared schema request for the next call (StrictMode)", async () => {
+    const f = fake({ post: () => listBody });
+    const ledger = createHttpFindingLedger(f.client);
+    const first = new AbortController();
+    const req = { query: q, page: { index: 1, size: 20 }, view: "all" as const };
+    const aborted = ledger.list(req, { signal: first.signal });
+    first.abort();
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    await expect(ledger.list(req, { signal: new AbortController().signal })).resolves.toMatchObject({ total: 41 });
+    expect(f.schemaCalls()).toBe(1);
+  });
+
   it("refuses a report-date filter instead of silently ignoring it", async () => {
     const f = fake({ post: () => listBody });
     const call = createHttpFindingLedger(f.client).list({ query: { ...q, reportedAt: { from: "2026-10-01", to: "" } }, page: { index: 1, size: 20 }, view: "all" });

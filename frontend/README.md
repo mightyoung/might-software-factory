@@ -81,3 +81,11 @@ VITE_API_MODE=http npm run dev
 `tools/mock-server/server.mjs` 按 `contracts/openapi` 的**书面描述**实现 CSRF 双提交、Cookie 会话、台账查询/详情、上报（含幂等键与同键异参 409、服务端校验、可上报组织），数据在内存里，重启即清空。**它不是后端**，只能证明前端自洽，不能证明与 Java 后端兼容；与真实后端不一致时以后端和契约为准。
 
 `src/integration/mockServer.test.ts` 用真实的 `httpClient` 和三个 HTTP adapter 对着它跑（含 CSRF、Cookie、幂等重放、越权组织、空白位置被拒）。
+
+## 浏览器端到端测试（Playwright）
+
+```sh
+npm run e2e
+```
+
+自动起契约模拟服务（18080）和 `VITE_API_MODE=http` 的开发服务器（15173），用**本机已安装的 Chrome**（`channel: "chrome"`，不下载浏览器）跑登录、会话恢复、退出、上报、按编号查询。未接入 CI；对着的是模拟服务，不是后端。

@@ -264,7 +264,7 @@ export function FindingsLedger({
 
         {!listError && (
         <div className="table-footer">
-          <span>共 {page.total} 条演示记录</span>
+          <span>共 {page.total} 条{submitAdapter?.listOrganizations === undefined ? "演示" : ""}记录</span>
           <div className="pagination-controls">
             <label className="page-size-select">
               <span className="visually-hidden">每页条数</span>
