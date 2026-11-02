@@ -1,5 +1,7 @@
 # Credential-version session boundary — 2026-11-02
 
+Follow-up: [real identity-table HTTPS login acceptance](identity-login-postgres-2026-11-02.md) covers the selected login and revocation path in a later batch. The results and limitations below describe this earlier checkpoint.
+
 Base: P0 candidate `73e8f06` (PR #20), not yet merged into dev at implementation time. This batch builds on that candidate and does not alter any schema, grant, credential or database connection configuration. The existing account `credential_version` column is used.
 
 ## Resulting behavior
