@@ -88,7 +88,7 @@ VITE_API_MODE=http npm run dev
 npm run e2e
 ```
 
-自动起契约模拟服务（18080）和 `VITE_API_MODE=http` 的开发服务器（15173），用**本机已安装的 Chrome**（`channel: "chrome"`，不下载浏览器）跑登录、会话恢复、退出、上报、按编号查询。未接入 CI；对着的是模拟服务，不是后端。
+自动起契约模拟服务（18080）和 `VITE_API_MODE=http` 的开发服务器（15173），用**本机已安装的 Chrome**（`channel: "chrome"`，不下载浏览器）跑登录、会话恢复、退出、上报、按编号查询。CI 的 `e2e` 任务（`.github/workflows/frontend-ci.yml`）用 runner 自带的 Chrome 跑它；对着的是模拟服务，不是后端。
 
 ## 流程命令（http 模式）
 
