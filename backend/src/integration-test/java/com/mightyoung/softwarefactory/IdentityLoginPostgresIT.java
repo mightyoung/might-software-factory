@@ -16,6 +16,7 @@ import com.mightyoung.softwarefactory.identity.JooqAccountStatusReadRepository;
 import com.mightyoung.softwarefactory.identity.JooqCurrentSessionReadRepository;
 import com.mightyoung.softwarefactory.identity.JooqPrincipalStatusReadRepository;
 import com.mightyoung.softwarefactory.identity.LocalPasswordAuthenticationProvider;
+import com.mightyoung.softwarefactory.identity.LoginAttemptLimiter;
 import com.mightyoung.softwarefactory.identity.SecurityConfiguration;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.TenantLoginContextResolver;
@@ -57,9 +58,12 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.time.Clock;
 import java.time.Duration;
@@ -97,6 +101,7 @@ class IdentityLoginPostgresIT {
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private SessionTrace sessions;
     @Autowired private AcceptanceClock clock;
+    @Autowired private AcceptanceThrottleClock throttleClock;
     private IdentityPostgresFixture fixture;
     private Set<String> previousSessions;
     private final List<IdentityAcceptanceHttps.Browser> browsers = new ArrayList<>();
@@ -127,6 +132,8 @@ class IdentityLoginPostgresIT {
     void seedOwnedIdentityAndCheckRuntimeRole() throws Exception {
         sessions.awaitIdle();
         clock.reset();
+        // Reset by monotonic advancement, never by replacing or clearing production limiter state.
+        throttleClock.advance(Duration.ofMinutes(10));
         previousSessions = sessions.ids();
         fixture = IdentityPostgresFixture.create(passwords);
         assertThat(runtimeJdbc.queryForObject("select current_user = session_user and current_user = ?",
@@ -267,6 +274,62 @@ class IdentityLoginPostgresIT {
     }
 
     private enum InvalidAuthenticationTime { MISSING, WRONG_TYPE, FUTURE }
+
+    @Test
+    void repeatedBadCredentialsCoolDownOnlyTheSourceAndNormalizedLoginAndRecoverAtTheDeadline() throws Exception {
+        var tenantB = browser();
+        String existingSession = sessions.idFor(login(tenantB, fixture.password(), fixture.tenantBCode()).trace());
+        var client = browser();
+        bootstrap(client);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertGenericAuthenticationFailure(client.post(LOGIN,
+                    loginBody("incorrect-synthetic-password", fixture.tenantACode()), client.csrf()));
+        }
+
+        var blocked = client.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), client.csrf());
+        assertThat(assertRateLimited(blocked)).isEqualTo(30L);
+        assertThat(client.cookie("SESSION")).isEmpty();
+        // A login failure/cooldown must not mutate the account or revoke an already valid session.
+        assertThat(runtimeJdbc.queryForObject("select status from public.account where id = ?",
+                String.class, fixture.accountId())).isEqualTo("ACTIVE");
+        assertThat(runtimeJdbc.queryForObject("select credential_version from public.account where id = ?",
+                Long.class, fixture.accountId())).isEqualTo(1L);
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
+        assertThat(fixture.sessionExists(existingSession)).isTrue();
+
+        StringBuilder equivalentLogin = new StringBuilder();
+        for (char character : fixture.loginKey().toUpperCase(Locale.ROOT).toCharArray()) {
+            equivalentLogin.append((char) (character + 0xfee0)); // Full-width ASCII folds under NFKC.
+        }
+        var changedSelection = client.postWithHeaders(LOGIN,
+                loginBody(equivalentLogin.toString(), fixture.password(), fixture.tenantBCode()), client.csrf(),
+                Map.of("X-Forwarded-For", "198.51.100.7", "Forwarded", "for=198.51.100.7;proto=https"));
+        assertThat(assertRateLimited(changedSelection)).isEqualTo(30L);
+        // A different login key on the same actual source still reaches generic authentication.
+        assertGenericAuthenticationFailure(client.post(LOGIN,
+                loginBody("unregistered-" + fixture.loginKey(), fixture.password(), fixture.tenantACode()),
+                client.csrf()));
+
+        throttleClock.advance(Duration.ofSeconds(10));
+        var afterTenSeconds = client.postWithHeaders(LOGIN,
+                loginBody(fixture.password(), fixture.tenantACode()), client.csrf(),
+                Map.of("X-Forwarded-For", "198.51.100.8", "X-Real-IP", "198.51.100.8"));
+        assertThat(assertRateLimited(afterTenSeconds)).isEqualTo(20L);
+        throttleClock.advance(Duration.ofSeconds(19));
+        assertThat(assertRateLimited(client.post(LOGIN,
+                loginBody(fixture.password(), fixture.tenantACode()), client.csrf()))).isEqualTo(1L);
+        throttleClock.advance(Duration.ofSeconds(1));
+
+        String freshSession = sessions.idFor(login(client, fixture.password(), fixture.tenantACode()).trace());
+        assertThat(fixture.sessionExists(freshSession)).isTrue();
+        assertThat(fixture.storedCredentialVersion(freshSession)).isEqualTo(1L);
+        assertThat(fixture.storedAuthenticatedAt(freshSession)).isEqualTo(clock.instant());
+        assertCurrent(client, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertOrganizations(client, fixture.organizationAId().toString(), fixture.organizationBId().toString());
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertCleanConnection();
+    }
 
     @Test
     void realCredentialRotationRejectsOldSessionsAndFreshLoginPersistsTheNewGeneration() throws Exception {
@@ -450,6 +513,22 @@ class IdentityLoginPostgresIT {
                 "LOCKED", "DISABLED", "SUSPENDED", "secret_hash", "secretHash");
     }
 
+    private long assertRateLimited(IdentityAcceptanceHttps.Response response) throws Exception {
+        expect(response, 429);
+        JsonNode error = json.readTree(response.body());
+        assertThat(error.path("code").asString()).isEqualTo("RATE_LIMITED");
+        assertThat(error.path("message").asString()).isEqualTo("Too many login attempts; try again later");
+        assertThat(error.path("retryable").asBoolean()).isTrue();
+        assertThat(error.path("fieldErrors").isArray()).isTrue();
+        assertThat(error.path("fieldErrors").size()).isZero();
+        assertThat(error.path("traceId").asString()).isNotBlank();
+        assertThat(response.body()).doesNotContain(fixture.loginKey(), fixture.password(), fixture.newPassword(),
+                fixture.tenantACode(), fixture.tenantBCode(), "198.51.100.", "127.0.0.1", "secret_hash");
+        String retryAfter = response.http().headers().firstValue("Retry-After").orElseThrow();
+        assertThat(retryAfter).matches("[1-9][0-9]*");
+        return Long.parseLong(retryAfter);
+    }
+
     private enum RevokedIdentityState {
         ACCOUNT_LOCKED,
         ACCOUNT_DISABLED,
@@ -488,8 +567,12 @@ class IdentityLoginPostgresIT {
     }
 
     private String loginBody(String password, String tenantCode) {
+        return loginBody(fixture.loginKey(), password, tenantCode);
+    }
+
+    private String loginBody(String loginKey, String password, String tenantCode) {
         return json.writeValueAsString(java.util.Map.of(
-                "loginKey", fixture.loginKey(), "password", password, "tenantCode", tenantCode));
+                "loginKey", loginKey, "password", password, "tenantCode", tenantCode));
     }
 
     private void logout(IdentityAcceptanceHttps.Browser client) throws Exception {
@@ -583,6 +666,13 @@ class IdentityLoginPostgresIT {
         @Override public Instant instant() { return now.get(); }
     }
 
+    /** Limiter time is independent of authentication age and advances only monotonically. */
+    static final class AcceptanceThrottleClock {
+        private final AtomicLong nanos = new AtomicLong();
+        long nanoTime() { return nanos.get(); }
+        void advance(Duration duration) { nanos.addAndGet(duration.toNanos()); }
+    }
+
     @Configuration(proxyBeanMethods = false)
     @TestComponent // Excluded from the main application's scan, but still an explicit primary config.
     @EnableAutoConfiguration(excludeName = {
@@ -600,6 +690,10 @@ class IdentityLoginPostgresIT {
     static class IdentityWebConfiguration {
         @Bean SessionTrace sessionTrace() { return new SessionTrace(); }
         @Bean @Primary AcceptanceClock acceptanceClock() { return new AcceptanceClock(); }
+        @Bean AcceptanceThrottleClock acceptanceThrottleClock() { return new AcceptanceThrottleClock(); }
+        @Bean @Primary LoginAttemptLimiter acceptanceLoginAttemptLimiter(AcceptanceThrottleClock clock) {
+            return new LoginAttemptLimiter(LoginAttemptLimiter.Config.defaults(), clock::nanoTime);
+        }
 
         // SecurityConfiguration selects this production provider by its component-scan bean name.
         @Bean

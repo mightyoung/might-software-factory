@@ -18,6 +18,7 @@ import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Comparator;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -147,10 +148,21 @@ final class IdentityAcceptanceHttps implements AutoCloseable {
             return send("POST", path, body, csrf);
         }
 
+        Response postWithHeaders(String path, String body, String csrf, Map<String, String> headers)
+                throws Exception {
+            return send("POST", path, body, csrf, headers);
+        }
+
         private Response send(String method, String path, String body, String csrf) throws Exception {
+            return send(method, path, body, csrf, Map.of());
+        }
+
+        private Response send(String method, String path, String body, String csrf, Map<String, String> headers)
+                throws Exception {
             String trace = UUID.randomUUID().toString();
             HttpRequest.Builder request = HttpRequest.newBuilder(origin.resolve(path))
                     .timeout(Duration.ofSeconds(15)).header(TRACE_HEADER, trace);
+            headers.forEach(request::header);
             if (csrf != null) request.header("X-XSRF-TOKEN", csrf);
             if (body == null) request.method(method, HttpRequest.BodyPublishers.noBody());
             else request.header("Content-Type", "application/json")

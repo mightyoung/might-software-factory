@@ -31,5 +31,14 @@ class SessionApiContractTest {
         }
         assertThat(((Map<?, ?>) paths.get("/api/v1/session/current")).containsKey("get")).isTrue();
         assertThat(((Map<?, ?>) paths.get("/api/v1/organizations/reportable")).containsKey("get")).isTrue();
+        Map<String, Object> login = (Map<String, Object>) ((Map<?, ?>) paths.get("/api/v1/auth/login")).get("post");
+        assertThat(((Map<?, ?>) ((Map<?, ?>) login.get("responses")).get("429")).get("$ref"))
+                .isEqualTo("#/components/responses/RateLimited");
+        Map<String, Object> limited = (Map<String, Object>) ((Map<?, ?>) document.get("components"))
+                .get("responses");
+        Map<?, ?> retry = (Map<?, ?>) ((Map<?, ?>) ((Map<?, ?>) limited.get("RateLimited"))
+                .get("headers")).get("Retry-After");
+        assertThat(retry.get("required")).isEqualTo(true);
+        assertThat(((Map<?, ?>) retry.get("schema")).get("minimum")).isEqualTo(1);
     }
 }

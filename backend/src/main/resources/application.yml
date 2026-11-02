@@ -32,6 +32,21 @@ software-factory:
     session:
       # Authentication age never slides with access; the separate idle timeout remains 30m.
       absolute-timeout: 12h
+    login-throttle:
+      # Process-local limits: successes and malformed bodies consume attempt capacity too.
+      global-attempts: 600
+      source-attempts: 60
+      attempt-window: 60s
+      failure-threshold: 5
+      failure-window: 5m
+      cooldown: 30s
+      max-concurrent: 8
+      max-sources: 4096
+      max-pairs: 8192
+
+server:
+  # Unverified Forwarded/X-Forwarded-For headers cannot change login budget identity.
+  forward-headers-strategy: none
 
 flowable:
   database-schema-update: false

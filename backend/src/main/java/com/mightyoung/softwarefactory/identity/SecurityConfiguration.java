@@ -105,14 +105,30 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    LoginAttemptLimiter loginAttemptLimiter(
+            @Value("${software-factory.security.login-throttle.global-attempts:600}") int globalAttempts,
+            @Value("${software-factory.security.login-throttle.source-attempts:60}") int sourceAttempts,
+            @Value("${software-factory.security.login-throttle.attempt-window:60s}") Duration attemptWindow,
+            @Value("${software-factory.security.login-throttle.failure-threshold:5}") int failureThreshold,
+            @Value("${software-factory.security.login-throttle.failure-window:5m}") Duration failureWindow,
+            @Value("${software-factory.security.login-throttle.cooldown:30s}") Duration cooldown,
+            @Value("${software-factory.security.login-throttle.max-concurrent:8}") int maxConcurrent,
+            @Value("${software-factory.security.login-throttle.max-sources:4096}") int maxSources,
+            @Value("${software-factory.security.login-throttle.max-pairs:8192}") int maxPairs) {
+        return new LoginAttemptLimiter(new LoginAttemptLimiter.Config(globalAttempts, sourceAttempts, attemptWindow,
+                failureThreshold, failureWindow, cooldown, maxConcurrent, maxSources, maxPairs), System::nanoTime);
+    }
+
+    @Bean
     LocalPasswordAuthenticationFilter localPasswordAuthenticationFilter(
             @Qualifier("localPasswordAuthenticationProvider") AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
             CookieCsrfTokenRepository csrfTokenRepository,
-            SessionLifetimePolicy sessionLifetime) {
+            SessionLifetimePolicy sessionLifetime,
+            LoginAttemptLimiter attempts) {
         return new LocalPasswordAuthenticationFilter(provider, converter, securityContextRepository,
-                csrfTokenRepository, sessionLifetime);
+                csrfTokenRepository, sessionLifetime, attempts);
     }
 
     @Bean
