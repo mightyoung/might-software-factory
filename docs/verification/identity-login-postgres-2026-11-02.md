@@ -1,5 +1,7 @@
 # Identity login PostgreSQL acceptance — 2026-11-02
 
+Follow-up: [absolute session lifetime](session-absolute-lifetime-2026-11-02.md) adds the configurable authentication-age gate and restricts login to POST. The 8-scenario results below describe this earlier checkpoint.
+
 This batch follows the [credential-version boundary receipt](credential-version-boundary-2026-11-02.md), based on the pending PR #21 candidate. It adds a real identity-table acceptance application and fixtures; production authentication and API behavior are unchanged.
 
 ## Scope and preparation

@@ -95,6 +95,18 @@ class IdentityAuthenticationHttpTest {
     }
 
     @Test
+    void getWithValidLoginJsonCannotAuthenticateWithoutCsrf() throws Exception {
+        MvcResult result = mvc.perform(get(LOGIN_PATH)
+                        .contentType("application/json")
+                        .content("{\"loginKey\":\"operator-1\",\"password\":\"synthetic-pass\",\"tenantCode\":\"north-plant\"}"))
+                .andExpect(status().isNotFound())
+                .andReturn();
+        HttpSession session = result.getRequest().getSession(false);
+        assertThat(session == null ? null : session.getAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY)).isNull();
+    }
+
+    @Test
     void currentSessionEndpointReturnsTheVerifiedCurrentMembership() throws Exception {
         MockHttpSession session = authenticatedSession();
 
@@ -148,6 +160,7 @@ class IdentityAuthenticationHttpTest {
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 new org.springframework.security.core.context.SecurityContextImpl(
                         UsernamePasswordAuthenticationToken.authenticated(legacy, null, List.of())));
+        VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(session);
 
         mvc.perform(get(CURRENT_SESSION_PATH).session(session))
                 .andExpect(status().isUnauthorized())
@@ -299,6 +312,7 @@ class IdentityAuthenticationHttpTest {
                 VerifiedSessionPrincipalTestFixture.create(
                         ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L), null, java.util.List.of()));
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+        VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(session);
         return session;
     }
 

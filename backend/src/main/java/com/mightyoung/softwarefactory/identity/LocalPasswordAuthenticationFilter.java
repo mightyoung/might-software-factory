@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.identity;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.ProviderManager;
@@ -11,6 +12,7 @@ import org.springframework.security.web.csrf.CsrfAuthenticationStrategy;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.authentication.AbstractAuthenticationProcessingFilter;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 
 import java.util.List;
 
@@ -21,15 +23,19 @@ final class LocalPasswordAuthenticationFilter extends AbstractAuthenticationProc
             AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
-            CsrfTokenRepository csrfTokenRepository) {
-        super("/api/v1/auth/login", new ProviderManager(provider));
+            CsrfTokenRepository csrfTokenRepository,
+            SessionLifetimePolicy sessionLifetime) {
+        super(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/api/v1/auth/login"),
+                new ProviderManager(provider));
         setAuthenticationConverter(converter);
         setSessionAuthenticationStrategy(new CompositeSessionAuthenticationStrategy(List.of(
                 new ChangeSessionIdAuthenticationStrategy(),
                 new CsrfAuthenticationStrategy(csrfTokenRepository))));
         setSecurityContextRepository(securityContextRepository);
-        setAuthenticationSuccessHandler((request, response, authentication) ->
-                IdentityHttpResponses.noContent(response));
+        setAuthenticationSuccessHandler((request, response, authentication) -> {
+            sessionLifetime.markAuthenticated(request.getSession(true));
+            IdentityHttpResponses.noContent(response);
+        });
         setAuthenticationFailureHandler((request, response, exception) -> {
             if (exception instanceof InvalidLoginRequestException) {
                 IdentityHttpResponses.writeError(response, HttpServletResponse.SC_BAD_REQUEST,

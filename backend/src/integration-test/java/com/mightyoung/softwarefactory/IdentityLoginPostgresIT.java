@@ -41,6 +41,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -59,7 +60,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -90,6 +96,7 @@ class IdentityLoginPostgresIT {
     @Autowired private JdbcTemplate runtimeJdbc;
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private SessionTrace sessions;
+    @Autowired private AcceptanceClock clock;
     private IdentityPostgresFixture fixture;
     private Set<String> previousSessions;
     private final List<IdentityAcceptanceHttps.Browser> browsers = new ArrayList<>();
@@ -119,6 +126,7 @@ class IdentityLoginPostgresIT {
     @BeforeEach
     void seedOwnedIdentityAndCheckRuntimeRole() throws Exception {
         sessions.awaitIdle();
+        clock.reset();
         previousSessions = sessions.ids();
         fixture = IdentityPostgresFixture.create(passwords);
         assertThat(runtimeJdbc.queryForObject("select current_user = session_user and current_user = ?",
@@ -162,6 +170,9 @@ class IdentityLoginPostgresIT {
     void realCsrfLoginAndTwoTenantSessionsRemainIsolatedOnTheSameRuntimeConnection() throws Exception {
         var tenantA = browser();
         var tenantB = browser();
+        var nonPostLogin = tenantA.getWithJsonBody(LOGIN, loginBody(fixture.password(), fixture.tenantACode()));
+        assertThat(nonPostLogin.status()).isIn(401, 404, 405);
+        assertThat(tenantA.cookie("SESSION")).isEmpty();
         expect(tenantA.get(CURRENT), 401);
         bootstrap(tenantA);
         expect(tenantA.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), null), 403);
@@ -193,6 +204,69 @@ class IdentityLoginPostgresIT {
         expect(tenantA.get(CURRENT), 401);
         assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
     }
+
+    @Test
+    void absoluteLifetimeSurvivesJdbcReloadDoesNotSlideAndExpiresOnlyTheOlderLogin() throws Exception {
+        var tenantA = browser();
+        var tenantB = browser();
+        Instant started = clock.instant();
+        String sessionA = sessions.idFor(login(tenantA, fixture.password(), fixture.tenantACode()).trace());
+        assertThat(fixture.storedAuthenticatedAt(sessionA)).isEqualTo(started);
+
+        clock.advance(Duration.ofHours(1));
+        String sessionB = sessions.idFor(login(tenantB, fixture.password(), fixture.tenantBCode()).trace());
+        assertThat(fixture.storedAuthenticatedAt(sessionB)).isEqualTo(started.plus(Duration.ofHours(1)));
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertThat(fixture.storedAuthenticatedAt(sessionA)).isEqualTo(started);
+
+        clock.advance(Duration.ofHours(11).minusNanos(1));
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertOrganizations(tenantA, fixture.organizationAId().toString(), fixture.organizationBId().toString());
+        assertThat(fixture.storedAuthenticatedAt(sessionA)).isEqualTo(started);
+        assertThat(fixture.sessionExists(sessionA)).isTrue();
+
+        clock.advance(Duration.ofNanos(1));
+        expect(tenantA.get(CURRENT), 401);
+        assertThat(fixture.sessionExists(sessionA)).isFalse();
+        expect(tenantA.get(ORGANIZATIONS), 401);
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
+        assertThat(fixture.sessionExists(sessionB)).isTrue();
+
+        bootstrap(tenantA);
+        String freshSession = sessions.idFor(login(tenantA, fixture.password(), fixture.tenantACode()).trace());
+        assertThat(freshSession).isNotEqualTo(sessionA);
+        assertThat(fixture.storedAuthenticatedAt(freshSession)).isEqualTo(clock.instant());
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertOrganizations(tenantA, fixture.organizationAId().toString(), fixture.organizationBId().toString());
+        assertCleanConnection();
+    }
+
+    @ParameterizedTest(name = "Invalid persisted authentication time: {0}")
+    @EnumSource(InvalidAuthenticationTime.class)
+    void invalidPersistedAuthenticationTimeCannotBeUpgradedIntoAFreshSession(
+            InvalidAuthenticationTime invalid) throws Exception {
+        var client = browser();
+        String originalSession = sessions.idFor(login(client, fixture.password(), fixture.tenantACode()).trace());
+        assertThat(fixture.storedAuthenticatedAt(originalSession)).isEqualTo(clock.instant());
+        switch (invalid) {
+            case MISSING -> fixture.removeStoredAuthenticationTime(originalSession);
+            case WRONG_TYPE -> fixture.replaceStoredAuthenticationTime(originalSession, "synthetic-invalid-time");
+            case FUTURE -> fixture.replaceStoredAuthenticationTime(originalSession, clock.instant().plusSeconds(1));
+        }
+
+        expect(client.get(CURRENT), 401);
+        assertThat(fixture.sessionExists(originalSession)).isFalse();
+        expect(client.get(ORGANIZATIONS), 401);
+        bootstrap(client);
+        String freshSession = sessions.idFor(login(client, fixture.password(), fixture.tenantACode()).trace());
+        assertThat(freshSession).isNotEqualTo(originalSession);
+        assertThat(fixture.storedAuthenticatedAt(freshSession)).isEqualTo(clock.instant());
+        assertCurrent(client, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertCleanConnection();
+    }
+
+    private enum InvalidAuthenticationTime { MISSING, WRONG_TYPE, FUTURE }
 
     @Test
     void realCredentialRotationRejectsOldSessionsAndFreshLoginPersistsTheNewGeneration() throws Exception {
@@ -491,6 +565,24 @@ class IdentityLoginPostgresIT {
         }
     }
 
+    /** Advances only the application's lifetime policy; JDBC Session retains its real idle clock. */
+    static final class AcceptanceClock extends Clock {
+        private static final Instant START = Instant.parse("2026-11-02T00:00:00Z");
+        private final AtomicReference<Instant> now;
+        private final ZoneId zone;
+
+        AcceptanceClock() { this(new AtomicReference<>(START), ZoneOffset.UTC); }
+        private AcceptanceClock(AtomicReference<Instant> now, ZoneId zone) {
+            this.now = now;
+            this.zone = zone;
+        }
+        void reset() { now.set(START); }
+        void advance(Duration duration) { now.updateAndGet(instant -> instant.plus(duration)); }
+        @Override public ZoneId getZone() { return zone; }
+        @Override public Clock withZone(ZoneId zone) { return new AcceptanceClock(now, zone); }
+        @Override public Instant instant() { return now.get(); }
+    }
+
     @Configuration(proxyBeanMethods = false)
     @TestComponent // Excluded from the main application's scan, but still an explicit primary config.
     @EnableAutoConfiguration(excludeName = {
@@ -507,6 +599,7 @@ class IdentityLoginPostgresIT {
             ReportableOrganizationController.class, FindingApiExceptionHandler.class})
     static class IdentityWebConfiguration {
         @Bean SessionTrace sessionTrace() { return new SessionTrace(); }
+        @Bean @Primary AcceptanceClock acceptanceClock() { return new AcceptanceClock(); }
 
         // SecurityConfiguration selects this production provider by its component-scan bean name.
         @Bean

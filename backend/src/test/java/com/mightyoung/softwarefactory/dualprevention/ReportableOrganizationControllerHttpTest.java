@@ -84,6 +84,7 @@ class ReportableOrganizationControllerHttpTest {
             context.setAuthentication(new TestingAuthenticationToken(principal, null, "ROLE_AUTHENTICATED"));
             request.setAttribute("SPRING_SECURITY_CONTEXT", context);
             request.getSession(true).setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+            VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(request.getSession(false));
             return request;
         };
     }

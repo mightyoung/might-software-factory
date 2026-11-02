@@ -7,7 +7,10 @@ x-implementation-status: csrf-login-logout-current-session-and-scoped-reportable
 x-session-policy: >-
   The browser uses the server-issued SESSION cookie and XSRF-TOKEN double-submit cookie. Login
   succeeds with 204 No Content. Tenant, account, actor, and member identity are resolved by the
-  server and never selected by finding requests.
+  server and never selected by finding requests. Only POST can authenticate. The default idle
+  timeout is 30 minutes and the configurable absolute lifetime is 12 hours from successful
+  authentication. Activity does not renew the absolute lifetime. Missing, invalid or expired
+  authentication timestamps invalidate the session; protected requests require a fresh login.
 servers:
   - url: /
 paths:
@@ -67,6 +70,7 @@ paths:
     get:
       operationId: getCurrentSession
       summary: Read and revalidate the current member identity
+      description: An expired absolute session lifetime is unauthenticated, even after recent activity.
       security:
         - sessionCookieAuth: []
       responses:

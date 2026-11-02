@@ -67,7 +67,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read and revalidate the current member identity */
+        /**
+         * Read and revalidate the current member identity
+         * @description An expired absolute session lifetime is unauthenticated, even after recent activity.
+         */
         get: operations["getCurrentSession"];
         put?: never;
         post?: never;

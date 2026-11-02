@@ -1,5 +1,7 @@
 # 隐患台账只读切片
 
+后续证据：V3/V4 已在另一个独占可丢弃测试目标完成[真实身份表登录验收](verification/identity-login-postgres-2026-11-02.md)。下文的 V3/V4 未执行、Session 未验收与授权范围描述保留为原只读切片的历史检查点；不代表后来身份验收的状态，也不表示 finding 完整业务命令已验收。
+
 状态：只读 HTTP handler、服务、finding 查询及 V2 migration 已在专用 `might_software_factory_test` 库实测。身份/成员/组织/角色读取策略和 V3 schema migration 已写入代码；本地密码登录 provider、HTTP 安全接线及 V4 migration 也已形成。V3/V4 未应用到任何数据库，也没有配置身份/授权表运行权限。登录和授权的本地合成数据测试不代表真实数据库会话或生产租户隔离已经验收。
 
 ## 本地实现
