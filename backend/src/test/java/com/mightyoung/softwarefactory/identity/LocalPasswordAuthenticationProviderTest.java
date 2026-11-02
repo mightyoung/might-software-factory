@@ -62,6 +62,7 @@ class LocalPasswordAuthenticationProviderTest {
         assertThat(principal.memberId()).isEqualTo(MEMBER_ID);
         assertThat(principal.tenantAuthEpoch()).isEqualTo(17L);
         assertThat(principal.memberAuthEpoch()).isEqualTo(23L);
+        assertThat(principal.credentialVersion()).isEqualTo(7L);
     }
 
     @Test
@@ -154,6 +155,56 @@ class LocalPasswordAuthenticationProviderTest {
                 .hasMessage("Authentication is temporarily unavailable");
     }
 
+    @Test
+    void rejectsAnAppendedSuffixInsteadOfAuthenticatingTheBcryptPrefixForEveryAccountShape() {
+        for (String prefix : new String[] {"a".repeat(72), "密".repeat(24)}) {
+            String encodedPrefix = passwordEncoder.encode(prefix);
+            for (Optional<LocalPasswordCredential> account : java.util.List.of(
+                    Optional.of(credential("ACTIVE", "ACTIVE", encodedPrefix)),
+                    Optional.<LocalPasswordCredential>empty(),
+                    Optional.of(credential("ACTIVE", "ACTIVE", "invalid-stored-hash")))) {
+                credentials.value = account;
+                for (String submitted : new String[] {prefix + "x", prefix + "密", prefix.substring(0, 1).repeat(1024)}) {
+                    char[] password = submitted.toCharArray();
+                    LocalPasswordAuthenticationToken token = new LocalPasswordAuthenticationToken(
+                            "operator-1", password, "north-plant");
+
+                    assertThatThrownBy(() -> provider.authenticate(token))
+                            .isInstanceOf(BadCredentialsException.class)
+                            .hasMessage("Invalid credentials or account context");
+                    assertThat(token.getCredentials()).isNull();
+                    assertThat(password).containsOnly('\0');
+                }
+            }
+        }
+    }
+
+    @Test
+    void aCorrectSeventyTwoBytePasswordStillAuthenticatesWithoutTruncation() {
+        for (String password : new String[] {"a".repeat(72), "密".repeat(24)}) {
+            credentials.value = Optional.of(credential("ACTIVE", "ACTIVE", passwordEncoder.encode(password)));
+            LocalPasswordAuthenticationToken token = login(password);
+
+            assertThat(provider.authenticate(token).isAuthenticated()).isTrue();
+            assertThat(token.getCredentials()).isNull();
+        }
+    }
+
+    @Test
+    void emptyAndMalformedUtf16PasswordsUseTheCredentialFailureAndAreErased() {
+        credentials.value = Optional.of(credential("ACTIVE", "ACTIVE", passwordEncoder.encode("synthetic-pass")));
+        for (char[] password : new char[][] {new char[0], {'\uD800'}, {'\uDC00'}, {'a', '\uD800', 'b'}}) {
+            LocalPasswordAuthenticationToken token = new LocalPasswordAuthenticationToken(
+                    "operator-1", password, "north-plant");
+
+            assertThatThrownBy(() -> provider.authenticate(token))
+                    .isInstanceOf(BadCredentialsException.class)
+                    .hasMessage("Invalid credentials or account context");
+            assertThat(token.getCredentials()).isNull();
+            for (char character : password) assertThat(character).isEqualTo('\0');
+        }
+    }
+
     private BadCredentialsException failureFor(String password) {
         Throwable failure = catchThrowable(() -> provider.authenticate(login(password)));
         assertThat(failure).isInstanceOf(BadCredentialsException.class);
@@ -165,7 +216,7 @@ class LocalPasswordAuthenticationProviderTest {
     }
 
     private static LocalPasswordCredential credential(String accountStatus, String principalStatus, String encoded) {
-        return new LocalPasswordCredential(ACTOR_ID, ACCOUNT_ID, accountStatus, principalStatus, encoded);
+        return new LocalPasswordCredential(ACTOR_ID, ACCOUNT_ID, accountStatus, principalStatus, 7L, encoded);
     }
 
     private static TenantLoginContext activeContext() {

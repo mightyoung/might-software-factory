@@ -18,7 +18,7 @@ class PersistentEntityReadAccessPolicyTest {
     private static final UUID ORG_ID = UUID.fromString("31000000-0000-0000-0000-000000000001");
 
     private final CurrentTenantContext session =
-            new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L);
+            new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L, 1L);
 
     @Test
     void grantsFindingReadOnlyForActiveIdentityWithCurrentEpochsAndAnExplicitOrganizationScope() {

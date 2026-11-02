@@ -14,7 +14,7 @@ Finding 创建字段包括来源 `FIELD_OBSERVATION`、`INSPECTION`、`PERSON_RE
 
 ## 身份、会话和 CSRF 边界
 
-`POST /api/v1/auth/login` 由 `LocalPasswordAuthenticationProvider` 校验本地密码、账号与 HUMAN principal，并解析所选租户的有效成员后签发 `VerifiedSessionPrincipal`；表单登录、HTTP Basic 和 Spring 默认开发用户均禁用。principal 保存 actor、account、tenant、member ID 及 tenant/member `auth_epoch` 快照；构造器不是 public。每次 finding 读取授权还会按 session actor 查询当前 principal，要求其仍为同 account 的 ACTIVE HUMAN，因此 principal 停用或 actor/account 绑定不符会拒绝旧 session。`credential_version` 尚未纳入 principal 或每请求授权校验；启用改密/重置前必须先实现版本捕获与每请求失效检查。
+`POST /api/v1/auth/login` 由 `LocalPasswordAuthenticationProvider` 校验本地密码、账号与 HUMAN principal，并解析所选租户的有效成员后签发 `VerifiedSessionPrincipal`；表单登录、HTTP Basic 和 Spring 默认开发用户均禁用。principal 保存 actor、account、tenant、member ID、tenant/member `auth_epoch` 及账号 `credential_version`；构造器不是 public。每次 finding 读取/流程授权仍复核 ACTIVE HUMAN 与 actor/account 绑定，并拒绝账号当前凭据版本缺失或不匹配。旧序列化会话缺失版本时拒绝，不能补成版本1。此版本机制及其验证边界见[凭据版本切片](verification/credential-version-boundary-2026-11-02.md)；改密/重置入口未来必须在同事务推进版本。
 
 权限模块的 `EntityReadAccessPolicy` 通过 identity、tenancy、directory 的公开读取接口，以及自身角色授权查询，从 actor principal、账号、租户、成员、当前组织关系、角色授予、动作权限和数据范围读取授权。数据库查询在只读 `REPEATABLE_READ` 事务内设置 `app.tenant_id`，并使用显式租户连接条件。principal 必须按 session actor 对应为 ACTIVE HUMAN，且关联 account 必须等于 session account；账号/租户/成员任一非 `ACTIVE`、session epoch 过期、找不到成员关系、权限缺失或组织范围为空都拒绝；finding 只接受 `finding.read`。`DEPT` 解析当前直接组织成员关系，`DEPT_TREE` 再递归包含有效子组织，`EXPLICIT` 取 `scope_org`；组织授予按成员当前直接组织关系匹配，`SELF` 与 `RELATION` 暂不能表示为 finding 的组织过滤条件，因此不会授予范围。V3 将当前可解释的 scope definition 限制为 `{}`，避免忽略未知 JSON 条件。新 migration 未执行前，相关表不可用会导致请求依赖不可用并拒绝访问。没有伪造用户头、租户头或匿名演示登录路径。
 
@@ -71,7 +71,7 @@ PR #10 将 finding schema 升至 v2，加入组织字段并调整默认投影与
 
 ## 当前阻塞与验证边界
 
-本地登录 provider 和 `EntityReadAccessPolicy` 已实现，但 V3/V4 未迁移，也未验证实际运行角色对身份/授权表的权限、JDBC Session 持久化或真实身份到租户绑定。应用开通读取、权限/角色数据维护、grant source 注册/撤销解析器、账号初始化/邀请/重置、失败限流/短期锁定及 `credential_version` 会话撤销均未完成。真实 PostgreSQL 15.4 测试库的 finding RLS/query/detail 探针仍使用 test-only principal 和授权策略，不能据此宣称真实身份会话、生产授权或租户隔离已验收。
+本地登录 provider、`EntityReadAccessPolicy` 和凭据版本捕获/撤销机制已实现；当前切片未迁移 V3/V4，也未验证实际运行角色对身份/授权表的权限或真实身份到租户绑定。真实 JDBC Session 的版本序列化和旧版本拒绝已有独立实库检查，但不等同真实账号登录闭环。应用开通读取、权限/角色数据维护、grant source 注册/撤销解析器、账号初始化/邀请/重置、失败限流/短期锁定仍未完成。历史 finding RLS/query/detail 探针使用 test-only principal 和授权策略，不能据此宣称生产身份会话、授权或租户隔离已验收。
 
 本地 HTTP 登录测试使用实际 `LocalPasswordAuthenticationProvider` 与合成凭证/租户仓储；授权变化测试使用合成授权快照。新增时序测试在本请求解析授权后、读取事务完成前合成撤权，只说明请求快照语义，不是 PostgreSQL 并发/可见性证据。jOOQ MockDataProvider 检查查询形状和参数。它们不运行 PostgreSQL parser、RLS policy、连接池回收、真实身份表查询或 JDBC Session 持久化。
 

@@ -61,7 +61,7 @@ class JooqFindingWorkflowEvidencePolicyTest {
         FindingEvidenceFileAccess fileAccess = fileAccess(authorizedUse::set);
         var policy = new JooqFindingWorkflowEvidencePolicy(dsl, fileAccess);
         CurrentTenantContext context = new CurrentTenantContext(
-                ACTOR_ID, ACCOUNT_ID, TENANT_ID, SUBMITTER_ID, 4, 9);
+                ACTOR_ID, ACCOUNT_ID, TENANT_ID, SUBMITTER_ID, 4, 9, 1L);
 
         var snapshots = policy.requireReady(context, FINDING_ID, 2, EVIDENCE_SET_ID);
 
@@ -97,7 +97,7 @@ class JooqFindingWorkflowEvidencePolicyTest {
         FindingEvidenceFileAccess fileAccess = fileAccess(authorizedUse::set);
         var policy = new JooqFindingWorkflowEvidencePolicy(dsl, fileAccess);
         CurrentTenantContext context = new CurrentTenantContext(
-                ACTOR_ID, ACCOUNT_ID, TENANT_ID, SUBMITTER_ID, 4, 9);
+                ACTOR_ID, ACCOUNT_ID, TENANT_ID, SUBMITTER_ID, 4, 9, 1L);
 
         assertThatThrownBy(() -> policy.requireReady(context, FINDING_ID, 2, EVIDENCE_SET_ID))
                 .isInstanceOf(FindingWorkflowEvidenceException.class);

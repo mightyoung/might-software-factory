@@ -15,7 +15,13 @@ public final class VerifiedSessionPrincipalTestFixture {
     public static VerifiedSessionPrincipal create(
             UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
             long tenantAuthEpoch, long memberAuthEpoch) {
+        return create(actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch, 1L);
+    }
+
+    public static VerifiedSessionPrincipal create(
+            UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
+            long tenantAuthEpoch, long memberAuthEpoch, long credentialVersion) {
         return new VerifiedSessionPrincipal(
-                actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch);
+                actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch, credentialVersion);
     }
 }

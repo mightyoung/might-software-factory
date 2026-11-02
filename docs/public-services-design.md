@@ -96,7 +96,11 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 
 浏览器使用 Secure、HttpOnly、SameSite Cookie，启用 CSRF，登录轮换 session ID；凭证不放 localStorage。同域反代 /api 优先，前后端分离指代码与部署边界，不要求跨站 Cookie。设计默认空闲 30 分钟、最长 12 小时，管理员敏感动作再认证；为可配置默认而非法规要求。退出、改密、成员停用、权限撤销可撤相应会话/安全版本。SSO 用 OIDC Client；不自行写授权服务器。只有实际联合身份/MFA 管理需求出现时引入 Keycloak 或既有企业 IdP。
 
-本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member 和 auth_epoch 放入 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。V4 迁移仍未应用；本切片没有账号/密码初始化、邀请与重置、失败限流/短期锁定或真实 Session JDBC/数据库联调，因此尚不能作为可投产登录配置。`credential_version` 尚未保存到 session 或按请求核验；启用改密/重置前，必须先将该版本纳入已签发会话并在授权读取时核验，旧版本须拒绝访问。
+本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member、auth_epoch 和 `credential_version` 放入服务端 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。2026-11-02 的后续切片已在当前会话读取及隐患读取/流程授权中核验凭据版本：缺失或不匹配即拒绝；旧序列化会话缺失版本时保持0并拒绝，不默认补1。改密/重置入口未来必须在修改凭据的同一事务中递增账号版本，不得重用旧值。本切片不提供这些写入入口，也未执行身份业务迁移或完整身份表实库登录链路。真实 JDBC Session 版本序列化及旧版本拒绝有独立实库证据；账号初始化、邀请/重置和失败限流/短期锁定仍未实现，因此不宣称可投产登录配置。具体边界见[凭据版本切片](verification/credential-version-boundary-2026-11-02.md)。
+
+登录JSON严格按已有契约读取三个必需字符串字段；拒绝未知/重复字段、错误根类型、尾随JSON值及非字符串字段，不接受客户端指定身份或凭据版本。请求体仍限4096字节，错误响应不回显凭据或解析细节。凭据版本检查不锁账号；独立授权读取配置RR，若已进入工作流事务则加入外层隔离级别，不保证取消在途请求。
+
+BCrypt实际认证另要求密码为有效UTF-8且长度1–72字节；超过该字节边界直接按通用错误凭据拒绝，不允许截断前缀匹配。JSON字段原1–1024字符格式上限不变。未来凭据写入也必须遵守算法字节边界；曾依赖截断匹配的长密码不再接受，需重置。
 
 ## 租户与组织
 

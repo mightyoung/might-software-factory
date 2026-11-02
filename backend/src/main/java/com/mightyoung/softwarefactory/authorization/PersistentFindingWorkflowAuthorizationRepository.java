@@ -3,6 +3,7 @@ package com.mightyoung.softwarefactory.authorization;
 import com.mightyoung.softwarefactory.directory.MemberDirectoryReadRepository;
 import com.mightyoung.softwarefactory.directory.MemberDirectorySnapshot;
 import com.mightyoung.softwarefactory.identity.AccountStatusReadRepository;
+import com.mightyoung.softwarefactory.identity.AccountSecurityState;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.PrincipalStatus;
 import com.mightyoung.softwarefactory.identity.PrincipalStatusReadRepository;
@@ -19,7 +20,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** Loads the identity and scoped role state used by workflow writes in one repeatable-read view. */
+/** Loads identity and role state; standalone reads use RR, while REQUIRED joins a caller's transaction. */
 @Repository
 public final class PersistentFindingWorkflowAuthorizationRepository
         implements FindingWorkflowAuthorizationRepository {
@@ -58,7 +59,11 @@ public final class PersistentFindingWorkflowAuthorizationRepository
             setLocalTenant(context.tenantId());
             PrincipalStatus principal = principalStatusRepository.findByActorId(context.actorId()).orElse(null);
             if (principal == null) return Optional.empty();
-            String accountStatus = accountStatusRepository.findStatus(context.accountId()).orElse(null);
+            AccountSecurityState account = accountStatusRepository.findState(context.accountId()).orElse(null);
+            if (account == null || account.credentialVersion() != context.credentialVersion()) {
+                return Optional.empty();
+            }
+            String accountStatus = account.status();
             TenantMembershipState membership = tenantMembershipRepository.findCurrentMembership(
                     context.tenantId(), context.accountId(), context.memberId()).orElse(null);
             if (membership == null) return Optional.empty();

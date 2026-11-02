@@ -3,14 +3,15 @@ package com.mightyoung.softwarefactory.identity;
 import java.util.UUID;
 import java.util.Objects;
 
-/** Identity and authorization epochs captured in the verified server session. */
+/** Identity, authorization epochs and credential generation captured in the verified session. */
 public record CurrentTenantContext(
         UUID actorId,
         UUID accountId,
         UUID tenantId,
         UUID memberId,
         long tenantAuthEpoch,
-        long memberAuthEpoch) {
+        long memberAuthEpoch,
+        long credentialVersion) {
 
     public CurrentTenantContext {
         Objects.requireNonNull(actorId, "actorId");
@@ -19,6 +20,9 @@ public record CurrentTenantContext(
         Objects.requireNonNull(memberId, "memberId");
         if (tenantAuthEpoch < 0 || memberAuthEpoch < 0) {
             throw new IllegalArgumentException("Authorization epochs must be non-negative");
+        }
+        if (credentialVersion < 1) {
+            throw new IllegalArgumentException("Credential version must be positive");
         }
     }
 }

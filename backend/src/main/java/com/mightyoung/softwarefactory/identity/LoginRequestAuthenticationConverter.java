@@ -6,6 +6,8 @@ import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.authentication.AuthenticationConverter;
 import tools.jackson.core.JacksonException;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.JsonToken;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -23,40 +25,90 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
 
     @Override
     public Authentication convert(HttpServletRequest request) {
+        byte[] serializedBody = null;
+        char[] password = null;
+        boolean passwordTransferred = false;
         try {
-            if (request.getContentType() == null
-                    || !MediaType.APPLICATION_JSON.isCompatibleWith(MediaType.parseMediaType(request.getContentType()))) {
+            if (request.getContentType() == null) {
                 throw new InvalidLoginRequestException();
             }
-            byte[] serializedBody = request.getInputStream().readNBytes(MAX_REQUEST_BYTES + 1);
-            LoginRequest body;
-            try {
-                if (serializedBody.length > MAX_REQUEST_BYTES) {
+            MediaType contentType = MediaType.parseMediaType(request.getContentType());
+            if (contentType.isWildcardType() || contentType.isWildcardSubtype()
+                    || !MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
+                throw new InvalidLoginRequestException();
+            }
+            // Own the buffer before reading so even a partial I/O failure can wipe it.
+            serializedBody = new byte[MAX_REQUEST_BYTES + 1];
+            int bodyLength = request.getInputStream().readNBytes(serializedBody, 0, serializedBody.length);
+            if (bodyLength > MAX_REQUEST_BYTES) {
+                throw new InvalidLoginRequestException();
+            }
+            String loginKey = null;
+            String tenantCode = null;
+            int fieldsSeen = 0;
+            try (JsonParser parser = objectMapper.createParser(serializedBody, 0, bodyLength)) {
+                if (parser.nextToken() != JsonToken.START_OBJECT) {
                     throw new InvalidLoginRequestException();
                 }
-                body = objectMapper.readValue(serializedBody, LoginRequest.class);
-            } finally {
-                Arrays.fill(serializedBody, (byte) 0);
-            }
-            char[] password = body == null ? null : body.password();
-            if (body == null || body.loginKey() == null || body.loginKey().isBlank()
-                    || body.loginKey().length() > 200
-                    || password == null || password.length == 0 || password.length > 1024
-                    || body.tenantCode() == null || body.tenantCode().isBlank() || body.tenantCode().length() > 64) {
-                if (password != null) {
-                    Arrays.fill(password, '\0');
+                while (parser.nextToken() != JsonToken.END_OBJECT) {
+                    if (parser.currentToken() != JsonToken.PROPERTY_NAME) {
+                        throw new InvalidLoginRequestException();
+                    }
+                    int field = switch (parser.currentName()) {
+                        case "loginKey" -> 1;
+                        case "password" -> 2;
+                        case "tenantCode" -> 4;
+                        default -> throw new InvalidLoginRequestException();
+                    };
+                    if ((fieldsSeen & field) != 0 || parser.nextToken() != JsonToken.VALUE_STRING) {
+                        throw new InvalidLoginRequestException();
+                    }
+                    fieldsSeen |= field;
+                    switch (field) {
+                        case 1 -> loginKey = parser.getString();
+                        case 2 -> password = readPassword(parser);
+                        case 4 -> tenantCode = parser.getString();
+                        default -> throw new IllegalStateException("Unexpected login field");
+                    }
                 }
+                if (fieldsSeen != 7 || parser.nextToken() != null) {
+                    throw new InvalidLoginRequestException();
+                }
+            }
+            if (loginKey == null || loginKey.isBlank() || loginKey.length() > 200
+                    || password == null || password.length == 0 || password.length > 1024
+                    || tenantCode == null || tenantCode.isBlank() || tenantCode.length() > 64) {
                 throw new InvalidLoginRequestException();
             }
-            return new LocalPasswordAuthenticationToken(
-                    body.loginKey().strip(), password, body.tenantCode().strip());
+            LocalPasswordAuthenticationToken token = new LocalPasswordAuthenticationToken(
+                    loginKey.strip(), password, tenantCode.strip());
+            passwordTransferred = true;
+            return token;
         } catch (InvalidLoginRequestException exception) {
             throw exception;
         } catch (JacksonException | IOException | InvalidMediaTypeException exception) {
             throw new InvalidLoginRequestException();
+        } finally {
+            if (serializedBody != null) {
+                Arrays.fill(serializedBody, (byte) 0);
+            }
+            if (!passwordTransferred && password != null) {
+                Arrays.fill(password, '\0');
+            }
         }
     }
 
-    private record LoginRequest(String loginKey, char[] password, String tenantCode) {
+    private static char[] readPassword(JsonParser parser) {
+        char[] characters = parser.getStringCharacters();
+        int offset = parser.getStringOffset();
+        int length = parser.getStringLength();
+        try {
+            if (length == 0 || length > 1024) {
+                throw new InvalidLoginRequestException();
+            }
+            return Arrays.copyOfRange(characters, offset, offset + length);
+        } finally {
+            Arrays.fill(characters, offset, offset + length, '\0');
+        }
     }
 }
