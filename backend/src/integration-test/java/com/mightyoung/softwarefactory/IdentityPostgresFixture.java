@@ -248,6 +248,26 @@ public final class IdentityPostgresFixture implements AutoCloseable {
         return authenticatedAt;
     }
 
+    public String storedPrincipalName(String sessionId) {
+        storedCredentialVersion(sessionId);
+        return jdbc.queryForObject("select principal_name from public.spring_session where session_id = ?",
+                String.class, sessionId);
+    }
+
+    public void replaceStoredPrincipalName(String sessionId, String principalName) {
+        storedCredentialVersion(sessionId);
+        requireOne(jdbc.update("update public.spring_session set principal_name = ? where session_id = ?",
+                Objects.requireNonNull(principalName, "principalName"), sessionId));
+    }
+
+    public void expireStoredSession(String sessionId) {
+        storedCredentialVersion(sessionId);
+        requireOne(jdbc.update("""
+                update public.spring_session set last_access_time = 0, max_inactive_interval = 0, expiry_time = 0
+                where session_id = ?
+                """, sessionId));
+    }
+
     public void replaceStoredAuthenticationTime(String sessionId, Object value) {
         storedCredentialVersion(sessionId);
         requireOne(jdbc.update("""
