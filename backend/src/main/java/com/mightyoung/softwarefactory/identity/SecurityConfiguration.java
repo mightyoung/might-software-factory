@@ -86,6 +86,20 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    FilterRegistrationBean<LoginSessionPersistenceFailureFilter> loginSessionPersistenceFailureBoundary(
+            org.springframework.core.env.Environment environment) {
+        int sessionOrder = environment.getProperty("spring.session.servlet.filter-order", Integer.class,
+                org.springframework.session.web.http.SessionRepositoryFilter.DEFAULT_ORDER);
+        if (sessionOrder == Integer.MIN_VALUE) {
+            throw new IllegalStateException("Session filter order must allow an outer login persistence boundary");
+        }
+        var registration = new FilterRegistrationBean<>(new LoginSessionPersistenceFailureFilter());
+        registration.setOrder(sessionOrder - 1);
+        registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
+        return registration;
+    }
+
+    @Bean
     SecurityContextRepository securityContextRepository() {
         return new HttpSessionSecurityContextRepository();
     }

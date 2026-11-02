@@ -146,6 +146,7 @@ class IdentityLoginPostgresIT {
         validateRuntimePrivilegeProfile(accepted.databaseName());
         var target = IdentityAcceptanceTarget.preflightFromEnvironment(System.getenv());
         if (https == null) https = IdentityAcceptanceHttps.create();
+        properties.add("spring.session.jdbc.cleanup-cron", () -> "-");
         properties.add("spring.datasource.url", target::jdbcUrl);
         properties.add("spring.datasource.username", () -> System.getenv("LAN_PG_APP_USERNAME"));
         properties.add("spring.datasource.password", () -> System.getenv("LAN_PG_APP_PASSWORD"));
@@ -245,6 +246,32 @@ class IdentityLoginPostgresIT {
         assertThat(fixture.sessionExists(sessionA)).isFalse();
         expect(tenantA.get(CURRENT), 401);
         assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+    }
+
+    @Test
+    void reauthenticationRotatesTheRealJdbcSessionAndOldCookieCannotAuthenticate() throws Exception {
+        var client = browser();
+        var first = login(client, fixture.password(), fixture.tenantACode());
+        String previousId = sessions.idFor(first.trace());
+        String previousCookie = client.cookie("SESSION").orElseThrow().getValue();
+        var oldCookieClient = client.copyTo(port);
+        browsers.add(oldCookieClient);
+        var second = login(client, fixture.password(), fixture.tenantBCode());
+        String currentId = sessions.idFor(second.trace());
+        assertThat(currentId.equals(previousId)).as("The persistent session ID rotates").isFalse();
+        assertThat(client.cookie("SESSION").orElseThrow().getValue().equals(previousCookie))
+                .as("The actual browser cookie rotates").isFalse();
+        assertThat(fixture.sessionExists(previousId)).isFalse();
+        assertThat(fixture.sessionExists(currentId)).isTrue();
+        expect(oldCookieClient.get(CURRENT), 401);
+        assertCurrent(client, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertIndexedSessions(fixture, currentId);
+        var alternateEntry = browser();
+        String basic = java.util.Base64.getEncoder().encodeToString(
+                (fixture.loginKey() + ":" + fixture.password()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        expect(alternateEntry.getWithHeaders(CURRENT, Map.of("Authorization", "Basic " + basic)), 401);
+        assertThat(alternateEntry.cookie("SESSION").isPresent()).isFalse();
+        assertCleanConnection();
     }
 
     @Test
