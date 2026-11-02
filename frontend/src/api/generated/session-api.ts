@@ -63,6 +63,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/account/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reauthenticate with the current password and advance the account credential generation
+         * @description Identity is taken from the verified session. Current password verification is required for this action; no reusable reauthentication marker is issued. Successful hash, version and audit changes commit together. All old credential generations require a fresh login. A retry after an uncertain response must account for an already committed password change. This endpoint does not reset an absolute session lifetime or upgrade an existing session.
+         */
+        post: operations["changeOwnPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session/bootstrap": {
         parameters: {
             query?: never;
@@ -145,6 +165,11 @@ export interface components {
             loginKey: string;
             password: string;
             tenantCode: string;
+        };
+        /** @description Duplicate fields, invalid UTF-8 and bodies above 4096 bytes are rejected. Passwords are never trimmed or normalized. Current passwords retain the existing 1-72 UTF-8 byte limit; new passwords require at least 15 Unicode code points and at most 72 UTF-8 bytes. */
+        PasswordChangeRequest: {
+            currentPassword: string;
+            newPassword: string;
         };
         CurrentSessionResponse: {
             data: components["schemas"]["CurrentSession"];
@@ -371,6 +396,47 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["CsrfDenied"];
+        };
+    };
+    changeOwnPassword: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must match the same-origin XSRF-TOKEN cookie. */
+                "X-XSRF-TOKEN": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Password change committed. Authenticate again using the new password. */
+            204: {
+                headers: {
+                    /** @description Server-generated trace shared with the successful audit and security event. */
+                    "X-Trace-Id"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            /** @description The bounded request-local password verification preparation expired. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
         };
     };
     getSessionBootstrap: {

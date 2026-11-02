@@ -147,6 +147,28 @@ class LoginRequestAuthenticationConverterTest {
         assertThat(readBuffer.get()).isNotNull().containsOnly((byte) 0);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings={"UTF-16LE","UTF-16BE","UTF-32LE","UTF-32BE"})
+    void rejectsBomlessNonUtf8PayloadEvenWithUtf8ContentType(String charset) {
+        var request=request("{}");
+        request.setContentType("application/json;charset=UTF-8");
+        request.setContent(VALID.getBytes(java.nio.charset.Charset.forName(charset)));
+        assertInvalid(request);
+    }
+
+    @Test void ownedDecodedCharacterBufferIsWipedAfterSuccessAndFailure() throws Exception {
+        var mapper=org.mockito.Mockito.spy(new ObjectMapper());
+        var decoded=new AtomicReference<char[]>();
+        org.mockito.Mockito.doAnswer(call->{decoded.set(call.getArgument(0));return call.callRealMethod();})
+                .when(mapper).createParser(org.mockito.ArgumentMatchers.any(char[].class),org.mockito.ArgumentMatchers.eq(0),org.mockito.ArgumentMatchers.anyInt());
+        var strict=new LoginRequestAuthenticationConverter(mapper);
+        var token=(LocalPasswordAuthenticationToken)strict.convert(request(VALID.replace("synthetic-pass","synthetic-秘密")));
+        assertThat((char[])token.getCredentials()).containsExactly("synthetic-秘密".toCharArray());
+        token.eraseCredentials();assertThat(decoded.get()).containsOnly('\0');
+        assertThatThrownBy(()->strict.convert(request(VALID+" {}"))).isInstanceOf(InvalidLoginRequestException.class);
+        assertThat(decoded.get()).containsOnly('\0');
+    }
+
     private void assertInvalid(MockHttpServletRequest request) {
         assertThatThrownBy(() -> converter.convert(request))
                 .isInstanceOf(InvalidLoginRequestException.class)

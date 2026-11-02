@@ -142,8 +142,8 @@ class IdentityAuthenticationHttpTest {
         currentSessionReadState.credentialVersion.set(2L);
 
         mvc.perform(get(CURRENT_SESSION_PATH).session(oldSession))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
         MockHttpSession freshSession = loginAndReturnSession();
         assertThat(principalFrom(freshSession).credentialVersion()).isEqualTo(2L);
         mvc.perform(get(CURRENT_SESSION_PATH).session(freshSession)).andExpect(status().isOk());
@@ -242,6 +242,16 @@ class IdentityAuthenticationHttpTest {
                         .content("{\"loginKey\":\"operator-1\",\"password\":\"synthetic-pass\",\"tenantCode\":\"north-plant\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+    }
+
+    @Test
+    void passwordRouteRequiresBothVerifiedSessionAndCsrf() throws Exception {
+        mvc.perform(post("/api/v1/account/password").with(validCsrf())
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/account/password").session(authenticatedSession())
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -373,6 +383,10 @@ class IdentityAuthenticationHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        @Bean
+        AccountStatusReadRepository accountStatusReadRepository(CurrentSessionReadState state) {
+            return accountId -> Optional.of(new AccountSecurityState("ACTIVE", state.credentialVersion.get()));
+        }
         @Bean
         CurrentSessionReadState currentSessionReadState() {
             return new CurrentSessionReadState();
