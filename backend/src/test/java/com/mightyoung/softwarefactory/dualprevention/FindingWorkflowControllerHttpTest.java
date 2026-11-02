@@ -18,6 +18,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEventPublisher;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRepository;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowCommandService;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowState;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowVersionConflictException;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
@@ -84,8 +85,94 @@ class FindingWorkflowControllerHttpTest {
 
     @BeforeEach
     void resetRepository() {
+        repository.findings.clear();
         repository.transactionCalls = 0;
         repository.nextTransactionFailure = null;
+    }
+
+    @Test
+    void closesPendingPersonConfirmationAsNotEstablishedWithAnOpinion() throws Exception {
+        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000091");
+        repository.seedFinding(new FindingWorkflowCase(TENANT, findingId, ORGANIZATION, "YH-20261031-0091",
+                "Synthetic finding", Instant.parse("2026-10-30T10:00:00Z").atOffset(ZoneOffset.UTC),
+                null, null, "UNKNOWN", FindingWorkflowState.PERSON_CONFIRM_PENDING,
+                1, 1, UUID.fromString("20000000-0000-0000-0000-000000000099"), MEMBER));
+
+        mvc.perform(post("/api/v1/findings/{id}/close-not-established", findingId)
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("""
+                                {"expectedVersion":1,"stage":"PERSON","reason":"Evidence does not support the report"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.state").value("NOT_ESTABLISHED"))
+                .andExpect(jsonPath("$.data.version").value(2));
+
+        assertThat(repository.finding(TENANT, findingId).orElseThrow().state())
+                .extracting(Enum::name)
+                .isEqualTo("NOT_ESTABLISHED");
+    }
+
+    @Test
+    void notEstablishedCloseRejectsBlankOpinionBeforeOpeningATransaction() throws Exception {
+        mvc.perform(post("/api/v1/findings/{id}/close-not-established",
+                        UUID.fromString("40000000-0000-0000-0000-000000000092"))
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("""
+                                {"expectedVersion":1,"stage":"PERSON","reason":"   "}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("reason"))
+                .andExpect(jsonPath("$.fieldErrors[0].reason").value("OpinionNotBlank"));
+
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void notEstablishedCloseRejectsUnicodeWhitespaceOnlyOpinionBeforeOpeningATransaction() throws Exception {
+        int index = 0;
+        for (String whitespace : List.of("\u00a0", "\t", " \t\u00a0\u2003")) {
+            String jsonReason = whitespace.replace("\\", "\\\\").replace("\t", "\\t");
+            mvc.perform(post("/api/v1/findings/{id}/close-not-established",
+                            UUID.fromString("40000000-0000-0000-0000-00000000009" + (++index)))
+                            .with(authenticatedMember())
+                            .with(validCsrf())
+                            .header("Idempotency-Key", UUID.fromString(
+                                    "60000000-0000-0000-0000-00000000000" + (++index)))
+                            .contentType("application/json")
+                            .content("{\"expectedVersion\":1,\"stage\":\"PERSON\",\"reason\":\""
+                                    + jsonReason + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.fieldErrors[0].field").value("reason"))
+                    .andExpect(jsonPath("$.fieldErrors[0].reason").value("OpinionNotBlank"));
+        }
+        assertThat(repository.transactionCalls).isZero();
+    }
+
+    @Test
+    void notEstablishedCloseRejectsClientGradeAsUnsupportedBeforeOpeningATransaction() throws Exception {
+        mvc.perform(post("/api/v1/findings/{id}/close-not-established",
+                        UUID.fromString("40000000-0000-0000-0000-000000000095"))
+                        .with(authenticatedMember())
+                        .with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                        .contentType("application/json")
+                        .content("""
+                                {"expectedVersion":1,"stage":"SAFETY","reason":"Evidence is insufficient",
+                                 "grade":"MAJOR"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_QUERY"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty());
+
+        assertThat(repository.transactionCalls).isZero();
     }
 
     @Test
@@ -526,6 +613,10 @@ class FindingWorkflowControllerHttpTest {
                 public void completeTask(UUID tenantId, String businessType, UUID businessId,
                                          String taskDefinitionKey, UUID actorMemberId,
                                          java.util.Map<String, Object> variables) { }
+                @Override
+                public Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId) {
+                    return Optional.of(FindingWorkflowCommandService.PROCESS_DEFINITION_KEY);
+                }
             };
         }
 
@@ -556,15 +647,23 @@ class FindingWorkflowControllerHttpTest {
     }
 
     static final class TestRepository implements FindingWorkflowRepository {
+        private final java.util.Map<FindingKey, FindingWorkflowCase> findings = new java.util.HashMap<>();
+        private UUID transactionTenant;
         private final Transaction transaction = new Transaction() {
             @Override
-            public Optional<FindingWorkflowCase> findForUpdate(UUID findingId) { return Optional.empty(); }
+            public Optional<FindingWorkflowCase> findForUpdate(UUID findingId) {
+                return Optional.ofNullable(findings.get(new FindingKey(transactionTenant, findingId)));
+            }
             @Override
-            public void insertFinding(FindingWorkflowCase finding) { }
+            public void insertFinding(FindingWorkflowCase finding) {
+                findings.put(new FindingKey(finding.tenantId(), finding.id()), finding);
+            }
             @Override
             public String nextFindingCode(LocalDate businessDay) { return "YH-20261031-0001"; }
             @Override
-            public void updateFinding(FindingWorkflowCase finding, long expectedVersion) { }
+            public void updateFinding(FindingWorkflowCase finding, long expectedVersion) {
+                findings.put(new FindingKey(finding.tenantId(), finding.id()), finding);
+            }
             @Override
             public CommandClaim claimCommand(WorkflowCommand command) { return CommandClaim.newClaim(); }
             @Override
@@ -595,6 +694,14 @@ class FindingWorkflowControllerHttpTest {
         private int transactionCalls;
         private RuntimeException nextTransactionFailure;
 
+        private void seedFinding(FindingWorkflowCase finding) {
+            findings.put(new FindingKey(finding.tenantId(), finding.id()), finding);
+        }
+
+        private Optional<FindingWorkflowCase> finding(UUID tenantId, UUID findingId) {
+            return Optional.ofNullable(findings.get(new FindingKey(tenantId, findingId)));
+        }
+
         @Override
         public <T> T inTenantTransaction(UUID tenantId, Function<Transaction, T> work) {
             transactionCalls++;
@@ -603,7 +710,14 @@ class FindingWorkflowControllerHttpTest {
                 nextTransactionFailure = null;
                 throw failure;
             }
-            return work.apply(transaction);
+            transactionTenant = tenantId;
+            try {
+                return work.apply(transaction);
+            } finally {
+                transactionTenant = null;
+            }
         }
+
+        private record FindingKey(UUID tenantId, UUID findingId) { }
     }
 }

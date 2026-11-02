@@ -28,6 +28,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
         { value: "SAFETY_DISPATCH_PENDING", label: findingStateLabels.SAFETY_DISPATCH_PENDING },
         { value: "RECTIFYING", label: findingStateLabels.RECTIFYING },
         { value: "ACCEPTANCE_PENDING", label: findingStateLabels.ACCEPTANCE_PENDING },
+        { value: "NOT_ESTABLISHED", label: findingStateLabels.NOT_ESTABLISHED },
         { value: "CLOSED", label: findingStateLabels.CLOSED },
       ],
     },

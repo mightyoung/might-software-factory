@@ -5,10 +5,12 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.ConfirmationDecision;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.ConfirmationStage;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CreateFinding;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Dispatch;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.InitialRoute;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Notice;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.NotEstablishedCommand;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.PersonConfirmationCommand;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.SafetyConfirmationCommand;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Submission;
@@ -43,13 +45,15 @@ import java.util.UUID;
 public final class FindingWorkflowCommandService {
 
     public static final String BUSINESS_TYPE = "FINDING";
-    public static final String PROCESS_DEFINITION_KEY = "findingRemediationV1";
+    public static final String PROCESS_DEFINITION_KEY = "findingRemediationV2";
 
     private static final String CREATE = "finding.create";
+    private static final String FINDING_READ = "finding.read";
     private static final String INITIALIZE_DISCOVERED = "finding.workflow.initialize";
     private static final String PERSON_CONFIRM = "finding.confirm.person";
     private static final String SAFETY_CONFIRM = "finding.confirm.safety";
     private static final String CONFIRMATION_FINGERPRINT_VERSION = "confirmation-payload-v2";
+    private static final String NOT_ESTABLISHED_FINGERPRINT_VERSION = "finding-not-established-v2";
     private static final String DISPATCH = "finding.dispatch";
     private static final String REMEDIATE = "finding.remediate";
     private static final String VERIFY = "finding.verify";
@@ -90,13 +94,31 @@ public final class FindingWorkflowCommandService {
         LocalDate businessDay = submittedAt.toInstant().atZone(ZoneId.of("Asia/Shanghai")).toLocalDate();
         boolean backfill = Duration.between(request.discoveredAt().toInstant(), submittedAt.toInstant())
                 .compareTo(Duration.ofHours(24)) > 0;
-        WorkflowCommand command = command(commandId, context, CREATE,
-                request.organizationId(), request.description(), request.discoveredAt(),
-                request.sourceEventId(), request.riskId(), request.grade(), request.sourceCategory(),
-                request.urgency(), request.location(), request.interimMeasure());
+        WorkflowCommand command = request.relatedFindingId() == null
+                ? command(commandId, context, CREATE,
+                        request.organizationId(), request.description(), request.discoveredAt(),
+                        request.sourceEventId(), request.riskId(), request.grade(), request.sourceCategory(),
+                        request.urgency(), request.location(), request.interimMeasure())
+                : command(commandId, context, CREATE,
+                        request.organizationId(), request.description(), request.discoveredAt(),
+                        request.sourceEventId(), request.riskId(), request.grade(), request.sourceCategory(),
+                        request.urgency(), request.location(), request.interimMeasure(),
+                        "relatedFindingId", request.relatedFindingId());
 
         return repository.inTenantTransaction(context.tenantId(), tx -> {
             accessPolicy.requireAction(context, CREATE, request.organizationId());
+            if (request.relatedFindingId() != null) {
+                FindingWorkflowCase related = visibleForCommand(tx, request.relatedFindingId());
+                try {
+                    accessPolicy.requireAction(context, FINDING_READ, related.organizationId());
+                } catch (org.springframework.security.access.AccessDeniedException denied) {
+                    throw new FindingNotVisibleException();
+                }
+                if (related.state() != FindingWorkflowState.NOT_ESTABLISHED) {
+                    throw new FindingWorkflowRuleException(
+                            "New evidence may only link to a not-established finding");
+                }
+            }
             CommandClaim claim = tx.claimCommand(command);
             if (!claim.acquired()) return claim.replay();
 
@@ -108,7 +130,7 @@ public final class FindingWorkflowCommandService {
                     context.tenantId(), findingId, request.organizationId(), code, request.description(),
                     request.discoveredAt(), request.sourceEventId(), request.riskId(), request.grade(),
                     context.memberId(), request.sourceCategory(), request.urgency(), request.location(),
-                    request.interimMeasure(), backfill);
+                    request.interimMeasure(), backfill, request.relatedFindingId());
             tx.insertFinding(finding);
             workflowFacade.startProcess(context.tenantId(), BUSINESS_TYPE, findingId, 1,
                     PROCESS_DEFINITION_KEY, Map.of(
@@ -164,6 +186,57 @@ public final class FindingWorkflowCommandService {
         Objects.requireNonNull(request, "request");
         return confirm(commandId, findingId, expectedVersion, SAFETY_CONFIRM, "SAFETY", "safetyConfirm",
                 request.reason(), request.grade());
+    }
+
+    public CommandResult closeNotEstablished(
+            UUID commandId, UUID findingId, long expectedVersion, NotEstablishedCommand request) {
+        Objects.requireNonNull(commandId, "commandId");
+        Objects.requireNonNull(request, "request");
+        ConfirmationStage requestedStage = Objects.requireNonNull(request.stage(), "stage");
+        String stage = requestedStage.name();
+        String permission = requestedStage == ConfirmationStage.PERSON ? PERSON_CONFIRM : SAFETY_CONFIRM;
+        String taskKey = requestedStage == ConfirmationStage.PERSON ? "personConfirm" : "safetyConfirm";
+        String reason = notEstablishedReason(request.reason());
+        CurrentTenantContext context = sessionContextResolver.currentTenant();
+        return repository.inTenantTransaction(context.tenantId(), tx -> {
+            FindingWorkflowCase current = visibleForCommand(tx, findingId);
+            accessPolicy.requireAction(context, permission, current.organizationId());
+            if (context.memberId().equals(current.createdByMemberId())) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "The finding reporter cannot confirm their own finding");
+            }
+            if (requestedStage == ConfirmationStage.SAFETY) {
+                UUID personConfirmer = tx.findConfirmationActorMemberId(findingId, "PERSON")
+                        .orElseThrow(() -> new FindingWorkflowConfigurationException(
+                                "A person confirmation is required before safety confirmation"));
+                if (context.memberId().equals(personConfirmer)) {
+                    throw new org.springframework.security.access.AccessDeniedException(
+                            "The safety confirmer must be different from the person confirmer");
+                }
+            }
+            if (workflowFacade.processDefinitionKey(context.tenantId(), BUSINESS_TYPE, findingId)
+                    .filter(PROCESS_DEFINITION_KEY::equals).isEmpty()) {
+                throw new com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException();
+            }
+            WorkflowCommand command = command(commandId, context, "finding.close-not-established",
+                    NOT_ESTABLISHED_FINGERPRINT_VERSION, findingId, expectedVersion, stage, reason);
+            CommandClaim claim = tx.claimCommand(command);
+            if (!claim.acquired()) return claim.replay();
+            requireExpectedVersion(current, expectedVersion);
+            FindingWorkflowCase updated = current.closeNotEstablished(
+                    context.memberId(), expectedVersion, stage);
+            OffsetDateTime decidedAt = now();
+            tx.appendConfirmation(new Confirmation(findingId, stage, context.memberId(),
+                    ConfirmationDecision.NOT_ESTABLISHED, reason, decidedAt, expectedVersion, commandId));
+            tx.updateFinding(updated, current.version());
+            appendTransition(tx, current, updated, commandId, context.actorId(), reason, decidedAt);
+            workflowFacade.completeTask(context.tenantId(), BUSINESS_TYPE, findingId, taskKey,
+                    context.memberId(), Map.of("confirmationDecision", ConfirmationDecision.NOT_ESTABLISHED.name()));
+            CommandResult result = CommandResult.from(updated);
+            tx.completeCommand(commandId, result);
+            publishChange(context, commandId, "finding.close-not-established", current, updated);
+            return result;
+        });
     }
 
     public CommandResult dispatch(UUID commandId, UUID findingId, long expectedVersion, Dispatch request) {
@@ -338,7 +411,7 @@ public final class FindingWorkflowCommandService {
             tx.updateFinding(updated, current.version());
             appendTransition(tx, current, updated, commandId, context.actorId(), reason, decidedAt);
             workflowFacade.completeTask(context.tenantId(), BUSINESS_TYPE, findingId, taskKey,
-                    context.memberId(), Map.of());
+                    context.memberId(), Map.of("confirmationDecision", ConfirmationDecision.APPROVE.name()));
             CommandResult result = CommandResult.from(updated);
             tx.completeCommand(commandId, result);
             publishChange(context, commandId, permission, current, updated);
@@ -459,11 +532,17 @@ public final class FindingWorkflowCommandService {
         if (reason == null || reason.length() > FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) {
             throw new FindingWorkflowRuleException("A confirmation opinion cannot exceed 4000 characters");
         }
+        // Preserve the published confirmation-payload-v2 canonicalization and immutable receipts.
         String normalized = reason.strip();
-        if (normalized.isEmpty()) {
+        if (!ConfirmationOpinionText.hasContent(normalized)) {
             throw new FindingWorkflowRuleException("A confirmation opinion is required");
         }
         return normalized;
+    }
+
+    private static String notEstablishedReason(String reason) {
+        // The new close action has its own fingerprint namespace and Unicode normalization.
+        return ConfirmationOpinionText.trim(confirmationReason(reason));
     }
 
     private static String professionalGrade(String grade) {

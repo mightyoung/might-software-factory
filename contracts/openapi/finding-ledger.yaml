@@ -216,7 +216,7 @@ components:
           const: finding
         schemaVersion:
           type: string
-          const: '3'
+          const: '4'
           description: >-
             Monotonic version of this entity's fields and query defaults; it is not an authorization
             token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share
@@ -228,13 +228,13 @@ components:
           const: id
         defaultFields:
           type: array
-          const: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, createdAt]
+          const: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, createdAt]
           items:
             type: string
         fields:
           type: object
           additionalProperties: false
-          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
           properties:
             id:
               $ref: '#/components/schemas/UuidField'
@@ -261,6 +261,8 @@ components:
             sourceEventId:
               $ref: '#/components/schemas/NullableUuidField'
             riskId:
+              $ref: '#/components/schemas/NullableUuidField'
+            relatedFindingId:
               $ref: '#/components/schemas/NullableUuidField'
             grade:
               $ref: '#/components/schemas/FindingGradeField'
@@ -466,7 +468,7 @@ components:
         maxLength: { const: 0 }
         enumValues:
           type: array
-          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED]
+          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
           items: { type: string }
     FindingListResponse:
       type: object
@@ -513,7 +515,8 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
@@ -539,7 +542,7 @@ components:
     FindingDetail:
       type: object
       additionalProperties: false
-      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, grade, state, roundNo, version, createdAt, updatedAt]
+      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -563,7 +566,8 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }

@@ -40,6 +40,32 @@ class JooqFindingWorkflowConfirmationPersistenceTest {
     private static final String REASON = "Safety review complete";
 
     @Test
+    void relatedFindingInsertPreservesExplicitTimestampTypingAndTheRelatedUuidBinding() {
+        List<CapturedStatement> statements = new ArrayList<>();
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        DSLContext dsl = DSL.using(new MockConnection(context -> {
+            statements.add(new CapturedStatement(context.sql(), new ArrayList<>(Arrays.asList(context.bindings()))));
+            if (context.sql().toLowerCase(Locale.ROOT).contains("set_config")) {
+                return new MockResult[] {singleValue(values, "set_config", String.class, TENANT.toString())};
+            }
+            return new MockResult[] {new MockResult(1)};
+        }), SQLDialect.POSTGRES);
+        var repository = new JooqFindingWorkflowRepository(dsl, new NoOpTransactionManager(),
+                org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
+        UUID related = UUID.fromString("40000000-0000-0000-0000-000000000099");
+        var finding = new FindingWorkflowCase(TENANT, FINDING, UUID.randomUUID(), "YH-20261031-0001",
+                "Related synthetic report", NOW, null, null, "UNKNOWN", FindingWorkflowState.DISCOVERED,
+                1, 1, MEMBER, MEMBER, null, null, null, null, null, related);
+        repository.inTenantTransaction(TENANT, tx -> {tx.insertFinding(finding); return null;});
+        var insert = statements.stream().filter(statement -> statement.sql().toLowerCase(Locale.ROOT)
+                .contains("insert into public.finding")).findFirst().orElseThrow();
+        assertThat(insert.sql().replaceAll("\\s+", " ")).contains("backfill, related_finding_id)",
+                "values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as timestamptz)");
+        assertThat(OffsetDateTime.parse(insert.bindings().get(5).toString().replace(' ', 'T')).isEqual(NOW)).isTrue();
+        assertThat(insert.bindings().getLast().toString()).isEqualTo(related.toString());
+    }
+
+    @Test
     void writesTheSameOpinionToConfirmationTransitionAndAuditAndCapturesGradeChange() {
         List<CapturedStatement> statements = new ArrayList<>();
         DSLContext values = DSL.using(SQLDialect.POSTGRES);

@@ -3,13 +3,16 @@ package com.mightyoung.softwarefactory.workflow;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.common.engine.api.FlowableException;
+import org.flowable.engine.RepositoryService;
 import org.flowable.engine.runtime.ProcessInstance;
+import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.task.api.Task;
 import org.jooq.DSLContext;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Tenant-checking adapter around the embedded Flowable engine and the shared PostgreSQL transaction. */
@@ -18,13 +21,16 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
 
     private final RuntimeService runtimeService;
     private final TaskService taskService;
+    private final RepositoryService repositoryService;
     private final DSLContext dsl;
     private final WorkflowBindingTransactionLock bindingLock;
 
-    public FlowableWorkflowFacade(RuntimeService runtimeService, TaskService taskService, DSLContext dsl,
+    public FlowableWorkflowFacade(RuntimeService runtimeService, TaskService taskService,
+                                  RepositoryService repositoryService, DSLContext dsl,
                                   WorkflowBindingTransactionLock bindingLock) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
+        this.repositoryService = repositoryService;
         this.dsl = dsl;
         this.bindingLock = bindingLock;
     }
@@ -109,5 +115,32 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
         } catch (FlowableException failure) {
             throw new WorkflowEngineUnavailableException(failure);
         }
+    }
+
+    @Override
+    public Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId) {
+        bindingLock.acquire(tenantId, businessType, businessId);
+        var binding = dsl.fetchOne("""
+                select business_revision, definition_id
+                  from public.workflow_binding
+                 where tenant_id = cast(? as uuid) and business_type = ?
+                   and business_id = cast(? as uuid) and submission_no = 1
+                """, tenantId, businessType, businessId);
+        if (binding == null || binding.get("business_revision", Integer.class) != 1) {
+            return Optional.empty();
+        }
+        String definitionId = binding.get("definition_id", String.class);
+        ProcessDefinition definition;
+        try {
+            definition = repositoryService.createProcessDefinitionQuery()
+                    .processDefinitionId(definitionId)
+                    .singleResult();
+        } catch (FlowableException failure) {
+            throw new WorkflowEngineUnavailableException(failure);
+        }
+        if (definition == null || !tenantId.toString().equals(definition.getTenantId())) {
+            return Optional.empty();
+        }
+        return Optional.of(definition.getKey());
     }
 }

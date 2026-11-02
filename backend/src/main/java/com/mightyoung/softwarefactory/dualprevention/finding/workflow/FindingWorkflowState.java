@@ -8,5 +8,6 @@ public enum FindingWorkflowState {
     SAFETY_DISPATCH_PENDING,
     RECTIFYING,
     ACCEPTANCE_PENDING,
+    NOT_ESTABLISHED,
     CLOSED
 }

@@ -122,8 +122,10 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </div>
             <ol className="workflow-list" aria-label="隐患流程节点">
               {workflowSteps.map((step, index) => {
-                const complete = finding.state === "CLOSED" || index < workflowCurrentIndex(finding.state);
-                const current = finding.state !== "CLOSED" && index === workflowCurrentIndex(finding.state);
+                const terminal = finding.state === "CLOSED" || finding.state === "NOT_ESTABLISHED";
+                const complete = finding.state === "CLOSED" ||
+                  (finding.state !== "NOT_ESTABLISHED" && index < workflowCurrentIndex(finding.state));
+                const current = !terminal && index === workflowCurrentIndex(finding.state);
                 return (
                   <li className={current ? "workflow-current" : complete ? "workflow-complete" : ""} key={step}>
                     <span className="workflow-marker" aria-hidden="true">
@@ -172,6 +174,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                   </button>
                 ))}
                 {finding.state === "CLOSED" && <span className="closed-note">此示例状态不可变更</span>}
+                {finding.state === "NOT_ESTABLISHED" && <span className="closed-note">未成立记录已终止；新证据应创建关联记录</span>}
               </div>
             </>
           )}

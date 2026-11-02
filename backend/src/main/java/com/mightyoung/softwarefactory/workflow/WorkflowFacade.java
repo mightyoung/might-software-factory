@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.workflow;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -24,4 +25,7 @@ public interface WorkflowFacade {
             String taskDefinitionKey,
             UUID actorMemberId,
             Map<String, Object> variables);
+
+    /** Returns the exact process definition key bound to this tenant-scoped business record. */
+    Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId);
 }

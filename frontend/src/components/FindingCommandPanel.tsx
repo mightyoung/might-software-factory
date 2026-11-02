@@ -182,6 +182,7 @@ export function FindingCommandPanel({ finding, adapter, onChanged, onUnauthentic
           </button>
         ))}
         {finding.state === "CLOSED" && <span className="closed-note">已闭环，不可再变更</span>}
+        {finding.state === "NOT_ESTABLISHED" && <span className="closed-note">未成立记录已终止；新证据应创建关联记录</span>}
       </div>
       {unavailable.length > 0 && (
         <p className="field-hint">{unavailable.map((item) => item.reason).join(" ")}</p>

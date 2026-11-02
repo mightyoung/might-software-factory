@@ -17,7 +17,7 @@ export interface paths {
         put?: never;
         /**
          * Create a finding and start its required confirmation workflow
-         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. Missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code. The server calculates backfill as true only when discoveredAt is more than 24 hours before its submission time; exactly 24 hours and future timestamps produce false. This uses the compared instants, independent of the submitted offsets. No new future-time restriction is introduced. The server owns backfill and rejects it in create requests.
+         * @description Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each confirmation/dispatch stage. PERSON and SAFETY confirmers must be distinct from one another and from the reporter; missing or ambiguous route configuration fails closed. The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission day sequence. A completed idempotent replay returns the original finding ID and code. The server calculates backfill as true only when discoveredAt is more than 24 hours before its submission time; exactly 24 hours and future timestamps produce false. This uses the compared instants, independent of the submitted offsets. No new future-time restriction is introduced. The server owns backfill and rejects it in create requests. An optional relatedFindingId links new evidence to a same-tenant parent in NOT_ESTABLISHED; the caller needs finding.create for the new record and finding.read for the parent. A missing, cross-tenant, or unreadable parent has the same 404 response. A visible parent in another state returns 422 WORKFLOW_RULE. Creating the related record never updates or reopens its parent.
          */
         post: operations["createFinding"];
         delete?: never;
@@ -74,6 +74,26 @@ export interface paths {
         put?: never;
         /** Complete the separate safety department confirmation */
         post: operations["confirmFindingBySafety"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/findings/{id}/close-not-established": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close a finding as not established at the current confirmation stage
+         * @description The stage must match the current pending confirmation state. PERSON requires finding.confirm.person and SAFETY requires finding.confirm.safety; neither confirmer may be the reporter, and the SAFETY confirmer must differ from the recorded PERSON confirmer. This command does not accept a grade; the finding's existing grade is preserved. Normal SAFETY approval still requires a GENERAL or MAJOR grade. The required opinion is retained in the confirmation, transition, and audit record. Stage, opinion, expectedVersion, and the authenticated actor participate in idempotency. Existing findingRemediationV1 instances are not migrated automatically; this command returns 409 COMMAND_CONFLICT for them before writing a receipt. Continue the existing V1 approval path or use a separately reviewed instance migration; do not retry the close with a new key.
+         */
+        post: operations["closeFindingAsNotEstablished"];
         delete?: never;
         options?: never;
         head?: never;
@@ -164,7 +184,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code and the backfill flag. Source and urgency are reporter choices and do not set the professional grade. */
+        /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code and the backfill flag. Source and urgency are reporter choices and do not set the professional grade. relatedFindingId is optional and only accepts a same-tenant NOT_ESTABLISHED parent; the parent is not reopened or changed. */
         CreateFindingRequest: {
             /** Format: uuid */
             organizationId: string;
@@ -194,6 +214,11 @@ export interface components {
             location: string;
             /** @description Optional temporary measure using a maximum of 2000 Unicode code points. */
             interimMeasure?: string;
+            /**
+             * Format: uuid
+             * @description Optional same-tenant NOT_ESTABLISHED parent to associate with new evidence.
+             */
+            relatedFindingId?: string;
         };
         /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         VersionedCommandRequest: {
@@ -201,18 +226,26 @@ export interface components {
         };
         PersonConfirmationRequest: {
             expectedVersion: number;
-            /** @description Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank. */
+            /** @description Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java String.strip() canonicalization and confirmation-payload-v2 receipt compatibility. Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged. */
             reason: string;
         };
         SafetyConfirmationRequest: {
             expectedVersion: number;
-            /** @description Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank. */
+            /** @description Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java String.strip() canonicalization and confirmation-payload-v2 receipt compatibility. Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged. */
             reason: string;
             /**
              * @description Professional grade assigned by the safety confirmer.
              * @enum {string}
              */
             grade: "GENERAL" | "MAJOR";
+        };
+        /** @description The stage must match the pending confirmation. This action does not accept or assign a grade; the finding's existing grade is preserved. The reason is recorded in the confirmation, transition, and audit event. */
+        NotEstablishedRequest: {
+            expectedVersion: number;
+            /** @enum {string} */
+            stage: "PERSON" | "SAFETY";
+            /** @description Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000); at least one other code point is required. */
+            reason: string;
         };
         /** @description Client requests must contain only documented properties. For compatibility, the current runtime ignores unknown properties on lifecycle commands; additionalProperties false describes the client contract and does not promise that the current server rejects unknown properties. */
         DispatchRequest: {
@@ -278,7 +311,7 @@ export interface components {
                 "application/json": components["schemas"]["CommandResponse"];
             };
         };
-        /** @description Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request binding failures return INVALID_QUERY with an empty fieldErrors array. Unsupported create fields also return INVALID_QUERY; lifecycle command DTOs currently ignore unknown properties for compatibility. */
+        /** @description Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request binding failures return INVALID_QUERY with an empty fieldErrors array. Opinion-only Unicode White_Space returns INVALID_REQUEST with reason OpinionNotBlank. Unsupported create, person confirmation, safety confirmation, and not-established close fields return INVALID_QUERY; other lifecycle command DTOs currently ignore unknown properties for compatibility. */
         InvalidRequest: {
             headers: {
                 [name: string]: unknown;
@@ -480,6 +513,36 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SafetyConfirmationRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["CommandSucceeded"];
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            404: components["responses"]["NotVisible"];
+            409: components["responses"]["CommandConflict"];
+            422: components["responses"]["WorkflowRule"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    closeFindingAsNotEstablished: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description UUID retained with the tenant, actor, action, request hash, and original result. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Must match the server-issued XSRF-TOKEN cookie. */
+                "X-XSRF-TOKEN": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: components["parameters"]["FindingId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotEstablishedRequest"];
             };
         };
         responses: {

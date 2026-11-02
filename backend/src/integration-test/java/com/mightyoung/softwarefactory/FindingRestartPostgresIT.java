@@ -48,7 +48,8 @@ class FindingRestartPostgresIT {
                 try (var engine = new Engine(runtimeSource)) {
                     deploymentId = engine.value.getRepositoryService().createDeployment().name(fixture.run)
                             .tenantId(fixture.tenantId.toString())
-                            .addClasspathResource("processes/finding-remediation-v1.bpmn20.xml").deploy().getId();
+                            .addClasspathResource("processes/finding-remediation-v1.bpmn20.xml")
+                .addClasspathResource("processes/finding-remediation-v2.bpmn20.xml").deploy().getId();
                 }
                 int firstPort = freePort();
                 Process first = start(jar, work, "application-1.log", target.jdbcUrl(), firstPort, https);
@@ -166,7 +167,13 @@ class FindingRestartPostgresIT {
         assertThat(task.getAssignee()).isEqualTo(fixture.person.memberId().toString());
         assertThat(engine.getRepositoryService().getProcessDefinition(instance.getProcessDefinitionId()).getDeploymentId()).isEqualTo(deploymentId);
         long definitions = engine.getRepositoryService().createProcessDefinitionQuery().processDefinitionTenantId(fixture.tenantId.toString()).count();
-        assertThat(definitions).isEqualTo(1);
+        assertThat(definitions).isEqualTo(2);
+        assertThat(engine.getRepositoryService().createProcessDefinitionQuery()
+                .processDefinitionTenantId(fixture.tenantId.toString()).list().stream()
+                .map(org.flowable.engine.repository.ProcessDefinition::getKey).toList())
+                .containsExactlyInAnyOrder("findingRemediationV1", "findingRemediationV2");
+        assertThat(engine.getRepositoryService().getProcessDefinition(instance.getProcessDefinitionId()).getKey())
+                .isEqualTo("findingRemediationV2");
         return new EngineState(processId, instance.getProcessDefinitionId(), task.getId(), task.getTaskDefinitionKey(), task.getAssignee(), definitions);
     }
 

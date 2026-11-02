@@ -26,10 +26,13 @@ class FindingWorkflowContractTest {
         Path contractPath = Path.of("..", "contracts", "openapi", "finding-workflow.yaml");
         Map<String, Object> document = new Yaml().load(Files.readString(contractPath));
         Map<String, Object> paths = (Map<String, Object>) document.get("paths");
+        assertThat((Map<String, Object>) document.get("x-confirmation-terminal-outcomes"))
+                .containsKey("NOT_ESTABLISHED");
         assertThat(paths.keySet()).containsExactlyInAnyOrder(
                 "/api/v1/findings",
                 "/api/v1/findings/{id}/confirm/person",
                 "/api/v1/findings/{id}/confirm/safety",
+                "/api/v1/findings/{id}/close-not-established",
                 "/api/v1/findings/{id}/dispatch",
                 "/api/v1/findings/{id}/remediation-submissions",
                 "/api/v1/findings/{id}/verifications",
@@ -103,6 +106,8 @@ class FindingWorkflowContractTest {
         Map<String, Object> data = (Map<String, Object>) responseProperties.get("data");
         assertThat((List<String>) data.get("required")).contains("code");
         assertThat((Map<String, Object>) data.get("properties")).containsKey("code");
+        Map<String, Object> createFinding = (Map<String, Object>) schemas.get("CreateFindingRequest");
+        assertThat((Map<String, Object>) createFinding.get("properties")).containsKey("relatedFindingId");
     }
 
     @Test
@@ -137,7 +142,34 @@ class FindingWorkflowContractTest {
         assertThat((Map<String, Object>) versioned.get("properties")).containsOnlyKeys("expectedVersion");
     }
 
+    @Test
+    void notEstablishedCloseContractCarriesStageAndOpinionButNeverChangesGrade() throws Exception {
+        Map<String, Object> document = new Yaml().load(Files.readString(
+                Path.of("..", "contracts", "openapi", "finding-workflow.yaml")));
+        Map<String, Object> paths = (Map<String, Object>) document.get("paths");
+        assertThat(requestBodySchema(paths, "/api/v1/findings/{id}/close-not-established"))
+                .isEqualTo("#/components/schemas/NotEstablishedRequest");
+        Map<String, Object> operation = (Map<String, Object>) ((Map<String, Object>)
+                paths.get("/api/v1/findings/{id}/close-not-established")).get("post");
+        assertThat(operation.get("description").toString()).contains("findingRemediationV1",
+                "COMMAND_CONFLICT", "not migrated automatically");
+
+        Map<String, Object> components = (Map<String, Object>) document.get("components");
+        Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
+        Map<String, Object> close = (Map<String, Object>) schemas.get("NotEstablishedRequest");
+        assertThat((List<String>) close.get("required"))
+                .containsExactly("expectedVersion", "stage", "reason");
+        Map<String, Object> properties = (Map<String, Object>) close.get("properties");
+        assertThat((Map<String, Object>) properties.get("stage"))
+                .containsEntry("enum", List.of("PERSON", "SAFETY"));
+        assertThat((Map<String, Object>) properties.get("reason")).containsEntry("maxLength", 4000);
+        assertThat(properties).doesNotContainKey("grade");
+        assertThat(close.get("description").toString()).contains("grade is preserved");
+        assertThat(operation.get("description").toString()).contains("does not accept a grade");
+    }
+
     private static String requestBodySchema(Map<String, Object> paths, String path) {
+        assertThat(paths).containsKey(path);
         Map<String, Object> operation = (Map<String, Object>) ((Map<String, Object>) paths.get(path)).get("post");
         Map<String, Object> requestBody = (Map<String, Object>) operation.get("requestBody");
         Map<String, Object> content = (Map<String, Object>) requestBody.get("content");
@@ -484,5 +516,53 @@ class FindingWorkflowContractTest {
                 assertThat(found).isTrue();
             }
         }
+    }
+
+    @Test
+    void v2BpmnAddsExplicitNotEstablishedEndBranchesAndLeavesV1DefinitionIntact() throws Exception {
+        String v1 = Files.readString(Path.of("src", "main", "resources", "processes",
+                "finding-remediation-v1.bpmn20.xml"));
+        assertThat(v1).doesNotContain("NOT_ESTABLISHED", "personDecision", "safetyDecision");
+
+        try (InputStream stream = getClass().getResourceAsStream("/processes/finding-remediation-v2.bpmn20.xml")) {
+            assertThat(stream).isNotNull();
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            Document process = factory.newDocumentBuilder().parse(stream);
+            assertThat(process.getElementsByTagNameNS(BPMN_NS, "process").item(0)
+                    .getAttributes().getNamedItem("id").getNodeValue()).isEqualTo("findingRemediationV2");
+
+            var gateways = process.getElementsByTagNameNS(BPMN_NS, "exclusiveGateway");
+            assertThat(gateways.getLength()).isEqualTo(3);
+            for (String gatewayId : List.of("personDecision", "safetyDecision")) {
+                boolean foundWithoutDefault = false;
+                for (int index = 0; index < gateways.getLength(); index++) {
+                    var gateway = gateways.item(index);
+                    if (gatewayId.equals(gateway.getAttributes().getNamedItem("id").getNodeValue())) {
+                        foundWithoutDefault = gateway.getAttributes().getNamedItem("default") == null;
+                    }
+                }
+                assertThat(foundWithoutDefault).isTrue();
+            }
+
+            assertThat(process.getElementsByTagNameNS(BPMN_NS, "endEvent").getLength()).isEqualTo(2);
+            var flows = process.getElementsByTagNameNS(BPMN_NS, "sequenceFlow");
+            assertThat(sequenceFlowTarget(flows, "personNotEstablished")).isEqualTo("notEstablishedEnd");
+            assertThat(sequenceFlowTarget(flows, "safetyNotEstablished")).isEqualTo("notEstablishedEnd");
+            assertThat(sequenceFlowTarget(flows, "personApproved")).isEqualTo("safetyConfirm");
+            assertThat(sequenceFlowTarget(flows, "safetyApproved")).isEqualTo("safetyDispatch");
+        }
+    }
+
+    private static String sequenceFlowTarget(org.w3c.dom.NodeList flows, String id) {
+        for (int index = 0; index < flows.getLength(); index++) {
+            var flow = flows.item(index);
+            if (id.equals(flow.getAttributes().getNamedItem("id").getNodeValue())) {
+                return flow.getAttributes().getNamedItem("targetRef").getNodeValue();
+            }
+        }
+        return null;
     }
 }

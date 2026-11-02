@@ -103,7 +103,8 @@ class FindingCommandPostgresIT {
         late.command.set(null); late.proof.set(null); late.failures.clear(); late.pause.set(null); late.fault.set(null); late.frame.remove();
         fixture = new BusinessWorkflowPostgresFixture(passwords);
         repository.createDeployment().name(fixture.run).tenantId(fixture.tenantId.toString())
-                .addClasspathResource("processes/finding-remediation-v1.bpmn20.xml").deploy();
+                .addClasspathResource("processes/finding-remediation-v1.bpmn20.xml")
+                .addClasspathResource("processes/finding-remediation-v2.bpmn20.xml").deploy();
     }
     @AfterEach void closeOnlyOwnedSessions() {
         try { clients.forEach(IdentityAcceptanceHttps.Browser::close); }

@@ -25,15 +25,15 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LT;
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LTE;
 
-/** Finding v3 field allowlist shared by schema discovery, query validation, and SQL projection. */
+/** Finding v4 field allowlist shared by schema discovery, query validation, and SQL projection. */
 @Component
 public final class FindingEntitySchema {
 
-    public static final String SCHEMA_VERSION = "3";
+    public static final String SCHEMA_VERSION = "4";
     public static final List<String> DEFAULT_FIELDS =
             List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
                     "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
-                    "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt");
+                    "sourceEventId", "riskId", "relatedFindingId", "grade", "state", "roundNo", "createdAt");
 
     private final EntitySchema schema;
 
@@ -59,11 +59,13 @@ public final class FindingEntitySchema {
                 List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of()));
         fields.put("riskId", field(FieldType.UUID, true, false, 0,
                 List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of()));
+        fields.put("relatedFindingId", field(FieldType.UUID, true, false, 0,
+                List.of(EQ, IN, IS_NULL, IS_NOT_NULL), List.of()));
         fields.put("grade", field(FieldType.ENUM, false, true, 0, List.of(EQ, IN),
                 List.of("UNKNOWN", "GENERAL", "MAJOR")));
         fields.put("state", field(FieldType.ENUM, false, true, 0, List.of(EQ, IN),
                 List.of("DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING",
-                        "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "CLOSED")));
+                        "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED")));
         fields.put("roundNo", field(FieldType.NUMBER, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
         fields.put("version", field(FieldType.NUMBER, false, true, 0,
