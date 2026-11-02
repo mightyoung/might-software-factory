@@ -80,7 +80,7 @@ export function LoginPage({ notice }: { notice: Notice }) {
     <main className="login-page" aria-label="登录">
       <section className="login-card">
         <div className="login-brand">
-          <span className="brand-mark" aria-hidden="true">M</span>
+          <span className="brand-mark" aria-hidden="true" />
           <span>MIGHT 工厂安全</span>
         </div>
         <h1>登录</h1>

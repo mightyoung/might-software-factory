@@ -9,7 +9,6 @@ import {
 } from "../domain/session";
 import { RouteLink } from "../routing/router";
 import { tenantPath } from "../routing/paths";
-import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { useAppMode } from "../mode";
 import { UserMenu } from "./UserMenu";
 
@@ -141,7 +140,6 @@ function Sidebar({
 
 export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
   const synthetic = useAppMode() === "synthetic";
-  const [changingPassword, setChangingPassword] = useState(false);
   const home = session.applications[0];
   return (
     <div className="app-root">
@@ -151,7 +149,7 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           className="brand"
           aria-label="MIGHT 工厂安全首页"
         >
-          <span className="brand-mark" aria-hidden="true">M</span>
+          <span className="brand-mark" aria-hidden="true" />
           <span>MIGHT 工厂安全</span>
         </RouteLink>
         <nav className="application-switcher" aria-label="应用选择">
@@ -169,14 +167,10 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         <div className="topbar-right">
           {synthetic && <span className="demo-environment">合成演示</span>}
           <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout}
-            onChangePassword={onChangePassword ? () => setChangingPassword(true) : undefined}
+            onChangePassword={onChangePassword}
           />
         </div>
       </header>
-
-      {changingPassword && onChangePassword && (
-        <ChangePasswordDialog onSubmit={onChangePassword} onClose={() => setChangingPassword(false)} />
-      )}
 
       <div className="workspace">
         {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}

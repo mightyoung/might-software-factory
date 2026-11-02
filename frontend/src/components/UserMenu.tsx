@@ -1,17 +1,19 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
 
 interface UserMenuProps {
   displayName: string;
   tenantName: string;
   onLogout: () => Promise<void> | void;
-  /** 提供时“修改密码”可用；缺省（合成演示）为禁用。 */
-  onChangePassword?: () => void;
+  /** 提供时“修改密码”可用并由本组件弹出对话框；缺省（合成演示）为禁用。成功后由会话层清除登录态。 */
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 /** 头像入口：个人资料、个人会话尚未接入（禁用并说明），退出登录可用。点击、键盘均可操作。 */
 export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -73,7 +75,7 @@ export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }
             disabled={!onChangePassword}
             onClick={() => {
               setOpen(false);
-              onChangePassword?.();
+              setChangingPassword(true);
             }}
           >
             修改密码{!onChangePassword && <small>演示模式不可用</small>}
@@ -82,6 +84,16 @@ export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }
             {pending ? "正在退出…" : "退出登录"}
           </button>
         </div>
+      )}
+      {changingPassword && onChangePassword && (
+        <ChangePasswordDialog
+          onSubmit={onChangePassword}
+          onClose={() => {
+            setChangingPassword(false);
+            // 菜单项在打开对话框时已卸载，焦点在 body 上：明确还给头像按钮。
+            queueMicrotask(() => buttonRef.current?.focus());
+          }}
+        />
       )}
     </div>
   );

@@ -50,6 +50,10 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Bundle size budget
+        working-directory: frontend
+        run: npm run check:bundle
+
   e2e:
     # 浏览器端到端：对着契约模拟服务（不是后端）。使用 runner 自带的 Google Chrome，不下载浏览器。
     runs-on: ubuntu-latest
