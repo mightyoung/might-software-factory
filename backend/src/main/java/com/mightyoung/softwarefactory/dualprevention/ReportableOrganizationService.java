@@ -4,6 +4,8 @@ import com.mightyoung.softwarefactory.authorization.FindingReadAuthorizationSnap
 import com.mightyoung.softwarefactory.authorization.FindingWorkflowAuthorizationRepository;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationState;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -19,18 +21,24 @@ public final class ReportableOrganizationService {
     private final SessionContextResolver sessionContextResolver;
     private final FindingWorkflowAuthorizationRepository authorizationRepository;
     private final ReportableOrganizationReadRepository organizationRepository;
+    private final TenantApplicationReadRepository applications;
 
     public ReportableOrganizationService(
             SessionContextResolver sessionContextResolver,
             FindingWorkflowAuthorizationRepository authorizationRepository,
-            ReportableOrganizationReadRepository organizationRepository) {
+            ReportableOrganizationReadRepository organizationRepository,
+            TenantApplicationReadRepository applications) {
         this.sessionContextResolver = Objects.requireNonNull(sessionContextResolver, "sessionContextResolver");
         this.authorizationRepository = Objects.requireNonNull(authorizationRepository, "authorizationRepository");
         this.organizationRepository = Objects.requireNonNull(organizationRepository, "organizationRepository");
+        this.applications = Objects.requireNonNull(applications, "applications");
     }
 
     public List<ReportableOrganization> reportable() {
         CurrentTenantContext context = sessionContextResolver.currentTenant();
+        if (applications.findCurrent(context.tenantId(), "safety").filter(TenantApplicationState::enabled).isEmpty()) {
+            throw new AccessDeniedException("The tenant application is unavailable");
+        }
         FindingReadAuthorizationSnapshot snapshot = authorizationRepository
                 .loadActionSnapshot(context, CREATE_PERMISSION, "create")
                 .orElseThrow(() -> new AccessDeniedException("The current member cannot report findings"));

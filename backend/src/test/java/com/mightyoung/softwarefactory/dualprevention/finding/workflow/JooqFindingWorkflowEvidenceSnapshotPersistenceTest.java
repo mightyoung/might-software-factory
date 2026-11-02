@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
+
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Submission;
 import com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel;
 import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
@@ -76,7 +78,8 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
         };
         NoOpTransactionManager transactionManager = new NoOpTransactionManager();
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager);
+                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager,
+                org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
 
         Submission reloaded = repository.inTenantTransaction(TENANT, tx -> {
             tx.insertSubmission(submission);
@@ -155,7 +158,8 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
         };
         NoOpTransactionManager transactionManager = new NoOpTransactionManager();
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager);
+                using(new MockConnection(provider), SQLDialect.POSTGRES), transactionManager,
+                org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
 
         assertThatThrownBy(() -> repository.inTenantTransaction(TENANT, tx -> {
             tx.insertSubmission(submission);
@@ -183,7 +187,8 @@ class JooqFindingWorkflowEvidenceSnapshotPersistenceTest {
             throw new AssertionError("Unexpected SQL: " + context.sql());
         };
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                using(new MockConnection(provider), SQLDialect.POSTGRES), new NoOpTransactionManager());
+                using(new MockConnection(provider), SQLDialect.POSTGRES), new NoOpTransactionManager(),
+                org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
 
         assertThatThrownBy(() -> repository.inTenantTransaction(
                 TENANT, tx -> tx.findSubmission(FINDING, 1).orElseThrow()))

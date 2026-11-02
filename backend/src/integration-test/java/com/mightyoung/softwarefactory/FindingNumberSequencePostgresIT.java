@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory;
 
+import com.mightyoung.softwarefactory.authorization.PostgresAuthorizationWriteGuard;
+
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowRepository;
@@ -117,7 +119,8 @@ class FindingNumberSequencePostgresIT {
         var transactionManager = new DataSourceTransactionManager(dataSource);
         var connectionProvider = new DataSourceConnectionProvider(new TransactionAwareDataSourceProxy(dataSource));
         DSLContext dsl = DSL.using(new DefaultConfiguration().set(SQLDialect.POSTGRES).set(connectionProvider));
-        return new JooqFindingWorkflowRepository(dsl, transactionManager);
+        return new JooqFindingWorkflowRepository(dsl, transactionManager,
+                new PostgresAuthorizationWriteGuard(dataSource));
     }
 
     private static void assertMigrationTargetAndV7State(Connection connection, String expectedDatabase)

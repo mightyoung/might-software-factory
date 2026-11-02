@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
+
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.ConfirmationDecision;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Transition;
@@ -50,7 +52,7 @@ class JooqFindingWorkflowConfirmationPersistenceTest {
         };
         DSLContext dsl = DSL.using(new MockConnection(provider), SQLDialect.POSTGRES);
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                dsl, new NoOpTransactionManager());
+                dsl, new NoOpTransactionManager(), org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
 
         repository.inTenantTransaction(TENANT, tx -> {
             FindingWorkflowCase safetyPending = new FindingWorkflowCase(TENANT, FINDING,
@@ -135,7 +137,7 @@ class JooqFindingWorkflowConfirmationPersistenceTest {
         };
         DSLContext dsl = DSL.using(new MockConnection(provider), SQLDialect.POSTGRES);
         JooqFindingWorkflowRepository repository = new JooqFindingWorkflowRepository(
-                dsl, new NoOpTransactionManager());
+                dsl, new NoOpTransactionManager(), org.mockito.Mockito.mock(AuthorizationWriteGuard.class));
 
         assertThatThrownBy(() -> repository.inTenantTransaction(TENANT, tx -> tx.claimCommand(
                 new FindingWorkflowContracts.WorkflowCommand(COMMAND, ACTOR,

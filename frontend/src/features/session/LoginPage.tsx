@@ -18,7 +18,8 @@ function failureMessage(error: unknown): string {
 }
 
 export function LoginPage({ notice }: { notice: Notice }) {
-  const { login } = useSession();
+  const { login, requiresTenantCode } = useSession();
+  const [tenantCode, setTenantCode] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -39,7 +40,7 @@ export function LoginPage({ notice }: { notice: Notice }) {
     setPending(true);
     setError(null);
     try {
-      await login(username, password);
+      await login(username, password, tenantCode);
       // 成功后 SessionProvider 切换为已登录，本组件会被卸载；返回地址由 App 统一处理。
     } catch (caught) {
       if (!mounted.current) return;
@@ -71,6 +72,20 @@ export function LoginPage({ notice }: { notice: Notice }) {
         )}
 
         <form onSubmit={handleSubmit} noValidate>
+          {requiresTenantCode && (
+            <label className="login-field">
+              <span>租户编码</span>
+              <input
+                name="tenantCode"
+                type="text"
+                autoComplete="organization"
+                autoFocus
+                value={tenantCode}
+                onChange={(event) => setTenantCode(event.target.value)}
+                disabled={pending}
+              />
+            </label>
+          )}
           <label className="login-field">
             <span>账号</span>
             <input
@@ -78,7 +93,7 @@ export function LoginPage({ notice }: { notice: Notice }) {
               name="username"
               type="text"
               autoComplete="username"
-              autoFocus
+              autoFocus={!requiresTenantCode}
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               disabled={pending}
@@ -100,6 +115,7 @@ export function LoginPage({ notice }: { notice: Notice }) {
           </button>
         </form>
 
+        {!requiresTenantCode && (
         <aside className="login-demo" aria-label="合成演示说明">
           <p>
             <strong>合成演示：</strong>
@@ -124,6 +140,7 @@ export function LoginPage({ notice }: { notice: Notice }) {
             ))}
           </ul>
         </aside>
+        )}
       </section>
     </main>
   );

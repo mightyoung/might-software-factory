@@ -37,9 +37,13 @@ public final class IdentityPostgresFixture implements AutoCloseable {
     private final HikariDataSource pool;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
+    private final com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard securityGuard;
     private final PasswordEncoder passwordEncoder;
     private UUID permissionId = UUID.randomUUID();
     private boolean ownsPermission;
+    private UUID readPermissionId = UUID.randomUUID();
+    private boolean ownsReadPermission;
+    private boolean navigationReadsEnabled;
     private boolean closed;
 
     public static IdentityPostgresFixture create(PasswordEncoder passwordEncoder) {
@@ -70,6 +74,14 @@ public final class IdentityPostgresFixture implements AutoCloseable {
         pool = new HikariDataSource(configuration);
         jdbc = new JdbcTemplate(pool);
         transaction = new TransactionTemplate(new DataSourceTransactionManager(pool));
+        securityGuard = new com.mightyoung.softwarefactory.authorization.PostgresAuthorizationWriteGuard(pool);
+    }
+
+    private void securityWrite(java.util.function.Consumer<org.springframework.transaction.TransactionStatus> work) {
+        transaction.executeWithoutResult(status -> {
+            securityGuard.forGlobalSecurityChange();
+            work.accept(status);
+        });
     }
 
     private void seed() {
@@ -79,7 +91,7 @@ public final class IdentityPostgresFixture implements AutoCloseable {
             throw new IllegalStateException("Identity fixture PostgreSQL major version does not match the test target");
         }
         String encoded = passwordEncoder.encode(SYNTHETIC_PASSWORD);
-        transaction.executeWithoutResult(status -> {
+        securityWrite(status -> {
             jdbc.update("insert into public.account (id, login_key, status, credential_version) values (?, ?, 'ACTIVE', 1)",
                     accountId, loginKey);
             jdbc.update("insert into public.principal (id, kind, account_id, status) values (?, 'HUMAN', ?, 'ACTIVE')",
@@ -112,6 +124,7 @@ public final class IdentityPostgresFixture implements AutoCloseable {
         setTenant(tenant.id);
         jdbc.update("insert into public.tenant (id, code, name, status, auth_epoch) values (?, ?, ?, 'ACTIVE', 1)",
                 tenant.id, tenant.code, "Synthetic identity tenant " + tenant.label + " " + suffix);
+        jdbc.update("insert into public.tenant_application (tenant_id, application_key, enabled, version) values (?, 'safety', true, 1)", tenant.id);
         jdbc.update("""
                 insert into public.tenant_member (tenant_id, id, account_id, status, auth_epoch, display_name)
                 values (?, ?, ?, 'ACTIVE', 1, ?)
@@ -141,9 +154,66 @@ public final class IdentityPostgresFixture implements AutoCloseable {
                 """, tenant.id, tenant.grantId, tenant.roleId, tenant.memberId, tenant.sourceId, tenant.memberId);
     }
 
+    /** Opt-in navigation fixture only: do not broaden the existing create-only identity cases. */
+    public void enableNavigationReads() {
+        if (navigationReadsEnabled) throw new IllegalStateException("Navigation reads already seeded");
+        securityWrite(status -> {
+            ownsReadPermission = jdbc.update("""
+                    insert into public.permission (id, code, resource_type, action)
+                    values (?, 'finding.read', 'finding', 'read') on conflict (code) do nothing
+                    """, readPermissionId) == 1;
+            if (!ownsReadPermission) {
+                var existing = jdbc.queryForMap("select id, resource_type, action from public.permission where code = 'finding.read'");
+                if (!"finding".equals(existing.get("resource_type")) || !"read".equals(existing.get("action"))) {
+                    throw new IllegalStateException("Existing finding.read permission has an incompatible definition");
+                }
+                readPermissionId = (UUID) existing.get("id");
+            }
+            for (TenantRows tenant : List.of(tenantA,tenantB)) {
+                setTenant(tenant.id);
+                requireOne(jdbc.update("""
+                        insert into public.role_permission (tenant_id, role_id, permission_id, scope_rule_id)
+                        values (?, ?, ?, ?)
+                        """, tenant.id,tenant.roleId,readPermissionId,tenant.scopeId));
+            }
+        });
+        navigationReadsEnabled = true;
+    }
+
+    public void setSafetyApplicationA(boolean enabled) { setSafetyApplication(tenantA, enabled); }
+    public void setSafetyApplicationB(boolean enabled) { setSafetyApplication(tenantB, enabled); }
+
+    private void setSafetyApplication(TenantRows tenant, boolean enabled) {
+        securityWrite(status -> {
+            setTenant(tenant.id);
+            requireOne(jdbc.update("""
+                    insert into public.tenant_application (tenant_id, application_key, enabled, version)
+                    values (?, 'safety', ?, 1)
+                    on conflict (tenant_id, application_key) do update
+                    set enabled = excluded.enabled, version = tenant_application.version + 1
+                    """, tenant.id, enabled));
+        });
+    }
+
+    public void removeSafetyApplicationA() {
+        securityWrite(status -> {
+            setTenant(tenantA.id);
+            requireOne(jdbc.update("delete from public.tenant_application where tenant_id = ? and application_key = 'safety'",tenantA.id));
+        });
+    }
+
+    public void revokeCreatePermissionA() {
+        securityWrite(status -> {
+            setTenant(tenantA.id);
+            requireOne(jdbc.update("""
+                    delete from public.role_permission where tenant_id = ? and role_id = ? and permission_id = ?
+                    """,tenantA.id,tenantA.roleId,permissionId));
+        });
+    }
+
     public void rotatePasswordAndCredentialVersion() {
         String encoded = passwordEncoder.encode(SYNTHETIC_NEW_PASSWORD);
-        transaction.executeWithoutResult(status -> {
+        securityWrite(status -> {
             requireOne(jdbc.update("""
                     update public.credential set secret_hash = ?, changed_at = current_timestamp
                     where account_id = ? and kind = 'PASSWORD'
@@ -162,18 +232,18 @@ public final class IdentityPostgresFixture implements AutoCloseable {
     }
 
     private void setAccountStatus(String status) {
-        transaction.executeWithoutResult(ignored -> requireOne(jdbc.update(
+        securityWrite(ignored -> requireOne(jdbc.update(
                 "update public.account set status = ? where id = ?", status, accountId)));
     }
 
     public void disablePrincipal() {
-        transaction.executeWithoutResult(status -> requireOne(jdbc.update(
+        securityWrite(status -> requireOne(jdbc.update(
                 "update public.principal set status = 'DISABLED' where id = ? and account_id = ?",
                 actorId, accountId)));
     }
 
     public void suspendTenantA() {
-        transaction.executeWithoutResult(status -> {
+        securityWrite(status -> {
             setTenant(tenantA.id);
             requireOne(jdbc.update("""
                     update public.tenant set status = 'SUSPENDED', auth_epoch = auth_epoch + 1
@@ -191,7 +261,7 @@ public final class IdentityPostgresFixture implements AutoCloseable {
     }
 
     private void setMembershipA(String status) {
-        transaction.executeWithoutResult(ignored -> {
+        securityWrite(ignored -> {
             setTenant(tenantA.id);
             requireOne(jdbc.update("""
                     update public.tenant_member set status = ?, auth_epoch = auth_epoch + 1
@@ -201,7 +271,7 @@ public final class IdentityPostgresFixture implements AutoCloseable {
     }
 
     public void revokeGrantA() {
-        transaction.executeWithoutResult(status -> {
+        securityWrite(status -> {
             setTenant(tenantA.id);
             requireOne(jdbc.update("update public.role_grant set valid_to = current_timestamp where tenant_id = ? and id = ?",
                     tenantA.id, tenantA.grantId));
@@ -300,13 +370,13 @@ public final class IdentityPostgresFixture implements AutoCloseable {
         try {
             for (TenantRows tenant : List.of(tenantA, tenantB)) {
                 try {
-                    transaction.executeWithoutResult(status -> cleanupTenant(tenant));
+                    securityWrite(status -> cleanupTenant(tenant));
                 } catch (RuntimeException exception) {
                     failure = combine(failure, exception);
                 }
             }
             try {
-                transaction.executeWithoutResult(status -> {
+                securityWrite(status -> {
                     setTenant(tenantCId);
                     jdbc.update("delete from public.tenant where id = ?", tenantCId);
                     requireNoRows("unjoined tenant", "select count(*) from public.tenant where id = ?", tenantCId);
@@ -315,10 +385,14 @@ public final class IdentityPostgresFixture implements AutoCloseable {
                 failure = combine(failure, exception);
             }
             try {
-                transaction.executeWithoutResult(status -> {
+                securityWrite(status -> {
                     jdbc.update("delete from public.credential where account_id = ? and kind = 'PASSWORD'", accountId);
                     jdbc.update("delete from public.principal where id = ? and account_id = ?", actorId, accountId);
                     jdbc.update("delete from public.account where id = ?", accountId);
+                    if (ownsReadPermission) {
+                        jdbc.update("delete from public.permission where id = ? and code = 'finding.read'", readPermissionId);
+                        requireNoRows("read permission", "select count(*) from public.permission where id = ?", readPermissionId);
+                    }
                     if (ownsPermission) {
                         jdbc.update("delete from public.permission where id = ? and code = ?", permissionId, CREATE_PERMISSION);
                         requireNoRows("permission", "select count(*) from public.permission where id = ?", permissionId);
@@ -339,8 +413,8 @@ public final class IdentityPostgresFixture implements AutoCloseable {
     private void cleanupTenant(TenantRows tenant) {
         setTenant(tenant.id);
         jdbc.update("delete from public.role_grant where tenant_id = ? and id = ?", tenant.id, tenant.grantId);
-        jdbc.update("delete from public.role_permission where tenant_id = ? and role_id = ? and permission_id = ?",
-                tenant.id, tenant.roleId, permissionId);
+        jdbc.update("delete from public.role_permission where tenant_id = ? and role_id = ? and permission_id in (?, ?)",
+                tenant.id, tenant.roleId, permissionId, readPermissionId);
         jdbc.update("delete from public.scope_org where tenant_id = ? and scope_rule_id = ? and org_id = ?",
                 tenant.id, tenant.scopeId, tenant.organizationId);
         jdbc.update("delete from public.scope_rule where tenant_id = ? and id = ?", tenant.id, tenant.scopeId);
@@ -350,14 +424,16 @@ public final class IdentityPostgresFixture implements AutoCloseable {
         jdbc.update("delete from public.org_unit where tenant_id = ? and id = ?", tenant.id, tenant.organizationId);
         jdbc.update("delete from public.tenant_member where tenant_id = ? and id = ? and account_id = ?",
                 tenant.id, tenant.memberId, accountId);
+        jdbc.update("delete from public.tenant_application where tenant_id = ? and application_key = 'safety'", tenant.id);
+        requireNoRows("application entitlement", "select count(*) from public.tenant_application where tenant_id = ?", tenant.id);
         jdbc.update("delete from public.tenant where id = ?", tenant.id);
         // Keep the same tenant setting: FORCE RLS must not hide an owned leftover from these checks.
         requireNoRows("role grant", "select count(*) from public.role_grant where tenant_id = ? and id = ?",
                 tenant.id, tenant.grantId);
         requireNoRows("role permission", """
                 select count(*) from public.role_permission
-                where tenant_id = ? and role_id = ? and permission_id = ?
-                """, tenant.id, tenant.roleId, permissionId);
+                where tenant_id = ? and role_id = ? and permission_id in (?, ?)
+                """, tenant.id, tenant.roleId, permissionId, readPermissionId);
         requireNoRows("scope organization", """
                 select count(*) from public.scope_org
                 where tenant_id = ? and scope_rule_id = ? and org_id = ?

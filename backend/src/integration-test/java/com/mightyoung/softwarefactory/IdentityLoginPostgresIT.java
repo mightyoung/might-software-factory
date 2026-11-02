@@ -21,6 +21,7 @@ import com.mightyoung.softwarefactory.identity.SecurityConfiguration;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.TenantLoginContextResolver;
 import com.mightyoung.softwarefactory.tenancy.JooqTenantLoginContextResolver;
+import com.mightyoung.softwarefactory.tenancy.JooqTenantApplicationReadRepository;
 import com.mightyoung.softwarefactory.tenancy.JooqTenantMembershipReadRepository;
 import jakarta.servlet.Filter;
 import jakarta.servlet.http.HttpServletRequest;
@@ -90,7 +91,7 @@ class IdentityLoginPostgresIT {
     private static final String CURRENT = "/api/v1/session/current";
     private static final String ORGANIZATIONS = "/api/v1/organizations/reportable";
     private static final List<String> IDENTITY_TABLES = List.of(
-            "account", "principal", "credential", "tenant", "tenant_member", "org_unit", "member_org",
+            "account", "principal", "credential", "tenant", "tenant_application", "tenant_member", "org_unit", "member_org",
             "position", "member_position", "user_group", "group_member", "permission", "role", "scope_rule",
             "role_permission", "role_grant", "scope_org");
     private static IdentityAcceptanceHttps https;
@@ -810,6 +811,7 @@ class IdentityLoginPostgresIT {
             "org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration"})
     @Import({SecurityConfiguration.class,
             JooqAccountPasswordCredentialReadRepository.class, JooqTenantLoginContextResolver.class,
+            JooqTenantApplicationReadRepository.class,
             SessionContextResolver.class, CurrentSessionService.class, JooqCurrentSessionReadRepository.class,
             CurrentSessionController.class, AuthenticationSessionController.class,
             JooqAccountStatusReadRepository.class, JooqPrincipalStatusReadRepository.class,

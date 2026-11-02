@@ -63,6 +63,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Revalidate identity and project current application entitlements and scoped permissions */
+        get: operations["getSessionBootstrap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/applications/{applicationId}/menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current authorized menu for a code-registered application */
+        get: operations["getApplicationMenu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session/current": {
         parameters: {
             query?: never;
@@ -127,6 +161,47 @@ export interface components {
             /** Format: uuid */
             memberId: string;
             displayName: string;
+        };
+        SessionBootstrapResponse: {
+            data: {
+                /** @constant */
+                schemaVersion: 1;
+                identity: components["schemas"]["CurrentSession"];
+                applications: components["schemas"]["ApplicationEntry"][];
+                permissions: components["schemas"]["NavigationPermissions"];
+                authorization: components["schemas"]["NavigationAuthorization"];
+            };
+        };
+        ApplicationEntry: {
+            id: string;
+            name: string;
+            entryPath: string;
+        };
+        NavigationPermissions: string[];
+        NavigationAuthorization: {
+            /** Format: int64 */
+            tenantAuthEpoch: number;
+            /** Format: int64 */
+            memberAuthEpoch: number;
+            /** Format: int64 */
+            applicationVersion: number | null;
+        };
+        ApplicationMenuResponse: {
+            data: {
+                /** @constant */
+                schemaVersion: 1;
+                applicationId: string;
+                title: string;
+                nodes: components["schemas"]["ApplicationMenuNode"][];
+                permissions: components["schemas"]["NavigationPermissions"];
+                authorization: components["schemas"]["NavigationAuthorization"];
+            };
+        };
+        ApplicationMenuNode: {
+            id: string;
+            label: string;
+            path: string;
+            permission: string;
         };
         ReportableOrganizationsResponse: {
             data: components["schemas"]["ReportableOrganization"][];
@@ -296,6 +371,54 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["CsrfDenied"];
+        };
+    };
+    getSessionBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative presentation projection. Empty applications and permissions deny access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBootstrapResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    getApplicationMenu: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current scoped menu. Business endpoints independently enforce the same entitlement. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplicationMenuResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            503: components["responses"]["DependencyUnavailable"];
         };
     };
     getCurrentSession: {

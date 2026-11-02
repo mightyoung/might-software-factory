@@ -153,3 +153,21 @@ describe("上报流程", () => {
     expect((await createSyntheticFindingStore().ledger.list({ query: {}, page: { index: 1, size: 20 }, view: "all" })).total).toBe(7);
   });
 });
+
+describe("真实后端会话（非合成）", () => {
+  it("不显示合成演示标识，台账与上报使用注入的适配器", async () => {
+    window.history.replaceState(null, "", "/safety/findings");
+    const base = createSyntheticSessionAdapter({ signedInAs: "demo.safety" });
+    const ledger = { list: vi.fn(async () => ({ items: [], page: { index: 1, size: 20 }, total: 0, pageCount: 0 })), get: vi.fn(async () => null) };
+    const submit = { submit: vi.fn(), listOrganizations: vi.fn(async () => [{ id: "o1", code: "A", name: "一车间" }]) };
+    render(<App sessionAdapter={{ ...base, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit })} />);
+    await screen.findByRole("heading", { name: "隐患台账" });
+    expect(screen.queryByText("合成演示")).not.toBeInTheDocument();
+    expect(screen.queryByText("前端合成数据")).not.toBeInTheDocument();
+    expect(screen.queryByText(/合成演示数据/)).not.toBeInTheDocument();
+    await waitFor(() => expect(ledger.list).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /新建上报/ }));
+    expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
+    expect(screen.queryByText("后端暂未接入")).not.toBeInTheDocument();
+  });
+});

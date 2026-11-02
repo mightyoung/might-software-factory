@@ -73,6 +73,49 @@ paths:
           description: Session invalidated if present; session/CSRF cookies are cleared.
         '403':
           $ref: '#/components/responses/CsrfDenied'
+  /api/v1/session/bootstrap:
+    get:
+      operationId: getSessionBootstrap
+      summary: Revalidate identity and project current application entitlements and scoped permissions
+      security:
+        - sessionCookieAuth: []
+      responses:
+        '200':
+          description: Authoritative presentation projection. Empty applications and permissions deny access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionBootstrapResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+  /api/v1/applications/{applicationId}/menu:
+    get:
+      operationId: getApplicationMenu
+      summary: Read the current authorized menu for a code-registered application
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: Current scoped menu. Business endpoints independently enforce the same entitlement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationMenuResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
   /api/v1/session/current:
     get:
       operationId: getCurrentSession
@@ -157,6 +200,77 @@ components:
         tenantName: { type: string }
         memberId: { type: string, format: uuid }
         displayName: { type: string }
+    SessionBootstrapResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [schemaVersion, identity, applications, permissions, authorization]
+          properties:
+            schemaVersion: { type: integer, const: 1 }
+            identity:
+              $ref: '#/components/schemas/CurrentSession'
+            applications:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApplicationEntry'
+            permissions:
+              $ref: '#/components/schemas/NavigationPermissions'
+            authorization:
+              $ref: '#/components/schemas/NavigationAuthorization'
+    ApplicationEntry:
+      type: object
+      additionalProperties: false
+      required: [id, name, entryPath]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        entryPath: { type: string }
+    NavigationPermissions:
+      type: array
+      uniqueItems: true
+      items: { type: string }
+    NavigationAuthorization:
+      type: object
+      additionalProperties: false
+      required: [tenantAuthEpoch, memberAuthEpoch, applicationVersion]
+      properties:
+        tenantAuthEpoch: { type: integer, format: int64, minimum: 0 }
+        memberAuthEpoch: { type: integer, format: int64, minimum: 0 }
+        applicationVersion: { type: [integer, 'null'], format: int64, minimum: 1 }
+    ApplicationMenuResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [schemaVersion, applicationId, title, nodes, permissions, authorization]
+          properties:
+            schemaVersion: { type: integer, const: 1 }
+            applicationId: { type: string }
+            title: { type: string }
+            nodes:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApplicationMenuNode'
+            permissions:
+              $ref: '#/components/schemas/NavigationPermissions'
+            authorization:
+              $ref: '#/components/schemas/NavigationAuthorization'
+    ApplicationMenuNode:
+      type: object
+      additionalProperties: false
+      required: [id, label, path, permission]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        path: { type: string }
+        permission: { type: string }
     ReportableOrganizationsResponse:
       type: object
       additionalProperties: false
