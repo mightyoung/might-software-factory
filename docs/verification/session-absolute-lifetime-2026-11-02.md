@@ -29,6 +29,7 @@ The existing real HTTPS/PostgreSQL identity suite adds four scenarios: a deadlin
 | Failsafe total and package | 27 tests passed, zero failures/errors/skips; BUILD SUCCESS |
 | Post-run inspection | Original ACLs restored on all 19 temporarily granted tables; separate read-only inspection found all 30 selected resource tables empty |
 | Independent review | No blocking issue; in-flight limitation retained |
+| Frontend contract consumers | Regenerated session API types; contract comparison, typecheck, 176 tests and production build passed locally |
 
 The fixed-clock workflow HTTP fixture initially stamped synthetic sessions using wall time, so the new future-time gate correctly rejected them. The fixture now shares its existing fixed instant between workflow and session metadata; a subsequent sequential clean run passed. Linux JDK21 CI runs both offline suites with secure-filesystem capability required; its revision-specific result is recorded on the PR and does not replace LAN database evidence.
 
