@@ -145,6 +145,21 @@ describe("新建上报表单", () => {
     expect(await screen.findByText("已提交上报")).toBeInTheDocument();
   });
 
+  it("同一 React 批次连续触发表单提交时只发送一次请求和成功回调", async () => {
+    const gate = deferred<FindingSubmitResult>();
+    const { submit, props } = setup(() => gate.promise);
+    fillValid();
+    const form = submitButton().closest("form")!;
+    act(() => {
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    await act(async () => gate.resolve(RESULT));
+    expect(await screen.findByText("已提交上报")).toBeInTheDocument();
+    expect(props.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
   it("服务不可用：保留已填内容，提示可安全重试；重试复用同一个幂等键", async () => {
     let attempts = 0;
     const { submit, props } = setup(async () => {

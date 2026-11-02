@@ -234,7 +234,7 @@ export function FindingReportForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting) return;
+    if (submitting || controller.current) return;
 
     const found = validateFindingDraft(draft, now());
     setErrors(found);
@@ -269,6 +269,8 @@ export function FindingReportForm({
         focusFirstError(error.fieldErrors);
       }
       if (kind === "unauthenticated") onUnauthenticated?.();
+    } finally {
+      if (controller.current === abort) controller.current = null;
     }
   }
 

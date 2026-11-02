@@ -110,9 +110,22 @@ class IdentityLoginPostgresIT {
     private final List<IdentityAcceptanceHttps.Browser> browsers = new ArrayList<>();
     private int backendPid;
 
+    /** Both profiles keep identity read-only. Business adds an explicitly confirmed engine/publication consumer. */
+    private static boolean validateRuntimePrivilegeProfile(String database) {
+        String profile = System.getenv().getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE", "identity-only");
+        if ("identity-only".equals(profile)) return false;
+        if (!"business-workflow".equals(profile)
+                || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:" + database)
+                .equals(System.getenv("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
+            throw new IllegalStateException("Runtime privilege profile requires an explicit database-specific business acknowledgement");
+        }
+        return true;
+    }
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) throws Exception {
         var target = IdentityAcceptanceTarget.preflightFromEnvironment(System.getenv());
+        validateRuntimePrivilegeProfile(target.databaseName());
         if (https == null) https = IdentityAcceptanceHttps.create();
         properties.add("spring.datasource.url", target::jdbcUrl);
         properties.add("spring.datasource.username", () -> System.getenv("LAN_PG_APP_USERNAME"));
@@ -520,7 +533,7 @@ class IdentityLoginPostgresIT {
     }
 
     @Test
-    void runtimeIdentityHasOnlyIdentityReadsAndSessionDmlAndCannotUpdateAnAccount() {
+    void runtimeIdentityReadsAndAdditionalConsumersMatchTheConfirmedPrivilegeProfile() {
         assertThat(runtimeJdbc.queryForObject("select current_setting('server_version_num')::int",
                 Integer.class) / 10_000).isEqualTo(18);
         for (String table : IDENTITY_TABLES) {
@@ -583,22 +596,59 @@ class IdentityLoginPostgresIT {
                         'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
                     """, Boolean.class, "public." + table)).as("Only required Session operations on %s", table).isFalse();
         }
-        for (String table : List.of("p0_finding_projection", "event_publication")) {
-            assertThat(runtimeJdbc.queryForObject(
-                    "select has_table_privilege(current_user, cast(? as regclass), 'SELECT')",
-                    Boolean.class, "public." + table)).as("No unrelated table read on %s", table).isFalse();
+        if (validateRuntimePrivilegeProfile(runtimeJdbc.queryForObject("select current_database()", String.class))) {
+            assertThat(runtimeJdbc.queryForObject("select to_regclass('public.p0_finding_projection') is null", Boolean.class))
+                    .as("Business target is independent of the P0 probe schema").isTrue();
+            for (String operation : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
+                assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user, 'public.event_publication', ?)",
+                        Boolean.class, operation)).as("Actual publication registry %s", operation).isTrue();
+            }
+            assertThat(runtimeJdbc.queryForObject("""
+                    select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'
+                      and left(relname, 4) in ('act_', 'flw_')
+                      and has_table_privilege(current_user, oid, 'SELECT')
+                    """, Integer.class)).as("Fixed Flowable8 schema read access").isEqualTo(45);
+            assertThat(runtimeJdbc.queryForObject("""
+                    select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'
+                      and left(relname, 4) in ('act_', 'flw_')
+                      and (pg_get_userbyid(relowner) = current_user or
+                           has_table_privilege(current_user, oid, 'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'))
+                    """, Integer.class)).as("No engine ownership or maintenance").isZero();
+            assertThat(runtimeJdbc.queryForObject("""
+                    select has_table_privilege(current_user, 'public.audit_event', 'SELECT')
+                       and has_table_privilege(current_user, 'public.audit_event', 'INSERT')
+                       and not has_table_privilege(current_user, 'public.audit_event', 'UPDATE,DELETE,TRUNCATE')
+                       and not has_schema_privilege(current_user, 'public', 'CREATE')
+                       and not has_database_privilege(current_user, current_database(), 'TEMP')
+                    """, Boolean.class)).as("Append-only audit and no DDL/TEMP").isTrue();
+        } else {
+            for (String table : List.of("p0_finding_projection", "event_publication")) {
+                assertThat(runtimeJdbc.queryForObject(
+                        "select has_table_privilege(current_user, cast(? as regclass), 'SELECT')",
+                        Boolean.class, "public." + table)).as("No unrelated table read on %s", table).isFalse();
+            }
+            assertThat(runtimeJdbc.queryForObject("""
+                    select count(*) from pg_class
+                    where relnamespace = 'public'::regnamespace and relkind = 'r'
+                      and left(relname, 4) in ('act_', 'flw_')
+                    """, Integer.class)).as("The negative Flowable privilege check must not be vacuous").isPositive();
+            assertThat(runtimeJdbc.queryForObject("""
+                    select count(*) from pg_class
+                    where relnamespace = 'public'::regnamespace and relkind = 'r'
+                      and left(relname, 4) in ('act_', 'flw_')
+                      and has_table_privilege(current_user, oid, 'SELECT')
+                    """, Integer.class)).as("No Flowable table read privileges").isZero();
         }
-        assertThat(runtimeJdbc.queryForObject("""
-                select count(*) from pg_class
-                where relnamespace = 'public'::regnamespace and relkind = 'r'
-                  and left(relname, 4) in ('act_', 'flw_')
-                """, Integer.class)).as("The negative Flowable privilege check must not be vacuous").isPositive();
-        assertThat(runtimeJdbc.queryForObject("""
-                select count(*) from pg_class
-                where relnamespace = 'public'::regnamespace and relkind = 'r'
-                  and left(relname, 4) in ('act_', 'flw_')
-                  and has_table_privilege(current_user, oid, 'SELECT')
-                """, Integer.class)).as("No Flowable table read privileges").isZero();
+
+        String forbiddenTable = "identity_forbidden_" + java.util.UUID.randomUUID().toString().replace("-", "");
+        Throwable ddlDenied = catchThrowable(() -> runtimeJdbc.execute(
+                "create table public." + forbiddenTable + " (id integer primary key)"));
+        assertThat(ddlDenied).isInstanceOf(DataAccessException.class);
+        assertThat(((DataAccessException) ddlDenied).getMostSpecificCause())
+                .isInstanceOfSatisfying(SQLException.class,
+                        sql -> assertThat(sql.getSQLState()).isEqualTo("42501"));
+        assertThat(runtimeJdbc.queryForObject("select to_regclass(?) is null", Boolean.class,
+                "public." + forbiddenTable)).as("Rejected DDL must leave no object").isTrue();
 
         String originalStatus = runtimeJdbc.queryForObject(
                 "select status from public.account where id = ?", String.class, fixture.accountId());

@@ -98,3 +98,9 @@ Finding 命令在同一数据源的受管、可写 READ COMMITTED 事务中，�
 当前实现和离线测试不是两事务实库证明；实库验收必须观察实际等待关系，覆盖两种提交顺序、撤权和新增/删除 grant、超时、回滚释放与外层隔离级别拒绝。
 
 依据：[PostgreSQL advisory locks](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS)、[READ COMMITTED](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)。
+
+### ADR023 补充：不可变流程绑定的串行化
+
+真实最小权限验收发现 `SELECT ... FOR UPDATE` 也要求绑定表 UPDATE 权限。保持绑定表的 SELECT/INSERT 权限，改为 start/complete 都先取得权限控制域，再取得独立 two-int namespace `0x4D534657` 下的绑定事务 advisory 锁，随后独立语句读取绑定，再访问引擎。锁键由 tenant、长度限定的 businessType、businessId 和 submission=1 的 SHA-256 前四字节生成；碰撞仅保守阻塞。权限 tenant 使用 bigint 键空间，权限 root 使用不同 two-int namespace。禁止单事务内追加不同绑定；不把流程锁当动作授权。
+
+复用同一权限 guard 验证实际受管 RW/RC 事务及保存点失效，绑定锁也保留更严格的五秒等待上限，失败整笔回滚。完整顺序为 root→tenant→既有 finding→receipt→binding→engine；创建时无既有 finding 行。该协议适用于当前同步引擎和同一数据源；未来后台或批量跨绑定写入需另行设计。运行账号不新增 UPDATE 权限。
