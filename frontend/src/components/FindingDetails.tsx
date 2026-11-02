@@ -165,6 +165,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
               key={finding.id}
               finding={finding}
               adapter={commandAdapter}
+              refreshing={loading}
               onChanged={onCommandChanged ?? onRetry}
               onUnauthenticated={onUnauthenticated}
             />

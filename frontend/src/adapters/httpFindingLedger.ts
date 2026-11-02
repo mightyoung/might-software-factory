@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/finding-ledger";
+import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import type { FindingRecord, FindingState } from "../domain/finding";
 import { findingLedgerSchema } from "../features/findings/schema";
@@ -76,9 +77,15 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
 
 function toAccessError(error: unknown): unknown {
   if (!(error instanceof ApiError)) return error;
-  if (error.status === 401) return new FindingLedgerAccessError("unauthenticated");
-  if (error.status === 403 || error.status === 404) return new FindingLedgerAccessError("forbidden");
-  return error;
+  switch (classifyHttpError(error)) {
+    case "unauthenticated":
+      return new FindingLedgerAccessError("unauthenticated");
+    case "forbidden":
+    case "notVisible":
+      return new FindingLedgerAccessError("forbidden");
+    default:
+      return error; // 其余按“未知失败”由界面显示通用提示
+  }
 }
 
 /** 视图过滤作为额外 AND 条件追加；与用户自选的状态条件求交集。 */
@@ -153,7 +160,7 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
         return toFindingRecord(body.data);
       } catch (error) {
         // 不存在与无权限同为 404，按契约呈现为“找不到”，不区分原因。
-        if (error instanceof ApiError && error.status === 404) return null;
+        if (error instanceof ApiError && classifyHttpError(error) === "notVisible") return null;
         throw toAccessError(error);
       }
     },
