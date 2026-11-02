@@ -126,9 +126,11 @@ final class IdentityAcceptanceHttps implements AutoCloseable {
         private final URI origin;
         private final CookieManager cookies = new CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER);
         private final HttpClient client;
+        private final SSLContext context;
 
         private Browser(int port, SSLContext context) {
             origin = URI.create("https://127.0.0.1:" + port);
+            this.context = context;
             SSLParameters parameters = new SSLParameters();
             parameters.setEndpointIdentificationAlgorithm("HTTPS");
             client = HttpClient.newBuilder().sslContext(context).sslParameters(parameters)
@@ -138,6 +140,20 @@ final class IdentityAcceptanceHttps implements AutoCloseable {
 
         Response get(String path) throws Exception {
             return send("GET", path, null, null);
+        }
+
+        Response getWithHeaders(String path, Map<String, String> headers) throws Exception {
+            return send("GET", path, null, null, headers);
+        }
+
+        /** Separate cookie jar, preserving actual cookies while changing only the same-host test port. */
+        Browser copyTo(int port) {
+            if (port < 1 || port > 65535) throw new IllegalArgumentException("Invalid local test port");
+            Browser copy = new Browser(port, context);
+            for (HttpCookie cookie : cookies.getCookieStore().getCookies()) {
+                if (!cookie.hasExpired()) copy.cookies.getCookieStore().add(copy.origin, (HttpCookie) cookie.clone());
+            }
+            return copy;
         }
 
         Response getWithJsonBody(String path, String body) throws Exception {
