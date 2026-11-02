@@ -131,8 +131,9 @@ describe("HTTP adapters × 契约模拟服务", () => {
     await expect(submit.submit({ ...draft, description: "另一条描述" }, { idempotencyKey: key, organizationId: orgs[0]!.id })).rejects.toMatchObject({ kind: "conflict" });
     const listed = await createHttpFindingLedger(c).list({ query: { keyword: "", state: "", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
     expect(listed.items.filter((r) => r.code === first.code)).toHaveLength(1);
+    expect(listed.items.find((r) => r.id === first.id)?.urgency).toBe(draft.urgency);
     const record = (await createHttpFindingLedger(c).get(first.id))!;
-    expect(record).toMatchObject({ source: "INSPECTION", urgency: "URGENT", location: "B 工房", state: "PERSON_CONFIRM_PENDING" });
+    expect(record).toMatchObject({ source: "INSPECTION", urgency: draft.urgency, location: "B 工房", state: "PERSON_CONFIRM_PENDING" });
   });
 
   it("服务端校验：越权组织与空白位置 → validation，带字段", async () => {
