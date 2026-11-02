@@ -196,7 +196,7 @@ public final class FindingWorkflowCommandService {
         String stage = requestedStage.name();
         String permission = requestedStage == ConfirmationStage.PERSON ? PERSON_CONFIRM : SAFETY_CONFIRM;
         String taskKey = requestedStage == ConfirmationStage.PERSON ? "personConfirm" : "safetyConfirm";
-        String reason = confirmationReason(request.reason());
+        String reason = notEstablishedReason(request.reason());
         CurrentTenantContext context = sessionContextResolver.currentTenant();
         return repository.inTenantTransaction(context.tenantId(), tx -> {
             FindingWorkflowCase current = visibleForCommand(tx, findingId);
@@ -532,11 +532,17 @@ public final class FindingWorkflowCommandService {
         if (reason == null || reason.length() > FindingWorkflowContracts.MAX_CONFIRMATION_OPINION_LENGTH) {
             throw new FindingWorkflowRuleException("A confirmation opinion cannot exceed 4000 characters");
         }
-        String normalized = ConfirmationOpinionText.trim(reason);
+        // Preserve the published confirmation-payload-v2 canonicalization and immutable receipts.
+        String normalized = reason.strip();
         if (!ConfirmationOpinionText.hasContent(normalized)) {
             throw new FindingWorkflowRuleException("A confirmation opinion is required");
         }
         return normalized;
+    }
+
+    private static String notEstablishedReason(String reason) {
+        // The new close action has its own fingerprint namespace and Unicode normalization.
+        return ConfirmationOpinionText.trim(confirmationReason(reason));
     }
 
     private static String professionalGrade(String grade) {

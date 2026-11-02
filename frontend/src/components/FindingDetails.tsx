@@ -9,6 +9,8 @@ import {
 } from "../domain/finding";
 import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
+import type { FindingCommandAdapter } from "../adapters/findingCommands";
+import { FindingCommandPanel } from "./FindingCommandPanel";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
 interface FindingDetailsProps {
@@ -17,9 +19,13 @@ interface FindingDetailsProps {
   error: FindingLedgerReadFailureKind | null;
   onClose: () => void;
   onRetry: () => void;
+  /** 提供时显示可用的流程操作（需要记录带版本号）；缺省为演示用的禁用按钮。 */
+  commandAdapter?: FindingCommandAdapter;
+  onCommandChanged?: () => void;
+  onUnauthenticated?: () => void;
 }
 
-export function FindingDetails({ finding, loading, error, onClose, onRetry }: FindingDetailsProps) {
+export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated }: FindingDetailsProps) {
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
       <div className="detail-heading">
@@ -148,24 +154,30 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry }: Fi
             </ul>
           </section>
 
-          <p className="action-hint" role="note">
-            审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
-          </p>
-          <div className="detail-actions">
-            {getFindingActions(finding.state).map((action) => (
-              <button
-                className="button button-disabled"
-                type="button"
-                disabled
-                title={action.reason}
-                key={action.label}
-              >
-                {action.label}
-              </button>
-            ))}
-            {finding.state === "CLOSED" && <span className="closed-note">此示例状态不可变更</span>}
-            {finding.state === "NOT_ESTABLISHED" && <span className="closed-note">未成立记录已终止；新证据应创建关联记录</span>}
-          </div>
+          {commandAdapter ? (
+            <FindingCommandPanel
+              key={finding.id}
+              finding={finding}
+              adapter={commandAdapter}
+              onChanged={onCommandChanged ?? onRetry}
+              onUnauthenticated={onUnauthenticated}
+            />
+          ) : (
+            <>
+              <p className="action-hint" role="note">
+                审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
+              </p>
+              <div className="detail-actions">
+                {getFindingActions(finding.state).map((action) => (
+                  <button className="button button-disabled" type="button" disabled title={action.reason} key={action.label}>
+                    {action.label}
+                  </button>
+                ))}
+                {finding.state === "CLOSED" && <span className="closed-note">此示例状态不可变更</span>}
+                {finding.state === "NOT_ESTABLISHED" && <span className="closed-note">未成立记录已终止；新证据应创建关联记录</span>}
+              </div>
+            </>
+          )}
         </>
       )}
     </aside>

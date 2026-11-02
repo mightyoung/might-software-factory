@@ -11,6 +11,7 @@ import com.mightyoung.softwarefactory.files.FindingEvidenceFileAccess;
 import com.mightyoung.softwarefactory.files.FindingEvidenceReadScope;
 import com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel;
 import com.mightyoung.softwarefactory.files.LocalPrivateFileStorageAdapter;
+import com.mightyoung.softwarefactory.files.SecureLocalStorageTestSupport;
 import com.mightyoung.softwarefactory.files.VerifiedFileContent;
 import com.mightyoung.softwarefactory.files.VerifiedFileEvidenceSnapshot;
 import com.mightyoung.softwarefactory.files.VerifiedStorageVersionReadPort;
@@ -200,6 +201,7 @@ class FindingEvidenceContentReadServiceTest {
 
     @Test
     void transactionFailuresReleaseTheRealAdapterBudgetForLaterReaders() throws Exception {
+        SecureLocalStorageTestSupport.requireOrAssumeSecureStorage(contentRoot);
         Set<PosixFilePermission> privateDirectory = Set.of(PosixFilePermission.OWNER_READ,
                 PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
         Files.setPosixFilePermissions(contentRoot, privateDirectory);

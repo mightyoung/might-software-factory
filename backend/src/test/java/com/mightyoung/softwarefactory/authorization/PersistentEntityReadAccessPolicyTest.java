@@ -18,13 +18,33 @@ class PersistentEntityReadAccessPolicyTest {
     private static final UUID ORG_ID = UUID.fromString("31000000-0000-0000-0000-000000000001");
 
     private final CurrentTenantContext session =
-            new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L);
+            new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L, 1L);
+
+    @Test
+    void absentDisabledAndRevokedEntitlementsFailClosedBeforeReadingScopes() {
+        var repository = org.mockito.Mockito.mock(PersistentEntityReadAuthorizationRepository.class);
+        var state = new java.util.concurrent.atomic.AtomicReference<Optional<com.mightyoung.softwarefactory.tenancy.TenantApplicationState>>(
+                Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1)));
+        org.mockito.Mockito.when(repository.loadFindingReadSnapshot(session,"finding.read"))
+                .thenReturn(Optional.of(snapshot("ACTIVE","ACTIVE","ACTIVE",17,23,Set.of(ORG_ID))));
+        var policy = new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> {
+            assertThat(tenant).isEqualTo(TENANT_ID); assertThat(app).isEqualTo("safety"); return state.get();
+        });
+        assertThat(policy.resolveEntityReadGrant(session,"finding")).isPresent();
+        org.mockito.Mockito.clearInvocations(repository);
+        state.set(Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(false,2)));
+        assertThat(policy.resolveEntityReadGrant(session,"finding")).isEmpty();
+        state.set(Optional.empty());
+        assertThat(policy.resolveEntityReadGrant(session,"finding")).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(repository);
+    }
 
     @Test
     void grantsFindingReadOnlyForActiveIdentityWithCurrentEpochsAndAnExplicitOrganizationScope() {
         PersistentEntityReadAuthorizationRepository repository = (context, permissionCode) ->
                 Optional.of(snapshot("ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of(ORG_ID)));
-        EntityReadAccessPolicy policy = new PersistentEntityReadAccessPolicy(repository);
+        EntityReadAccessPolicy policy = new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)));
 
         Optional<EntityReadGrant> grant = policy.resolveEntityReadGrant(session, "finding");
 
@@ -40,7 +60,8 @@ class PersistentEntityReadAccessPolicyTest {
             PersistentEntityReadAuthorizationRepository repository = (context, permissionCode) ->
                     Optional.of(identity);
 
-            assertThat(new PersistentEntityReadAccessPolicy(repository)
+            assertThat(new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                     .resolveEntityReadGrant(session, "finding")).isEmpty();
         }
     }
@@ -59,7 +80,8 @@ class PersistentEntityReadAccessPolicyTest {
             PersistentEntityReadAuthorizationRepository repository = (context, permissionCode) ->
                     Optional.of(identity);
 
-            assertThat(new PersistentEntityReadAccessPolicy(repository)
+            assertThat(new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                     .resolveEntityReadGrant(session, "finding")).isEmpty();
         }
     }
@@ -72,7 +94,8 @@ class PersistentEntityReadAccessPolicyTest {
             PersistentEntityReadAuthorizationRepository repository = (context, permissionCode) ->
                     Optional.of(identity);
 
-            assertThat(new PersistentEntityReadAccessPolicy(repository)
+            assertThat(new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                     .resolveEntityReadGrant(session, "finding")).isEmpty();
         }
     }
@@ -83,11 +106,14 @@ class PersistentEntityReadAccessPolicyTest {
                 Optional.of(snapshot("ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of()));
         PersistentEntityReadAuthorizationRepository missing = (context, permissionCode) -> Optional.empty();
 
-        assertThat(new PersistentEntityReadAccessPolicy(emptyScope)
+        assertThat(new PersistentEntityReadAccessPolicy(emptyScope, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                 .resolveEntityReadGrant(session, "finding")).isEmpty();
-        assertThat(new PersistentEntityReadAccessPolicy(missing)
+        assertThat(new PersistentEntityReadAccessPolicy(missing, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                 .resolveEntityReadGrant(session, "finding")).isEmpty();
-        assertThat(new PersistentEntityReadAccessPolicy(emptyScope)
+        assertThat(new PersistentEntityReadAccessPolicy(emptyScope, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)))
                 .resolveEntityReadGrant(session, "unknown")).isEmpty();
     }
 
@@ -99,7 +125,8 @@ class PersistentEntityReadAccessPolicyTest {
             return Optional.of(snapshot("ACTIVE", "ACTIVE", "ACTIVE", 17L, 23L, Set.of(ORG_ID)));
         };
 
-        new PersistentEntityReadAccessPolicy(repository).resolveEntityReadGrant(session, "finding");
+        new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1))).resolveEntityReadGrant(session, "finding");
 
         assertThat(observedCode[0]).isEqualTo("finding.read");
     }

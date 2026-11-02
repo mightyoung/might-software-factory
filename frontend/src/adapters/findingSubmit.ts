@@ -7,15 +7,24 @@ export interface FindingSubmitContext {
    * 同键异参应被拒绝（conflict）。
    */
   idempotencyKey: string;
+  /** 所属组织：仅当适配器提供 listOrganizations 时必填，来自当前会话有权上报的组织。 */
+  organizationId?: string;
   signal?: AbortSignal;
+}
+
+export interface ReportableOrganization {
+  id: string;
+  code: string;
+  name: string;
 }
 
 export interface FindingSubmitResult {
   id: string;
   code: string;
   state: FindingState;
-  submittedAt: string;
-  backfill: boolean;
+  /** 后端回执目前不含提交时间和补报标记（frontend-contract-gap W6），HTTP 实现不推断。 */
+  submittedAt?: string;
+  backfill?: boolean;
 }
 
 /**
@@ -24,10 +33,12 @@ export interface FindingSubmitResult {
  */
 export interface FindingSubmitAdapter {
   submit(draft: FindingDraft, context: FindingSubmitContext): Promise<FindingSubmitResult>;
+  /** 有此方法时表单要求先选择组织；列表为空表示当前没有可上报的组织。失败抛 FindingSubmitError。 */
+  listOrganizations?(signal?: AbortSignal): Promise<readonly ReportableOrganization[]>;
 }
 
 /** 仅为界面语义分类，对应设计里的 401/403/409/422/503；真实传输需显式映射服务端行为。 */
-export type FindingSubmitFailureKind = "validation" | "unauthenticated" | "forbidden" | "conflict" | "unavailable";
+export type FindingSubmitFailureKind = "validation" | "workflow" | "unauthenticated" | "forbidden" | "conflict" | "unavailable";
 
 export class FindingSubmitError extends Error {
   readonly kind: FindingSubmitFailureKind;

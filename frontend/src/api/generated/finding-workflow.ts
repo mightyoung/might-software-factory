@@ -226,12 +226,12 @@ export interface components {
         };
         PersonConfirmationRequest: {
             expectedVersion: number;
-            /** @description Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000); at least one other code point is required. */
+            /** @description Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java String.strip() canonicalization and confirmation-payload-v2 receipt compatibility. Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged. */
             reason: string;
         };
         SafetyConfirmationRequest: {
             expectedVersion: number;
-            /** @description Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000); at least one other code point is required. */
+            /** @description Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java String.strip() canonicalization and confirmation-payload-v2 receipt compatibility. Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged. */
             reason: string;
             /**
              * @description Professional grade assigned by the safety confirmer.

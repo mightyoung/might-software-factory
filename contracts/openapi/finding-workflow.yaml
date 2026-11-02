@@ -24,13 +24,11 @@ x-confirmation-terminal-outcomes:
     Either confirmation stage may end its review branch as not established with a required opinion.
     This is distinct from CLOSED, which remains the successful remediation acceptance outcome.
 x-confirmation-idempotency-compatibility: >-
-  Existing confirmation command receipts are immutable. This contract retains the
-  confirmation-payload-v2 fingerprint name while normalizing opinions with Unicode White_Space
-  trimming. A receipt produced by the earlier String.strip normalization can conflict when the
-  original opinion has leading or trailing Unicode White_Space such as NBSP. Before rollout,
-  clients must read back the finding, confirmation opinion, grade, and version to reconcile any
-  previously completed action; they must not overwrite or assume absence of an old receipt. Use a
-  new idempotency key only for an action the current state still accepts, after reconciliation.
+  Existing confirmation receipts remain immutable. Ordinary APPROVE requests retain Java
+  String.strip() canonicalization and the published confirmation-payload-v2 fingerprint;
+  the same original body and key, including NBSP boundaries, replay the original result.
+  A changed canonical payload conflicts. Unicode White_Space-only opinions are rejected.
+  The new not-established command has its own Unicode trimming and fingerprint namespace.
 x-remediation-loop: >-
   A failed safety verification requires a reason, retains the failed round, and routes through a
   safety re-dispatch before the new remediation notice is issued. Only a passing safety verification
@@ -655,9 +653,9 @@ components:
           minLength: 1
           maxLength: 4000
           description: >-
-            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
-            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
+            Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java
+            String.strip() canonicalization and confirmation-payload-v2 receipt compatibility.
+            Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged.
     SafetyConfirmationRequest:
       type: object
       additionalProperties: false
@@ -669,9 +667,9 @@ components:
           minLength: 1
           maxLength: 4000
           description: >-
-            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
-            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
+            Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java
+            String.strip() canonicalization and confirmation-payload-v2 receipt compatibility.
+            Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged.
         grade:
           type: string
           enum: [GENERAL, MAJOR]

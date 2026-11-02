@@ -10,7 +10,9 @@ export type SessionState =
 export interface SessionContextValue {
   state: SessionState;
   /** 失败时抛出 SessionError，由调用方（登录页）展示；成功后返回 bootstrap。 */
-  login(username: string, password: string): Promise<SessionBootstrap>;
+  login(username: string, password: string, tenantCode?: string): Promise<SessionBootstrap>;
+  /** 当前适配器登录是否需要租户码。 */
+  requiresTenantCode: boolean;
   logout(): Promise<void>;
   /** 服务端返回 401（会话失效或被撤销）时调用：清除本地登录态并回到登录页。 */
   expire(): void;
@@ -51,8 +53,8 @@ export function SessionProvider({
   }, [adapter]);
 
   const login = useCallback(
-    async (username: string, password: string) => {
-      const session = await adapter.login({ username, password });
+    async (username: string, password: string, tenantCode?: string) => {
+      const session = await adapter.login({ username, password, tenantCode });
       generation.current += 1;
       setState({ status: "signedIn", session });
       return session;
@@ -88,7 +90,11 @@ export function SessionProvider({
     [adapter, expire],
   );
 
-  const value = useMemo(() => ({ state, login, logout, expire, loadMenu }), [state, login, logout, expire, loadMenu]);
+  const requiresTenantCode = adapter.requiresTenantCode === true;
+  const value = useMemo(
+    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode }),
+    [state, login, logout, expire, loadMenu, requiresTenantCode],
+  );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

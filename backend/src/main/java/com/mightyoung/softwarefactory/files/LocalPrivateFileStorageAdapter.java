@@ -170,10 +170,12 @@ public final class LocalPrivateFileStorageAdapter
                 throw new FileEvidenceTrustUnavailableException();
             }
 
+            // Canonicalize before signing so PostgreSQL timestamptz preserves the exact receipt time.
             ContentVerificationReceipt receipt = new ContentVerificationReceipt(
                     UUID.randomUUID(), file.tenantId(), file.fileId(), digest, file.storageVersion(),
                     FileEvidenceVerificationLevel.CONTENT, verifierId, verifierKeyId, policyVersion,
-                    OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
+                    OffsetDateTime.ofInstant(clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS),
+                            ZoneOffset.UTC));
             if (writeReceipt(receipt)) return receipt;
             ContentVerificationReceipt existing = readReceipt(lookupName(file), null)
                     .filter(value -> matchesFile(file, value))

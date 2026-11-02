@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.authorization;
 
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
@@ -13,9 +14,12 @@ public final class PersistentEntityReadAccessPolicy implements EntityReadAccessP
     private static final String FINDING_READ_PERMISSION = "finding.read";
 
     private final PersistentEntityReadAuthorizationRepository repository;
+    private final TenantApplicationReadRepository applications;
 
-    public PersistentEntityReadAccessPolicy(PersistentEntityReadAuthorizationRepository repository) {
+    public PersistentEntityReadAccessPolicy(PersistentEntityReadAuthorizationRepository repository,
+            TenantApplicationReadRepository applications) {
         this.repository = repository;
+        this.applications = applications;
     }
 
     @Override
@@ -23,6 +27,11 @@ public final class PersistentEntityReadAccessPolicy implements EntityReadAccessP
         if (context == null || !FINDING_ENTITY_KEY.equals(entityKey)
                 || context.actorId() == null || context.accountId() == null
                 || context.tenantId() == null || context.memberId() == null) {
+            return Optional.empty();
+        }
+
+        if (applications.findCurrent(context.tenantId(), "safety")
+                .filter(com.mightyoung.softwarefactory.tenancy.TenantApplicationState::enabled).isEmpty()) {
             return Optional.empty();
         }
 

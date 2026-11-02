@@ -613,7 +613,7 @@ class FindingWorkflowCommandServiceTest {
     }
 
     @Test
-    void legacyConfirmationReceiptWithUnicodeBoundaryOpinionIsNotRewrittenOrSilentlyReplayed() {
+    void legacyConfirmationReceiptWithUnicodeBoundaryOpinionReplaysExactlyWithoutHistoryRewrite() {
         UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000142");
         FindingWorkflowCase alreadyConfirmed = safetyPendingFinding(TENANT_A, findingId);
         UUID oldCommandId = command("60000000-0000-0000-0000-000000000142");
@@ -628,8 +628,10 @@ class FindingWorkflowCommandServiceTest {
         repository.seedCommand(TENANT_A, oldCommandId, ACTOR_ID, "finding.confirm.person", oldHash, oldResult);
         asMember(PERSON_CONFIRMER, TENANT_A);
 
+        assertThat(service.confirmPerson(oldCommandId, findingId, 1L,
+                new FindingWorkflowContracts.PersonConfirmationCommand(legacyOpinion))).isEqualTo(oldResult);
         assertThatThrownBy(() -> service.confirmPerson(oldCommandId, findingId, 1L,
-                new FindingWorkflowContracts.PersonConfirmationCommand(legacyOpinion)))
+                new FindingWorkflowContracts.PersonConfirmationCommand("Changed opinion")))
                 .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
 
         assertThat(repository.finding(TENANT_A, findingId).orElseThrow()).isEqualTo(alreadyConfirmed);
@@ -639,6 +641,43 @@ class FindingWorkflowCommandServiceTest {
         assertThat(repository.confirmation(TENANT_A, findingId, "PERSON").orElseThrow().reason())
                 .isEqualTo(legacyOpinion);
         assertThat(repository.confirmation(TENANT_A, findingId, "SAFETY")).isEmpty();
+        assertThat(repository.transitions).isEmpty();
+        assertThat(workflow.completedTasks).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+    }
+
+    @Test
+    void legacySafetyV2ReceiptWithUnicodeBoundaryOpinionReplaysWithoutHistoryRewrite() {
+        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000144");
+        FindingWorkflowCase alreadyConfirmed = new FindingWorkflowCase(TENANT_A, findingId, ORGANIZATION_ID,
+                "YH-20261031-0144", "Legacy safety finding", DISCOVERED_AT, null, null, "GENERAL",
+                FindingWorkflowState.SAFETY_DISPATCH_PENDING, 1, 3, CREATOR, SAFETY_MEMBER,
+                null, null, null, null, null);
+        UUID key = command("60000000-0000-0000-0000-000000000144");
+        String legacyOpinion = "\u00a0Safety review complete\u00a0";
+        String oldHash = legacyConfirmationHashWithOpinion("finding.confirm.safety", findingId, 2,
+                legacyOpinion, "GENERAL");
+        var oldResult = new FindingWorkflowContracts.CommandResult(findingId, alreadyConfirmed.code(),
+                FindingWorkflowState.SAFETY_DISPATCH_PENDING, 1, 3);
+        repository.seed(alreadyConfirmed);
+        repository.seedConfirmation(TENANT_A, confirmation(findingId, "PERSON", PERSON_CONFIRMER,
+                "Prior personal approval", "60000000-0000-0000-0000-000000000145"));
+        repository.seedConfirmation(TENANT_A, confirmation(findingId, "SAFETY", SAFETY_MEMBER,
+                legacyOpinion, "60000000-0000-0000-0000-000000000146"));
+        repository.seedCommand(TENANT_A, key, ACTOR_ID, "finding.confirm.safety", oldHash, oldResult);
+        var originalHistory = List.copyOf(repository.confirmations);
+        asMember(SAFETY_MEMBER, TENANT_A);
+
+        assertThat(service.confirmSafety(key, findingId, 2,
+                new FindingWorkflowContracts.SafetyConfirmationCommand(legacyOpinion, "GENERAL"))).isEqualTo(oldResult);
+        assertThatThrownBy(() -> service.confirmSafety(key, findingId, 2,
+                new FindingWorkflowContracts.SafetyConfirmationCommand("Changed opinion", "GENERAL")))
+                .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
+        assertThat(repository.command(TENANT_A, key)).isEqualTo(new MemoryRepository.StoredCommand(
+                ACTOR_ID, "finding.confirm.safety", oldHash, oldResult));
+        assertThat(repository.finding(TENANT_A, findingId)).contains(alreadyConfirmed);
+        assertThat(repository.confirmation(TENANT_A, findingId, "SAFETY").orElseThrow().reason()).isEqualTo(legacyOpinion);
+        assertThat(repository.confirmations).isEqualTo(originalHistory);
         assertThat(repository.transitions).isEmpty();
         assertThat(workflow.completedTasks).isEmpty();
         assertThat(publishedEvents).isEmpty();

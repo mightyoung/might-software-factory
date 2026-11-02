@@ -5,6 +5,7 @@ import {
   type FindingSubmitAdapter,
   type FindingSubmitFailureKind,
   type FindingSubmitResult,
+  type ReportableOrganization,
 } from "../adapters/findingSubmit";
 import {
   findingSourceLabels,
@@ -17,6 +18,7 @@ import {
 import {
   DRAFT_FIELD_ORDER,
   DRAFT_LIMITS,
+  codePointLength,
   createEmptyDraft,
   formatLocalDateTime,
   hasDraftErrors,
@@ -45,6 +47,7 @@ type Phase = { name: "editing" } | { name: "submitting" } | { name: "submitted";
 
 const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   validation: "服务端校验未通过，请修正标出的内容后再提交。",
+  workflow: "当前无法进入确认流程（例如没有可用的确认人），请联系管理员处理。",
   unauthenticated: "登录已失效，请重新登录。",
   forbidden: "你没有提交隐患上报的权限。",
   conflict: "这次提交与之前的一次提交内容不一致，已被拒绝。请关闭面板后重新上报。",
@@ -122,6 +125,16 @@ export function FindingReportForm({
   const [phase, setPhase] = useState<Phase>({ name: "editing" });
   const [submitFailure, setSubmitFailure] = useState<FindingSubmitFailureKind | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // 组织选择：仅当适配器提供 listOrganizations 时启用。
+  const needsOrganization = adapter.listOrganizations !== undefined;
+  // 提供组织列表的适配器即真实服务端；合成演示不提供。
+  const live = needsOrganization;
+  const [orgState, setOrgState] = useState<
+    { status: "loading" } | { status: "error" } | { status: "ready"; items: readonly ReportableOrganization[] }
+  >({ status: "loading" });
+  const [organizationId, setOrganizationId] = useState("");
+  const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgReloadTick, setOrgReloadTick] = useState(0);
   const [pendingFocus, setPendingFocus] = useState<FindingDraftField | null>(null);
 
   const fieldRefs = useRef<Partial<Record<FindingDraftField, HTMLElement | null>>>({});
@@ -142,6 +155,27 @@ export function FindingReportForm({
       controller.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (!adapter.listOrganizations) return;
+    const abort = new AbortController();
+    setOrgState({ status: "loading" });
+    adapter
+      .listOrganizations(abort.signal)
+      .then((items) => {
+        setOrgState({ status: "ready", items });
+        // 只有一个可选组织时直接选中，仍显示出来。
+        if (items.length === 1) setOrganizationId(items[0]!.id);
+      })
+      .catch((error: unknown) => {
+        if (abort.signal.aborted) return;
+        if (error instanceof FindingSubmitError && error.kind === "unauthenticated") onUnauthenticated?.();
+        setOrgState({ status: "error" });
+      });
+    return () => abort.abort();
+    // onUnauthenticated 是回调属性，不作为重新加载的依据。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adapter, orgReloadTick]);
 
   // 字段在提交期间是禁用的，禁用元素无法获得焦点：等重新渲染成可编辑后再聚焦出错字段。
   // 用 layout effect 在提交阶段同步聚焦，焦点不会比错误文字晚一帧出现。
@@ -200,15 +234,17 @@ export function FindingReportForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting) return;
+    if (submitting || controller.current) return;
 
     const found = validateFindingDraft(draft, now());
     setErrors(found);
     setSubmitFailure(null);
+    if (needsOrganization && !organizationId) setOrgError("请选择所属组织");
     if (hasDraftErrors(found)) {
       focusFirstError(found);
       return;
     }
+    if (needsOrganization && !organizationId) return;
 
     const payload = normalizeDraft(draft);
     const abort = new AbortController();
@@ -216,7 +252,8 @@ export function FindingReportForm({
     setPhase({ name: "submitting" });
     try {
       const result = await adapter.submit(payload, {
-        idempotencyKey: keyFor(JSON.stringify(payload)),
+        idempotencyKey: keyFor(JSON.stringify({ ...payload, organizationId })),
+        ...(needsOrganization ? { organizationId } : {}),
         signal: abort.signal,
       });
       if (!mounted.current) return;
@@ -232,6 +269,8 @@ export function FindingReportForm({
         focusFirstError(error.fieldErrors);
       }
       if (kind === "unauthenticated") onUnauthenticated?.();
+    } finally {
+      if (controller.current === abort) controller.current = null;
     }
   }
 
@@ -256,7 +295,7 @@ export function FindingReportForm({
         <div className="detail-heading">
           <div>
             <h2>新建上报</h2>
-            <p>隐患发现 · 合成演示</p>
+            <p>隐患发现{live ? "" : " · 合成演示"}</p>
           </div>
           <button className="icon-button" type="button" aria-label="关闭上报" onClick={onClose}>
             ×
@@ -268,8 +307,14 @@ export function FindingReportForm({
             编号 <strong>{result.code}</strong>，当前状态：待一人确认。
           </p>
           {result.backfill && <p>发现时间早于当前时间超过 24 小时，已按补报处理：发现时间和上报时间分别保存。</p>}
-          <p className="field-hint">“来源”“所在位置 / 设备”“紧急程度”“临时措施”标注为后端暂未接入：真实后端目前没有对应字段，接入后这些内容不会被保存。</p>
-          <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>
+          {live ? (
+            <p className="field-hint">已写入服务端，由服务端按流程指派确认人；上报人和租户以你的登录身份为准。</p>
+          ) : (
+            <>
+              <p className="field-hint">“来源”“所在位置 / 设备”“紧急程度”“临时措施”标注为后端暂未接入：真实后端目前没有对应字段，接入后这些内容不会被保存。</p>
+              <p className="field-hint">合成演示：记录只保存在本页内存中，刷新后消失；没有通知任何人，也不形成真实记录。</p>
+            </>
+          )}
         </section>
         <div className="report-actions">
           <button type="button" className="button button-primary" onClick={() => onOpenSubmitted(result.id)}>
@@ -299,9 +344,15 @@ export function FindingReportForm({
       </div>
 
       <p className="report-banner" role="note">
-        <strong>合成演示：</strong>提交只写入本页内存中的演示数据，不会通知任何人，也不形成真实记录。发现紧急危险请先通过现场应急渠道处理。
-        <br />
-        标有“后端暂未接入”的项目：当前后端的创建接口没有对应字段，接入真实后端后这些内容目前不会被保存。
+        {live ? (
+          <>发现紧急危险请先通过现场应急渠道处理，再来上报。提交后进入“待一人确认”，确认人由服务端按流程指派。</>
+        ) : (
+          <>
+            <strong>合成演示：</strong>提交只写入本页内存中的演示数据，不会通知任何人，也不形成真实记录。发现紧急危险请先通过现场应急渠道处理。
+            <br />
+            标有“后端暂未接入”的项目：当前后端的创建接口没有对应字段，接入真实后端后这些内容目前不会被保存。
+          </>
+        )}
       </p>
 
       <form className="report-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
@@ -316,7 +367,49 @@ export function FindingReportForm({
           </p>
         )}
 
-        <Field id={ids.source} label="来源" required notWired error={errors.source}>
+        {needsOrganization && (
+          <Field
+            id={`${uid}-org`}
+            label="所属组织"
+            required
+            error={orgError ?? undefined}
+            hint={
+              orgState.status === "ready" && orgState.items.length === 0
+                ? "你当前没有可上报的组织，无法提交。请联系管理员授权。"
+                : undefined
+            }
+          >
+            {orgState.status === "error" ? (
+              <p>
+                组织列表加载失败。
+                <button type="button" className="button button-subtle" onClick={() => setOrgReloadTick((n) => n + 1)}>
+                  重试
+                </button>
+              </p>
+            ) : (
+              <select
+                id={`${uid}-org`}
+                value={organizationId}
+                aria-invalid={Boolean(orgError)}
+                disabled={submitting || orgState.status !== "ready" || orgState.items.length === 0}
+                onChange={(event) => {
+                  setOrganizationId(event.target.value);
+                  setOrgError(null);
+                }}
+              >
+                <option value="">{orgState.status === "loading" ? "加载中…" : "请选择"}</option>
+                {orgState.status === "ready" &&
+                  orgState.items.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </Field>
+        )}
+
+        <Field id={ids.source} label="来源" required notWired={!live} error={errors.source}>
           <select
             id={ids.source}
             ref={(node) => {
@@ -362,7 +455,7 @@ export function FindingReportForm({
           />
         </Field>
 
-        <Field id={ids.location} label="所在位置 / 设备" required notWired error={errors.location}>
+        <Field id={ids.location} label="所在位置 / 设备" required notWired={!live} error={errors.location}>
           <input
             id={ids.location}
             ref={(node) => {
@@ -383,7 +476,7 @@ export function FindingReportForm({
           label="隐患描述"
           required
           error={errors.description}
-          hint={`写清楚看到了什么、在哪里。${draft.description.trim().length}/${DRAFT_LIMITS.descriptionMax}`}
+          hint={`写清楚看到了什么、在哪里。${codePointLength(draft.description.trim())}/${DRAFT_LIMITS.descriptionMax}`}
         >
           <textarea
             id={ids.description}
@@ -407,7 +500,7 @@ export function FindingReportForm({
         >
           <legend>
             紧急程度<span className="required-mark" aria-hidden="true"> *</span>
-            <NotWiredTag />
+            {!live && <NotWiredTag />}
           </legend>
           <div className="report-radio-row">
             {findingUrgencies.map((urgency, index) => (
@@ -445,9 +538,9 @@ export function FindingReportForm({
         <Field
           id={ids.interimMeasure}
           label="已采取的临时措施（选填）"
-          notWired
+          notWired={!live}
           error={errors.interimMeasure}
-          hint={`${draft.interimMeasure.trim().length}/${DRAFT_LIMITS.interimMeasureMax}`}
+          hint={`${codePointLength(draft.interimMeasure.trim())}/${DRAFT_LIMITS.interimMeasureMax}`}
         >
           <textarea
             id={ids.interimMeasure}
@@ -489,7 +582,11 @@ export function FindingReportForm({
             <button type="button" className="button button-subtle" onClick={requestClose} disabled={submitting}>
               取消
             </button>
-            <button type="submit" className="button button-primary" disabled={submitting}>
+            <button
+              type="submit"
+              className="button button-primary"
+              disabled={submitting || (needsOrganization && orgState.status === "ready" && orgState.items.length === 0)}
+            >
               {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : "提交上报"}
             </button>
           </div>

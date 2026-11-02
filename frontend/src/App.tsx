@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedger } from "./features/findings/FindingsLedger";
 import { LoginPage } from "./features/session/LoginPage";
@@ -8,7 +8,18 @@ import { hasPermission, type ApplicationId, type SessionBootstrap } from "./doma
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
-import { syntheticFindingStore, type SyntheticFindingStore } from "./adapters/syntheticFindingStore";
+import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
+import type { FindingLedgerAdapter } from "./adapters/findingLedger";
+import type { FindingCommandAdapter } from "./adapters/findingCommands";
+import type { FindingSubmitAdapter } from "./adapters/findingSubmit";
+
+/** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
+export interface FindingStore {
+  ledger: FindingLedgerAdapter;
+  submit: FindingSubmitAdapter;
+  /** 流程命令；合成存储没有。 */
+  commands?: FindingCommandAdapter;
+}
 import type { FindingView } from "./adapters/findingLedger";
 
 interface LedgerPage {
@@ -122,11 +133,15 @@ function StatusPage({ title, description, note }: { title: string; description: 
   );
 }
 
-function AppRouter({ findingStore }: { findingStore: SyntheticFindingStore }) {
-  const { state, logout, expire } = useSession();
+function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
+  const { state, logout, expire, requiresTenantCode } = useSession();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
+  // 按身份和租户重建：适配器可能缓存 schema，不得跨账号或租户复用。
+  const identityKey = session ? `${session.tenant.id}/${session.actor.id}` : "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const findingStore = useMemo(() => createFindingStore(), [identityKey]);
 
   const parsed = parsePath(pathname);
   const redirect = session ? canonicalTarget(session, location) : null;
@@ -196,6 +211,7 @@ function AppRouter({ findingStore }: { findingStore: SyntheticFindingStore }) {
         description={route.page.description}
         adapter={findingStore.ledger}
         submitAdapter={findingStore.submit}
+        commandAdapter={findingStore.commands}
         canReport={hasPermission(session, "safety.finding.report")}
         onUnauthenticated={expire}
       />
@@ -222,6 +238,7 @@ function AppRouter({ findingStore }: { findingStore: SyntheticFindingStore }) {
       onRetryMenu={menu.retry}
       onLogout={logout}
       title={title}
+      synthetic={!requiresTenantCode}
     >
       {content}
     </AppShell>
@@ -231,13 +248,17 @@ function AppRouter({ findingStore }: { findingStore: SyntheticFindingStore }) {
 export function App({
   sessionAdapter,
   findingStore = syntheticFindingStore,
+  createFindingStore,
 }: {
   sessionAdapter?: SessionAdapter;
-  findingStore?: SyntheticFindingStore;
+  /** 固定的适配器对（测试、合成演示）。 */
+  findingStore?: FindingStore;
+  /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
+  createFindingStore?: () => FindingStore;
 }) {
   return (
     <SessionProvider adapter={sessionAdapter}>
-      <AppRouter findingStore={findingStore} />
+      <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} />
     </SessionProvider>
   );
 }

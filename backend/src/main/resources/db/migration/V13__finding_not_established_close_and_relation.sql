@@ -1,6 +1,6 @@
 -- Add an explicit terminal outcome for findings confirmed as not established.
--- V2-V9 are immutable history; V9 is already applied on the test database and V8 is
--- reserved by PR #12. This migration is intentionally not applied by the local slice.
+-- Forward migration for the known V2-V8/V11/V12 lineage; V9/V10 stay reserved.
+-- The unapplied review draft is now V13. This does not validate historical V9 upgrades.
 
 alter table public.finding
     add column related_finding_id uuid,

@@ -12,8 +12,10 @@ class FindingMigrationContractTest {
 
     @Test
     void notEstablishedMigrationAddsTerminalStateDecisionAndTenantSafeRelatedFindingLink() throws IOException {
-        Path migrationPath = Path.of("src/main/resources/db/migration/V10__finding_not_established_close_and_relation.sql");
+        Path migrationPath = Path.of("src/main/resources/db/migration/V13__finding_not_established_close_and_relation.sql");
         assertThat(Files.exists(migrationPath)).isTrue();
+        assertThat(Files.exists(migrationPath.resolveSibling("V10__finding_not_established_close_and_relation.sql")))
+                .as("unapplied V10 draft must not also be discovered").isFalse();
         String sql = Files.readString(migrationPath).toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("\\s+", " ");
 

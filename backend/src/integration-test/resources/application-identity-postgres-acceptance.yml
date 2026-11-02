@@ -1,0 +1,24 @@
+# Combined with lan-postgres-compatibility; no schema initialization is enabled.
+spring:
+  datasource:
+    url: ${LAN_PG_TEST_JDBC_URL}
+    username: ${LAN_PG_APP_USERNAME}
+    password: ${LAN_PG_APP_PASSWORD}
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+  autoconfigure:
+    exclude:
+      - org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration
+      - org.springframework.modulith.events.config.EventPublicationAutoConfiguration
+  modulith:
+    events:
+      externalization:
+        enabled: false
+flowable:
+  process:
+    enabled: false
+  idm:
+    enabled: false
+  eventregistry:
+    enabled: false

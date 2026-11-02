@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DRAFT_LIMITS,
+  codePointLength,
   createEmptyDraft,
   formatLocalDateTime,
   hasDraftErrors,
@@ -103,5 +104,25 @@ describe("补报判定", () => {
 
   it("时间格式不合法时不算补报", () => {
     expect(isBackfill("bad", NOW)).toBe(false);
+  });
+});
+
+describe("与契约对齐的校验", () => {
+  const NOW = new Date("2026-10-30T14:30:00+08:00");
+  const base = { ...createEmptyDraft(NOW), description: "通道护栏连接件松动", location: "北侧通道" };
+
+  it("按码点计长：emoji 只算一个", () => {
+    expect(codePointLength("a😀b")).toBe(3);
+    expect("a😀b".length).toBe(4);
+    const description = "😀".repeat(DRAFT_LIMITS.descriptionMax);
+    expect(validateFindingDraft({ ...base, description }, NOW).description).toBeUndefined();
+    expect(validateFindingDraft({ ...base, description: description + "😀" }, NOW).description).toBeDefined();
+  });
+
+  it("位置必须含非 White_Space 码点：U+0085、全角空格、零宽以外的空白都不算", () => {
+    for (const blank of ["\u0085", "　", " ", " ", " \u0085　 "]) {
+      expect(validateFindingDraft({ ...base, location: blank }, NOW).location).toBeDefined();
+    }
+    expect(validateFindingDraft({ ...base, location: "A\u0085" }, NOW).location).toBeUndefined();
   });
 });

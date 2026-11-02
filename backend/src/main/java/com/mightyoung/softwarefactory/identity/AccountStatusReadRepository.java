@@ -3,8 +3,8 @@ package com.mightyoung.softwarefactory.identity;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Public identity query for the current status of a global account. */
+/** Public identity query for the current security state of a global account. */
 public interface AccountStatusReadRepository {
 
-    Optional<String> findStatus(UUID accountId);
+    Optional<AccountSecurityState> findState(UUID accountId);
 }

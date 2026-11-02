@@ -67,6 +67,20 @@ Do not seed findings, command receipts, transition history, confirmations, remed
 
 The local code now contains an opt-in content verifier, a sealed-snapshot content reader, and `GET /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-items/{evidenceItemId}/content`. Synthetic tests exercise receipt signing, hash/version checks, authorization rejection, and the HTTP route. V2–V7 and the listed finding-read/sequence checks were exercised on disposable PG18.6 databases; the local follow-up branch has not rerun them. The local adapter is not configured with a real storage root or trust key; full real-file retention, end-to-end login and finding-command/idempotency, Flowable/JOOQ/Modulith rollback, evidence-row concurrent locking, deployment seeds, and production identity bootstrap remain unverified. The reader must continue resolving only the persisted submission snapshot and its exact `file_id` plus immutable `storage_version`, never current metadata or latest.
 
+## PR #14 forward candidate: V13 and V2 BPMN
+
+This section is the current PR14-specific gate; earlier run receipts above retain their original scope. The candidate uses known-source V2–V8, V11 and V12, then appends `V13__finding_not_established_close_and_relation.sql`. The original unapplied V10 draft is retained in Git at `39503493ff72356462b753b5e2a4134599281a82`; it is not applied retrospectively. Historical targets whose recorded V9 source is missing remain **BLOCKED**. Do not use `outOfOrder`, `repair`, `baseline` or rewritten history to bypass that block.
+
+- [x] On exclusive local targets, verified complete known-source history/checksums and least-privilege runtime grants; normal V12→V13 and separate clean installation passed. No V13 NAS application is recorded.
+- [x] Local fixtures deployed both exact V1/V2 definitions, verified new instances bind V2, and independently proved an actual V1 instance survives V12→V13 and continues normal approvals while refusing close.
+- [ ] NAS/production release: deliberately deploy V2, apply reviewed V13 and release the application only after source-complete target and permission review. Local acceptance is not this rollout.
+- [x] On local real PostgreSQL/Flowable, verified PERSON and SAFETY closes, actor exclusion, opinion normalization, preserved grade, original-key replay and changed-payload conflict; reject V1 close before receipt/business writes.
+- [x] Late completion/publication failure proved rollback of state/version, confirmation, transition, audit, receipt, engine changes and publication together. Verify terminal-state/link triggers and tenant boundaries under the non-owner runtime role.
+- [x] Verified related creation reads an authorized same-tenant NOT_ESTABLISHED parent, creates a new record and leaves the parent unchanged; hidden parents return 404, visible nonterminal parents 422.
+- [x] Frontend candidate: 272 tests in 25 files and TypeScript/production build passed. NOT_ESTABLISHED is terminal in both detail rendering paths and exposes no workflow actions. The UI has **no new close-command entry**; these tests do not prove backend or real database acceptance.
+
+See [PR14 forward-candidate readiness](verification/pr14-forward-candidate-readiness-2026-11-02.md) for the evidence boundary.
+
 ## Reference
 
 PostgreSQL 18 documents that all row-locking clauses (`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`) require `UPDATE` privilege on at least one column of each selected table: [PostgreSQL 18 `SELECT`](https://www.postgresql.org/docs/18/sql-select.html).

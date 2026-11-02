@@ -1,5 +1,6 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandClaim;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
@@ -30,10 +31,13 @@ import java.util.function.Function;
 public final class JooqFindingWorkflowRepository implements FindingWorkflowRepository {
 
     private final DSLContext dsl;
+    private final AuthorizationWriteGuard authorizationWriteGuard;
     private final TransactionTemplate commandTransaction;
 
-    public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager) {
+    public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager,
+                                         AuthorizationWriteGuard authorizationWriteGuard) {
         this.dsl = dsl;
+        this.authorizationWriteGuard = java.util.Objects.requireNonNull(authorizationWriteGuard);
         this.commandTransaction = new TransactionTemplate(transactionManager);
         // Read fresh evidence rows after lock waits; V6's parent revision update also
         // turns stale REPEATABLE READ writers into serialization conflicts.
@@ -45,6 +49,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         if (tenantId == null || work == null) throw new IllegalArgumentException("Tenant and command are required");
         return commandTransaction.execute(status -> {
             setLocalTenant(tenantId);
+            authorizationWriteGuard.forFindingCommand(tenantId);
             return work.apply(new JooqTransaction(tenantId));
         });
     }
@@ -89,7 +94,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                          source_event_id, risk_id, grade, state, round_no, version,
                          created_at, updated_at, created_by_member_id, updated_by_member_id,
                          source_category, urgency, location, interim_measure, backfill, related_finding_id)
-                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, ?,
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as timestamptz),
                             cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, current_timestamp,
                             current_timestamp, cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, ?, cast(? as uuid))
                     """, finding.tenantId(), finding.id(), finding.organizationId(), finding.code(),
@@ -201,7 +206,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         (tenant_id, id, finding_id, from_state, to_state, command_id, actor_id,
                          occurred_at, reason, from_version, to_version)
                     values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid),
-                            cast(? as uuid), ?, ?, ?, ?)
+                            cast(? as uuid), cast(? as timestamptz), ?, ?, ?)
                     """, tenantId, UUID.randomUUID(), transition.findingId(),
                     transition.fromState() == null ? null : transition.fromState().name(),
                     transition.toState().name(), transition.commandId(), transition.actorId(),
@@ -221,7 +226,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                                'toVersion', cast(? as bigint),
                                'fromGrade', cast(? as text),
                                'toGrade', cast(? as text)),
-                           cast(? as varchar), 'finding-workflow-v1', ?
+                           cast(? as varchar), 'finding-workflow-v1', cast(? as timestamptz)
                       from public.finding_command_receipt receipt
                      where receipt.tenant_id = cast(? as uuid)
                        and receipt.command_id = cast(? as uuid)
@@ -241,7 +246,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     insert into public.finding_confirmation
                         (tenant_id, finding_id, stage, actor_member_id, decision, reason, decided_at,
                          expected_version, command_id)
-                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), ?, ?, ?, ?, cast(? as uuid))
+                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), ?, ?, cast(? as timestamptz), ?, cast(? as uuid))
                     """, tenantId, confirmation.findingId(), confirmation.stage(), confirmation.actorMemberId(),
                     confirmation.decision().name(), confirmation.reason(), confirmation.decidedAt(),
                     confirmation.expectedVersion(), confirmation.commandId());
@@ -314,7 +319,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     insert into public.remediation_notice
                         (tenant_id, id, finding_id, revision, round_no, assignee_id, due_at, original_due_at,
                          requirements, state, issued_at, command_id)
-                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?,
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), cast(? as timestamptz), cast(? as timestamptz),
                             ?, 'ISSUED', current_timestamp, cast(? as uuid))
                     """, tenantId, notice.id(), notice.findingId(), notice.roundNo(), notice.roundNo(),
                     notice.assigneeMemberId(), notice.dueAt(), notice.originalDueAt(),
@@ -332,7 +337,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         (tenant_id, id, finding_id, notice_id, round_no, submitted_by, submitted_at,
                          evidence_set_id, statement, expected_version, command_id)
                     values (cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid), ?,
-                            cast(? as uuid), ?, cast(? as uuid), ?, ?, cast(? as uuid))
+                            cast(? as uuid), cast(? as timestamptz), cast(? as uuid), ?, ?, cast(? as uuid))
                     """, tenantId, submission.id(), submission.findingId(), submission.noticeId(),
                     submission.roundNo(), submission.submittedByMemberId(), submission.submittedAt(),
                     submission.evidenceSetId(), submission.statement(), submission.expectedVersion(),
@@ -350,7 +355,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, cast(? as uuid),
                                 cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid),
                                 'FINDING_EVIDENCE_ITEM', cast(? as uuid), 'REMEDIATION_EVIDENCE',
-                                cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?, ?, ?, ?)
+                                cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?, ?, ?, cast(? as timestamptz))
                         """, tenantId, submission.id(), submission.findingId(), submission.roundNo(),
                         submission.evidenceSetId(), submission.submittedByMemberId(), snapshot.evidenceItemId(),
                         snapshot.fileLinkId(), snapshot.fileId(), snapshot.evidenceItemId(), snapshot.ownerMemberId(),
@@ -436,7 +441,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         (tenant_id, id, finding_id, submission_id, round_no, reviewer_id, decision,
                          reason, decided_at, command_id)
                     values (cast(? as uuid), cast(? as uuid), cast(? as uuid), cast(? as uuid), ?,
-                            cast(? as uuid), ?, ?, ?, cast(? as uuid))
+                            cast(? as uuid), ?, ?, cast(? as timestamptz), cast(? as uuid))
                     """, tenantId, UUID.randomUUID(), verification.findingId(), verification.submissionId(),
                     verification.roundNo(), verification.reviewerMemberId(), verification.decision().name(),
                     verification.reason(), verification.decidedAt(), verification.commandId());

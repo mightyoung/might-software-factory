@@ -145,6 +145,21 @@ describe("新建上报表单", () => {
     expect(await screen.findByText("已提交上报")).toBeInTheDocument();
   });
 
+  it("同一 React 批次连续触发表单提交时只发送一次请求和成功回调", async () => {
+    const gate = deferred<FindingSubmitResult>();
+    const { submit, props } = setup(() => gate.promise);
+    fillValid();
+    const form = submitButton().closest("form")!;
+    act(() => {
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    await act(async () => gate.resolve(RESULT));
+    expect(await screen.findByText("已提交上报")).toBeInTheDocument();
+    expect(props.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
   it("服务不可用：保留已填内容，提示可安全重试；重试复用同一个幂等键", async () => {
     let attempts = 0;
     const { submit, props } = setup(async () => {
@@ -374,5 +389,55 @@ describe("新建上报表单", () => {
     expect(signal?.aborted).toBe(true);
     await act(async () => gate.resolve(RESULT));
     expect(props.onSubmitted).not.toHaveBeenCalled();
+  });
+});
+
+describe("所属组织选择", () => {
+  const orgs = [
+    { id: "o1", code: "A", name: "一车间" },
+    { id: "o2", code: "B", name: "二车间" },
+  ];
+  function withOrgs(listOrganizations: FindingSubmitAdapter["listOrganizations"]) {
+    const adapter: FindingSubmitAdapter = { submit: vi.fn(async () => RESULT), listOrganizations };
+    render(
+      <FindingReportForm adapter={adapter} onClose={vi.fn()} onSubmitted={vi.fn()} onOpenSubmitted={vi.fn()} now={() => NOW} />,
+    );
+    return adapter;
+  }
+
+  it("必须先选择组织，选择后随提交带上 organizationId", async () => {
+    const adapter = withOrgs(async () => orgs);
+    await screen.findByRole("option", { name: "二车间" });
+    fillValid();
+    fireEvent.click(submitButton());
+    expect(await screen.findByText("请选择所属组织")).toBeInTheDocument();
+    expect(adapter.submit).not.toHaveBeenCalled();
+
+    fireEvent.change(field(/所属组织/), { target: { value: "o2" } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(adapter.submit).toHaveBeenCalled());
+    expect(vi.mocked(adapter.submit).mock.calls[0]![1]).toMatchObject({ organizationId: "o2" });
+  });
+
+  it("只有一个组织时自动选中", async () => {
+    const adapter = withOrgs(async () => [orgs[0]!]);
+    await waitFor(() => expect(field(/所属组织/)).toHaveValue("o1"));
+    fillValid();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(adapter.submit).toHaveBeenCalled());
+  });
+
+  it("没有可上报的组织时说明原因并禁用提交", async () => {
+    withOrgs(async () => []);
+    expect(await screen.findByText(/没有可上报的组织/)).toBeInTheDocument();
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it("加载失败可重试", async () => {
+    const list = vi.fn().mockRejectedValueOnce(new FindingSubmitError("unavailable")).mockResolvedValueOnce(orgs);
+    withOrgs(list);
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
+    expect(list).toHaveBeenCalledTimes(2);
   });
 });

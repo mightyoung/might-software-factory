@@ -84,12 +84,20 @@ class ReportableOrganizationControllerHttpTest {
             context.setAuthentication(new TestingAuthenticationToken(principal, null, "ROLE_AUTHENTICATED"));
             request.setAttribute("SPRING_SECURITY_CONTEXT", context);
             request.getSession(true).setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+            VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(request.getSession(false));
             return request;
         };
     }
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        // This HTTP slice supplies identity state explicitly; persisted revocation is tested separately.
+        @Bean
+        com.mightyoung.softwarefactory.identity.AccountStatusReadRepository accountSecurityStates() {
+            return account -> java.util.Optional.of(
+                    new com.mightyoung.softwarefactory.identity.AccountSecurityState("ACTIVE", 1));
+        }
+
         @Bean
         AuthorizationState authorizationState() {
             return new AuthorizationState();
@@ -121,6 +129,11 @@ class ReportableOrganizationControllerHttpTest {
                 public boolean isAssignableMemberAuthorizedForAction(
                         UUID tenantId, UUID memberId, UUID organizationId, String permissionCode) { return false; }
             };
+        }
+
+        @Bean
+        com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository tenantApplications() {
+            return (tenant, app) -> Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1));
         }
 
         @Bean

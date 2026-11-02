@@ -23,13 +23,16 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
     private final TaskService taskService;
     private final RepositoryService repositoryService;
     private final DSLContext dsl;
+    private final WorkflowBindingTransactionLock bindingLock;
 
-    public FlowableWorkflowFacade(
-            RuntimeService runtimeService, TaskService taskService, RepositoryService repositoryService, DSLContext dsl) {
+    public FlowableWorkflowFacade(RuntimeService runtimeService, TaskService taskService,
+                                  RepositoryService repositoryService, DSLContext dsl,
+                                  WorkflowBindingTransactionLock bindingLock) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.repositoryService = repositoryService;
         this.dsl = dsl;
+        this.bindingLock = bindingLock;
     }
 
     @Override
@@ -40,6 +43,7 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
             int businessRevision,
             String processDefinitionKey,
             Map<String, Object> variables) {
+        bindingLock.acquire(tenantId, businessType, businessId);
         ProcessInstance instance;
         try {
             instance = runtimeService.createProcessInstanceBuilder()
@@ -73,12 +77,12 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
             String taskDefinitionKey,
             UUID actorMemberId,
             Map<String, Object> variables) {
+        bindingLock.acquire(tenantId, businessType, businessId);
         var binding = dsl.fetchOne("""
                 select business_revision, definition_id, process_instance_id
                   from public.workflow_binding
                  where tenant_id = cast(? as uuid) and business_type = ?
                    and business_id = cast(? as uuid) and submission_no = 1
-                 for update
                 """, tenantId, businessType, businessId);
         if (binding == null || binding.get("business_revision", Integer.class) != 1) {
             throw new WorkflowResourceNotVisibleException();
@@ -115,12 +119,12 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
 
     @Override
     public Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId) {
+        bindingLock.acquire(tenantId, businessType, businessId);
         var binding = dsl.fetchOne("""
                 select business_revision, definition_id
                   from public.workflow_binding
                  where tenant_id = cast(? as uuid) and business_type = ?
                    and business_id = cast(? as uuid) and submission_no = 1
-                 for update
                 """, tenantId, businessType, businessId);
         if (binding == null || binding.get("business_revision", Integer.class) != 1) {
             return Optional.empty();

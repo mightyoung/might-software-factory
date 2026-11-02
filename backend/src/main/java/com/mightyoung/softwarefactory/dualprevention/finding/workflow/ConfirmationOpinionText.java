@@ -33,7 +33,7 @@ public final class ConfirmationOpinionText {
         return value.substring(start, end);
     }
 
-    /** Unicode White_Space property, kept in sync with the V10 PostgreSQL CHECK constraint. */
+    /** Unicode White_Space property, kept in sync with the V13 PostgreSQL CHECK constraint. */
     private static boolean isUnicodeWhiteSpace(int codePoint) {
         return (codePoint >= 0x0009 && codePoint <= 0x000D)
                 || codePoint == 0x0020

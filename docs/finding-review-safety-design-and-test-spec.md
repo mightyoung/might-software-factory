@@ -1,9 +1,11 @@
 # 隐患确认安全规则：设计与测试规格
 
-状态：确认人隔离、必填确认意见/等级、`NOT_ESTABLISHED` 终态、关联新建、V10 迁移草案、V2 BPMN 文件和前端状态契约已在独立本地整合切片实现。后端 226 项测试、前端 177 项测试、类型检查和 API 类型生成校验通过。退回补充/复核周期未实现；V10 未应用、V2 BPMN 未部署；没有真实 PostgreSQL/Flowable 集成验收。本文较早的测试计数属于历史证据，不是当前整合树结果。
-用途：记录确认安全规则、独立关闭切片的实现边界及仍需验收的部分。此分支不执行数据库迁移或部署；单测/XML/静态迁移测试不等同真实 PostgreSQL/Flowable 流程验收。具体 API 与兼容条件见 [finding-review-safety-contract.md](finding-review-safety-contract.md)。
+状态：PR #14 前向候选在后端主线 `e028a959ab3d5dbe3314404fc72fe497dad01d82` 上整合原草稿 `39503493ff72356462b753b5e2a4134599281a82`，保留确认人隔离、必填确认意见/等级、`NOT_ESTABLISHED` 终态、关联新建、独立 V2 BPMN；关闭迁移改为 V13。当前前端 25 个文件、272 项测试通过，TypeScript/生产构建通过；后端及真实 PostgreSQL/Flowable 门禁以[前向候选就绪记录](verification/pr14-forward-candidate-readiness-2026-11-02.md)为准。V13 未应用，V2 未部署；退回补充/复核周期未实现。
 
-当前整合树以远端 `dev` `d466eae636515f4f1f5935af9633e39d36213248` 为基线，包含已整合的报告元数据、确认输入和读写契约。先前的身份隔离工作树 `7ba22f369219ef8680284ed1bb8165e57caa4f58` 及其初始远端基线仅是历史分析快照。V8 已包含在当前基线；V9 已在测试库应用，但对应源码不在此 dev 树，本切片不复制或改写它；关闭切片使用 V10 草案。整合新增关系字段和 `NOT_ESTABLISHED` 状态后，ledger `schemaVersion` 从 3 升至 4。V10 未应用，V2 BPMN 未部署。
+当前整合验证：已取得前向 V13 的独占本地 PostgreSQL/Flowable 证据、494 项 Linux 离线及 272 项前端测试；分批结果、跨迁移门禁与发布边界以 [当前验收报告](verification/pr14-forward-candidate-readiness-2026-11-02.md) 为准。下文未部署说明指 NAS/正式环境，历史草稿计数不作当前证据。
+用途：记录确认安全规则、独立关闭切片的实现边界及仍需验收的部分。具体 API 与兼容条件见 [finding-review-safety-contract.md](finding-review-safety-contract.md)。静态迁移、XML、替身或前端模拟服务测试不等同真实 PostgreSQL/Flowable 验收。
+
+当前候选使用已知源码 V2–V8、V11、V12 安装链并追加 V13；不修改已有迁移。原 PR14 草稿基于 `dev` `d466eae636515f4f1f5935af9633e39d36213248`，使用尚未应用的 V10；该原始文档及迁移可从[草稿提交](https://github.com/mightyoung/might-software-factory/tree/39503493ff72356462b753b5e2a4134599281a82)重新取得。原草稿的后端 226、前端 177 项测试计数及下文早期切片计数属于历史证据，不是当前候选结果。历史 V9 原始 Java 源码缺失的目标仍为 **BLOCKED**，不能借用新独占已知源码安装链的验收结论；不采用 `outOfOrder`、`repair`、`baseline` 或重写历史。ledger schemaVersion 从 3 升至 4。
 
 ## 1. 核对范围与基线
 
@@ -22,7 +24,7 @@
 - 现有服务测试覆盖完整确认链、命令幂等和整改人不能自验收，但没有上报人不能自确认的用例。见 [FindingWorkflowCommandServiceTest.java:83](/Users/muyi/Documents/Codex/2026-10-30/task-10/api-contract-dev-6b0c2ee/backend/src/test/java/com/mightyoung/softwarefactory/dualprevention/FindingWorkflowCommandServiceTest.java:83) 和 [FindingWorkflowCommandServiceTest.java:324](/Users/muyi/Documents/Codex/2026-10-30/task-10/api-contract-dev-6b0c2ee/backend/src/test/java/com/mightyoung/softwarefactory/dualprevention/FindingWorkflowCommandServiceTest.java:324)。
 - `finding_transition` 与 `audit_event` 已在同一命令事务写入；两者可携带原因、执行人和版本变化。现在确认命令传入的原因是空值。见 [JooqFindingWorkflowRepository.java:193](/Users/muyi/Documents/Codex/2026-10-30/task-10/api-contract-dev-6b0c2ee/backend/src/main/java/com/mightyoung/softwarefactory/dualprevention/finding/workflow/JooqFindingWorkflowRepository.java:193)。
 - 当前 BPMN 只连通人员确认→安全确认→派单→整改→验收；没有“补充资料”或“不成立”分支。见 [finding-remediation-v1.bpmn20.xml:6](/Users/muyi/Documents/Codex/2026-10-30/task-10/api-contract-dev-6b0c2ee/backend/src/main/resources/processes/finding-remediation-v1.bpmn20.xml:6)。
-- 基线后端固定使用 Flowable 8.0.0。`workflow_binding` 记录精确 `definition_id`，完成任务时会验证流程实例的定义 ID 与绑定一致；只部署新版 BPMN 不会自动迁移在途 V1 实例。早期确认人隔离切片没有新增 BPMN/状态/迁移；后续关闭切片新增独立 V2 BPMN 与 V10 草案，详见本文第 4–5 节。
+- 基线后端固定使用 Flowable 8.0.0。`workflow_binding` 记录精确 `definition_id`，完成任务时会验证流程实例的定义 ID 与绑定一致；只部署新版 BPMN 不会自动迁移在途 V1 实例。早期确认人隔离切片没有新增 BPMN/状态/迁移；后续关闭草稿新增独立 V2 BPMN 与 V10，本前向候选将未应用的关闭迁移编号调整为 V13，详见本文第 4–5 节。
 - 已实现切片从 `finding_confirmation` 读取同租户、同隐患的 PERSON 确认成员；Safety 命令在当前会话成员与上报人、历史 PERSON 确认成员逐次比较。路由创建及旧 `DISCOVERED` 初始化前检查两个确认人不相同且都不同于上报人。
 - 本地前端状态枚举同样只有七态，但动作草案已经列出“退回补充”“退回第一确认”，未找到对应后端命令。见 [finding.ts:1](/Users/muyi/Documents/Codex/2026-10-30/task-10/api-contract-dev-6b0c2ee/frontend/src/domain/finding.ts:1)。
 
@@ -30,7 +32,7 @@
 
 1. **每个确认阶段都是独立命令。** 人员确认不可省略；角色兼任、重复角色、相同人员配置或历史迁移都不能自动通过或跳过任一阶段。
 2. **两位确认人必须互不相同，且都不能是上报人。** 用户已批准：PERSON/SAFETY 路由的成员 ID 必须不同；两人都不得等于当前上报人；每次确认也必须从服务端会话身份逐次验证，不能从请求体接收 actor。缺少合格确认人时返回配置/业务阻断，不自动跳过。
-3. **确认意见与等级契约（本地实现）。** PERSON 请求 `{ expectedVersion, reason }`，SAFETY 正常批准请求 `{ expectedVersion, reason, grade }`；意见首尾按 Unicode White_Space 集合修剪且修剪后必须非空，原始字符串最多 4000 个 Java UTF-16 字符单元。SAFETY 批准等级只接受 `GENERAL`/`MAJOR`，PERSON 请求拒绝等级和任意未知字段。批准命令指纹采用 `confirmation-payload-v2`，将阶段、版本、意见与（安全批准）等级纳入同键重放判定；规范化意见写入确认、状态转移与审计，安全批准等级同步写入 finding。`NOT_ESTABLISHED` 关闭请求不接收 grade，关闭时保留原等级。
+3. **确认意见与等级契约（本地实现）。** PERSON 请求 `{ expectedVersion, reason }`，SAFETY 正常批准请求 `{ expectedVersion, reason, grade }`；普通批准意见保留 Java `String.strip()` 首尾规范化与既有 v2 回执兼容，并拒绝 Unicode White_Space 全空输入；新关闭命令独立使用 Unicode White_Space 修剪，原始字符串最多 4000 个 Java UTF-16 字符单元。SAFETY 批准等级只接受 `GENERAL`/`MAJOR`，PERSON 请求拒绝等级和任意未知字段。批准命令指纹采用 `confirmation-payload-v2`，将阶段、版本、意见与（安全批准）等级纳入同键重放判定；规范化意见写入确认、状态转移与审计，安全批准等级同步写入 finding。`NOT_ESTABLISHED` 关闭请求不接收 grade，关闭时保留原等级。
 4. **不成立不可直接重开（已实现）。** `NOT_ESTABLISHED` 与整改验收通过的 `CLOSED` 区分；新证据创建新的 finding 并通过可选 `relatedFindingId` 关联原记录，原记录不变。关闭理由非空并进入确认、状态转移和审计。初版不从旧 `CLOSED` 推断为不成立。
 5. **退回补充与不成立分离。** `RETURN_FOR_INFORMATION` 是非终态，转到 `REPORTER_SUPPLEMENT_PENDING`；上报人追加补充说明，不覆盖初次描述。推荐补充后回到 `PERSON_CONFIRM_PENDING` 并递增独立 `review_cycle`，让两级重审新材料；旧决定保留。
 6. **没有有效确认人时保持阻塞。** 缺人、成员停用、指派失效或指派重叠均不得自动跳过阶段。给出可操作的路由配置错误，待有效指派后再处理。
@@ -80,14 +82,14 @@
 
 ## 4. 新迁移与审计
 
-当前关闭切片新增 `V10__finding_not_established_close_and_relation.sql` 草案，不修改 V2–V9。V8 已包含在整合基线；V9 已在测试库应用但源码不在此 dev 树，V10 不能在缺少经 owner 纳入并校验的 V9 原始迁移时申请执行。V10 目前包括：
+当前关闭切片追加 `V13__finding_not_established_close_and_relation.sql` 候选，不修改 V2–V8、V11、V12。仅在已核验的独占已知源码安装链上审查及验收；历史 V9 源码缺失的目标继续 BLOCKED。V13 目前包括：
 
 - 将 `NOT_ESTABLISHED` 加入 `finding_state_valid`，将 `finding_confirmation.decision` 扩为 `APPROVE`/`NOT_ESTABLISHED`，并要求不成立决定有非空 reason。
 - 不成立意见 CHECK 与应用层共享 Unicode White_Space 字符集合；NBSP、ASCII 空格和制表符等全空值均拒绝。
 - 新增 nullable `related_finding_id`、同租户复合外键、自关联检查、仅关联 `NOT_ESTABLISHED` 父记录的触发器，以及关系不可变约束。
 - 禁止 `NOT_ESTABLISHED` finding 被 UPDATE 到其它状态；保留旧 `CLOSED` 语义。
 
-V10 未应用于 NAS 或任何数据库。多轮退回所需周期/追加补充表仍需单独设计和迁移：
+V13 未应用于 NAS 或任何数据库。多轮退回所需周期/追加补充表仍需单独设计和迁移：
 
 - 扩展 `finding.state` 检查，允许 `REPORTER_SUPPLEMENT_PENDING`、`NOT_ESTABLISHED`，保留旧值 `DISCOVERED` 和 `CLOSED`。为 `finding` 新增正数 `review_cycle`，历史行默认 1；不得用 `round_no` 兼作复核周期。
 - 新建按租户隔离的 `finding_review_decision`，记录 finding、review_cycle、stage、actor member、decision、reason、可选 confirmed_grade、expected_version、command_id、时间；同一周期同一阶段最多一项，并按命令 ID 唯一。决定表仅追加。
@@ -108,16 +110,16 @@ V10 未应用于 NAS 或任何数据库。多轮退回所需周期/追加补充�
 
 流程引擎只执行命令服务已验证的决定；不能让流程变量自行绕过 DB 状态。新建记录和显式初始化的旧 `DISCOVERED` 记录使用 V2。关闭命令核对 tenant-scoped workflow binding 的 definition key；仅 `findingRemediationV2` 可以关闭。V1 活跃实例可以继续批准路径，但不成立关闭会在领取幂等回执前以 409 `COMMAND_CONFLICT` 拒绝。
 
-对已运行的 V1 流程不可静默切换实例。发版必须先部署 V2、再应用 V10、最后部署会绑定 V2 的应用代码。无法确认 V2 或 V10 已就绪时，不得部署新应用版本；不能回退到 V1。
+对已运行的 V1 流程不可静默切换实例。发版必须先部署 V2、再应用 V13、最后部署会绑定 V2 的应用代码。无法确认 V2 或 V13 已就绪时，不得部署新应用版本；不能回退到 V1。
 
 ## 6. 测试先行的小批次
 
-以下是实现规格，不代表本任务已运行测试。每批不超过一天；先补失败测试，再实现，再跑该批测试。
+下表保留原草稿实现规格、估时和历史验证描述，不代表当前前向候选已完成这些验收。原草稿 V10 静态契约证据不自动转换为当前 V13 测试结果；当前后端候选验证由后端 lane 单独记录。每批不超过一天；先补失败测试，再实现，再跑该批测试。
 
 | 批次 | 估时 | 先写的测试与通过条件 |
 |---|---:|---|
 | A. 确认人隔离与每次授权复核 | 0.5 天 | **A1 已实现并通过**：测试上报人分别调用 PERSON/SAFETY 被拒；PERSON 与 SAFETY 指派重复、任一确认人等于上报人时创建/旧 `DISCOVERED` 初始化均被阻断且不产生业务副作用；SAFETY 缺少 PERSON 历史被阻断；故意把流程任务改派给上报人或同一 PERSON 确认人，命令服务仍拒绝。先运行旧实现得到 5 个新增拒绝测试失败，再实现，定向类 23/23 通过，全 `backend` 测试 169/169 通过。**后续 A2 未实现**：撤权/改派并发与回执重放、任务 assignee 变化时的动态授权、完整状态/transition/audit 不变及 HTTP actor 覆盖测试仍需补齐。 |
-| B. 确认输入与不成立终态 | 1 天 | **本切片已实现并通过本地测试**：关闭命令必填非空意见、PERSON/SAFETY 阶段规则和互斥；关闭不接收等级并保留原等级；普通 SAFETY 批准仍必须提供等级。终态不可重开、V10 静态迁移契约、V2 BPMN 双阶段显式关闭分支、V1 关闭阻断、新证据同租户关联、API/OpenAPI/前端状态、幂等/Unicode 回执兼容和回滚测试。真实 PostgreSQL/Flowable 集成未跑。**未实现**：`RETURN_FOR_INFORMATION` 及补充周期。 |
+| B. 确认输入与不成立终态 | 1 天 | **本切片已实现并通过本地测试**：关闭命令必填非空意见、PERSON/SAFETY 阶段规则和互斥；关闭不接收等级并保留原等级；普通 SAFETY 批准仍必须提供等级。终态不可重开、原 V10 静态迁移契约、V2 BPMN 双阶段显式关闭分支、V1 关闭阻断、新证据同租户关联、API/OpenAPI/前端状态、幂等/Unicode 回执兼容和回滚测试。真实 PostgreSQL/Flowable 集成未跑。**未实现**：`RETURN_FOR_INFORMATION` 及补充周期。 |
 | C. 退回与补充周期 | 1 天 | PERSON 与 SAFETY 的退回都需意见并转等待补充；只有原上报人能提交非空补充，其他人及其他状态均拒绝；补充只追加不覆盖初始描述；周期递增、回 PERSON 再走完整人员和安全确认；旧决定可按周期查询。用并发/事务测试验证竞争版本只有一个提交，流程失败时补充、状态、审计和回执一起回滚。 |
 | D. 幂等/撤权并发与 BPMN | 1 天 | 同键同完整请求重放同结果；同键更改意见/等级/补充文本得到 409；过期版本得到 409；新 BPMN 三条决定路由与数据库状态逐一匹配；旧流程实例不被部署新版本静默改写；无法迁移时新决定被阻断；撤权与命令并发有确定的串行化结果。用流程引擎集成测试覆盖新旧定义，不以 XML 字符串测试代替行为。 |
 | E. OpenAPI / 前端状态与错误呈现 | 0.5 天 | 契约测试锁定新 decision、reason、safety grade、supplement 和两个新增 state；生成 TS 类型后增加 exhaustiveness 测试；UI 只在当前状态展示可用动作，详情时间线区分退回意见、补充、未成立理由与验收关闭。测试 400/401/403/404/409/422/503 的呈现，不得把网络失败或排队请求显示成完成。 |
@@ -137,7 +139,7 @@ V10 未应用于 NAS 或任何数据库。多轮退回所需周期/追加补充�
 | 422 `WORKFLOW_RULE` | 明确提示当前状态不允许该决定或规则字段缺失；不清除用户意见。 |
 | 503 `DEPENDENCY_UNAVAILABLE` | 保留输入并提示用相同 Idempotency-Key 查询/重试；结果未知时不生成新键。 |
 
-原基线异常处理器将 DTO 校验失败映射为 400 `INVALID_REQUEST`，但不填充字段错误，并把版本/幂等/任务冲突都归为 409 `COMMAND_CONFLICT`。当前错误切片已返回稳定字段路径和机器可读校验码；版本过期返回 `VERSION_CONFLICT`，幂等键冲突返回 `IDEMPOTENCY_CONFLICT`，工作流任务状态冲突保留 `COMMAND_CONFLICT`。Malformed JSON/绑定错误与不支持的创建字段返回 `INVALID_QUERY`，生命周期命令 DTO 对未知字段的当前兼容行为也已在 OpenAPI 明确说明。前端 HTTP adapter 尚未接入这些错误响应。
+原基线异常处理器将 DTO 校验失败映射为 400 `INVALID_REQUEST`，但不填充字段错误，并把版本/幂等/任务冲突都归为 409 `COMMAND_CONFLICT`。当前错误切片已返回稳定字段路径和机器可读校验码；版本过期返回 `VERSION_CONFLICT`，幂等键冲突返回 `IDEMPOTENCY_CONFLICT`，工作流任务状态冲突保留 `COMMAND_CONFLICT`。Malformed JSON/绑定错误与不支持的创建字段返回 `INVALID_QUERY`，生命周期命令 DTO 对未知字段的当前兼容行为也已在 OpenAPI 明确说明。当前前端 HTTP 命令 adapter 已分类映射 400/401/403/404/409/422/503；尚未提供新的不成立关闭命令入口，也未实现退回补充入口。
 
 紧急通知只在实际未接收/未送达时显示“待接收/未确认”，不能由派单或创建通知记录推断“已通知”。本规格不新增通知传输或送达实现。
 
@@ -151,4 +153,4 @@ V10 未应用于 NAS 或任何数据库。多轮退回所需周期/追加补充�
 
 ## 8. 非目标
 
-本关闭切片不实现退回补充、多轮复核周期、V1 活跃实例迁移、账号模型、通知传输、附件/NAS、密钥或部署；不应用 V10，也不部署 V2 BPMN。审批/审核失败不得写成已成功；任何流程外紧急处置仍不可因内部审批等待而被界面描述为已通知或已办结。
+本关闭切片不实现退回补充、多轮复核周期、V1 活跃实例迁移、账号模型、通知传输、附件/NAS、密钥或部署；不应用 V13，也不部署 V2 BPMN。审批/审核失败不得写成已成功；任何流程外紧急处置仍不可因内部审批等待而被界面描述为已通知或已办结。

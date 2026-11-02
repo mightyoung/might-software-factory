@@ -37,17 +37,22 @@ export interface SessionBootstrap {
   permissions: readonly string[];
 }
 
-export type SessionFailureKind = "invalid_credentials" | "unauthenticated" | "forbidden" | "unavailable";
+export type SessionFailureKind = "invalid_credentials" | "unauthenticated" | "forbidden" | "unavailable" | "rate_limited";
 
 export class SessionError extends Error {
   readonly kind: SessionFailureKind;
   readonly retryable: boolean;
+  /** Bounded display cooldown; the server decides whether a later manual attempt is allowed. */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(kind: SessionFailureKind, retryable = kind === "unavailable") {
+  constructor(kind: SessionFailureKind, retryable = kind === "unavailable", retryAfterSeconds: number | null = null) {
     super(kind);
     this.name = "SessionError";
     this.kind = kind;
     this.retryable = retryable;
+    this.retryAfterSeconds = kind === "rate_limited" && retryAfterSeconds !== null
+      && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? Math.min(300, Math.ceil(retryAfterSeconds)) : null;
   }
 }
 
