@@ -30,6 +30,11 @@ paths:
     post:
       operationId: login
       summary: Start a session using local credentials and a tenant code
+      description: >-
+        Login attempts are limited before password verification. Source/account failure cooling
+        is shared across tenant selections and equivalent normalized login keys. A rate-limited
+        request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not
+        disclose which limit was reached. This protection is local to one running instance.
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
       requestBody:
@@ -52,6 +57,8 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           $ref: '#/components/responses/CsrfDenied'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
   /api/v1/auth/logout:
@@ -188,6 +195,19 @@ components:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
     ActionDenied:
       description: The current account, tenant, or membership is inactive or no longer authorized.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: RATE_LIMITED; wait at least Retry-After seconds before another login attempt.
+      headers:
+        Retry-After:
+          required: true
+          description: Positive integer seconds until a bounded retry; another limit may still apply.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:

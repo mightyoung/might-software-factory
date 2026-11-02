@@ -98,7 +98,9 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 
 最长会话期限已按成功登录的服务端时刻实现，配置 `software-factory.security.session.absolute-timeout` 默认 `12h`，访问不续期；旧会话缺失时刻或时刻无效均需重新登录，主体验证结构不变。登录入口明确限定 POST。测试与在途请求边界见[最长会话期限切片](verification/session-absolute-lifetime-2026-11-02.md)；敏感动作再认证仍未实现。
 
-本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member、auth_epoch 和 `credential_version` 放入服务端 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。2026-11-02 的后续切片已在当前会话读取及隐患读取/流程授权中核验凭据版本：缺失或不匹配即拒绝；旧序列化会话缺失版本时保持0并拒绝，不默认补1。改密/重置入口未来必须在修改凭据的同一事务中递增账号版本，不得重用旧值。本切片不提供这些写入入口。V3/V4 已在独占可丢弃测试库执行，真实身份表 HTTPS 登录、JDBC Session、双租户读取、撤销/重登/退出共8个场景通过，见[身份登录实库验收](verification/identity-login-postgres-2026-11-02.md)。该结果不包含 finding 完整业务命令或生产授权；账号初始化、邀请/重置和失败限流/短期锁定仍未实现，因此不宣称可投产登录配置。凭据兼容边界见[凭据版本切片](verification/credential-version-boundary-2026-11-02.md)。
+登录入口已补进程内来源/全局尝试限流及来源与规范化账号的累计失败冷却；不因切换租户分桶，不修改账号状态，响应为通用429和正整数Retry-After。成功尝试也消耗速率预算；失败窗口内成功不清零累计失败。默认5分钟内5次坏凭据触发30秒冷却，具体配置、并发预留、内存上限和实测见[登录尝试防护切片](verification/login-attempt-throttle-2026-11-02.md)。这不代表跨来源账号聚合或跨实例共享限流已实现；代理来源解析及发布容量仍需另验。
+
+本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member、auth_epoch 和 `credential_version` 放入服务端 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。2026-11-02 的后续切片已在当前会话读取及隐患读取/流程授权中核验凭据版本：缺失或不匹配即拒绝；旧序列化会话缺失版本时保持0并拒绝，不默认补1。改密/重置入口未来必须在修改凭据的同一事务中递增账号版本，不得重用旧值。本切片不提供这些写入入口。V3/V4 已在独占可丢弃测试库执行，真实身份表 HTTPS 登录、JDBC Session、双租户读取、撤销/重登/退出共8个场景通过，见[身份登录实库验收](verification/identity-login-postgres-2026-11-02.md)。该结果不包含 finding 完整业务命令或生产授权；账号初始化、邀请/重置、跨来源账号聚合及共享限流仍未实现，因此不宣称可投产登录配置。凭据兼容边界见[凭据版本切片](verification/credential-version-boundary-2026-11-02.md)。
 
 登录JSON严格按已有契约读取三个必需字符串字段；拒绝未知/重复字段、错误根类型、尾随JSON值及非字符串字段，不接受客户端指定身份或凭据版本。请求体仍限4096字节，错误响应不回显凭据或解析细节。凭据版本检查不锁账号；独立授权读取配置RR，若已进入工作流事务则加入外层隔离级别，不保证取消在途请求。
 

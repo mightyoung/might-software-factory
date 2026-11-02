@@ -1,5 +1,7 @@
 # Absolute session lifetime — 2026-11-02
 
+Follow-up: [login attempt limits and source/account cooling](login-attempt-throttle-2026-11-02.md) adds the next bounded protection slice. Remaining-work statements below describe this earlier checkpoint.
+
 This batch builds on the pending PR #22 [identity login acceptance](identity-login-postgres-2026-11-02.md). It implements the existing design's configurable maximum authentication age, independently of Spring Session's sliding idle timeout.
 
 ## Behavior

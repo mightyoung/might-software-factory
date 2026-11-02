@@ -32,7 +32,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start a session using local credentials and a tenant code */
+        /**
+         * Start a session using local credentials and a tenant code
+         * @description Login attempts are limited before password verification. Source/account failure cooling is shared across tenant selections and equivalent normalized login keys. A rate-limited request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not disclose which limit was reached. This protection is local to one running instance.
+         */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -190,6 +193,17 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description RATE_LIMITED; wait at least Retry-After seconds before another login attempt. */
+        RateLimited: {
+            headers: {
+                /** @description Positive integer seconds until a bounded retry; another limit may still apply. */
+                "Retry-After": number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Required identity or authorization data could not be safely read. */
         DependencyUnavailable: {
             headers: {
@@ -258,6 +272,7 @@ export interface operations {
             400: components["responses"]["InvalidRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfDenied"];
+            429: components["responses"]["RateLimited"];
             503: components["responses"]["DependencyUnavailable"];
         };
     };
