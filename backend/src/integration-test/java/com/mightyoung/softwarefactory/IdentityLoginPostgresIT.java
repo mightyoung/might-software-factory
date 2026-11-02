@@ -1,0 +1,547 @@
+package com.mightyoung.softwarefactory;
+
+import com.mightyoung.softwarefactory.authorization.JooqRoleScopeReadRepository;
+import com.mightyoung.softwarefactory.authorization.PersistentFindingWorkflowAuthorizationRepository;
+import com.mightyoung.softwarefactory.directory.JooqMemberDirectoryReadRepository;
+import com.mightyoung.softwarefactory.dualprevention.FindingApiExceptionHandler;
+import com.mightyoung.softwarefactory.dualprevention.JooqReportableOrganizationReadRepository;
+import com.mightyoung.softwarefactory.dualprevention.ReportableOrganizationController;
+import com.mightyoung.softwarefactory.dualprevention.ReportableOrganizationService;
+import com.mightyoung.softwarefactory.identity.AuthenticationSessionController;
+import com.mightyoung.softwarefactory.identity.AccountPasswordCredentialReadRepository;
+import com.mightyoung.softwarefactory.identity.CurrentSessionController;
+import com.mightyoung.softwarefactory.identity.CurrentSessionService;
+import com.mightyoung.softwarefactory.identity.JooqAccountPasswordCredentialReadRepository;
+import com.mightyoung.softwarefactory.identity.JooqAccountStatusReadRepository;
+import com.mightyoung.softwarefactory.identity.JooqCurrentSessionReadRepository;
+import com.mightyoung.softwarefactory.identity.JooqPrincipalStatusReadRepository;
+import com.mightyoung.softwarefactory.identity.LocalPasswordAuthenticationProvider;
+import com.mightyoung.softwarefactory.identity.SecurityConfiguration;
+import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import com.mightyoung.softwarefactory.identity.TenantLoginContextResolver;
+import com.mightyoung.softwarefactory.tenancy.JooqTenantLoginContextResolver;
+import com.mightyoung.softwarefactory.tenancy.JooqTenantMembershipReadRepository;
+import jakarta.servlet.Filter;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestComponent;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataAccessException;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Duration;
+import java.sql.SQLException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+
+/** Real HTTPS, production authentication/JDBC repositories, real JDBC Session and FORCE RLS. */
+@SpringBootTest(classes = IdentityLoginPostgresIT.IdentityWebConfiguration.class,
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles({"lan-postgres-compatibility", "identity-postgres-acceptance"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@Execution(ExecutionMode.SAME_THREAD)
+class IdentityLoginPostgresIT {
+
+    private static final String CSRF = "/api/v1/auth/csrf";
+    private static final String LOGIN = "/api/v1/auth/login";
+    private static final String LOGOUT = "/api/v1/auth/logout";
+    private static final String CURRENT = "/api/v1/session/current";
+    private static final String ORGANIZATIONS = "/api/v1/organizations/reportable";
+    private static final List<String> IDENTITY_TABLES = List.of(
+            "account", "principal", "credential", "tenant", "tenant_member", "org_unit", "member_org",
+            "position", "member_position", "user_group", "group_member", "permission", "role", "scope_rule",
+            "role_permission", "role_grant", "scope_org");
+    private static IdentityAcceptanceHttps https;
+
+    @LocalServerPort private int port;
+    @Autowired private PasswordEncoder passwords;
+    @Autowired private ObjectMapper json;
+    @Autowired private JdbcTemplate runtimeJdbc;
+    @Autowired private PlatformTransactionManager transactions;
+    @Autowired private SessionTrace sessions;
+    private IdentityPostgresFixture fixture;
+    private Set<String> previousSessions;
+    private final List<IdentityAcceptanceHttps.Browser> browsers = new ArrayList<>();
+    private int backendPid;
+
+    @DynamicPropertySource
+    static void properties(DynamicPropertyRegistry properties) throws Exception {
+        var target = IdentityAcceptanceTarget.preflightFromEnvironment(System.getenv());
+        if (https == null) https = IdentityAcceptanceHttps.create();
+        properties.add("spring.datasource.url", target::jdbcUrl);
+        properties.add("spring.datasource.username", () -> System.getenv("LAN_PG_APP_USERNAME"));
+        properties.add("spring.datasource.password", () -> System.getenv("LAN_PG_APP_PASSWORD"));
+        properties.add("spring.datasource.hikari.maximum-pool-size", () -> 1);
+        properties.add("spring.datasource.hikari.minimum-idle", () -> 1);
+        properties.add("server.address", () -> "127.0.0.1");
+        properties.add("server.ssl.enabled", () -> true);
+        properties.add("server.ssl.key-store", () -> https.keyStore().toUri().toString());
+        properties.add("server.ssl.key-store-password", https::password);
+        properties.add("server.ssl.key-store-type", () -> "PKCS12");
+        properties.add("server.ssl.key-alias", () -> "identity-acceptance");
+        properties.add("flowable.process.enabled", () -> false);
+        properties.add("flowable.idm.enabled", () -> false);
+        properties.add("flowable.eventregistry.enabled", () -> false);
+        properties.add("spring.modulith.events.externalization.enabled", () -> false);
+    }
+
+    @BeforeEach
+    void seedOwnedIdentityAndCheckRuntimeRole() throws Exception {
+        sessions.awaitIdle();
+        previousSessions = sessions.ids();
+        fixture = IdentityPostgresFixture.create(passwords);
+        assertThat(runtimeJdbc.queryForObject("select current_user = session_user and current_user = ?",
+                Boolean.class, System.getenv("LAN_PG_APP_USERNAME"))).isTrue();
+        assertThat(runtimeJdbc.queryForObject("""
+                select rolsuper or rolbypassrls or rolinherit
+                from pg_roles where rolname = current_user
+                """, Boolean.class)).isFalse();
+        assertThat(runtimeJdbc.queryForObject("select has_schema_privilege(current_user, 'public', 'CREATE')",
+                Boolean.class)).isFalse();
+        backendPid = runtimeJdbc.queryForObject("select pg_backend_pid()", Integer.class);
+        assertCleanConnection();
+    }
+
+    @AfterEach
+    void cleanupOwnedSessionsAndIdentity() throws Exception {
+        try {
+            for (var browser : browsers) browser.close();
+        } finally {
+            browsers.clear();
+            if (fixture != null) {
+                try {
+                    sessions.awaitIdle();
+                    Set<String> owned = new HashSet<>(sessions.ids());
+                    owned.removeAll(previousSessions);
+                    fixture.cleanupSessions(owned);
+                } finally {
+                    fixture.close();
+                    fixture = null;
+                }
+            }
+        }
+    }
+
+    @AfterAll
+    static void removeOwnTlsMaterial() throws Exception {
+        if (https != null) https.close();
+    }
+
+    @Test
+    void realCsrfLoginAndTwoTenantSessionsRemainIsolatedOnTheSameRuntimeConnection() throws Exception {
+        var tenantA = browser();
+        var tenantB = browser();
+        expect(tenantA.get(CURRENT), 401);
+        bootstrap(tenantA);
+        expect(tenantA.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), null), 403);
+        expect(tenantA.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), "wrong-test-token"), 403);
+        expect(tenantA.post(LOGIN, loginBody("incorrect-synthetic-password", fixture.tenantACode()), tenantA.csrf()), 401);
+        expect(tenantA.post(LOGIN, loginBody(fixture.password(), fixture.tenantCCode()), tenantA.csrf()), 401);
+        assertCleanConnection();
+
+        var loginA = login(tenantA, fixture.password(), fixture.tenantACode());
+        String sessionA = sessions.idFor(loginA.trace());
+        assertThat(fixture.sessionExists(sessionA)).isTrue();
+        assertThat(fixture.storedCredentialVersion(sessionA)).isEqualTo(1L);
+        assertSessionCookie(loginA, tenantA);
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertOrganizations(tenantA, fixture.organizationAId().toString(), fixture.organizationBId().toString());
+        assertCleanConnection();
+
+        var loginB = login(tenantB, fixture.password(), fixture.tenantBCode());
+        String sessionB = sessions.idFor(loginB.trace());
+        assertThat(sessionB).isNotEqualTo(sessionA);
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
+        // A's server-side context is unchanged by B's login on the same one-connection pool.
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertCleanConnection();
+
+        logout(tenantA);
+        assertThat(fixture.sessionExists(sessionA)).isFalse();
+        expect(tenantA.get(CURRENT), 401);
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+    }
+
+    @Test
+    void realCredentialRotationRejectsOldSessionsAndFreshLoginPersistsTheNewGeneration() throws Exception {
+        var client = browser();
+        var firstLogin = login(client, fixture.password(), fixture.tenantACode());
+        String originalId = sessions.idFor(firstLogin.trace());
+        assertThat(fixture.storedCredentialVersion(originalId)).isEqualTo(1L);
+        fixture.rotatePasswordAndCredentialVersion();
+        expect(client.get(CURRENT), 403);
+        expect(client.get(ORGANIZATIONS), 403);
+        bootstrap(client);
+        expect(client.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), client.csrf()), 401);
+        var newLogin = login(client, fixture.newPassword(), fixture.tenantACode());
+        String replacementId = sessions.idFor(newLogin.trace());
+        assertThat(replacementId).isNotEqualTo(originalId);
+        assertThat(fixture.sessionExists(originalId)).isFalse();
+        assertThat(fixture.storedCredentialVersion(replacementId)).isEqualTo(2L);
+        assertCurrent(client, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertOrganizations(client, fixture.organizationAId().toString(), fixture.organizationBId().toString());
+        assertCleanConnection();
+        logout(client);
+        assertThat(fixture.sessionExists(replacementId)).isFalse();
+    }
+
+    @Test
+    void membershipAndRoleRevocationAreRecheckedWithoutChangingAnotherTenantSession() throws Exception {
+        var tenantA = browser();
+        var tenantB = browser();
+        login(tenantA, fixture.password(), fixture.tenantACode());
+        login(tenantB, fixture.password(), fixture.tenantBCode());
+        fixture.revokeGrantA();
+        expect(tenantA.get(CURRENT), 200);
+        var organizations = tenantA.get(ORGANIZATIONS);
+        expect(organizations, 200);
+        assertThat(json.readTree(organizations.body()).path("data").size()).isZero();
+        assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
+
+        fixture.revokeMembershipA();
+        expect(tenantA.get(CURRENT), 403);
+        expect(tenantA.get(ORGANIZATIONS), 403);
+        bootstrap(tenantA);
+        expect(tenantA.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), tenantA.csrf()), 401);
+        fixture.restoreMembershipA();
+        // Reactivating a member cannot resurrect the old epoch captured in A's session.
+        expect(tenantA.get(CURRENT), 403);
+        login(tenantA, fixture.password(), fixture.tenantACode());
+        assertCurrent(tenantA, fixture.tenantAId().toString(), fixture.memberAId().toString());
+        assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+        assertCleanConnection();
+    }
+
+    @ParameterizedTest(name = "Identity state revoked: {0}")
+    @EnumSource(RevokedIdentityState.class)
+    void inactiveIdentityRejectsExistingSessionsAndNewLoginWithoutLeakingItsState(
+            RevokedIdentityState state) throws Exception {
+        var tenantA = browser();
+        var tenantB = browser();
+        login(tenantA, fixture.password(), fixture.tenantACode());
+        login(tenantB, fixture.password(), fixture.tenantBCode());
+
+        state.revoke(fixture);
+
+        expect(tenantA.get(CURRENT), 403);
+        expect(tenantA.get(ORGANIZATIONS), 403);
+        bootstrap(tenantA);
+        assertGenericAuthenticationFailure(tenantA.post(
+                LOGIN, loginBody(fixture.password(), fixture.tenantACode()), tenantA.csrf()));
+        if (state == RevokedIdentityState.TENANT_SUSPENDED) {
+            assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+            assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
+        } else {
+            expect(tenantB.get(CURRENT), 403);
+            expect(tenantB.get(ORGANIZATIONS), 403);
+            bootstrap(tenantB);
+            assertGenericAuthenticationFailure(tenantB.post(
+                    LOGIN, loginBody(fixture.password(), fixture.tenantBCode()), tenantB.csrf()));
+        }
+        assertCleanConnection();
+    }
+
+    @Test
+    void runtimeIdentityHasOnlyIdentityReadsAndSessionDmlAndCannotUpdateAnAccount() {
+        assertThat(runtimeJdbc.queryForObject("select current_setting('server_version_num')::int",
+                Integer.class) / 10_000).isEqualTo(18);
+        for (String table : IDENTITY_TABLES) {
+            String qualified = "public." + table;
+            assertThat(runtimeJdbc.queryForObject(
+                    "select has_table_privilege(current_user, cast(? as regclass), 'SELECT')",
+                    Boolean.class, qualified)).as("SELECT on %s", table).isTrue();
+            assertThat(runtimeJdbc.queryForObject("""
+                    select pg_get_userbyid(relowner) = current_user
+                    from pg_class where oid = cast(? as regclass)
+                    """, Boolean.class, qualified)).as("Runtime must not own %s", table).isFalse();
+            // PostgreSQL18 includes MAINTAIN; comma-separated privilege checks mean ANY privilege.
+            assertThat(runtimeJdbc.queryForObject("""
+                    select has_table_privilege(current_user, cast(? as regclass),
+                        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+                    """, Boolean.class, qualified)).as("No table mutation/maintenance on %s", table).isFalse();
+            assertThat(runtimeJdbc.queryForObject("""
+                    select has_any_column_privilege(current_user, cast(? as regclass),
+                        'INSERT,UPDATE,REFERENCES')
+                    """, Boolean.class, qualified)).as("No column mutation/reference grants on %s", table).isFalse();
+            if (!Set.of("account", "principal", "credential", "permission").contains(table)) {
+                assertThat(runtimeJdbc.queryForObject("""
+                        select relrowsecurity and relforcerowsecurity
+                        from pg_class where oid = cast(? as regclass)
+                        """, Boolean.class, qualified)).as("Enabled and forced RLS on %s", table).isTrue();
+            }
+        }
+        for (var tenantId : List.of(fixture.tenantAId(), fixture.tenantBId(), fixture.tenantCId())) {
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.tenant where id = ?",
+                    Integer.class, tenantId)).as("No tenant visible without a context").isZero();
+        }
+        for (var organizationId : List.of(fixture.organizationAId(), fixture.organizationBId())) {
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.org_unit where id = ?",
+                    Integer.class, organizationId)).as("No organization visible without a context").isZero();
+        }
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            assertThat(runtimeJdbc.queryForObject("select set_config('app.tenant_id', ?, true)",
+                    String.class, fixture.tenantAId().toString())).isEqualTo(fixture.tenantAId().toString());
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.tenant where id = ?",
+                    Integer.class, fixture.tenantAId())).isEqualTo(1);
+            for (var tenantId : List.of(fixture.tenantBId(), fixture.tenantCId())) {
+                assertThat(runtimeJdbc.queryForObject("select count(*) from public.tenant where id = ?",
+                        Integer.class, tenantId)).as("Tenant A context hides other tenants").isZero();
+            }
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.org_unit where id = ?",
+                    Integer.class, fixture.organizationAId())).isEqualTo(1);
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.org_unit where id = ?",
+                    Integer.class, fixture.organizationBId())).as("Tenant A context hides B's organization").isZero();
+        });
+        assertCleanConnection();
+        for (String table : List.of("spring_session", "spring_session_attributes")) {
+            for (String operation : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
+                assertThat(runtimeJdbc.queryForObject(
+                        "select has_table_privilege(current_user, cast(? as regclass), ?)",
+                        Boolean.class, "public." + table, operation))
+                        .as("Session %s on %s", operation, table).isTrue();
+            }
+            assertThat(runtimeJdbc.queryForObject("""
+                    select has_table_privilege(current_user, cast(? as regclass),
+                        'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+                    """, Boolean.class, "public." + table)).as("Only required Session operations on %s", table).isFalse();
+        }
+        for (String table : List.of("p0_finding_projection", "event_publication")) {
+            assertThat(runtimeJdbc.queryForObject(
+                    "select has_table_privilege(current_user, cast(? as regclass), 'SELECT')",
+                    Boolean.class, "public." + table)).as("No unrelated table read on %s", table).isFalse();
+        }
+        assertThat(runtimeJdbc.queryForObject("""
+                select count(*) from pg_class
+                where relnamespace = 'public'::regnamespace and relkind = 'r'
+                  and left(relname, 4) in ('act_', 'flw_')
+                """, Integer.class)).as("The negative Flowable privilege check must not be vacuous").isPositive();
+        assertThat(runtimeJdbc.queryForObject("""
+                select count(*) from pg_class
+                where relnamespace = 'public'::regnamespace and relkind = 'r'
+                  and left(relname, 4) in ('act_', 'flw_')
+                  and has_table_privilege(current_user, oid, 'SELECT')
+                """, Integer.class)).as("No Flowable table read privileges").isZero();
+
+        String originalStatus = runtimeJdbc.queryForObject(
+                "select status from public.account where id = ?", String.class, fixture.accountId());
+        Throwable denied = catchThrowable(() -> runtimeJdbc.update(
+                "update public.account set status = 'DISABLED' where id = ?", fixture.accountId()));
+        assertThat(denied).isInstanceOf(DataAccessException.class);
+        assertThat(((DataAccessException) denied).getMostSpecificCause())
+                .isInstanceOfSatisfying(SQLException.class,
+                        sql -> assertThat(sql.getSQLState()).isEqualTo("42501"));
+        assertThat(runtimeJdbc.queryForObject("select status from public.account where id = ?",
+                String.class, fixture.accountId())).isEqualTo(originalStatus).isEqualTo("ACTIVE");
+        assertCleanConnection();
+    }
+
+    private void assertGenericAuthenticationFailure(IdentityAcceptanceHttps.Response response) throws Exception {
+        expect(response, 401);
+        JsonNode error = json.readTree(response.body());
+        assertThat(error.path("code").asString()).isEqualTo("AUTH_REQUIRED");
+        assertThat(error.path("message").asString()).isEqualTo("Invalid credentials or account context");
+        assertThat(response.body()).doesNotContain(fixture.password(), fixture.newPassword(),
+                "LOCKED", "DISABLED", "SUSPENDED", "secret_hash", "secretHash");
+    }
+
+    private enum RevokedIdentityState {
+        ACCOUNT_LOCKED,
+        ACCOUNT_DISABLED,
+        PRINCIPAL_DISABLED,
+        TENANT_SUSPENDED;
+
+        void revoke(IdentityPostgresFixture fixture) {
+            switch (this) {
+                case ACCOUNT_LOCKED -> fixture.lockAccount();
+                case ACCOUNT_DISABLED -> fixture.disableAccount();
+                case PRINCIPAL_DISABLED -> fixture.disablePrincipal();
+                case TENANT_SUSPENDED -> fixture.suspendTenantA();
+            }
+        }
+    }
+
+    private IdentityAcceptanceHttps.Browser browser() {
+        var browser = https.browser(port);
+        browsers.add(browser);
+        return browser;
+    }
+
+    private void bootstrap(IdentityAcceptanceHttps.Browser client) throws Exception {
+        expect(client.get(CSRF), 204);
+        var cookie = client.cookie("XSRF-TOKEN").orElseThrow();
+        assertThat(cookie.getSecure()).isTrue();
+        assertThat(cookie.isHttpOnly()).isFalse();
+    }
+
+    private IdentityAcceptanceHttps.Response login(IdentityAcceptanceHttps.Browser client,
+                                                   String password, String tenantCode) throws Exception {
+        bootstrap(client);
+        var response = client.post(LOGIN, loginBody(password, tenantCode), client.csrf());
+        expect(response, 204);
+        return response;
+    }
+
+    private String loginBody(String password, String tenantCode) {
+        return json.writeValueAsString(java.util.Map.of(
+                "loginKey", fixture.loginKey(), "password", password, "tenantCode", tenantCode));
+    }
+
+    private void logout(IdentityAcceptanceHttps.Browser client) throws Exception {
+        bootstrap(client);
+        expect(client.post(LOGOUT, null, client.csrf()), 204);
+    }
+
+    private void assertCurrent(IdentityAcceptanceHttps.Browser client, String tenantId, String memberId)
+            throws Exception {
+        var response = client.get(CURRENT);
+        expect(response, 200);
+        JsonNode current = json.readTree(response.body()).path("data");
+        assertThat(current.path("actorId").asString()).isEqualTo(fixture.actorId().toString());
+        assertThat(current.path("accountId").asString()).isEqualTo(fixture.accountId().toString());
+        assertThat(current.path("tenantId").asString()).isEqualTo(tenantId);
+        assertThat(current.path("memberId").asString()).isEqualTo(memberId);
+        assertThat(current.has("secretHash")).isFalse();
+        assertThat(current.has("credentialVersion")).isFalse();
+    }
+
+    private void assertOrganizations(IdentityAcceptanceHttps.Browser client, String expected, String forbidden)
+            throws Exception {
+        var response = client.get(ORGANIZATIONS);
+        expect(response, 200);
+        JsonNode organizations = json.readTree(response.body()).path("data");
+        assertThat(organizations.isArray()).isTrue();
+        assertThat(organizations.size()).isEqualTo(1);
+        assertThat(organizations.get(0).path("id").asString()).isEqualTo(expected);
+        assertThat(response.body()).doesNotContain(forbidden);
+    }
+
+    private void assertCleanConnection() {
+        assertThat(runtimeJdbc.queryForObject("select pg_backend_pid()", Integer.class)).isEqualTo(backendPid);
+        assertThat(runtimeJdbc.queryForObject("""
+                select nullif(current_setting('app.tenant_id', true), '') is null
+                   and nullif(current_setting('app.login_tenant_code', true), '') is null
+                """, Boolean.class)).isTrue();
+    }
+
+    private static void assertSessionCookie(IdentityAcceptanceHttps.Response login,
+                                            IdentityAcceptanceHttps.Browser client) {
+        var cookie = client.cookie("SESSION").orElseThrow();
+        assertThat(cookie.getSecure()).isTrue();
+        assertThat(cookie.isHttpOnly()).isTrue();
+        assertThat(cookie.getPath()).isEqualTo("/");
+        assertThat(login.http().headers().allValues("Set-Cookie").stream()
+                .filter(value -> value.startsWith("SESSION="))
+                .anyMatch(value -> value.toLowerCase(java.util.Locale.ROOT).contains("samesite=lax"))).isTrue();
+    }
+
+    private void expect(IdentityAcceptanceHttps.Response response, int status) throws Exception {
+        assertThat(response.status()).as("HTTP acceptance response status").isEqualTo(status);
+        sessions.awaitIdle();
+    }
+
+    /** Observation only: no principal injection, authentication replacement or session fabrication. */
+    static final class SessionTrace {
+        private final ConcurrentHashMap<String, String> requests = new ConcurrentHashMap<>();
+        private final AtomicInteger inFlight = new AtomicInteger();
+        Set<String> ids() { return Set.copyOf(requests.values()); }
+        String idFor(String requestId) throws Exception {
+            awaitIdle();
+            String id = requests.get(requestId);
+            assertThat(id).as("The real servlet filter must observe the saved session").isNotNull();
+            return id;
+        }
+
+        void awaitIdle() throws InterruptedException {
+            long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+            while (inFlight.get() != 0 && System.nanoTime() < deadline) Thread.sleep(10);
+            assertThat(inFlight.get()).as("Tracked servlet requests must finish before session inspection/cleanup")
+                    .isZero();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @TestComponent // Excluded from the main application's scan, but still an explicit primary config.
+    @EnableAutoConfiguration(excludeName = {
+            "org.springframework.modulith.events.config.EventPublicationAutoConfiguration",
+            "org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration"})
+    @Import({SecurityConfiguration.class,
+            JooqAccountPasswordCredentialReadRepository.class, JooqTenantLoginContextResolver.class,
+            SessionContextResolver.class, CurrentSessionService.class, JooqCurrentSessionReadRepository.class,
+            CurrentSessionController.class, AuthenticationSessionController.class,
+            JooqAccountStatusReadRepository.class, JooqPrincipalStatusReadRepository.class,
+            JooqTenantMembershipReadRepository.class, JooqMemberDirectoryReadRepository.class,
+            JooqRoleScopeReadRepository.class, PersistentFindingWorkflowAuthorizationRepository.class,
+            ReportableOrganizationService.class, JooqReportableOrganizationReadRepository.class,
+            ReportableOrganizationController.class, FindingApiExceptionHandler.class})
+    static class IdentityWebConfiguration {
+        @Bean SessionTrace sessionTrace() { return new SessionTrace(); }
+
+        // SecurityConfiguration selects this production provider by its component-scan bean name.
+        @Bean
+        LocalPasswordAuthenticationProvider localPasswordAuthenticationProvider(
+                AccountPasswordCredentialReadRepository credentials, TenantLoginContextResolver tenants,
+                PasswordEncoder encoder, PlatformTransactionManager transactions) {
+            return new LocalPasswordAuthenticationProvider(credentials, tenants, encoder, transactions);
+        }
+
+        @Bean
+        FilterRegistrationBean<Filter> observeOnlyOwnSessions(SessionTrace trace) {
+            Filter filter = (request, response, chain) -> {
+                trace.inFlight.incrementAndGet();
+                try {
+                    chain.doFilter(request, response);
+                } finally {
+                    try {
+                        var http = (HttpServletRequest) request;
+                        String requestId = http.getHeader(IdentityAcceptanceHttps.TRACE_HEADER);
+                        if (requestId != null) {
+                            try {
+                                HttpSession session = http.getSession(false);
+                                if (session != null) trace.requests.put(requestId, session.getId());
+                            } catch (IllegalStateException invalidatedSession) {
+                                // Logout may already have invalidated the observed session.
+                            }
+                        }
+                    } finally {
+                        trace.inFlight.decrementAndGet();
+                    }
+                }
+            };
+            var registration = new FilterRegistrationBean<>(filter);
+            registration.setOrder(-101); // After Spring Session, immediately before Spring Security.
+            return registration;
+        }
+    }
+}
