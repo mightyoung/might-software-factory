@@ -131,7 +131,10 @@ class ReportableOrganizationControllerHttpTest {
                     return Optional.of(state.snapshot.get());
                 }
                 @Override
-                public boolean isAssignableMemberAuthorizedForAction(
+                public java.util.List<com.mightyoung.softwarefactory.authorization.AssignableFindingMember> findAssignableMembers(
+                    UUID tenantId, UUID organizationId, String permissionCode, String prefix, UUID afterMemberId, int limit) { return java.util.List.of(); }
+            @Override
+            public boolean isAssignableMemberAuthorizedForAction(
                         UUID tenantId, UUID memberId, UUID organizationId, String permissionCode) { return false; }
             };
         }
