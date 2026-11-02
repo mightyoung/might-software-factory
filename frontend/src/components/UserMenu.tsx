@@ -4,10 +4,12 @@ interface UserMenuProps {
   displayName: string;
   tenantName: string;
   onLogout: () => Promise<void> | void;
+  /** 提供时“修改密码”可用；缺省（合成演示）为禁用。 */
+  onChangePassword?: () => void;
 }
 
 /** 头像入口：个人资料、个人会话尚未接入（禁用并说明），退出登录可用。点击、键盘均可操作。 */
-export function UserMenu({ displayName, tenantName, onLogout }: UserMenuProps) {
+export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -64,6 +66,17 @@ export function UserMenu({ displayName, tenantName, onLogout }: UserMenuProps) {
           </button>
           <button type="button" className="user-menu-item" disabled>
             个人会话<small>尚未接入</small>
+          </button>
+          <button
+            type="button"
+            className="user-menu-item"
+            disabled={!onChangePassword}
+            onClick={() => {
+              setOpen(false);
+              onChangePassword?.();
+            }}
+          >
+            修改密码{!onChangePassword && <small>演示模式不可用</small>}
           </button>
           <button type="button" className="user-menu-item user-menu-logout" onClick={handleLogout} disabled={pending}>
             {pending ? "正在退出…" : "退出登录"}

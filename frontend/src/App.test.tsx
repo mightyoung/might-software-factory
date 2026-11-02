@@ -314,3 +314,42 @@ describe("真实后端登录（需要租户码）", () => {
     expect(screen.queryByLabelText("租户编码")).not.toBeInTheDocument();
   });
 });
+
+describe("修改密码", () => {
+  const NEW = "a-new-long-password";
+
+  it("演示模式：菜单项存在但禁用并说明", async () => {
+    renderSignedIn("demo.admin");
+    fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
+    expect(screen.getByRole("button", { name: /修改密码/ })).toBeDisabled();
+  });
+
+  it("支持改密的会话：成功后清除登录态并回到登录页，提示用新密码重新登录", async () => {
+    const base = createSyntheticSessionAdapter({ signedInAs: "demo.admin" });
+    const changePassword = vi.fn(async () => {});
+    renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
+    fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
+    fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
+    fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
+    fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(changePassword).toHaveBeenCalledWith("old", NEW);
+    expect(await screen.findByRole("status")).toHaveTextContent("密码已修改");
+  });
+
+  it("会话已失效（401）：回到登录页并提示已失效", async () => {
+    const base = createSyntheticSessionAdapter({ signedInAs: "demo.admin" });
+    const changePassword = vi.fn(async () => { throw new SessionError("unauthenticated"); });
+    renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
+    fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
+    fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
+    fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
+    fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);
+    expect(await screen.findByRole("status")).toHaveTextContent("登录已失效");
+  });
+});
+

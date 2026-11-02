@@ -25,6 +25,11 @@ export interface SessionAdapter {
   /** 无有效会话时返回 null（对应服务端 401），其他故障抛 SessionError("unavailable")。 */
   restore(signal?: AbortSignal): Promise<SessionBootstrap | null>;
   logout(signal?: AbortSignal): Promise<void>;
+  /**
+   * 自助改密（可选；合成演示没有）。成功后服务端使旧凭据代的所有会话失效，调用方必须回到登录页。
+   * 当前密码错误抛 invalid_credentials；会话已失效抛 unauthenticated。
+   */
+  changePassword?(currentPassword: string, newPassword: string, signal?: AbortSignal): Promise<void>;
   /** 进入某个应用时才取它的菜单，不在登录时拉取全部应用的菜单树。 */
   loadMenu(applicationId: ApplicationId, signal?: AbortSignal): Promise<AppMenu>;
 }

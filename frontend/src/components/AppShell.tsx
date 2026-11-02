@@ -9,6 +9,7 @@ import {
 } from "../domain/session";
 import { RouteLink } from "../routing/router";
 import { tenantPath } from "../routing/paths";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { UserMenu } from "./UserMenu";
 
 const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
@@ -28,6 +29,8 @@ interface AppShellProps {
   menu: AppMenuState;
   onRetryMenu: () => void;
   onLogout: () => Promise<void> | void;
+  /** 提供时头像菜单出现可用的“修改密码”。 */
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
   title: string;
   children: ReactNode;
 }
@@ -137,7 +140,8 @@ function Sidebar({
   );
 }
 
-export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, title, synthetic = true, children }: AppShellProps) {
+export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, synthetic = true, children }: AppShellProps) {
+  const [changingPassword, setChangingPassword] = useState(false);
   const home = session.applications[0];
   return (
     <div className="app-root">
@@ -164,9 +168,15 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         </nav>
         <div className="topbar-right">
           {synthetic && <span className="demo-environment">合成演示</span>}
-          <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout} />
+          <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout}
+            onChangePassword={onChangePassword ? () => setChangingPassword(true) : undefined}
+          />
         </div>
       </header>
+
+      {changingPassword && onChangePassword && (
+        <ChangePasswordDialog onSubmit={onChangePassword} onClose={() => setChangingPassword(false)} />
+      )}
 
       <div className="workspace">
         {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}

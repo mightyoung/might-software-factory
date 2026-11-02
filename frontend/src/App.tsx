@@ -134,7 +134,7 @@ function StatusPage({ title, description, note }: { title: string; description: 
 }
 
 function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
-  const { state, logout, expire, requiresTenantCode } = useSession();
+  const { state, logout, expire, requiresTenantCode, canChangePassword, changePassword } = useSession();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
@@ -237,6 +237,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       menu={menu.state}
       onRetryMenu={menu.retry}
       onLogout={logout}
+      onChangePassword={canChangePassword ? changePassword : undefined}
       title={title}
       synthetic={!requiresTenantCode}
     >

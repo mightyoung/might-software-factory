@@ -37,7 +37,16 @@ export interface SessionBootstrap {
   permissions: readonly string[];
 }
 
-export type SessionFailureKind = "invalid_credentials" | "unauthenticated" | "forbidden" | "unavailable" | "rate_limited";
+export type SessionFailureKind =
+  | "invalid_credentials"
+  | "unauthenticated"
+  | "forbidden"
+  | "unavailable"
+  | "rate_limited"
+  /** 请求被服务端判为格式不合规（400）。 */
+  | "invalid_request"
+  /** 服务端的一次性校验准备已过期（409），重新提交即可。 */
+  | "stale_attempt";
 
 export class SessionError extends Error {
   readonly kind: SessionFailureKind;

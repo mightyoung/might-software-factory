@@ -78,6 +78,27 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
         throw toSessionError(error);
       }
     },
+    async changePassword(currentPassword, newPassword, signal) {
+      try {
+        await client.post<void>("/api/v1/account/password", { body: { currentPassword, newPassword }, signal });
+      } catch (error) {
+        if (error instanceof ApiError) {
+          if (error.status === 400) throw new SessionError("invalid_request", false);
+          if (error.status === 409) throw new SessionError("stale_attempt", true);
+          if (error.status === 401) {
+            // 契约里 401 既可能是“会话已失效”也可能是“当前密码不对”：再读一次会话来区分。
+            try {
+              await current(signal);
+            } catch (probe) {
+              if (probe instanceof ApiError && probe.status === 401) throw new SessionError("unauthenticated");
+              throw toSessionError(probe);
+            }
+            throw new SessionError("invalid_credentials");
+          }
+        }
+        throw toSessionError(error);
+      }
+    },
     async loadMenu(applicationId, signal) {
       try {
         const { data } = await client.get<MenuResponse>(`/api/v1/applications/${encodeURIComponent(applicationId)}/menu`, { signal });

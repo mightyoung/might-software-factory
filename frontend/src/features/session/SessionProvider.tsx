@@ -4,7 +4,7 @@ import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap }
 
 export type SessionState =
   | { status: "restoring" }
-  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" }
+  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" | "passwordChanged" }
   | { status: "signedIn"; session: SessionBootstrap };
 
 export interface SessionContextValue {
@@ -14,6 +14,10 @@ export interface SessionContextValue {
   /** 当前适配器登录是否需要租户码。 */
   requiresTenantCode: boolean;
   logout(): Promise<void>;
+  /** 当前适配器是否支持自助改密。 */
+  canChangePassword: boolean;
+  /** 成功后本地登录态清除并回到登录页（服务端已使所有旧会话失效）；失败抛 SessionError。 */
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
   /** 服务端返回 401（会话失效或被撤销）时调用：清除本地登录态并回到登录页。 */
   expire(): void;
   loadMenu(applicationId: ApplicationId, signal?: AbortSignal): Promise<AppMenu>;
@@ -77,6 +81,22 @@ export function SessionProvider({
     setState({ status: "signedOut", notice: "expired" });
   }, []);
 
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      if (!adapter.changePassword) throw new SessionError("unavailable", false);
+      try {
+        await adapter.changePassword(currentPassword, newPassword);
+      } catch (error) {
+        // 会话已失效：回到登录页，而不是停在对话框里报错。
+        if (error instanceof SessionError && error.kind === "unauthenticated") expire();
+        throw error;
+      }
+      generation.current += 1;
+      setState({ status: "signedOut", notice: "passwordChanged" });
+    },
+    [adapter, expire],
+  );
+
   const loadMenu = useCallback(
     async (applicationId: ApplicationId, signal?: AbortSignal) => {
       try {
@@ -91,9 +111,10 @@ export function SessionProvider({
   );
 
   const requiresTenantCode = adapter.requiresTenantCode === true;
+  const canChangePassword = adapter.changePassword !== undefined;
   const value = useMemo(
-    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode }),
-    [state, login, logout, expire, loadMenu, requiresTenantCode],
+    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword }),
+    [state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

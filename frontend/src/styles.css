@@ -1219,7 +1219,8 @@ select:focus-visible {
   margin-bottom: 14px;
 }
 
-.login-field > span {
+.login-field > span,
+.login-field > label {
   color: #46566e;
   font-size: 12px;
   font-weight: 580;
@@ -1633,4 +1634,28 @@ select:focus-visible {
 .report-form .report-discard {
   background: #fef2f2;
   border-top-color: #fecaca;
+}
+
+/* ---- 修改密码对话框 ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(15 23 42 / 45%);
+}
+
+.modal-card {
+  width: min(420px, calc(100vw - 32px));
+  padding: 20px 22px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 40px rgb(15 23 42 / 25%);
+}
+
+.modal-card h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
 }
