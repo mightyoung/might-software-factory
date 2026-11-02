@@ -1,8 +1,12 @@
 # 前端与后端 OpenAPI 契约差异清单（隐患台账 / 上报）
 
-状态：本地集成分支基于远端 `dev` `6b0c2ee55741f9dd610742dd0e277288534ac432` 的源码树，包含 session、reportable organizations、finding.create、确认人隔离与统一错误契约；对应代码正通过 Draft PR #9 评审。当前本地后端 Surefire 175 项通过；LAN PG18 profile 的安全静态测试 12 项通过、58 个测试源编译通过；锁定生成器 `gen:api` / `check:api`、TypeScript typecheck 与 Vitest 176 项通过。以上本地/合成结果不代表本分支连接了 PostgreSQL；本地没有运行真实 API、完整 Flowable 事务或前后端联调。前端仍使用合成适配器，没有 HTTP 适配器。
+当前 B2-F 检查点：本分支已复用 PR16 `233d04fe214528d771d46f7599745b8f28a6c125` 的 HTTP 会话/台账/上报/命令适配器、组织选择与契约模拟浏览器框架；生成类型仍取当前后端契约。Vitest 限定项目 `src` 测试并保留默认依赖排除，修复工具依赖内 Redocly 测试被误收集的问题。未知 API 模式不再静默进入合成演示，HTTP 错误不回退合成数据。
 
-本轮变更：新增 `session-api.yaml`；`/api/v1/session/current` 复核账号、租户、成员状态与授权纪元；`/api/v1/organizations/reportable` 只返回当前会话 `finding.create` 权限范围内的有效组织；创建由服务端按租户和上海提交日生成 `YH-YYYYMMDD-NNNN`，响应含业务编号，重放读取原隐患编号。创建和流程初始化阻止上报人担任确认人、两阶段使用同一确认人；执行确认时再次核验当前操作者和安全确认的人员确认历史。错误响应含安全的字段路径与稳定校验码，并区分 `VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT` 与任务状态 `COMMAND_CONFLICT`。已按最终 OpenAPI 重新生成四份 TypeScript 契约类型；生成器依赖锁文件未改。
+下面原状态和一至七节为早期对齐记录，其中“没有 HTTP 适配器/后端端点契约”等说法已被后续实现覆盖。后续差异表和本检查点描述当前候选，不把历史测试数量当本轮结果。**HTTP 适配器已改读权威 bootstrap/menu，删除静态应用与权限兜底；finding.read/create 显式映射 UI 权限，未知权限不授予。B2-N 真实数据库验收仍独立推进；G2a/G2b 不在本批宣称通过。** 真实后端、Secure Cookie、PG/Flowable和完整业务事务仍须独立验证。
+
+历史状态（仅供追溯）：本地集成分支基于远端 `dev` `6b0c2ee55741f9dd610742dd0e277288534ac432` 的源码树，包含 session、reportable organizations、finding.create、确认人隔离与统一错误契约；对应代码正通过 Draft PR #9 评审。当前本地后端 Surefire 175 项通过；LAN PG18 profile 的安全静态测试 12 项通过、58 个测试源编译通过；锁定生成器 `gen:api` / `check:api`、TypeScript typecheck 与 Vitest 176 项通过。以上本地/合成结果不代表本分支连接了 PostgreSQL；本地没有运行真实 API、完整 Flowable 事务或前后端联调。前端仍使用合成适配器，没有 HTTP 适配器。
+
+历史变更（仅供追溯）：新增 `session-api.yaml`；`/api/v1/session/current` 复核账号、租户、成员状态与授权纪元；`/api/v1/organizations/reportable` 只返回当前会话 `finding.create` 权限范围内的有效组织；创建由服务端按租户和上海提交日生成 `YH-YYYYMMDD-NNNN`，响应含业务编号，重放读取原隐患编号。创建和流程初始化阻止上报人担任确认人、两阶段使用同一确认人；执行确认时再次核验当前操作者和安全确认的人员确认历史。错误响应含安全的字段路径与稳定校验码，并区分 `VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT` 与任务状态 `COMMAND_CONFLICT`。已按最终 OpenAPI 重新生成四份 TypeScript 契约类型；生成器依赖锁文件未改。
 
 对照对象：
 
@@ -110,3 +114,40 @@
 2. S2：菜单及权限接口、前端能力码到 `finding.create` 的映射仍需产品/接口批次确认。
 3. 为最小闭环接入前端 HTTP adapter，并进行同源 CSRF/session 联调。
 4. 使用现有 NAS PostgreSQL 18 实例完成授权角色下的当前用户、组织权限、完整创建幂等/并发/回滚、列表/详情及会话撤权验收；当前本地验证未连接 NAS。独立 V7 allocator IT 已在 PG18.6 通过，但不等同完整 finding/auth/Flowable 闭环验收。
+
+## 八、HTTP adapter 落地后的差异与待决定（前端侧，未联调）
+
+前端已有 `httpClient`（CSRF、统一错误）、`httpSessionAdapter`、`httpFindingLedger`、`httpFindingSubmit`，单元测试用假客户端通过；**没有连过真实后端**。登录页可用 `VITE_API_MODE=http` 切换，`VITE_API_MODE=http` 时台账读取与上报提交也走 HTTP adapter（未联调）。以下是接线时暴露的、需要产品或后端拍板的差异：
+
+| # | 差异 | 前端现状 | 需要谁决定 |
+|---|---|---|---|
+| D1 | 紧急程度：契约 `NORMAL` / `URGENT`（URGENT=“需立即处置”）；表单有“一般 / 紧急 / 需立即处置”三档 | “需立即处置”→`URGENT`，“一般”→`NORMAL`；“紧急”无对应值，提交前拒绝并提示，不并入其他档 | 产品：去掉“紧急”档，或后端增加一档 |
+| D2 | 上报日期筛选：台账列“上报日期”对应 `createdAt`（DATETIME），查询映射器只把日期输入映射到 DATE 字段 | 绑定缺失，筛选时明确报错，不静默忽略 | 后端：提供 DATE 字段或 DATETIME 区间语义（含时区）；或前端改用 BETWEEN 并约定上海日界 |
+| D3 | 上报人、责任人、历史（R4）：契约仍无 | 显示“—”，详情时间线为空 | 后端补字段/接口，或产品删列 |
+| D4 | 提交回执无提交时间与补报标记（W6） | 回执里两项可选；成功页不显示补报提示；详情页可用读取到的 `backfill` | 后端回执或详情补充 |
+| D5 | 创建需 `organizationId`（W1） | **已处理（前端）**：适配器提供 `listOrganizations` 时表单显示“所属组织”（单个自动选中、空列表禁用提交、加载失败可重试），选择随提交带上；http 模式下已接线 | — |
+| D6 | 登录需 `tenantCode`（S1） | 登录页在 http 模式多一个“租户编码” | 产品：租户码来源（手输、子域名还是记忆上次） |
+| D7 | 权威应用/权限/菜单投影（S1/S2） | **已接线（前端）**：bootstrap/menu 来自后端，删除静态兜底；仅 `finding.read`→`safety.finding.read`、`finding.create`→`safety.finding.report`，未知权限不授予；无应用/停用/撤权/失败有模拟回归 | 真实后端与数据库验收独立完成 |
+| D8 | 隐患等级文案（R2）：`UNKNOWN`/`GENERAL`/`MAJOR` | 暂显示“待专业评估 / 一般 / 重大” | 业务确认文案 |
+| D9 | 会话到期：契约未给空闲/绝对到期时间 | 仅在收到 401 时回登录页 | 后端：到期时间字段或心跳约定 |
+| D10 | 契约 `minimum`/`maxLength`/`pattern` 不进入生成类型 | **部分已处理（前端）**：长度改按 Unicode 码点计；位置按契约 White_Space 集合校验（含 JS `trim()` 漏掉的 U+0085）。前端限制仍更严（位置 100、描述 500、临时措施 300，产品假设）；其余约束靠后端测试 | — |
+
+### 流程命令界面（http 模式）接线后的缺口
+
+已接线：启动确认流程（旧数据 `DISCOVERED`）、确认发现、安全确认（选等级）、验收通过 / 退回整改。每次都带 `expectedVersion` 与 `Idempotency-Key`；`VERSION_CONFLICT`、`COMMAND_CONFLICT` 会提示并重新读取详情，`IDEMPOTENCY_CONFLICT` 换新键，422 提示流程规则不满足。**仅用模拟服务和假客户端验证，未对真实后端联调。**
+
+| # | 缺口 | 前端现状 | 需要谁决定 |
+|---|---|---|---|
+| D11 | 分派整改需 `assigneeMemberId`，契约没有成员查询接口（也没有“可派单人”范围接口） | “分派整改”禁用并写明原因 | 后端：提供有权限范围的成员候选查询（分页检索，不下发全员） |
+| D12 | 提交整改需 `evidenceSetId`，契约没有证据集创建 / 上传接口（只有已封存证据的读取） | “提交整改证据”禁用并写明原因 | 后端：证据上传与封存接口 |
+| D13 | “退回补充”“退回第一确认”后端未实现 | 禁用并写明原因 | 后端 / 产品 |
+| D14 | 没有“当前用户能对此记录做哪些动作”的字段；按钮按状态显示，职责冲突（上报人不能确认、确认人不能重复等）只能在提交后由服务端 403/422 拒绝 | 失败时给出通用提示 | 后端：在详情里返回可用动作，或给出稳定的拒绝原因码 |
+| D15 | 命令成功回执只有 `state/roundNo/version`，不含新的责任人、历史 | 成功后重新读取详情 | 后端补读取字段（见 D3） |
+
+### 登录边界（来自后端分支 `codex/credential-version-boundary-20261102`，未合入 dev）
+
+| # | 差异 | 前端现状 | 需要谁决定 |
+|---|---|---|---|
+| D16 | 认证只接受有效 UTF-8 且 1–72 字节的密码，超出按通用“凭据错误”拒绝；契约 `LoginRequest.password` 仍是 `maxLength: 1024`（字符），没有写这个字节上限 | 登录页不校验，超长密码只会看到“账号或密码不正确”，与输错密码无法区分 | 后端：把字节上限写进契约（或改契约上限）并给出可区分的错误码；前端随后在登录页提示。注意中文等多字节字符 72 字节约 24 个字 |
+| D17 | 登录 JSON 严格校验：未知 / 重复字段、尾随内容、非字符串字段被拒；请求体 ≤ 4096 字节 | 当前只发 `loginKey` / `password` / `tenantCode` 三个字符串，符合 | 无需处理，记录备查 |
+| D18 | 凭据版本写入会话并在每次授权读取时核验：改密 / 重置后旧会话被拒绝（401 或 403），需重新登录；后端尚无改密 / 重置入口 | 401 回登录页并提示“登录已失效”；403 在台账里按“无权”显示，不会引导重新登录 | 后端：明确凭据版本不匹配返回 401 还是 403；若是 403，前端需要区分“无权”与“会话被撤销” |

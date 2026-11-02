@@ -4,6 +4,7 @@ import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContr
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FieldError;
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.ValidationException;
 import com.mightyoung.softwarefactory.identity.UnauthenticatedSessionException;
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuardUnavailableException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowConfigurationException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowEvidenceException;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowIdempotencyConflictException;
@@ -98,7 +99,8 @@ public final class FindingApiExceptionHandler {
     }
 
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
-            WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class})
+            WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
+            AuthorizationWriteGuardUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
                 "The finding command could not be completed safely", true, List.of());

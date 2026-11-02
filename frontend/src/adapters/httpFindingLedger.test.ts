@@ -1,0 +1,86 @@
+import { describe, expect, it } from "vitest";
+import { ApiError, type HttpClient } from "../api/httpClient";
+import { createHttpFindingLedger } from "./httpFindingLedger";
+
+const field = (type: string, operators: string[], extra = {}) => ({ type, nullable: false, selectable: true, sortable: true, operators, maxLength: 0, enumValues: [], ...extra });
+const schema = {
+  key: "finding", schemaVersion: "3", idField: "id", defaultFields: ["id"],
+  fields: {
+    id: field("UUID", ["EQ", "IN"]),
+    code: field("TEXT", ["EQ", "CONTAINS"], { maxLength: 64 }),
+    state: field("ENUM", ["EQ", "IN"], { enumValues: ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "ACCEPTANCE_PENDING", "CLOSED"] }),
+    createdAt: field("DATETIME", ["GTE", "LTE"]),
+  },
+};
+const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
+const q = { keyword: "", state: "", reportedAt: { from: "", to: "" } };
+
+function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string) => unknown }) {
+  const posts: unknown[] = [];
+  let schemaCalls = 0;
+  const client = {
+    get: async (path: string) => {
+      if (path.endsWith("/schema")) { schemaCalls++; return { data: schema }; }
+      const r = handlers.get!(path); if (r instanceof Error) throw r; return r;
+    },
+    post: async (_p: string, req: { body: unknown }) => { posts.push(req.body); const r = handlers.post!(req.body); if (r instanceof Error) throw r; return r; },
+  } as unknown as HttpClient;
+  return { client, posts, schemaCalls: () => schemaCalls };
+}
+const listBody = { data: { items: [item], page: { number: 2, size: 20, total: 41, pageCount: 3 } }, meta: {} };
+
+describe("createHttpFindingLedger", () => {
+  it("maps query, appends the view filter, maps records, and fetches the schema once", async () => {
+    const f = fake({ post: () => listBody });
+    const ledger = createHttpFindingLedger(f.client);
+    const result = await ledger.list({ query: { ...q, keyword: "YH" }, page: { index: 2, size: 20 }, view: "confirmation" });
+    await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    expect(f.schemaCalls()).toBe(1);
+    expect(f.posts[0]).toMatchObject({
+      page: { number: 2 }, size: 20,
+      filterAST: { operator: "AND", conditions: [
+        { field: "code", operator: "CONTAINS", value: "YH" },
+        { field: "state", operator: "IN", value: ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING"] },
+      ] },
+    });
+    expect(f.posts[1]).not.toHaveProperty("filterAST");
+    expect(result).toMatchObject({ page: { index: 2, size: 20 }, total: 41, pageCount: 3 });
+    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "URGENT", riskLabel: "待专业评估", round: 2 });
+    expect(result.items[0]).not.toHaveProperty("backfill");
+  });
+
+  it("a cancelled first call does not poison the shared schema request for the next call (StrictMode)", async () => {
+    const f = fake({ post: () => listBody });
+    const ledger = createHttpFindingLedger(f.client);
+    const first = new AbortController();
+    const req = { query: q, page: { index: 1, size: 20 }, view: "all" as const };
+    const aborted = ledger.list(req, { signal: first.signal });
+    first.abort();
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    await expect(ledger.list(req, { signal: new AbortController().signal })).resolves.toMatchObject({ total: 41 });
+    expect(f.schemaCalls()).toBe(1);
+  });
+
+  it("refuses a report-date filter instead of silently ignoring it", async () => {
+    const f = fake({ post: () => listBody });
+    const call = createHttpFindingLedger(f.client).list({ query: { ...q, reportedAt: { from: "2026-10-01", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
+    await expect(call).rejects.toThrow(/binding/);
+    expect(f.posts).toHaveLength(0);
+  });
+
+  it("maps 401/403/404 on list to access errors and other failures stay unknown", async () => {
+    for (const [status, kind] of [[401, "unauthenticated"], [403, "forbidden"], [404, "forbidden"]] as const) {
+      const f = fake({ post: () => new ApiError(status, "X", null, false) });
+      await expect(createHttpFindingLedger(f.client).list({ query: q, page: { index: 1, size: 20 }, view: "all" })).rejects.toMatchObject({ name: "FindingLedgerAccessError", kind });
+    }
+    const f = fake({ post: () => new ApiError(503, "DEPENDENCY_UNAVAILABLE", "t", true) });
+    await expect(createHttpFindingLedger(f.client).list({ query: q, page: { index: 1, size: 20 }, view: "all" })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("returns null for an invisible detail and encodes the id", async () => {
+    const paths: string[] = [];
+    const f = fake({ get: (p) => { paths.push(p); return new ApiError(404, "RESOURCE_NOT_VISIBLE", null, false); } });
+    expect(await createHttpFindingLedger(f.client).get("a/b")).toBeNull();
+    expect(paths).toEqual(["/api/v1/entities/finding/a%2Fb"]);
+  });
+});

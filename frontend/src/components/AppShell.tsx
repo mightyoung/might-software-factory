@@ -18,6 +18,8 @@ const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
 };
 
 interface AppShellProps {
+  /** 合成演示会话时为 true（默认）：显示“合成演示”标识；真实后端会话不显示。 */
+  synthetic?: boolean;
   session: SessionBootstrap;
   /** 当前所在应用；为 null 时（如无权限页）不显示侧栏。 */
   application: ApplicationId | null;
@@ -90,7 +92,9 @@ function Sidebar({
   menu,
   currentRest,
   onRetryMenu,
+  synthetic,
 }: {
+  synthetic: boolean;
   session: SessionBootstrap;
   menu: AppMenuState;
   currentRest: string;
@@ -123,15 +127,17 @@ function Sidebar({
       ) : (
         <div className="sidebar-status" role="status">导航加载中…</div>
       )}
-      <div className="sidebar-footer">
-        <span className="demo-dot" aria-hidden="true" />
-        前端合成数据
-      </div>
+      {synthetic && (
+        <div className="sidebar-footer">
+          <span className="demo-dot" aria-hidden="true" />
+          前端合成数据
+        </div>
+      )}
     </aside>
   );
 }
 
-export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, title, children }: AppShellProps) {
+export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, title, synthetic = true, children }: AppShellProps) {
   const home = session.applications[0];
   return (
     <div className="app-root">
@@ -157,13 +163,13 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           ))}
         </nav>
         <div className="topbar-right">
-          <span className="demo-environment">合成演示</span>
+          {synthetic && <span className="demo-environment">合成演示</span>}
           <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout} />
         </div>
       </header>
 
       <div className="workspace">
-        {application && <Sidebar session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}
+        {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}
         <main className="main-region" aria-label={title}>
           {children}
         </main>

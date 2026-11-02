@@ -421,7 +421,8 @@ class IdentityAuthenticationHttpTest {
 
         @Bean
         EntityReadAccessPolicy entityReadAccessPolicy(PersistentEntityReadAuthorizationRepository repository) {
-            return new PersistentEntityReadAccessPolicy(repository);
+            return new PersistentEntityReadAccessPolicy(repository, (tenant, app) -> Optional.of(
+                    new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true, 1)));
         }
     }
 

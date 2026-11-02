@@ -86,3 +86,15 @@ MinIO官方开源仓库已归档；Camunda7 CE停止后续维护；Camunda8生�
 ## Three.js最终选型补充 — 2026-10-29
 
 Three.js已选定；SceneJSON/GLB、ID映射、React隔离、2D保底及R3F边界的唯一规范见[设备地图大屏：Three.js最终选型](device-map-dashboard.md#threejs最终选型补充--2026-10-29)。
+
+## ADR023 权限变更与业务命令事务顺序
+
+Finding 命令在同一数据源的受管、可写 READ COMMITTED 事务中，先取得全局共享事务 advisory lock，再取得租户共享锁，之后才读取授权、锁定业务记录及命令回执。全局账号、principal、密码及全局权限写入使用全局排他锁；成员、角色、scope、组织及应用授权写入使用全局共享锁和受影响租户排他锁。多租户锁按 SHA-256 派生的有符号 bigint 键排序、去重；禁止事务内升级或追加不同范围。
+
+全局锁使用 PostgreSQL 双 integer 键 `(0x4D534647, 1)`；租户键使用字符串 `msf.authorization.v1/tenant/<canonical UUID>` 的 SHA-256 前八字节，按 big-endian signed long 解释。两种键空间不重叠；摘要碰撞仅产生保守串行化。默认锁等待上限五秒，保留调用方更严格上限，失败整笔回滚。授权必须在取得锁后的独立语句读取，不接受外层 REPEATABLE READ 或只读事务冒充兼容。
+
+该协议需要所有安全写入者共同遵循，不能保护绕过协议的人工 SQL。候选处理人的账号和 principal 状态同样由全局锁覆盖。注销或会话到期只影响会话，不承诺撤销已授权的在途命令。仅支持 Spring 管理的保存点；保存点回滚使 guard 失效并强制整笔回滚，禁止直接 JDBC/SQL SAVEPOINT 绕过同步回调。后台执行器仍关闭；未来引擎先持锁的任务须采用 try-lock/回滚重试并另行验证，不能反向阻塞取得权限锁。
+
+当前实现和离线测试不是两事务实库证明；实库验收必须观察实际等待关系，覆盖两种提交顺序、撤权和新增/删除 grant、超时、回滚释放与外层隔离级别拒绝。
+
+依据：[PostgreSQL advisory locks](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS)、[READ COMMITTED](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)。

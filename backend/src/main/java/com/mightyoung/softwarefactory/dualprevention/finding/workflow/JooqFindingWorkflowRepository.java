@@ -1,5 +1,6 @@
 package com.mightyoung.softwarefactory.dualprevention.finding.workflow;
 
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandClaim;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
@@ -30,10 +31,13 @@ import java.util.function.Function;
 public final class JooqFindingWorkflowRepository implements FindingWorkflowRepository {
 
     private final DSLContext dsl;
+    private final AuthorizationWriteGuard authorizationWriteGuard;
     private final TransactionTemplate commandTransaction;
 
-    public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager) {
+    public JooqFindingWorkflowRepository(DSLContext dsl, PlatformTransactionManager transactionManager,
+                                         AuthorizationWriteGuard authorizationWriteGuard) {
         this.dsl = dsl;
+        this.authorizationWriteGuard = java.util.Objects.requireNonNull(authorizationWriteGuard);
         this.commandTransaction = new TransactionTemplate(transactionManager);
         // Read fresh evidence rows after lock waits; V6's parent revision update also
         // turns stale REPEATABLE READ writers into serialization conflicts.
@@ -45,6 +49,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
         if (tenantId == null || work == null) throw new IllegalArgumentException("Tenant and command are required");
         return commandTransaction.execute(status -> {
             setLocalTenant(tenantId);
+            authorizationWriteGuard.forFindingCommand(tenantId);
             return work.apply(new JooqTransaction(tenantId));
         });
     }

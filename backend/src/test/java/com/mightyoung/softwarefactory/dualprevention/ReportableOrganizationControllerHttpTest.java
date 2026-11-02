@@ -125,6 +125,11 @@ class ReportableOrganizationControllerHttpTest {
         }
 
         @Bean
+        com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository tenantApplications() {
+            return (tenant, app) -> Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1));
+        }
+
+        @Bean
         ReportableOrganizationReadRepository reportableOrganizationReadRepository() {
             return (tenantId, organizationIds) -> organizationIds.contains(AUTHORIZED_ORG)
                     ? List.of(new ReportableOrganization(AUTHORIZED_ORG, "NORTH", "North plant"))

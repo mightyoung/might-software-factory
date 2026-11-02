@@ -22,6 +22,8 @@ class SessionApiContractTest {
                 "/api/v1/auth/login",
                 "/api/v1/auth/logout",
                 "/api/v1/session/current",
+                "/api/v1/session/bootstrap",
+                "/api/v1/applications/{applicationId}/menu",
                 "/api/v1/organizations/reportable");
         for (String path : new String[] {"/api/v1/auth/csrf", "/api/v1/auth/login", "/api/v1/auth/logout"}) {
             Map<String, Object> operation = (Map<String, Object>) ((Map<String, Object>) paths.get(path))

@@ -57,8 +57,11 @@ export interface FindingRecord {
   reportedAt: string;
   reporter: string;
   responsible: string;
-  riskLabel: "待专业评估";
+  /** UNKNOWN 显示“待专业评估”；其余等级文案待业务确认（见 frontend-contract-gap R2）。 */
+  riskLabel: string;
   round: number;
+  /** 乐观锁版本（契约的 version）；流程命令必须带它。合成数据没有。 */
+  version?: number;
   history: readonly FindingHistoryEntry[];
   /** 以下字段只有通过上报表单创建的记录才有；发现时间与上报时间分开保存，补报不改写发现时间。 */
   foundAt?: string;
