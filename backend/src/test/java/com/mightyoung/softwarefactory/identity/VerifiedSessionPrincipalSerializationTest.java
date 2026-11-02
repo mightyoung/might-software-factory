@@ -47,6 +47,7 @@ class VerifiedSessionPrincipalSerializationTest {
         assertThat(restored.tenantAuthEpoch()).isEqualTo(1L);
         assertThat(restored.memberAuthEpoch()).isEqualTo(1L);
         assertThat(restored.credentialVersion()).isEqualTo(7L);
+        assertThat(restored.getName()).isEqualTo(ACTOR_ID.toString());
         assertThat(restored.toString()).isEqualTo("VerifiedSessionPrincipal");
     }
 
@@ -74,6 +75,7 @@ class VerifiedSessionPrincipalSerializationTest {
         assertThat(restoredPrincipal.tenantId()).isEqualTo(TENANT_ID);
         assertThat(restoredPrincipal.memberId()).isEqualTo(MEMBER_ID);
         assertThat(restoredPrincipal.credentialVersion()).isEqualTo(7L);
+        assertThat(restored.getAuthentication().getName()).isEqualTo(ACTOR_ID.toString());
     }
 
     @Test
@@ -89,6 +91,8 @@ class VerifiedSessionPrincipalSerializationTest {
         assertThat(legacy.tenantAuthEpoch()).isEqualTo(17L);
         assertThat(legacy.memberAuthEpoch()).isEqualTo(23L);
         assertThat(legacy.credentialVersion()).isZero();
+        assertThat(legacy.accountId()).isEqualTo(UUID.fromString("11000000-0000-0000-0000-000000000001"));
+        assertThat(legacy.getName()).isEqualTo(legacy.accountId().toString());
         SecurityContextHolder.getContext().setAuthentication(
                 UsernamePasswordAuthenticationToken.authenticated(legacy, null, List.of()));
 

@@ -2,6 +2,7 @@ package com.mightyoung.softwarefactory.identity;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.security.Principal;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -11,7 +12,7 @@ import java.util.UUID;
  * from request data. The serialized form keeps its existing UID so older sessions can be read and
  * rejected for their missing (zero) credential generation rather than treated as current.
  */
-public final class VerifiedSessionPrincipal implements Serializable {
+public final class VerifiedSessionPrincipal implements Principal, Serializable {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -68,6 +69,13 @@ public final class VerifiedSessionPrincipal implements Serializable {
 
     public long credentialVersion() {
         return credentialVersion;
+    }
+
+    /** Stable account scope for server-side session indexing; never a tenant or display name. */
+    @Override
+    public String getName() {
+        // Deserialization can bypass the constructor; a missing account must not share an index.
+        return accountId == null ? null : accountId.toString();
     }
 
     @Override

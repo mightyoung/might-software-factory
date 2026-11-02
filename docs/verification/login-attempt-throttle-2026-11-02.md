@@ -1,5 +1,7 @@
 # Login attempt limits and source/account cooling — 2026-11-02
 
+Follow-up: [account-scoped Session index](account-session-index-2026-11-02.md) repairs the next identity foundation gap. The results below describe the earlier throttling checkpoint.
+
 This batch follows pending PR #23 and the [absolute session lifetime receipt](session-absolute-lifetime-2026-11-02.md). It adds bounded protection to the existing POST login path before password verification, without modifying account status, credentials, database schema or production privileges.
 
 ## Policy and boundaries

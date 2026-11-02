@@ -46,6 +46,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.DataAccessException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.session.jdbc.JdbcIndexedSessionRepository;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -99,6 +100,7 @@ class IdentityLoginPostgresIT {
     @Autowired private ObjectMapper json;
     @Autowired private JdbcTemplate runtimeJdbc;
     @Autowired private PlatformTransactionManager transactions;
+    @Autowired private JdbcIndexedSessionRepository indexedSessions;
     @Autowired private SessionTrace sessions;
     @Autowired private AcceptanceClock clock;
     @Autowired private AcceptanceThrottleClock throttleClock;
@@ -210,6 +212,112 @@ class IdentityLoginPostgresIT {
         assertThat(fixture.sessionExists(sessionA)).isFalse();
         expect(tenantA.get(CURRENT), 401);
         assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
+    }
+
+    @Test
+    void accountIndexGroupsTenantSessionsAndKeepsOtherAccountsIsolatedThroughLogout() throws Exception {
+        var firstTenant = browser();
+        var secondTenant = browser();
+        String firstSession = sessions.idFor(login(firstTenant, fixture.password(), fixture.tenantACode()).trace());
+        String secondSession = sessions.idFor(login(secondTenant, fixture.password(), fixture.tenantBCode()).trace());
+        assertThat(fixture.storedPrincipalName(firstSession)).isEqualTo(fixture.accountId().toString());
+        assertThat(fixture.storedPrincipalName(secondSession)).isEqualTo(fixture.accountId().toString());
+        assertIndexedSessions(fixture, firstSession, secondSession);
+
+        Set<String> beforeOtherAccount = sessions.ids();
+        try (var other = IdentityPostgresFixture.create(passwords)) {
+            var otherClient = browser();
+            try {
+                bootstrap(otherClient);
+                var otherLogin = otherClient.post(LOGIN,
+                        loginBody(other.loginKey(), other.password(), other.tenantACode()), otherClient.csrf());
+                expect(otherLogin, 204);
+                String otherSession = sessions.idFor(otherLogin.trace());
+                assertThat(other.storedPrincipalName(otherSession)).isEqualTo(other.accountId().toString());
+                assertIndexedSessions(fixture, firstSession, secondSession);
+                assertIndexedSessions(other, otherSession);
+                for (var owner : List.of(fixture, other)) {
+                    for (String alias : List.of(owner.loginKey(), owner.actorId().toString(),
+                            owner.memberAId().toString(), owner.memberBId().toString(),
+                            owner.tenantAId().toString(), owner.tenantBId().toString())) {
+                        assertNoSessionsIndexedBy(alias);
+                    }
+                }
+                assertNoSessionsIndexedBy("VerifiedSessionPrincipal");
+
+                logout(firstTenant);
+                assertThat(fixture.sessionExists(firstSession)).isFalse();
+                assertIndexedSessions(fixture, secondSession);
+                assertIndexedSessions(other, otherSession);
+
+                logout(secondTenant);
+                assertThat(fixture.sessionExists(secondSession)).isFalse();
+                assertIndexedSessions(fixture);
+                assertIndexedSessions(other, otherSession);
+                assertCurrent(otherClient, other, other.tenantAId().toString(), other.memberAId().toString());
+                assertOrganizations(otherClient, other.organizationAId().toString(), fixture.organizationAId().toString());
+                assertCleanConnection();
+            } finally {
+                try {
+                    otherClient.close();
+                } finally {
+                    browsers.remove(otherClient);
+                    sessions.awaitIdle();
+                    Set<String> owned = new HashSet<>(sessions.ids());
+                    owned.removeAll(beforeOtherAccount);
+                    other.cleanupSessions(owned);
+                }
+            }
+        }
+    }
+
+    @Test
+    void aLoadedLegacyIndexRepairsItselfButAnIndexedExpiredSessionStillCannotAuthenticate() throws Exception {
+        var client = browser();
+        String session = sessions.idFor(login(client, fixture.password(), fixture.tenantACode()).trace());
+        Set<String> beforeOtherAccount = sessions.ids();
+        try (var other = IdentityPostgresFixture.create(passwords)) {
+            var otherClient = browser();
+            try {
+                bootstrap(otherClient);
+                var otherLogin = otherClient.post(LOGIN,
+                        loginBody(other.loginKey(), other.password(), other.tenantACode()), otherClient.csrf());
+                expect(otherLogin, 204);
+                String otherSession = sessions.idFor(otherLogin.trace());
+                assertIndexedSessions(other, otherSession);
+
+                fixture.replaceStoredPrincipalName(session, "VerifiedSessionPrincipal");
+                assertThat(fixture.storedPrincipalName(session)).isEqualTo("VerifiedSessionPrincipal");
+                assertIndexedSessions(fixture);
+                assertIndexedSessions(other, otherSession);
+                assertCurrent(client, fixture.tenantAId().toString(), fixture.memberAId().toString());
+                assertThat(fixture.storedPrincipalName(session)).isEqualTo(fixture.accountId().toString());
+                assertIndexedSessions(fixture, session);
+                assertIndexedSessions(other, otherSession);
+                assertNoSessionsIndexedBy("VerifiedSessionPrincipal");
+
+                fixture.expireStoredSession(session);
+                // The repository's principal index is a lookup, not an authorization or expiry gate.
+                assertIndexedSessions(fixture, session);
+                assertIndexedSessions(other, otherSession);
+                expect(client.get(CURRENT), 401);
+                assertThat(fixture.sessionExists(session)).isFalse();
+                assertIndexedSessions(fixture);
+                assertIndexedSessions(other, otherSession);
+                assertCurrent(otherClient, other, other.tenantAId().toString(), other.memberAId().toString());
+                assertCleanConnection();
+            } finally {
+                try {
+                    otherClient.close();
+                } finally {
+                    browsers.remove(otherClient);
+                    sessions.awaitIdle();
+                    Set<String> owned = new HashSet<>(sessions.ids());
+                    owned.removeAll(beforeOtherAccount);
+                    other.cleanupSessions(owned);
+                }
+            }
+        }
     }
 
     @Test
@@ -582,15 +690,37 @@ class IdentityLoginPostgresIT {
 
     private void assertCurrent(IdentityAcceptanceHttps.Browser client, String tenantId, String memberId)
             throws Exception {
+        assertCurrent(client, fixture, tenantId, memberId);
+    }
+
+    private void assertCurrent(IdentityAcceptanceHttps.Browser client, IdentityPostgresFixture owner,
+                               String tenantId, String memberId) throws Exception {
         var response = client.get(CURRENT);
         expect(response, 200);
         JsonNode current = json.readTree(response.body()).path("data");
-        assertThat(current.path("actorId").asString()).isEqualTo(fixture.actorId().toString());
-        assertThat(current.path("accountId").asString()).isEqualTo(fixture.accountId().toString());
+        assertThat(current.path("actorId").asString()).isEqualTo(owner.actorId().toString());
+        assertThat(current.path("accountId").asString()).isEqualTo(owner.accountId().toString());
         assertThat(current.path("tenantId").asString()).isEqualTo(tenantId);
         assertThat(current.path("memberId").asString()).isEqualTo(memberId);
         assertThat(current.has("secretHash")).isFalse();
         assertThat(current.has("credentialVersion")).isFalse();
+    }
+
+    private void assertIndexedSessions(IdentityPostgresFixture owner, String... expectedIds) throws Exception {
+        sessions.awaitIdle();
+        String accountName = owner.accountId().toString();
+        // Inspect opaque IDs before repository reload, so unrelated serialized sessions are never read.
+        assertThat(runtimeJdbc.queryForList(
+                "select session_id from public.spring_session where principal_name = ?", String.class, accountName))
+                .containsExactlyInAnyOrder(expectedIds);
+        for (String id : expectedIds) owner.storedCredentialVersion(id);
+        assertThat(indexedSessions.findByPrincipalName(accountName).keySet()).containsExactlyInAnyOrder(expectedIds);
+    }
+
+    private void assertNoSessionsIndexedBy(String name) {
+        assertThat(runtimeJdbc.queryForObject(
+                "select count(*) from public.spring_session where principal_name = ?", Integer.class, name)).isZero();
+        assertThat(indexedSessions.findByPrincipalName(name)).isEmpty();
     }
 
     private void assertOrganizations(IdentityAcceptanceHttps.Browser client, String expected, String forbidden)
