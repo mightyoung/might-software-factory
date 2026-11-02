@@ -3,3 +3,9 @@ target/
 .vscode/
 *.iml
 .DS_Store
+# Local environment files may contain service credentials.
+.[Ee][Nn][Vv]
+.[Ee][Nn][Vv].*
+!.[Ee][Nn][Vv].example
+!.[Ee][Nn][Vv].*.example
+.[Ee][Nn][Vv][Rr][Cc]
