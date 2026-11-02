@@ -139,6 +139,10 @@ final class IdentityAcceptanceHttps implements AutoCloseable {
             return send("GET", path, null, null);
         }
 
+        Response getWithJsonBody(String path, String body) throws Exception {
+            return send("GET", path, body, null);
+        }
+
         Response post(String path, String body, String csrf) throws Exception {
             return send("POST", path, body, csrf);
         }

@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,6 +15,7 @@ import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
@@ -26,6 +29,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.UUID;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.time.Clock;
+import java.time.Duration;
 
 /**
  * Session and CSRF boundary for the management API. Local password login installs only the
@@ -40,7 +45,8 @@ public class SecurityConfiguration {
             HttpSecurity http,
             CookieCsrfTokenRepository csrfTokenRepository,
             SecurityContextRepository securityContextRepository,
-            LocalPasswordAuthenticationFilter loginFilter)
+            LocalPasswordAuthenticationFilter loginFilter,
+            SessionLifetimePolicy sessionLifetime)
             throws Exception {
         return http
                 .csrf(csrf -> csrf
@@ -73,6 +79,7 @@ public class SecurityConfiguration {
                         .logoutSuccessHandler((request, response, authentication) ->
                                 IdentityHttpResponses.noContent(response)))
                 .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new AbsoluteSessionLifetimeFilter(sessionLifetime), SecurityContextHolderFilter.class)
                 .build();
     }
 
@@ -92,13 +99,20 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    SessionLifetimePolicy sessionLifetimePolicy(ObjectProvider<Clock> clocks,
+            @Value("${software-factory.security.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        return new SessionLifetimePolicy(clocks.getIfAvailable(Clock::systemUTC), absoluteTimeout);
+    }
+
+    @Bean
     LocalPasswordAuthenticationFilter localPasswordAuthenticationFilter(
             @Qualifier("localPasswordAuthenticationProvider") AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
-            CookieCsrfTokenRepository csrfTokenRepository) {
+            CookieCsrfTokenRepository csrfTokenRepository,
+            SessionLifetimePolicy sessionLifetime) {
         return new LocalPasswordAuthenticationFilter(provider, converter, securityContextRepository,
-                csrfTokenRepository);
+                csrfTokenRepository, sessionLifetime);
     }
 
     @Bean

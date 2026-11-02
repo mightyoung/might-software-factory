@@ -1,9 +1,11 @@
 package com.mightyoung.softwarefactory;
 
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipal;
+import com.mightyoung.softwarefactory.identity.SessionLifetimePolicy;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.core.serializer.support.DeserializingConverter;
+import org.springframework.core.serializer.support.SerializingConverter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.security.core.context.SecurityContext;
@@ -15,6 +17,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.time.Instant;
 
 /** Synthetic identity rows only. Schema and temporary runtime grants are provisioned separately. */
 public final class IdentityPostgresFixture implements AutoCloseable {
@@ -228,6 +231,39 @@ public final class IdentityPostgresFixture implements AutoCloseable {
             throw new IllegalStateException("Stored session is not bound to this fixture account");
         }
         return principal.credentialVersion();
+    }
+
+    public Instant storedAuthenticatedAt(String sessionId) {
+        storedCredentialVersion(sessionId); // Refuse inspection of a session outside this fixture account.
+        List<byte[]> attributes = jdbc.query("""
+                select a.attribute_bytes from public.spring_session s
+                join public.spring_session_attributes a on a.session_primary_id = s.primary_id
+                where s.session_id = ? and a.attribute_name = ?
+                """, (result, row) -> result.getBytes(1), sessionId,
+                SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE);
+        if (attributes.size() != 1
+                || !(new DeserializingConverter().convert(attributes.getFirst()) instanceof Instant authenticatedAt)) {
+            throw new IllegalStateException("Expected one owned JDBC authentication-time attribute");
+        }
+        return authenticatedAt;
+    }
+
+    public void replaceStoredAuthenticationTime(String sessionId, Object value) {
+        storedCredentialVersion(sessionId);
+        requireOne(jdbc.update("""
+                update public.spring_session_attributes a set attribute_bytes = ?
+                from public.spring_session s
+                where s.primary_id = a.session_primary_id and s.session_id = ? and a.attribute_name = ?
+                """, new SerializingConverter().convert(Objects.requireNonNull(value, "value")), sessionId,
+                SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE));
+    }
+
+    public void removeStoredAuthenticationTime(String sessionId) {
+        storedCredentialVersion(sessionId);
+        requireOne(jdbc.update("""
+                delete from public.spring_session_attributes a using public.spring_session s
+                where s.primary_id = a.session_primary_id and s.session_id = ? and a.attribute_name = ?
+                """, sessionId, SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE));
     }
 
     public void cleanupSessions(Collection<String> sessionIds) {

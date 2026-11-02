@@ -27,6 +27,12 @@ spring:
           # The event publication registry is created by the versioned Flyway migration.
           enabled: false
 
+software-factory:
+  security:
+    session:
+      # Authentication age never slides with access; the separate idle timeout remains 30m.
+      absolute-timeout: 12h
+
 flowable:
   database-schema-update: false
   async-executor-activate: false

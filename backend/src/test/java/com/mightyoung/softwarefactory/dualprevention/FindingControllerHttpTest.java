@@ -267,6 +267,7 @@ class FindingControllerHttpTest {
             context.setAuthentication(authentication);
             request.setAttribute("SPRING_SECURITY_CONTEXT", context);
             request.getSession(true).setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+            VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(request.getSession(false));
             return request;
         };
     }
