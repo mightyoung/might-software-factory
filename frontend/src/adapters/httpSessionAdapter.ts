@@ -22,6 +22,7 @@ function checkVersion(version: number): void {
 
 function toSessionError(error: unknown): unknown {
   if (!(error instanceof ApiError)) return error;
+  if (error.status === 429) return new SessionError("rate_limited", false, error.retryAfterSeconds);
   if (error.status === 401) return new SessionError("unauthenticated");
   if (error.status === 403) return new SessionError("forbidden");
   return new SessionError("unavailable", error.retryable);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, type HttpClient } from "../api/httpClient";
+import { ApiError, createHttpClient, type HttpClient } from "../api/httpClient";
 import { createHttpSessionAdapter } from "./httpSessionAdapter";
 
 const current = { data: { actorId: "a", accountId: "b", tenantId: "t", tenantCode: "c", tenantName: "租户", memberId: "m", displayName: "张三" } };
@@ -42,6 +42,30 @@ describe("createHttpSessionAdapter", () => {
     const a503 = fake({ "/api/v1/session/bootstrap": () => new ApiError(503, "DEPENDENCY_UNAVAILABLE", null, true) });
     await expect(createHttpSessionAdapter(a503.client).restore()).rejects.toMatchObject({ kind: "unavailable", retryable: true });
   });
+
+  it.each([30, null])("preserves a 429 as rate_limited with Retry-After %s", async (seconds) => {
+    const { client, calls } = fake({ "/api/v1/auth/login": () => new ApiError(429, "RATE_LIMITED", null, true, [], seconds) });
+    await expect(createHttpSessionAdapter(client).login({ username: "u", password: "p", tenantCode: "c" }))
+      .rejects.toMatchObject({ kind: "rate_limited", retryable: false, retryAfterSeconds: seconds });
+    expect(calls).toEqual(["/api/v1/auth/login"]);
+  });
+
+  it.each([["17", 17], [undefined, null], ["999999999", 300], ["invalid", null]] as const)(
+    "carries actual Retry-After header %s through HttpClient and adapter", async (header, expected) => {
+      const client = createHttpClient({ readCookie: () => "csrf-token", fetchImpl: async () => new Response(
+        JSON.stringify({ code: "RATE_LIMITED", message: "Too many attempts", retryable: true, fieldErrors: [] }),
+        { status: 429, headers: { "Content-Type": "application/json", ...(header ? { "Retry-After": header } : {}) } },
+      ) });
+      await expect(createHttpSessionAdapter(client).login({ username: "u", password: "p", tenantCode: "c" }))
+        .rejects.toMatchObject({ kind: "rate_limited", retryAfterSeconds: expected, retryable: false });
+    });
+
+  it.each([[401, "invalid_credentials"], [403, "forbidden"], [503, "unavailable"]] as const)(
+    "keeps login HTTP %s mapped to %s", async (status, kind) => {
+      const { client } = fake({ "/api/v1/auth/login": () => new ApiError(status, "DENIED", null, status === 503) });
+      await expect(createHttpSessionAdapter(client).login({ username: "u", password: "p", tenantCode: "c" }))
+        .rejects.toMatchObject({ kind, retryAfterSeconds: null });
+    });
 
   it("loads server menu and maps only known permissions", async () => {
     const { client, calls } = fake({ "/api/v1/applications/safety/menu": () => menu });
