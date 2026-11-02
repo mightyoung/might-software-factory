@@ -7,6 +7,7 @@ import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
+import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -217,6 +218,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
         canReport={hasPermission(session, "safety.finding.report")}
+        draftKey={draftOwnerKey(session.tenant.id, session.actor.id)}
         onUnauthenticated={expire}
       />
     );

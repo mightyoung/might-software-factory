@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { syntheticSessionAdapter, type SessionAdapter } from "../../adapters/sessionAdapter";
+import { beginExpiry, clearAllDrafts, draftOwnerKey, onSignedIn } from "./draftStash";
 import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap } from "../../domain/session";
 
 export type SessionState =
@@ -62,6 +63,7 @@ export function SessionProvider({
     async (username: string, password: string, tenantCode?: string) => {
       const session = await adapter.login({ username, password, tenantCode });
       generation.current += 1;
+      onSignedIn(draftOwnerKey(session.tenant.id, session.actor.id));
       setState({ status: "signedIn", session });
       return session;
     },
@@ -70,6 +72,7 @@ export function SessionProvider({
 
   const logout = useCallback(async () => {
     generation.current += 1;
+    clearAllDrafts(); // 主动退出：不在内存里留下上一个人的草稿
     try {
       await adapter.logout();
     } catch {
@@ -80,6 +83,7 @@ export function SessionProvider({
 
   const expire = useCallback(() => {
     generation.current += 1;
+    beginExpiry(); // 被动失效：未提交的上报草稿在重新登录后恢复
     setState({ status: "signedOut", notice: "expired" });
   }, []);
 
@@ -94,6 +98,7 @@ export function SessionProvider({
         throw error;
       }
       generation.current += 1;
+      clearAllDrafts();
       setState({ status: "signedOut", notice: "passwordChanged" });
     },
     [adapter, expire],

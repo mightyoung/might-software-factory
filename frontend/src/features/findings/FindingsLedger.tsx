@@ -30,6 +30,8 @@ interface FindingsLedgerProps {
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
   canReport?: boolean;
+  /** 当前登录者标识；传给上报表单用于登录失效后恢复草稿。 */
+  draftKey?: string;
   /** 读取或提交收到“未登录”时通知应用回到登录页。 */
   onUnauthenticated?: () => void;
 }
@@ -49,6 +51,7 @@ export function FindingsLedger({
   submitAdapter,
   commandAdapter,
   canReport = false,
+  draftKey,
   onUnauthenticated,
 }: FindingsLedgerProps) {
   const demo = useAppMode() === "synthetic";
@@ -308,6 +311,7 @@ export function FindingsLedger({
           onSubmitted={handleSubmitted}
           onOpenSubmitted={openSubmitted}
           onUnauthenticated={onUnauthenticated}
+          draftKey={draftKey}
         />
       )}
 

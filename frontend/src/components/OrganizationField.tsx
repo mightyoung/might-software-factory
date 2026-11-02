@@ -23,10 +23,12 @@ export interface ReportableOrganizations {
 export function useReportableOrganizations(
   adapter: FindingSubmitAdapter,
   onUnauthenticated?: () => void,
+  /** 恢复的草稿里选过的组织；视为用户亲自选的。 */
+  initialId = "",
 ): ReportableOrganizations {
   const [state, setState] = useState<OrganizationsState>({ status: "loading" });
-  const [organizationId, setOrganizationId] = useState("");
-  const [touched, setTouched] = useState(false);
+  const [organizationId, setOrganizationId] = useState(initialId);
+  const [touched, setTouched] = useState(initialId !== "");
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -37,7 +39,10 @@ export function useReportableOrganizations(
       .listOrganizations(abort.signal)
       .then((items) => {
         setState({ status: "ready", items });
-        if (items.length === 1) setOrganizationId(items[0]!.id);
+        // 只有一个可选组织且还没选过时自动选中；恢复的选择若已不在列表里（授权变化）则清掉。
+        setOrganizationId((current) =>
+          items.some((item) => item.id === current) ? current : items.length === 1 ? items[0]!.id : "",
+        );
       })
       .catch((error: unknown) => {
         if (abort.signal.aborted) return;

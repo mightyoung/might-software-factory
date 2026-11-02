@@ -1,17 +1,20 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useAppMode } from "../mode";
 import { OrganizationField, useReportableOrganizations } from "./OrganizationField";
 import { ReportDraftFields } from "./ReportDraftFields";
 import { ReportSuccess } from "./ReportSuccess";
+import { peekDraft } from "../features/session/draftStash";
+import { useDraftStash } from "./useDraftStash";
+import { useFieldFocus } from "./useFieldFocus";
+import { useReportSubmit } from "./useReportSubmit";
+import { useUnsavedGuard } from "./useUnsavedGuard";
 import {
-  FindingSubmitError,
   newIdempotencyKey,
   type FindingSubmitAdapter,
   type FindingSubmitFailureKind,
   type FindingSubmitResult,
 } from "../adapters/findingSubmit";
 import {
-  DRAFT_FIELD_ORDER,
   createEmptyDraft,
   hasDraftErrors,
   normalizeDraft,
@@ -30,11 +33,11 @@ export interface FindingReportFormProps {
   onOpenSubmitted: (id: string) => void;
   /** 服务端判定未登录（401）：由应用回到登录页。 */
   onUnauthenticated?: () => void;
+  /** 当前登录者的标识；提供时，会话被动失效后未提交的内容会在同一个人重新登录后恢复。 */
+  draftKey?: string;
   now?: () => Date;
   createKey?: () => string;
 }
-
-type Phase = { name: "editing" } | { name: "submitting" } | { name: "submitted"; result: FindingSubmitResult };
 
 const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   validation: "服务端校验未通过，请修正标出的内容后再提交。",
@@ -51,68 +54,40 @@ export function FindingReportForm({
   onSubmitted,
   onOpenSubmitted,
   onUnauthenticated,
+  draftKey,
   now = () => new Date(),
   createKey = newIdempotencyKey,
 }: FindingReportFormProps) {
   const uid = useId();
-
   const [initial] = useState(() => createEmptyDraft(now()));
-  const [draft, setDraft] = useState<FindingDraft>(initial);
+  const [restored] = useState(() => (draftKey ? peekDraft(draftKey) : undefined));
+  const [draft, setDraft] = useState<FindingDraft>(restored?.draft ?? initial);
   const [errors, setErrors] = useState<FindingDraftErrors>({});
-  const [phase, setPhase] = useState<Phase>({ name: "editing" });
-  const [submitFailure, setSubmitFailure] = useState<FindingSubmitFailureKind | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const live = useAppMode() === "http";
+
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
   const needsOrganization = adapter.listOrganizations !== undefined;
-  const live = useAppMode() === "http";
-  const orgs = useReportableOrganizations(adapter, onUnauthenticated);
+  const orgs = useReportableOrganizations(adapter, onUnauthenticated, restored?.organizationId);
   const organizationId = orgs.organizationId;
   const [orgError, setOrgError] = useState<string | null>(null);
   const orgRef = useRef<HTMLSelectElement | null>(null);
-  // 选了组织，“请选择所属组织”的错误随即消失。
   useEffect(() => {
+    // 选了组织，“请选择所属组织”的错误随即消失。
     if (organizationId) setOrgError(null);
   }, [organizationId]);
-  const [pendingFocus, setPendingFocus] = useState<FindingDraftField | null>(null);
 
-  const fieldRefs = useRef<Partial<Record<FindingDraftField, HTMLElement | null>>>({});
-  const mounted = useRef(true);
-  const controller = useRef<AbortController | null>(null);
-  // 同一份内容的重试复用同一个幂等键；内容变化才生成新键。
-  const lastAttempt = useRef<{ payload: string; key: string } | null>(null);
-
-  const submitting = phase.name === "submitting";
+  const submit = useReportSubmit({ adapter, createKey, onSubmitted, onUnauthenticated });
+  const { phase, failure: submitFailure, submitting } = submit;
+  const focus = useFieldFocus(phase.name === "editing");
   const dirty = orgs.touched || JSON.stringify(normalizeDraft(draft)) !== JSON.stringify(normalizeDraft(initial));
+  useUnsavedGuard(dirty && phase.name !== "submitted");
+  useDraftStash({ draftKey, draft, organizationId, dirty, submitted: phase.name === "submitted", restored: restored !== undefined });
   const errorCount = Object.keys(errors).length + (orgError ? 1 : 0);
 
   useEffect(() => {
-    mounted.current = true;
-    fieldRefs.current.source?.focus();
-    return () => {
-      mounted.current = false;
-      controller.current?.abort();
-    };
-  }, []);
-
-  // 字段在提交期间是禁用的，禁用元素无法获得焦点：等重新渲染成可编辑后再聚焦出错字段。
-  // 用 layout effect 在提交阶段同步聚焦，焦点不会比错误文字晚一帧出现。
-  useLayoutEffect(() => {
-    if (!pendingFocus || phase.name !== "editing") return;
-    fieldRefs.current[pendingFocus]?.focus();
-    setPendingFocus(null);
-  }, [pendingFocus, phase.name]);
-
-  // 有未提交内容时，刷新或关闭标签页由浏览器给出原生确认。
-  // 用 useLayoutEffect：守卫要和成功页的 DOM 在同一次提交里同步解除；被动 effect 的清理会晚于 DOM，
-  // 留下“页面已显示提交成功，关闭标签页却仍被拦截”的窗口。
-  useLayoutEffect(() => {
-    if (!dirty || phase.name === "submitted") return;
-    function onBeforeUnload(event: BeforeUnloadEvent) {
-      event.preventDefault();
-    }
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty, phase.name]);
+    focus.focusNow("source");
+  }, [focus.focusNow]);
 
   function update<K extends FindingDraftField>(key: K, value: FindingDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -122,11 +97,6 @@ export function FindingReportForm({
       const { [key]: _removed, ...rest } = current;
       return rest;
     });
-  }
-
-  function focusFirstError(next: FindingDraftErrors) {
-    const first = DRAFT_FIELD_ORDER.find((field) => next[field]);
-    if (first) setPendingFocus(first);
   }
 
   function requestClose() {
@@ -142,67 +112,33 @@ export function FindingReportForm({
     }
   }
 
-  function keyFor(payload: string): string {
-    if (lastAttempt.current?.payload === payload) return lastAttempt.current.key;
-    const key = createKey();
-    lastAttempt.current = { payload, key };
-    return key;
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting || controller.current) return;
-
+    if (submitting) return;
     const found = validateFindingDraft(draft, now());
     setErrors(found);
-    setSubmitFailure(null);
     const orgMissing = needsOrganization && !organizationId;
     setOrgError(orgMissing ? "请选择所属组织" : null);
     if (orgMissing || hasDraftErrors(found)) {
       // 组织在表单最上方：缺它时先把焦点交给它，其余错误随后按顺序处理。
       if (orgMissing) orgRef.current?.focus();
-      else focusFirstError(found);
+      else focus.focusFirstError(found);
       return;
     }
-
-    const payload = normalizeDraft(draft);
-    const abort = new AbortController();
-    controller.current = abort;
-    setPhase({ name: "submitting" });
-    try {
-      const result = await adapter.submit(payload, {
-        idempotencyKey: keyFor(JSON.stringify({ ...payload, organizationId })),
-        ...(needsOrganization ? { organizationId } : {}),
-        signal: abort.signal,
-      });
-      if (!mounted.current) return;
-      setPhase({ name: "submitted", result });
-      onSubmitted(result);
-    } catch (error) {
-      if (!mounted.current || (error instanceof DOMException && error.name === "AbortError")) return;
-      const kind: FindingSubmitFailureKind = error instanceof FindingSubmitError ? error.kind : "unavailable";
-      setPhase({ name: "editing" });
-      setSubmitFailure(kind);
-      if (kind === "validation" && error instanceof FindingSubmitError) {
-        setErrors(error.fieldErrors);
-        focusFirstError(error.fieldErrors);
-      }
-      if (kind === "unauthenticated") onUnauthenticated?.();
-    } finally {
-      if (controller.current === abort) controller.current = null;
+    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined);
+    if (outcome.fieldErrors) {
+      setErrors(outcome.fieldErrors);
+      focus.focusFirstError(outcome.fieldErrors);
     }
   }
 
   function startAnother() {
-    const fresh = createEmptyDraft(now());
-    setDraft(fresh);
+    setDraft(createEmptyDraft(now()));
     setErrors({});
     setOrgError(null);
-    setSubmitFailure(null);
     setConfirmDiscard(false);
-    lastAttempt.current = null;
-    setPhase({ name: "editing" });
-    queueMicrotask(() => fieldRefs.current.source?.focus());
+    submit.reset();
+    queueMicrotask(() => focus.focusNow("source"));
   }
 
   if (phase.name === "submitted") {
@@ -244,6 +180,11 @@ export function FindingReportForm({
       </p>
 
       <form className="report-form" onSubmit={handleSubmit} noValidate aria-busy={submitting}>
+        {restored && (
+          <p className="report-banner" role="status">
+            已恢复登录失效前还没提交的内容，请检查后再提交。
+          </p>
+        )}
         {errorCount > 0 && (
           <p className="report-summary" role="alert">
             有 {errorCount} 项需要修正。
@@ -274,9 +215,7 @@ export function FindingReportForm({
           urgencies={adapter.urgencies}
           now={now}
           update={update}
-          fieldRef={(field) => (node) => {
-            fieldRefs.current[field] = node;
-          }}
+          fieldRef={focus.fieldRef}
         />
 
         <div className="report-readonly">
