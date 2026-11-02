@@ -9,6 +9,7 @@ const NOTICE_TEXT: Record<Exclude<Notice, "none">, string> = {
   signedOut: "已退出登录。",
   expired: "登录已失效，请重新登录。",
   unavailable: "暂时无法确认登录状态，请稍后重试。",
+  forbidden: "当前账号暂时无法登录，请联系管理员。",
   passwordChanged: "密码已修改。请使用新密码重新登录。",
 };
 

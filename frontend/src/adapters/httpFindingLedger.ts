@@ -37,18 +37,33 @@ const GRADE_LABELS: Record<components["schemas"]["FindingDetail"]["grade"], stri
   MAJOR: "重大",
 };
 
+/** 服务端响应缺少默认投影里必有的字段：按“读取失败”处理，不替服务端编造状态或内容。 */
+export class MalformedFindingResponseError extends Error {
+  constructor(field: string) {
+    super(`Finding response is missing required field "${field}"`);
+    this.name = "MalformedFindingResponseError";
+  }
+}
+
+function required<T>(value: T | undefined, field: string): T {
+  if (value === undefined) throw new MalformedFindingResponseError(field);
+  return value;
+}
+
 export function toFindingRecord(item: Item | Detail): FindingRecord {
   return {
     id: item.id,
-    code: item.code ?? NOT_PROVIDED,
-    description: item.description ?? "",
+    code: required(item.code, "code"),
+    description: required(item.description, "description"),
+    // location 在契约里可为 null（旧数据无法推断），这是合法的“未提供”。
     location: item.location ?? NOT_PROVIDED,
-    state: item.state ?? "DISCOVERED",
-    reportedAt: item.createdAt ?? "",
+    state: required(item.state, "state"),
+    reportedAt: required(item.createdAt, "createdAt"),
     reporter: NOT_PROVIDED,
     responsible: NOT_PROVIDED,
-    riskLabel: GRADE_LABELS[item.grade ?? "UNKNOWN"],
-    round: item.roundNo ?? 1,
+    riskLabel: GRADE_LABELS[required(item.grade, "grade")],
+    round: required(item.roundNo, "roundNo"),
+    // version 不在列表的默认投影里，只有详情有；缺失时流程命令保持禁用。
     ...(item.version ? { version: item.version } : {}),
     history: [],
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),

@@ -61,6 +61,8 @@ function toSubmitError(error: ApiError): FindingSubmitError {
  */
 export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapter {
   return {
+    // 与 URGENCY_MAP 一致：后端没有对应值的“紧急”档不提供。
+    urgencies: (Object.keys(URGENCY_MAP) as FindingUrgency[]).filter((key) => URGENCY_MAP[key] !== null),
     async listOrganizations(signal) {
       try {
         const body = await client.get<SessionComponents["schemas"]["ReportableOrganizationsResponse"]>(

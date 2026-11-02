@@ -4,7 +4,7 @@ import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap }
 
 export type SessionState =
   | { status: "restoring" }
-  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" | "passwordChanged" }
+  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" | "forbidden" | "passwordChanged" }
   | { status: "signedIn"; session: SessionBootstrap };
 
 export interface SessionContextValue {
@@ -51,7 +51,9 @@ export function SessionProvider({
       })
       .catch((error: unknown) => {
         if (isAbortError(error) || mine !== generation.current) return;
-        setState({ status: "signedOut", notice: "unavailable" });
+        // 账号 / 租户已停用（403）不是暂时故障，不能让用户一直“稍后重试”。
+        const denied = error instanceof SessionError && error.kind === "forbidden";
+        setState({ status: "signedOut", notice: denied ? "forbidden" : "unavailable" });
       });
     return () => controller.abort();
   }, [adapter]);

@@ -353,3 +353,19 @@ describe("修改密码", () => {
   });
 });
 
+describe("恢复会话失败的提示", () => {
+  it("403（账号 / 租户已停用）提示无法登录，而不是“稍后重试”", async () => {
+    const base = createSyntheticSessionAdapter();
+    setPath("/safety/findings");
+    render(<App sessionAdapter={{ ...base, restore: vi.fn().mockRejectedValue(new SessionError("forbidden")) }} />);
+    expect(await screen.findByText(/当前账号暂时无法登录/)).toBeInTheDocument();
+  });
+
+  it("503 仍提示稍后重试", async () => {
+    const base = createSyntheticSessionAdapter();
+    setPath("/safety/findings");
+    render(<App sessionAdapter={{ ...base, restore: vi.fn().mockRejectedValue(new SessionError("unavailable")) }} />);
+    expect(await screen.findByText(/暂时无法确认登录状态/)).toBeInTheDocument();
+  });
+});
+

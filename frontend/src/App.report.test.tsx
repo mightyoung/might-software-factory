@@ -155,19 +155,46 @@ describe("上报流程", () => {
 });
 
 describe("真实后端会话（非合成）", () => {
-  it("不显示合成演示标识，台账与上报使用注入的适配器", async () => {
+  const live = { id: "00000000-0000-4000-8000-0000000000aa", code: "YH-20261102-0001", description: "护栏松动", location: "A 工房", state: "PERSON_CONFIRM_PENDING" as const,
+    reportedAt: "2026-11-02T09:00:00+08:00", reporter: "—", responsible: "—", riskLabel: "待专业评估", round: 1, version: 1, history: [] };
+
+  it("任何界面文字都不再称真实数据为演示/合成；台账、详情、上报使用注入的适配器", async () => {
     window.history.replaceState(null, "", "/safety/findings");
     const base = createSyntheticSessionAdapter({ signedInAs: "demo.safety" });
-    const ledger = { list: vi.fn(async () => ({ items: [], page: { index: 1, size: 20 }, total: 0, pageCount: 0 })), get: vi.fn(async () => null) };
-    const submit = { submit: vi.fn(), listOrganizations: vi.fn(async () => [{ id: "o1", code: "A", name: "一车间" }]) };
-    render(<App sessionAdapter={{ ...base, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit })} />);
+    const ledger = {
+      list: vi.fn(async () => ({ items: [live], page: { index: 1, size: 20 }, total: 1, pageCount: 1 })),
+      get: vi.fn(async () => live),
+    };
+    const submit = { submit: vi.fn(), urgencies: ["NORMAL", "IMMEDIATE"] as const, listOrganizations: vi.fn(async () => [{ id: "o1", code: "A", name: "一车间" }]) };
+    // 演示适配器的账号显示名本身带“演示”，换成中性名字，只检查产品文案。
+    const restore: typeof base.restore = async () => ({ ...(await base.restore())!, actor: { id: "u1", displayName: "张三" } });
+    render(<App mode="http" sessionAdapter={{ ...base, restore, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit, commands: { run: vi.fn() } })} />);
     await screen.findByRole("heading", { name: "隐患台账" });
-    expect(screen.queryByText("合成演示")).not.toBeInTheDocument();
-    expect(screen.queryByText("前端合成数据")).not.toBeInTheDocument();
-    expect(screen.queryByText(/合成演示数据/)).not.toBeInTheDocument();
-    await waitFor(() => expect(ledger.list).toHaveBeenCalled());
+    await screen.findByText("共 1 条记录");
+    const noDemoWording = () => {
+      const text = document.body.textContent ?? "";
+      expect(text).not.toMatch(/演示|合成|示例对象/);
+    };
+    noDemoWording();
+
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    await screen.findByText("处理轨迹");
+    noDemoWording();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭详情" }));
     fireEvent.click(screen.getByRole("button", { name: /新建上报/ }));
     expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
     expect(screen.queryByText("后端暂未接入")).not.toBeInTheDocument();
+    // 适配器声明的紧急程度：没有后端不接受的“紧急”档
+    expect(screen.queryByLabelText("紧急")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("需立即处置")).toBeInTheDocument();
+    noDemoWording();
+  });
+
+  it("演示模式仍标注演示", async () => {
+    window.history.replaceState(null, "", "/safety/findings");
+    render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} />);
+    await screen.findByText(/共 \d+ 条演示记录/);
+    expect(screen.getByText("合成演示")).toBeInTheDocument();
   });
 });

@@ -10,6 +10,7 @@ import {
 import { RouteLink } from "../routing/router";
 import { tenantPath } from "../routing/paths";
 import { ChangePasswordDialog } from "./ChangePasswordDialog";
+import { useAppMode } from "../mode";
 import { UserMenu } from "./UserMenu";
 
 const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
@@ -19,8 +20,6 @@ const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
 };
 
 interface AppShellProps {
-  /** 合成演示会话时为 true（默认）：显示“合成演示”标识；真实后端会话不显示。 */
-  synthetic?: boolean;
   session: SessionBootstrap;
   /** 当前所在应用；为 null 时（如无权限页）不显示侧栏。 */
   application: ApplicationId | null;
@@ -140,7 +139,8 @@ function Sidebar({
   );
 }
 
-export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, synthetic = true, children }: AppShellProps) {
+export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
+  const synthetic = useAppMode() === "synthetic";
   const [changingPassword, setChangingPassword] = useState(false);
   const home = session.applications[0];
   return (

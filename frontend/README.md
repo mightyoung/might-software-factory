@@ -31,7 +31,7 @@ VITE_API_MODE=synthetic npm run dev
 VITE_API_MODE=http npm run dev
 ```
 
-未配置、空值或 `synthetic` 使用演示模式；`http` 使用 HTTP 适配器；其他值启动失败，避免拼写错误静默进入演示。HTTP 登录需要租户编码、账号和密码。
+未配置、空值或 `synthetic` 使用演示模式；`http` 使用 HTTP 适配器；其他值启动失败，避免拼写错误静默进入演示。模式由 `main.tsx` 一次性解析（`src/mode.tsx`）并经 React context 下发，界面是否标注“演示 / 合成”只看它，不再从各适配器的能力去推断。HTTP 登录需要租户编码、账号和密码。
 
 开发服务器代理 `/api` 到 `BACKEND_URL`，默认 `http://127.0.0.1:8080`。真实 Secure Cookie/CSRF 验收须配置同源 HTTPS；当前 HTTP 开发代理不是这项证据，不关闭 TLS 校验作为替代。
 

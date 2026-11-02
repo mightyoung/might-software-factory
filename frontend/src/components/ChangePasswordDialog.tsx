@@ -29,12 +29,16 @@ export function ChangePasswordDialog({ onSubmit, onClose }: ChangePasswordDialog
   const [now, setNow] = useState(() => Date.now());
   const currentRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
+  const cardRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     mounted.current = true;
+    // 打开前的焦点（头像菜单按钮）；关闭后还给它，键盘用户不会丢失位置。
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     currentRef.current?.focus();
     return () => {
       mounted.current = false;
+      if (opener?.isConnected) opener.focus();
     };
   }, []);
 
@@ -79,6 +83,22 @@ export function ChangePasswordDialog({ onSubmit, onClose }: ChangePasswordDialog
     if (event.key === "Escape" && !pending) {
       event.stopPropagation();
       onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    // 焦点陷阱：Tab / Shift+Tab 只在对话框内循环，不落到背景页面。
+    const focusable = Array.from(
+      cardRef.current?.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled)") ?? [],
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -106,7 +126,7 @@ export function ChangePasswordDialog({ onSubmit, onClose }: ChangePasswordDialog
 
   return (
     <div className="modal-backdrop" onKeyDown={onKeyDown}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-label="修改密码">
+      <section ref={cardRef} className="modal-card" role="dialog" aria-modal="true" aria-label="修改密码">
         <h2>修改密码</h2>
         <p className="field-hint">
           修改成功后，所有已登录的设备都需要用新密码重新登录。新密码至少 {PASSWORD_LIMITS.newMinCodePoints} 个字符，不超过{" "}

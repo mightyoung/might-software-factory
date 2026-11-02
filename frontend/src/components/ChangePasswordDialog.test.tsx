@@ -62,4 +62,29 @@ describe("修改密码对话框", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("Tab / Shift+Tab 只在对话框内循环；关闭后焦点还给打开它的元素", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const { unmount } = render(<ChangePasswordDialog onSubmit={vi.fn(async () => {})} onClose={onClose} />);
+    const dialog = screen.getByRole("dialog");
+    const current = screen.getByLabelText("当前密码");
+    const submit = screen.getByRole("button", { name: "修改密码" });
+    expect(document.activeElement).toBe(current);
+
+    submit.focus();
+    const forward = fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(forward).toBe(false); // preventDefault：不让浏览器把焦点带出对话框
+    expect(document.activeElement).toBe(current);
+
+    const backward = fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(backward).toBe(false);
+    expect(document.activeElement).toBe(submit);
+
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
 });

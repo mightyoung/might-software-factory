@@ -7,6 +7,7 @@ import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
+import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
@@ -26,6 +27,8 @@ interface LedgerPage {
   kind: "ledger";
   title: string;
   description: string;
+  /** 真实后端模式下的说明；缺省沿用 description。 */
+  liveDescription?: string;
   view: FindingView;
 }
 
@@ -49,19 +52,19 @@ const ROUTES: readonly RouteDef[] = [
     rest: "safety/findings",
     application: "safety",
     permission: "safety.finding.read",
-    page: { kind: "ledger", title: "隐患台账", description: "查询合成隐患样例，查看确认、派单、整改和验收节点。", view: "all" },
+    page: { kind: "ledger", title: "隐患台账", description: "查询合成隐患样例，查看确认、派单、整改和验收节点。", liveDescription: "查询隐患记录，查看确认、派单、整改和验收节点。", view: "all" },
   },
   {
     rest: "safety/inbox",
     application: "safety",
     permission: "safety.inbox.read",
-    page: { kind: "ledger", title: "待确认", description: "查看处于确认节点的合成样例。", view: "confirmation" },
+    page: { kind: "ledger", title: "待确认", description: "查看处于确认节点的合成样例。", liveDescription: "查看处于确认节点的隐患记录。", view: "confirmation" },
   },
   {
     rest: "safety/acceptance",
     application: "safety",
     permission: "safety.acceptance.read",
-    page: { kind: "ledger", title: "整改验收", description: "查看处于验收节点的合成样例。", view: "acceptance" },
+    page: { kind: "ledger", title: "整改验收", description: "查看处于验收节点的合成样例。", liveDescription: "查看处于验收节点的隐患记录。", view: "acceptance" },
   },
   {
     rest: "safety/risks",
@@ -134,7 +137,8 @@ function StatusPage({ title, description, note }: { title: string; description: 
 }
 
 function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
-  const { state, logout, expire, requiresTenantCode, canChangePassword, changePassword } = useSession();
+  const { state, logout, expire, canChangePassword, changePassword } = useSession();
+  const mode = useAppMode();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
@@ -208,7 +212,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         key={route.page.view}
         view={route.page.view}
         title={route.page.title}
-        description={route.page.description}
+        description={mode === "http" ? (route.page.liveDescription ?? route.page.description) : route.page.description}
         adapter={findingStore.ledger}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
@@ -239,7 +243,6 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       onLogout={logout}
       onChangePassword={canChangePassword ? changePassword : undefined}
       title={title}
-      synthetic={!requiresTenantCode}
     >
       {content}
     </AppShell>
@@ -250,16 +253,21 @@ export function App({
   sessionAdapter,
   findingStore = syntheticFindingStore,
   createFindingStore,
+  mode = "synthetic",
 }: {
   sessionAdapter?: SessionAdapter;
   /** 固定的适配器对（测试、合成演示）。 */
   findingStore?: FindingStore;
   /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
   createFindingStore?: () => FindingStore;
+  /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
+  mode?: AppMode;
 }) {
   return (
-    <SessionProvider adapter={sessionAdapter}>
-      <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} />
-    </SessionProvider>
+    <ModeProvider value={mode}>
+      <SessionProvider adapter={sessionAdapter}>
+        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} />
+      </SessionProvider>
+    </ModeProvider>
   );
 }

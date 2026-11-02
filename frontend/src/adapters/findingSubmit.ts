@@ -1,4 +1,4 @@
-import type { FindingState } from "../domain/finding";
+import type { FindingState, FindingUrgency } from "../domain/finding";
 import type { FindingDraft, FindingDraftErrors } from "../domain/findingDraft";
 
 export interface FindingSubmitContext {
@@ -34,6 +34,8 @@ export interface FindingSubmitResult {
 export interface FindingSubmitAdapter {
   submit(draft: FindingDraft, context: FindingSubmitContext): Promise<FindingSubmitResult>;
   /** 有此方法时表单要求先选择组织；列表为空表示当前没有可上报的组织。失败抛 FindingSubmitError。 */
+  /** 服务端接受的紧急程度；缺省为全部。表单只提供这些选项，避免用户选了必然被拒的档位。 */
+  readonly urgencies?: readonly FindingUrgency[];
   listOrganizations?(signal?: AbortSignal): Promise<readonly ReportableOrganization[]>;
 }
 

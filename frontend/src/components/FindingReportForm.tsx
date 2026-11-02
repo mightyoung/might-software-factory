@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useAppMode } from "../mode";
 import {
   FindingSubmitError,
   newIdempotencyKey,
@@ -127,8 +128,7 @@ export function FindingReportForm({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
   const needsOrganization = adapter.listOrganizations !== undefined;
-  // 提供组织列表的适配器即真实服务端；合成演示不提供。
-  const live = needsOrganization;
+  const live = useAppMode() === "http";
   const [orgState, setOrgState] = useState<
     { status: "loading" } | { status: "error" } | { status: "ready"; items: readonly ReportableOrganization[] }
   >({ status: "loading" });
@@ -336,7 +336,7 @@ export function FindingReportForm({
       <div className="detail-heading">
         <div>
           <h2>新建上报</h2>
-          <p>隐患发现 · 合成演示</p>
+          <p>隐患发现{live ? "" : " · 合成演示"}</p>
         </div>
         <button className="icon-button" type="button" aria-label="关闭上报" onClick={requestClose} disabled={submitting}>
           ×
@@ -503,7 +503,7 @@ export function FindingReportForm({
             {!live && <NotWiredTag />}
           </legend>
           <div className="report-radio-row">
-            {findingUrgencies.map((urgency, index) => (
+            {(adapter.urgencies ?? findingUrgencies).map((urgency, index) => (
               <label key={urgency} className="report-radio">
                 <input
                   type="radio"

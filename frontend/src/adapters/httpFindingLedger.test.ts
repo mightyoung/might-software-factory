@@ -83,4 +83,12 @@ describe("createHttpFindingLedger", () => {
     expect(await createHttpFindingLedger(f.client).get("a/b")).toBeNull();
     expect(paths).toEqual(["/api/v1/entities/finding/a%2Fb"]);
   });
+
+  it("fails the read when a required field is missing instead of inventing one", async () => {
+    const { state: _state, ...withoutState } = item;
+    const f = fake({ post: () => ({ data: { items: [withoutState], page: { number: 1, size: 20, total: 1, pageCount: 1 } }, meta: {} }) });
+    const call = createHttpFindingLedger(f.client).list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    await expect(call).rejects.toMatchObject({ name: "MalformedFindingResponseError" });
+    await expect(call).rejects.not.toMatchObject({ name: "FindingLedgerAccessError" }); // 通用失败，不是未登录/无权
+  });
 });
