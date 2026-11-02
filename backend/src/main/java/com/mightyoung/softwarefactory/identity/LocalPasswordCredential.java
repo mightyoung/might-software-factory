@@ -8,12 +8,19 @@ public record LocalPasswordCredential(
         UUID accountId,
         String accountStatus,
         String principalStatus,
+        long credentialVersion,
         String secretHash) {
+
+    public LocalPasswordCredential {
+        if (credentialVersion < 1) {
+            throw new IllegalArgumentException("Credential version must be positive");
+        }
+    }
 
     @Override
     public String toString() {
         return "LocalPasswordCredential[actorId=" + actorId + ", accountId=" + accountId
                 + ", accountStatus=" + accountStatus + ", principalStatus=" + principalStatus
-                + ", secretHash=[REDACTED]]";
+                + ", credentialVersion=" + credentialVersion + ", secretHash=[REDACTED]]";
     }
 }

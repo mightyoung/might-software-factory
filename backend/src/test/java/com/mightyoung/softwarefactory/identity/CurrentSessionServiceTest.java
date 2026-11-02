@@ -33,6 +33,7 @@ class CurrentSessionServiceTest {
                 new SessionContextResolver(), context -> {
                     assertThat(context.tenantAuthEpoch()).isEqualTo(17L);
                     assertThat(context.memberAuthEpoch()).isEqualTo(23L);
+                    assertThat(context.credentialVersion()).isEqualTo(1L);
                     return Optional.of(expected);
                 });
 

@@ -65,6 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         FindingWorkflowControllerHttpTest.TestDependencies.class})
 class FindingWorkflowControllerHttpTest {
 
+    private static final Instant TEST_INSTANT = Instant.parse("2026-10-30T16:30:00Z");
     private static final UUID ACTOR = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID ACCOUNT = UUID.fromString("11000000-0000-0000-0000-000000000001");
     private static final UUID TENANT = UUID.fromString("30000000-0000-0000-0000-000000000001");
@@ -435,6 +436,7 @@ class FindingWorkflowControllerHttpTest {
             context.setAuthentication(new TestingAuthenticationToken(principal, null, "ROLE_AUTHENTICATED"));
             request.setAttribute("SPRING_SECURITY_CONTEXT", context);
             request.getSession(true).setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
+            VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(request.getSession(false), TEST_INSTANT);
             return request;
         };
     }
@@ -449,6 +451,13 @@ class FindingWorkflowControllerHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        // This HTTP slice supplies identity state explicitly; persisted revocation is tested separately.
+        @Bean
+        com.mightyoung.softwarefactory.identity.AccountStatusReadRepository accountSecurityStates() {
+            return account -> java.util.Optional.of(
+                    new com.mightyoung.softwarefactory.identity.AccountSecurityState("ACTIVE", 1));
+        }
+
         @Bean
         AuthenticationProvider localPasswordAuthenticationProvider() {
             return new AuthenticationProvider() {
@@ -528,7 +537,7 @@ class FindingWorkflowControllerHttpTest {
         @Bean
         @Primary
         Clock findingWorkflowClock() {
-            return Clock.fixed(Instant.parse("2026-10-30T16:30:00Z"), ZoneOffset.UTC);
+            return Clock.fixed(TEST_INSTANT, ZoneOffset.UTC);
         }
 
         @Bean

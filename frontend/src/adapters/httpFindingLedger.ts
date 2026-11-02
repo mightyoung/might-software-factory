@@ -69,7 +69,8 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
     history: [],
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),
     ...(item.sourceCategory ? { source: item.sourceCategory } : {}),
-    ...(item.urgency ? { urgency: item.urgency } : {}),
+    // 后端 URGENT 表示“需立即处置”，与提交适配器的 IMMEDIATE → URGENT 对应。
+    ...(item.urgency ? { urgency: item.urgency === "URGENT" ? "IMMEDIATE" : item.urgency } : {}),
     ...(item.interimMeasure ? { interimMeasure: item.interimMeasure } : {}),
     ...(typeof item.backfill === "boolean" ? { backfill: item.backfill } : {}),
   };

@@ -1,7 +1,8 @@
 spring:
   datasource:
     hikari:
-      # Keep startup and preflight connection inspection independent of the pool under test.
+      # Failed-job recording uses REQUIRES_NEW while the first connection is still held.
+      # Keep two main connections; the separate RLS application pool still uses one.
       maximum-pool-size: 2
       minimum-idle: 1
   flyway:
@@ -19,8 +20,12 @@ spring:
     store-type: jdbc
     jdbc:
       initialize-schema: never
+      # Tests clean only their own sessions; never sweep other clients' expired sessions.
+      cleanup-cron: "-"
 
 flowable:
   database-schema-update: false
+  # Probes deploy their own definitions; never deploy application processes at startup.
+  check-process-definitions: false
   async-executor-activate: false
   async-history-executor-activate: false

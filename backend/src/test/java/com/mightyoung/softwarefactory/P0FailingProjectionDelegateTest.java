@@ -9,11 +9,45 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class P0FailingProjectionDelegateTest {
+
+    @Test
+    void retryGatePreventsWritesUntilRollbackAssertionsCanFinish() throws Exception {
+        RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
+        P0FailingProjectionDelegate delegate = new P0FailingProjectionDelegate(jdbc);
+        DelegateExecution execution = execution("paused-retry");
+        assertThatThrownBy(() -> delegate.execute(execution))
+                .isExactlyInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
+        var gate = delegate.pauseRetryFor("paused-retry");
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var retry = executor.submit(() -> delegate.execute(execution));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!gate.isWaiting() && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(gate.isWaiting()).isTrue();
+            assertThat(retry.isDone()).isFalse();
+            assertThat(delegate.successfulWriteStatementsFor("paused-retry")).isEqualTo(3);
+            assertThat(jdbc.successfulStatements).hasSize(3);
+
+            gate.release();
+            retry.get(5, TimeUnit.SECONDS);
+
+            assertThat(delegate.successfulWriteStatementsFor("paused-retry")).isEqualTo(6);
+            assertThat(jdbc.successfulStatements).hasSize(6);
+        } finally {
+            gate.release();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+    }
 
     @Test
     void namedFlowableDelegateRunsAllThreeWritesBeforeRaisingTheExpectedFailure() {
@@ -28,15 +62,7 @@ class P0FailingProjectionDelegateTest {
                     "p0FailingProjectionDelegate", P0FailingProjectionDelegate.class);
             assertThat(context.getBean(JavaDelegate.class)).isSameAs(delegate);
 
-            DelegateExecution execution = (DelegateExecution) Proxy.newProxyInstance(
-                    DelegateExecution.class.getClassLoader(),
-                    new Class<?>[]{DelegateExecution.class},
-                    (proxy, method, arguments) -> {
-                        if (method.getName().equals("getProcessInstanceId")) {
-                            return "unit-test-process";
-                        }
-                        throw new UnsupportedOperationException("Unexpected delegate call: " + method.getName());
-                    });
+            DelegateExecution execution = execution("unit-test-process");
             assertThatThrownBy(() -> delegate.execute(execution))
                     .isExactlyInstanceOf(P0FailingProjectionDelegate.ProjectionWriteFailure.class);
 
@@ -46,6 +72,17 @@ class P0FailingProjectionDelegateTest {
                     "insert into p0_outbox values (?, ?)");
             assertThat(delegate.successfulWriteStatementsFor("unit-test-process")).isEqualTo(3);
         }
+    }
+
+    private static DelegateExecution execution(String processId) {
+        return (DelegateExecution) Proxy.newProxyInstance(
+                DelegateExecution.class.getClassLoader(), new Class<?>[]{DelegateExecution.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("getProcessInstanceId")) {
+                        return processId;
+                    }
+                    throw new UnsupportedOperationException("Unexpected delegate call: " + method.getName());
+                });
     }
 
     private static final class RecordingJdbcTemplate extends JdbcTemplate {

@@ -2,7 +2,7 @@ package com.mightyoung.softwarefactory.identity;
 
 import org.jooq.DSLContext;
 import org.jooq.Field;
-import org.jooq.Record5;
+import org.jooq.Record6;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import org.jooq.tools.jdbc.MockConnection;
@@ -33,14 +33,16 @@ class JooqAccountPasswordCredentialReadRepositoryTest {
             Field<UUID> account = DSL.field("account_id", UUID.class);
             Field<String> accountStatus = DSL.field("account_status", String.class);
             Field<String> principalStatus = DSL.field("principal_status", String.class);
+            Field<Long> version = DSL.field("credential_version", Long.class);
             Field<String> secretHash = DSL.field("secret_hash", String.class);
-            var result = values.newResult(actor, account, accountStatus, principalStatus, secretHash);
-            Record5<UUID, UUID, String, String, String> row = values.newRecord(
-                    actor, account, accountStatus, principalStatus, secretHash);
+            var result = values.newResult(actor, account, accountStatus, principalStatus, version, secretHash);
+            Record6<UUID, UUID, String, String, Long, String> row = values.newRecord(
+                    actor, account, accountStatus, principalStatus, version, secretHash);
             row.set(actor, actorId);
             row.set(account, accountId);
             row.set(accountStatus, "ACTIVE");
             row.set(principalStatus, "ACTIVE");
+            row.set(version, 7L);
             row.set(secretHash, "{bcrypt}$2a$10$synthetic-hash-value");
             result.add(row);
             return new MockResult[] {new MockResult(result.size(), result)};
@@ -50,11 +52,11 @@ class JooqAccountPasswordCredentialReadRepositoryTest {
         var credential = new JooqAccountPasswordCredentialReadRepository(dsl).findByLoginKey("operator-1");
 
         assertThat(credential).contains(new LocalPasswordCredential(
-                actorId, accountId, "ACTIVE", "ACTIVE", "{bcrypt}$2a$10$synthetic-hash-value"));
+                actorId, accountId, "ACTIVE", "ACTIVE", 7L, "{bcrypt}$2a$10$synthetic-hash-value"));
         assertThat(statements).hasSize(1);
         assertThat(statements.getFirst().toLowerCase(java.util.Locale.ROOT))
                 .contains("from public.account a", "join public.credential", "c.kind = 'password'",
-                        "join public.principal", "p.kind = 'human'", "where lower(btrim(a.login_key)) = ?");
+                        "a.credential_version", "join public.principal", "p.kind = 'human'", "where lower(btrim(a.login_key)) = ?");
         assertThat(bindings.getFirst()).containsExactly("operator-1");
     }
 }

@@ -3,6 +3,7 @@ package com.mightyoung.softwarefactory.authorization;
 import com.mightyoung.softwarefactory.directory.MemberDirectoryReadRepository;
 import com.mightyoung.softwarefactory.directory.MemberDirectorySnapshot;
 import com.mightyoung.softwarefactory.identity.AccountStatusReadRepository;
+import com.mightyoung.softwarefactory.identity.AccountSecurityState;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.PrincipalStatus;
 import com.mightyoung.softwarefactory.identity.PrincipalStatusReadRepository;
@@ -21,8 +22,9 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Composes the modules' public read queries into one request authorization snapshot. Reads use repeatable read
- * for a consistent view; authorization source rows are not locked against concurrent revocation.
+ * Composes the modules' public read queries into request authorization state. Standalone reads use
+ * repeatable read; REQUIRED propagation joins an existing caller's isolation level. Authorization
+ * source rows are not locked against concurrent revocation.
  */
 @Repository
 public final class PersistentFindingReadAuthorizationRepository
@@ -65,7 +67,11 @@ public final class PersistentFindingReadAuthorizationRepository
             if (principal == null) {
                 return Optional.empty();
             }
-            String accountStatus = accountStatusRepository.findStatus(context.accountId()).orElse(null);
+            AccountSecurityState account = accountStatusRepository.findState(context.accountId()).orElse(null);
+            if (account == null || account.credentialVersion() != context.credentialVersion()) {
+                return Optional.empty();
+            }
+            String accountStatus = account.status();
             TenantMembershipState membership = tenantMembershipRepository.findCurrentMembership(
                     context.tenantId(), context.accountId(), context.memberId()).orElse(null);
             if (membership == null) {

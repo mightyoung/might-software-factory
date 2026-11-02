@@ -96,7 +96,17 @@ jOOQ OSS 的数据库支持矩阵有限，不能将最新 OSS 自动配旧 Postg
 
 浏览器使用 Secure、HttpOnly、SameSite Cookie，启用 CSRF，登录轮换 session ID；凭证不放 localStorage。同域反代 /api 优先，前后端分离指代码与部署边界，不要求跨站 Cookie。设计默认空闲 30 分钟、最长 12 小时，管理员敏感动作再认证；为可配置默认而非法规要求。退出、改密、成员停用、权限撤销可撤相应会话/安全版本。SSO 用 OIDC Client；不自行写授权服务器。只有实际联合身份/MFA 管理需求出现时引入 Keycloak 或既有企业 IdP。
 
-本地登录代码切片已形成：`POST /api/v1/auth/login` 以 `login_key`、密码和租户 code 选择上下文；服务端在同一只读事务内校验账号凭证、HUMAN principal、租户状态与账号成员绑定，成功后才把数据库解析出的 actor/account/tenant/member 和 auth_epoch 放入 session。租户 code 是选择条件，不是可信 tenant ID。密码校验只接受 `{bcrypt}` 格式、work factor 12–16 的哈希，默认编码 work factor 为 12。V4 迁移仍未应用；本切片没有账号/密码初始化、邀请与重置、失败限流/短期锁定或真实 Session JDBC/数据库联调，因此尚不能作为可投产登录配置。`credential_version` 尚未保存到 session 或按请求核验；启用改密/重置前，必须先将该版本纳入已签发会话并在授权读取时核验，旧版本须拒绝访问。
+最长会话期限已按成功登录的服务端时刻实现，配置 `software-factory.security.session.absolute-timeout` 默认 `12h`，访问不续期；旧会话缺失时刻或时刻无效均需重新登录，主体验证结构不变。登录入口明确限定 POST。测试与在途请求边界见[最长会话期限切片](verification/session-absolute-lifetime-2026-11-02.md)；敏感动作再认证仍未实现。
+
+登录入口已补进程内来源/全局尝试限流及来源与规范化账号的累计失败冷却；不因切换租户分桶，不修改账号状态，响应为通用429和正整数Retry-After。成功尝试也消耗速率预算；失败窗口内成功不清零累计失败。默认5分钟内5次坏凭据触发30秒冷却，具体配置、并发预留、内存上限和实测见[登录尝试防护切片](verification/login-attempt-throttle-2026-11-02.md)。这不代表跨来源账号聚合或跨实例共享限流已实现；代理来源解析及发布容量仍需另验。
+
+会话主体已提供稳定的账号UUID名称，用于JDBC Session账号索引；同账号多租户归组，不同账号隔离，脱敏文本和序列兼容保持。旧活跃索引可随正常请求保存归正，未访问旧行没有全量回填。按账号查索引可能包含未清理的过期会话，不能当作认证或授权证明；公开会话管理/批量撤销接口尚未实现。测试与兼容边界见[账号会话索引切片](verification/account-session-index-2026-11-02.md)。
+
+本地登录通过 `POST /api/v1/auth/login` 校验 login_key、密码和租户 code。认证只读事务从真实身份表解析 account、HUMAN principal、tenant/member、auth_epoch 和 credential_version；成功后由独立 JDBC Session 事务保存服务端主体及认证时刻，不把认证读取与会话写入称为同一原子事务。租户 code 只是选择条件。密码只接受 `{bcrypt}`、work factor 12–16；编码默认12。受保护请求拒绝缺失/旧凭据版本，旧序列缺失版本保持0。自助改密已实现哈希、版本递增及成功审计同事务，失败事件独立记录；重置入口仍待后续。登录保存故障会在未提交响应时转为统一503并清除可发布认证Cookie；框架提前flush可能在finally再次保存，因此503不代表数据库必定回滚。独占库上已有16项登录、8项改密、3项故障恢复与3项独立JVM会话验收，另两项JDBC序列化不计作身份表HTTP证明。最新范围见[身份会话闭环验收](verification/identity-session-closure-2026-11-02.md)，早期记录见[身份登录实库验收](verification/identity-login-postgres-2026-11-02.md)。账号初始化、邀请/重置、登录成功/失败持久安全事件及共享限流仍未完成，不宣称可投产登录配置。凭据兼容见[凭据版本切片](verification/credential-version-boundary-2026-11-02.md)。
+
+登录JSON严格按已有契约读取三个必需字符串字段；拒绝未知/重复字段、错误根类型、尾随JSON值及非字符串字段，不接受客户端指定身份或凭据版本。请求体仍限4096字节，错误响应不回显凭据或解析细节。凭据版本检查不锁账号；独立授权读取配置RR，若已进入工作流事务则加入外层隔离级别，不保证取消在途请求。
+
+BCrypt实际认证另要求密码为有效UTF-8且长度1–72字节；超过该字节边界直接按通用错误凭据拒绝，不允许截断前缀匹配。JSON字段原1–1024字符格式上限不变。未来凭据写入也必须遵守算法字节边界；曾依赖截断匹配的长密码不再接受，需重置。
 
 ## 租户与组织
 

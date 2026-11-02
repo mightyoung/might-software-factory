@@ -15,6 +15,9 @@ import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.CharBuffer;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.List;
@@ -24,13 +27,15 @@ import java.util.regex.Pattern;
 import java.util.UUID;
 
 /**
- * Authenticates a persisted local password and signs only server-resolved identity and membership
+ * Authenticates a persisted local password and stores only server-resolved identity and membership
  * state into the session principal. All expected account/context failures share one response.
  */
 @Component
 public final class LocalPasswordAuthenticationProvider implements AuthenticationProvider {
 
     private static final String GENERIC_FAILURE = "Invalid credentials or account context";
+    private static final int MAX_BCRYPT_PASSWORD_BYTES = 72;
+    private static final String DUMMY_PASSWORD_PROBE = "authentication-padding-probe";
     private static final UUID UNKNOWN_ACCOUNT_ID = new UUID(0L, 0L);
     private static final Pattern ACCEPTED_PASSWORD_HASH =
             Pattern.compile("\\{bcrypt\\}\\$2[aby]\\$1[2-6]\\$[./A-Za-z0-9]{53}");
@@ -117,21 +122,44 @@ public final class LocalPasswordAuthenticationProvider implements Authentication
 
         VerifiedSessionPrincipal principal = new VerifiedSessionPrincipal(
                 credential.actorId(), credential.accountId(), context.tenantId(), context.memberId(),
-                context.tenantAuthEpoch(), context.memberAuthEpoch());
+                context.tenantAuthEpoch(), context.memberAuthEpoch(), credential.credentialVersion());
         return UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of());
     }
 
     private boolean matchesPassword(char[] submittedPassword, String encodedPassword) {
+        if (!hasSupportedPasswordEncoding(submittedPassword)) {
+            matchDummyPassword();
+            return false;
+        }
         if (encodedPassword == null || !ACCEPTED_PASSWORD_HASH.matcher(encodedPassword).matches()) {
-            passwordEncoder.matches(CharBuffer.wrap(submittedPassword), dummyPasswordHash);
+            matchDummyPassword();
             return false;
         }
         try {
             return passwordEncoder.matches(CharBuffer.wrap(submittedPassword), encodedPassword);
         } catch (IllegalArgumentException malformedStoredHash) {
-            passwordEncoder.matches(CharBuffer.wrap(submittedPassword), dummyPasswordHash);
+            matchDummyPassword();
             return false;
         }
+    }
+
+    private static boolean hasSupportedPasswordEncoding(char[] submittedPassword) {
+        ByteBuffer encoded = ByteBuffer.allocate(MAX_BCRYPT_PASSWORD_BYTES + 1);
+        try {
+            var result = StandardCharsets.UTF_8.newEncoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .encode(CharBuffer.wrap(submittedPassword), encoded, true);
+            return result.isUnderflow() && encoded.position() >= 1
+                    && encoded.position() <= MAX_BCRYPT_PASSWORD_BYTES;
+        } finally {
+            Arrays.fill(encoded.array(), (byte) 0);
+        }
+    }
+
+    private void matchDummyPassword() {
+        // Never pass an unbounded or malformed submitted value to the padding operation.
+        passwordEncoder.matches(DUMMY_PASSWORD_PROBE, dummyPasswordHash);
     }
 
     @Override

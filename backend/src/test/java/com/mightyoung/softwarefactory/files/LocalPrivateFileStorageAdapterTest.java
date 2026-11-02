@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +54,7 @@ class LocalPrivateFileStorageAdapterTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        SecureLocalStorageTestSupport.requireOrAssumeSecureStorage(root);
         Files.setPosixFilePermissions(root, PRIVATE_DIRECTORY_PERMISSIONS);
         Files.createDirectory(root.resolve(".receipt-registry"),
                 java.nio.file.attribute.PosixFilePermissions.asFileAttribute(PRIVATE_DIRECTORY_PERMISSIONS));
@@ -62,6 +65,50 @@ class LocalPrivateFileStorageAdapterTest {
     @AfterEach
     void closeAdapter() throws Exception {
         if (adapter != null) adapter.close();
+    }
+
+    @Test
+    void issuesMicrosecondCanonicalReceiptAndPreservesItsSignedTimeOnRead() throws Exception {
+        adapter.close();
+        adapter = new LocalPrivateFileStorageAdapter(root, TRUST_KEY, "local-test-verifier", "test-key-1",
+                "content-v1", 1_048_576L,
+                Clock.fixed(Instant.parse("2026-11-02T13:00:00.123456789Z"), ZoneOffset.UTC));
+        writeVersion("disk-v1", VERSION_ONE);
+        FileObjectMetadata file = metadata("disk-v1", VERSION_ONE);
+
+        ContentVerificationReceipt issued = adapter.verifyAndRegister(file);
+
+        assertThat(issued.verifiedAt().getNano() % 1_000).isZero();
+        assertThat(issued.verifiedAt()).isEqualTo(OffsetDateTime.parse("2026-11-02T13:00:00.123456Z"));
+        adapter.close();
+        adapter = new LocalPrivateFileStorageAdapter(root, TRUST_KEY, "local-test-verifier", "test-key-1",
+                "content-v1", 1_048_576L);
+        assertThat(adapter.findByReceiptId(TENANT_ID, issued.receiptId())).contains(issued);
+        assertThat(adapter.findVerifiedContent(use("disk-v1", VERSION_ONE), file)).contains(issued);
+        assertThat(adapter.verifyAndRegister(file)).isEqualTo(issued);
+        try (VerifiedFileContent content = adapter.openVerifiedVersion(snapshot(issued))) {
+            assertThat(content).isNotNull();
+        }
+    }
+
+    @Test
+    void evenOneNanosecondDifferenceFromSignedReceiptFailsClosed() throws Exception {
+        writeVersion("disk-v1", VERSION_ONE);
+        ContentVerificationReceipt receipt = adapter.verifyAndRegister(metadata("disk-v1", VERSION_ONE));
+        VerifiedFileEvidenceSnapshot changedTime = new VerifiedFileEvidenceSnapshot(
+                TENANT_ID, ITEM_ID, FILE_ID, LINK_ID, MEMBER_ID, ACTOR_ID,
+                receipt.sha256(), receipt.storageVersion(), receipt.receiptId(), receipt.verifierId(),
+                receipt.verifierKeyId(), receipt.verificationPolicyVersion(), receipt.verificationLevel(),
+                receipt.verifiedAt().plusNanos(1));
+        FindingEvidenceFileAccessPolicy policy = new FindingEvidenceFileAccessPolicy(
+                org.mockito.Mockito.mock(FileEvidenceMetadataReadRepository.class),
+                org.mockito.Mockito.mock(EvidenceFileReferenceReadRepository.class), adapter);
+
+        policy.requirePreviouslySubmittedEvidence(snapshot(receipt));
+        assertThatThrownBy(() -> policy.requirePreviouslySubmittedEvidence(changedTime))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        assertThatThrownBy(() -> adapter.openVerifiedVersion(changedTime))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
     }
 
     @Test

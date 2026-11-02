@@ -1,11 +1,22 @@
 package com.mightyoung.softwarefactory.identity;
 
 import java.util.UUID;
+import java.time.Instant;
+import jakarta.servlet.http.HttpSession;
 
 /** Test-only constructor access. Production code has no factory that can mint a verified identity. */
 public final class VerifiedSessionPrincipalTestFixture {
 
     private VerifiedSessionPrincipalTestFixture() {
+    }
+
+    /** Synthetic authenticated sessions need the same independent age metadata as a real login. */
+    public static void markAuthenticatedSession(HttpSession session) {
+        markAuthenticatedSession(session, Instant.now());
+    }
+
+    public static void markAuthenticatedSession(HttpSession session, Instant authenticatedAt) {
+        session.setAttribute(SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE, authenticatedAt);
     }
 
     public static VerifiedSessionPrincipal create(UUID actorId, UUID tenantId, UUID memberId) {
@@ -15,7 +26,13 @@ public final class VerifiedSessionPrincipalTestFixture {
     public static VerifiedSessionPrincipal create(
             UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
             long tenantAuthEpoch, long memberAuthEpoch) {
+        return create(actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch, 1L);
+    }
+
+    public static VerifiedSessionPrincipal create(
+            UUID actorId, UUID accountId, UUID tenantId, UUID memberId,
+            long tenantAuthEpoch, long memberAuthEpoch, long credentialVersion) {
         return new VerifiedSessionPrincipal(
-                actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch);
+                actorId, accountId, tenantId, memberId, tenantAuthEpoch, memberAuthEpoch, credentialVersion);
     }
 }

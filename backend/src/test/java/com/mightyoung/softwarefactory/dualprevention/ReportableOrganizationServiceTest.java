@@ -44,7 +44,7 @@ class ReportableOrganizationServiceTest {
                     assertThat(tenant).isEqualTo(TENANT);
                     queriedIds.set(ids);
                     return List.of(row);
-                });
+                }, (tenant, app) -> Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1)));
 
         assertThat(service.reportable()).containsExactly(row);
         assertThat(queriedIds.get()).containsExactly(REPORTABLE);
@@ -59,7 +59,7 @@ class ReportableOrganizationServiceTest {
                 (tenant, ids) -> {
                     queriedIds.set(ids);
                     return List.of();
-                });
+                }, (tenant, app) -> Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1)));
 
         assertThat(service.reportable()).isEmpty();
         assertThat(queriedIds.get()).isEmpty();
@@ -85,8 +85,27 @@ class ReportableOrganizationServiceTest {
                 (tenant, ids) -> {
                     queried.set(true);
                     return List.of();
-                });
+                }, (tenant, app) -> Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1)));
 
+        assertThatThrownBy(service::reportable).isInstanceOf(AccessDeniedException.class);
+        assertThat(queried.get()).isFalse();
+    }
+
+    @Test
+    void missingOrDisabledApplicationDeniesBeforeOrganizationLookupAndRevocationIsFresh() {
+        asMember();
+        var enabled = new AtomicReference<Optional<com.mightyoung.softwarefactory.tenancy.TenantApplicationState>>(
+                Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(true,1)));
+        var queried = new AtomicReference<Boolean>(false);
+        var service = new ReportableOrganizationService(new SessionContextResolver(), authorization(Set.of(REPORTABLE)),
+                (tenant, ids) -> { queried.set(true); return List.of(); }, (tenant, app) -> {
+                    assertThat(tenant).isEqualTo(TENANT); assertThat(app).isEqualTo("safety"); return enabled.get();
+                });
+        service.reportable();
+        queried.set(false);
+        enabled.set(Optional.of(new com.mightyoung.softwarefactory.tenancy.TenantApplicationState(false,2)));
+        assertThatThrownBy(service::reportable).isInstanceOf(AccessDeniedException.class);
+        enabled.set(Optional.empty());
         assertThatThrownBy(service::reportable).isInstanceOf(AccessDeniedException.class);
         assertThat(queried.get()).isFalse();
     }

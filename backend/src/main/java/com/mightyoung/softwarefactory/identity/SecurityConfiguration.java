@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,6 +15,7 @@ import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
@@ -26,6 +29,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.UUID;
 import java.util.Map;
 import java.util.function.Supplier;
+import java.time.Clock;
+import java.time.Duration;
 
 /**
  * Session and CSRF boundary for the management API. Local password login installs only the
@@ -40,7 +45,9 @@ public class SecurityConfiguration {
             HttpSecurity http,
             CookieCsrfTokenRepository csrfTokenRepository,
             SecurityContextRepository securityContextRepository,
-            LocalPasswordAuthenticationFilter loginFilter)
+            LocalPasswordAuthenticationFilter loginFilter,
+            SessionLifetimePolicy sessionLifetime,
+            AccountStatusReadRepository accountStatusRepository)
             throws Exception {
         return http
                 .csrf(csrf -> csrf
@@ -73,7 +80,23 @@ public class SecurityConfiguration {
                         .logoutSuccessHandler((request, response, authentication) ->
                                 IdentityHttpResponses.noContent(response)))
                 .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new AbsoluteSessionLifetimeFilter(sessionLifetime), SecurityContextHolderFilter.class)
+                .addFilterAfter(new CredentialVersionSessionFilter(accountStatusRepository), AbsoluteSessionLifetimeFilter.class)
                 .build();
+    }
+
+    @Bean
+    FilterRegistrationBean<LoginSessionPersistenceFailureFilter> loginSessionPersistenceFailureBoundary(
+            org.springframework.core.env.Environment environment) {
+        int sessionOrder = environment.getProperty("spring.session.servlet.filter-order", Integer.class,
+                org.springframework.session.web.http.SessionRepositoryFilter.DEFAULT_ORDER);
+        if (sessionOrder == Integer.MIN_VALUE) {
+            throw new IllegalStateException("Session filter order must allow an outer login persistence boundary");
+        }
+        var registration = new FilterRegistrationBean<>(new LoginSessionPersistenceFailureFilter());
+        registration.setOrder(sessionOrder - 1);
+        registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
+        return registration;
     }
 
     @Bean
@@ -92,13 +115,36 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    SessionLifetimePolicy sessionLifetimePolicy(ObjectProvider<Clock> clocks,
+            @Value("${software-factory.security.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        return new SessionLifetimePolicy(clocks.getIfAvailable(Clock::systemUTC), absoluteTimeout);
+    }
+
+    @Bean
+    LoginAttemptLimiter loginAttemptLimiter(
+            @Value("${software-factory.security.login-throttle.global-attempts:600}") int globalAttempts,
+            @Value("${software-factory.security.login-throttle.source-attempts:60}") int sourceAttempts,
+            @Value("${software-factory.security.login-throttle.attempt-window:60s}") Duration attemptWindow,
+            @Value("${software-factory.security.login-throttle.failure-threshold:5}") int failureThreshold,
+            @Value("${software-factory.security.login-throttle.failure-window:5m}") Duration failureWindow,
+            @Value("${software-factory.security.login-throttle.cooldown:30s}") Duration cooldown,
+            @Value("${software-factory.security.login-throttle.max-concurrent:8}") int maxConcurrent,
+            @Value("${software-factory.security.login-throttle.max-sources:4096}") int maxSources,
+            @Value("${software-factory.security.login-throttle.max-pairs:8192}") int maxPairs) {
+        return new LoginAttemptLimiter(new LoginAttemptLimiter.Config(globalAttempts, sourceAttempts, attemptWindow,
+                failureThreshold, failureWindow, cooldown, maxConcurrent, maxSources, maxPairs), System::nanoTime);
+    }
+
+    @Bean
     LocalPasswordAuthenticationFilter localPasswordAuthenticationFilter(
             @Qualifier("localPasswordAuthenticationProvider") AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
-            CookieCsrfTokenRepository csrfTokenRepository) {
+            CookieCsrfTokenRepository csrfTokenRepository,
+            SessionLifetimePolicy sessionLifetime,
+            LoginAttemptLimiter attempts) {
         return new LocalPasswordAuthenticationFilter(provider, converter, securityContextRepository,
-                csrfTokenRepository);
+                csrfTokenRepository, sessionLifetime, attempts);
     }
 
     @Bean

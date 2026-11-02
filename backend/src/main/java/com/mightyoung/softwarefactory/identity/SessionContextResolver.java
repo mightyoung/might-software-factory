@@ -17,11 +17,13 @@ public final class SessionContextResolver {
             throw new UnauthenticatedSessionException();
         }
         if (principal.actorId() == null || principal.accountId() == null
-                || principal.tenantId() == null || principal.memberId() == null) {
+                || principal.tenantId() == null || principal.memberId() == null
+                || principal.tenantAuthEpoch() < 0 || principal.memberAuthEpoch() < 0
+                || principal.credentialVersion() < 1) {
             throw new UnauthenticatedSessionException();
         }
         return new CurrentTenantContext(
                 principal.actorId(), principal.accountId(), principal.tenantId(), principal.memberId(),
-                principal.tenantAuthEpoch(), principal.memberAuthEpoch());
+                principal.tenantAuthEpoch(), principal.memberAuthEpoch(), principal.credentialVersion());
     }
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, type HttpClient } from "../api/httpClient";
+import { findingUrgencyLabels } from "../domain/finding";
+import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpFindingLedger } from "./httpFindingLedger";
 
 const field = (type: string, operators: string[], extra = {}) => ({ type, nullable: false, selectable: true, sortable: true, operators, maxLength: 0, enumValues: [], ...extra });
@@ -45,8 +47,49 @@ describe("createHttpFindingLedger", () => {
     });
     expect(f.posts[1]).not.toHaveProperty("filterAST");
     expect(result).toMatchObject({ page: { index: 2, size: 20 }, total: 41, pageCount: 3 });
-    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "URGENT", riskLabel: "待专业评估", round: 2 });
+    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "IMMEDIATE", riskLabel: "待专业评估", round: 2 });
     expect(result.items[0]).not.toHaveProperty("backfill");
+  });
+
+  it.each([
+    ["NORMAL", "NORMAL", "一般"],
+    ["URGENT", "IMMEDIATE", "需立即处置"],
+  ] as const)("maps backend %s urgency consistently in list and detail", async (backend, expected, label) => {
+    const stored = { ...item, urgency: backend };
+    const f = fake({
+      post: () => ({ ...listBody, data: { ...listBody.data, items: [stored] } }),
+      get: () => ({ data: stored }),
+    });
+    const ledger = createHttpFindingLedger(f.client);
+    const listed = await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    const detail = await ledger.get(stored.id);
+    for (const record of [listed.items[0], detail]) {
+      expect(record?.urgency).toBe(expected);
+      expect(findingUrgencyLabels[record!.urgency!]).toBe(label);
+    }
+  });
+
+  it.each(["NORMAL", "IMMEDIATE"] as const)("preserves %s urgency through submit, list and detail", async (urgency) => {
+    let persisted: typeof item | undefined;
+    const client = {
+      get: async (path: string) => ({ data: path.endsWith("/schema") ? schema : persisted }),
+      post: async (path: string, request: { body: { urgency: string } }) => {
+        if (path === "/api/v1/findings") {
+          persisted = { ...item, urgency: request.body.urgency };
+          return { data: { findingId: item.id, code: item.code, state: item.state } };
+        }
+        return { ...listBody, data: { ...listBody.data, items: [persisted] } };
+      },
+    } as unknown as HttpClient;
+    const created = await createHttpFindingSubmit(client).submit({
+      source: "INSPECTION", description: "防护罩松动", location: "B 工房",
+      foundAt: "2026-10-30T09:00", urgency, interimMeasure: "",
+    }, { idempotencyKey: "roundtrip", organizationId: "org-1" });
+    expect(persisted?.urgency).toBe(urgency === "IMMEDIATE" ? "URGENT" : "NORMAL");
+    const ledger = createHttpFindingLedger(client);
+    const listed = await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    expect(listed.items[0].urgency).toBe(urgency);
+    expect((await ledger.get(created.id))?.urgency).toBe(urgency);
   });
 
   it("a cancelled first call does not poison the shared schema request for the next call (StrictMode)", async () => {

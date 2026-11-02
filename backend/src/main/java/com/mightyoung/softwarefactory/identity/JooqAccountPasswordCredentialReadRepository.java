@@ -15,6 +15,7 @@ public final class JooqAccountPasswordCredentialReadRepository implements Accoun
                    a.id as account_id,
                    a.status as account_status,
                    p.status as principal_status,
+                   a.credential_version,
                    c.secret_hash
               from public.account a
               join public.credential c on c.account_id = a.id and c.kind = 'PASSWORD'
@@ -39,6 +40,7 @@ public final class JooqAccountPasswordCredentialReadRepository implements Accoun
                 row.get("account_id", java.util.UUID.class),
                 row.get("account_status", String.class),
                 row.get("principal_status", String.class),
+                row.get("credential_version", Long.class),
                 row.get("secret_hash", String.class)));
     }
 }
