@@ -106,18 +106,33 @@ class FindingRemediationPostgresIT {
     }
 
     private void faultThenRetry(FindingRemediationPostgresFixture.Member actor,UUID finding,String suffix,Map<String,Object> body,String expectedState,int round,long version,boolean processStillActive)throws Exception {
-        State before=state(finding);UUID command=UUID.randomUUID();fault.command.set(command);
+        State before=state(finding);
+        assertThat(before.rounds()).containsExactly(new LifecycleRow(finding,1,"OPEN"));
+        assertThat(before.notices()).hasSize(1);
+        LifecycleRow notice=before.notices().getFirst();
+        assertThat(notice.roundNo()).isEqualTo(1);assertThat(notice.state()).isEqualTo("ISSUED");
+        UUID command=UUID.randomUUID();fault.command.set(command);
         expect(post(actor,finding,suffix,command,body),503);
         Proof written=fault.proof.get();assertThat(written).isNotNull();assertThat(written.state()).isEqualTo(expectedState);assertThat(written.version()).isEqualTo(version);assertThat(written.completedReceipt()).isEqualTo(1);assertThat(written.publications()).isPositive();assertThat(written.audit()).isEqualTo(1);assertThat(written.activeProcess()).isEqualTo(processStillActive?1:0);
         if(suffix.equals("remediation-submissions")) {
+            assertThat(written.rounds()).containsExactly(new LifecycleRow(finding,1,"OPEN"));
+            assertThat(written.notices()).containsExactly(notice);
             for(String participant:List.of("remediation_submission","remediation_submission_evidence","sealedSets"))assertThat(written.rows().get(participant)).isEqualTo(before.counts().get(participant)+1);
         } else {
+            if(expectedState.equals("RECTIFYING")) {
+                assertThat(written.rounds()).containsExactly(new LifecycleRow(finding,1,"FAILED"),new LifecycleRow(finding,2,"OPEN"));
+                assertThat(written.notices()).containsExactly(new LifecycleRow(notice.id(),1,"NEEDS_REWORK"));
+            } else {
+                assertThat(written.rounds()).containsExactly(new LifecycleRow(finding,1,"CLOSED"));
+                assertThat(written.notices()).containsExactly(new LifecycleRow(notice.id(),1,"VERIFIED"));
+            }
             assertThat(written.rows().get("verification")).isEqualTo(before.counts().get("verification")+1);
             assertThat(written.rows().get("remediation_round")).isEqualTo(before.counts().get("remediation_round")+(expectedState.equals("RECTIFYING")?1:0));
         }
         assertThat(state(finding)).isEqualTo(before);
         assertResult(result(post(actor,finding,suffix,command,body),200),expectedState,round,version);
         assertCommand(command,finding,version);State retried=state(finding);
+        assertThat(retried.rounds()).isEqualTo(written.rounds());assertThat(retried.notices()).isEqualTo(written.notices());
         assertResult(result(post(actor,finding,suffix,command,body),200),expectedState,round,version);assertThat(state(finding)).isEqualTo(retried);
     }
     private UUID acceptancePending()throws Exception {UUID finding=dispatchFirstRound();var evidence=fixture.evidence(finding,1,fixture.remediator());command(fixture.remediator(),finding,"remediation-submissions",Map.of("expectedVersion",4,"evidenceSetId",evidence.setId(),"statement","Awaiting actual verification"));return finding;}
@@ -142,9 +157,19 @@ class FindingRemediationPostgresIT {
         var issuedTime=fileVerifier.findByReceiptId(tenant(),evidence.receiptId()).orElseThrow().verifiedAt();
         assertThat(persistedTime.isEqual(issuedTime)).as("Signed receipt survives PG precision: persisted nano remainder=%s, issued nano remainder=%s",persistedTime.getNano()%1000,issuedTime.getNano()%1000).isTrue();
         fixture.read(db->{assertThat(db.queryForObject("select count(*) from public.evidence_set where tenant_id=? and id=? and submission_sealed_at is not null",Long.class,tenant(),evidence.setId())).isEqualTo(1);assertThat(db.queryForObject("select count(*) from public.remediation_submission where tenant_id=? and evidence_set_id=? and evidence_snapshots_sealed_at is not null and evidence_snapshot_count=1 and evidence_snapshot_manifest=array[cast(? as uuid)]",Long.class,tenant(),evidence.setId(),evidence.itemId())).isEqualTo(1);assertThat(db.queryForObject("select count(*) from public.remediation_submission_evidence s join public.file_object f on f.tenant_id=s.tenant_id and f.id=s.file_id where s.tenant_id=? and s.evidence_set_id=? and s.evidence_item_id=? and s.file_id=? and s.verification_receipt_id=? and s.verification_level='CONTENT' and s.sha256=f.checksum and s.storage_version=f.storage_version and s.owner_member_id=f.owner_member_id and s.owner_actor_id=f.owner_actor_id and s.verifier_id='b4-local-verifier' and s.verifier_key_id='b4-local-key-1' and s.verification_policy_version='b4-fixture-v1' and s.verified_at is not null",Long.class,tenant(),evidence.setId(),evidence.itemId(),evidence.fileId(),evidence.receiptId())).isEqualTo(1);return null;});}
-    record State(Map<String,Long> counts,String state,int round,long version,List<String> tasks,long active,long finished){}
-    private State state(UUID finding){var row=fixture.read(db->db.queryForMap("select state,round_no,version from public.finding where tenant_id=? and id=?",tenant(),finding));String instance=instance(finding);List<String> taskState=tasks.createTaskQuery().processInstanceId(instance).list().stream().map(task->task.getId()+"/"+task.getTaskDefinitionKey()+"/"+task.getAssignee()).sorted().toList();return new State(fixture.counts(),(String)row.get("state"),((Number)row.get("round_no")).intValue(),((Number)row.get("version")).longValue(),taskState,runtime.createProcessInstanceQuery().processInstanceId(instance).count(),history.createHistoricProcessInstanceQuery().processInstanceId(instance).finished().count());}
-    record Proof(String state,long version,long completedReceipt,long publications,long audit,long activeProcess,Map<String,Long> rows){}
+    // Rounds have no surrogate id: their identity is tenant + finding id + roundNo.
+    record LifecycleRow(UUID id,int roundNo,String state){}
+    private static List<LifecycleRow> roundStates(JdbcTemplate jdbc,UUID tenant,UUID finding) {
+        return jdbc.query("select finding_id,round_no,state from public.remediation_round where tenant_id=? and finding_id=? order by round_no,finding_id",
+                (row,index)->new LifecycleRow(row.getObject("finding_id",UUID.class),row.getInt("round_no"),row.getString("state")),tenant,finding);
+    }
+    private static List<LifecycleRow> noticeStates(JdbcTemplate jdbc,UUID tenant,UUID finding) {
+        return jdbc.query("select id,round_no,state from public.remediation_notice where tenant_id=? and finding_id=? order by round_no,id",
+                (row,index)->new LifecycleRow(row.getObject("id",UUID.class),row.getInt("round_no"),row.getString("state")),tenant,finding);
+    }
+    record State(Map<String,Long> counts,String state,int round,long version,List<String> tasks,long active,long finished,List<LifecycleRow> rounds,List<LifecycleRow> notices){}
+    private State state(UUID finding){var row=fixture.read(db->db.queryForMap("select state,round_no,version from public.finding where tenant_id=? and id=?",tenant(),finding));String instance=instance(finding);List<String> taskState=tasks.createTaskQuery().processInstanceId(instance).list().stream().map(task->task.getId()+"/"+task.getTaskDefinitionKey()+"/"+task.getAssignee()).sorted().toList();return new State(fixture.counts(),(String)row.get("state"),((Number)row.get("round_no")).intValue(),((Number)row.get("version")).longValue(),taskState,runtime.createProcessInstanceQuery().processInstanceId(instance).count(),history.createHistoricProcessInstanceQuery().processInstanceId(instance).finished().count(),fixture.read(db->roundStates(db,tenant(),finding)),fixture.read(db->noticeStates(db,tenant(),finding)));}
+    record Proof(String state,long version,long completedReceipt,long publications,long audit,long activeProcess,Map<String,Long> rows,List<LifecycleRow> rounds,List<LifecycleRow> notices){}
     static final class Fault{final AtomicReference<UUID> command=new AtomicReference<>();final AtomicReference<Proof> proof=new AtomicReference<>();}
     @TestConfiguration(proxyBeanMethods=false)
     static class FaultConfiguration {
@@ -172,6 +197,6 @@ class FindingRemediationPostgresIT {
             var persisted=jdbc.queryForMap("select state,version from public.finding where tenant_id=? and id=?",event.tenantId(),event.findingId());Map<String,Long> rows=new HashMap<>();
             for(String table:List.of("remediation_submission","remediation_submission_evidence","verification","remediation_round"))rows.put(table,jdbc.queryForObject("select count(*) from public."+table+" where tenant_id=? and finding_id=?",Long.class,event.tenantId(),event.findingId()));
             rows.put("sealedSets",jdbc.queryForObject("select count(*) from public.evidence_set where tenant_id=? and finding_id=? and submission_sealed_at is not null",Long.class,event.tenantId(),event.findingId()));
-            fault.proof.set(new Proof((String)persisted.get("state"),((Number)persisted.get("version")).longValue(),receipts,publications,audits,active,Map.copyOf(rows)));throw new DataAccessResourceFailureException("Synthetic B4 failure after real publication");}};}
+            fault.proof.set(new Proof((String)persisted.get("state"),((Number)persisted.get("version")).longValue(),receipts,publications,audits,active,Map.copyOf(rows),roundStates(jdbc,event.tenantId(),event.findingId()),noticeStates(jdbc,event.tenantId(),event.findingId())));throw new DataAccessResourceFailureException("Synthetic B4 failure after real publication");}};}
     }
 }

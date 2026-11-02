@@ -30,7 +30,9 @@ The container ran as a named non-root test UID with a read-only root filesystem,
 
 Private directories, retained signing key, immutable versions, receipt registry and per-run manifests remain together with their database ancestors. Storage/probe failures are hard failures, not skipped acceptance. Session cleanup is restricted to owned sessions; background global cleanup is disabled for this suite. Temporary containers exited and were removed. The batch added no database migration or runtime grant.
 
-The final fresh Linux verify forced secure-storage capability checks: 467 offline tests and 5 integration cases passed, all with zero failures/errors/skips. File-adapter regressions executed on Linux rather than relying on the host's capability skips. Post-run role/migration/identity-event privilege audit passed.
+The fresh Linux verify forced secure-storage capability checks: 467 offline tests and 5 integration cases passed, all with zero failures/errors/skips. File-adapter regressions executed on Linux rather than relying on the host's capability skips. Post-run role/migration/identity-event privilege audit passed.
+
+A source-review follow-up strengthened rollback evidence beyond counts: the real application connection captures complete round and notice identity/round/state lists after actual publication and before failure. Submission observes OPEN/ISSUED, rejection FAILED plus OPEN/NEEDS_REWORK, and acceptance CLOSED/VERIFIED. Rollback compares the full lists; retry matches the observed committed lifecycle and replay adds nothing. All five integration cases were freshly rerun after this assertion change and passed without skips. Production and offline-test code were unchanged from the 467-test clean pass.
 
 ## Remaining scope
 
