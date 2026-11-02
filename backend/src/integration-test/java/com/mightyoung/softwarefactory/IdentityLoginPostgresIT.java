@@ -110,22 +110,41 @@ class IdentityLoginPostgresIT {
     private final List<IdentityAcceptanceHttps.Browser> browsers = new ArrayList<>();
     private int backendPid;
 
-    /** Both profiles keep identity read-only. Business adds an explicitly confirmed engine/publication consumer. */
-    private static boolean validateRuntimePrivilegeProfile(String database) {
-        String profile = System.getenv().getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE", "identity-only");
-        if ("identity-only".equals(profile)) return false;
-        if (!"business-workflow".equals(profile)
-                || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:" + database)
-                .equals(System.getenv("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
+    enum RuntimePrivilegeProfile {
+        IDENTITY_ONLY(false,false), BUSINESS_WORKFLOW(true,false), BUSINESS_PASSWORD_CHANGE(true,true);
+        final boolean business;
+        final boolean passwordChange;
+        RuntimePrivilegeProfile(boolean business,boolean passwordChange) { this.business=business;this.passwordChange=passwordChange; }
+        boolean permitsUpdate(String table,String column) {
+            return passwordChange && ((table.equals("account") && column.equals("credential_version"))
+                    || (table.equals("credential") && Set.of("secret_hash","changed_at").contains(column)));
+        }
+    }
+
+    /** New writer scope requires both exact ACKs; either old scope remains identity-read-only. */
+    static RuntimePrivilegeProfile validateRuntimePrivilegeProfile(Map<String,String> environment,String database) {
+        String profile=environment.getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE","identity-only");
+        if("identity-only".equals(profile)) return RuntimePrivilegeProfile.IDENTITY_ONLY;
+        if(!Set.of("business-workflow","business-password-change").contains(profile)
+                || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
             throw new IllegalStateException("Runtime privilege profile requires an explicit database-specific business acknowledgement");
         }
-        return true;
+        if("business-password-change".equals(profile)) {
+            if(!("I_CONFIRM_PASSWORD_CHANGE_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_PASSWORD_CHANGE_ACCEPTANCE_ACK")))
+                throw new IllegalStateException("Password-change privilege profile requires an explicit database-specific password-change acknowledgement");
+            return RuntimePrivilegeProfile.BUSINESS_PASSWORD_CHANGE;
+        }
+        return RuntimePrivilegeProfile.BUSINESS_WORKFLOW;
+    }
+    private static RuntimePrivilegeProfile validateRuntimePrivilegeProfile(String database) {
+        return validateRuntimePrivilegeProfile(System.getenv(),database);
     }
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) throws Exception {
+        var accepted = IdentityAcceptanceTarget.validateInputs(System.getenv());
+        validateRuntimePrivilegeProfile(accepted.databaseName());
         var target = IdentityAcceptanceTarget.preflightFromEnvironment(System.getenv());
-        validateRuntimePrivilegeProfile(target.databaseName());
         if (https == null) https = IdentityAcceptanceHttps.create();
         properties.add("spring.datasource.url", target::jdbcUrl);
         properties.add("spring.datasource.username", () -> System.getenv("LAN_PG_APP_USERNAME"));
@@ -539,6 +558,9 @@ class IdentityLoginPostgresIT {
     void runtimeIdentityReadsAndAdditionalConsumersMatchTheConfirmedPrivilegeProfile() {
         assertThat(runtimeJdbc.queryForObject("select current_setting('server_version_num')::int",
                 Integer.class) / 10_000).isEqualTo(18);
+        RuntimePrivilegeProfile privilegeProfile=validateRuntimePrivilegeProfile(runtimeJdbc.queryForObject("select current_database()",String.class));
+        assertThat(runtimeJdbc.queryForObject("select has_database_privilege(current_user,current_database(),'CREATE,TEMP')",Boolean.class))
+                .as("No runtime database CREATE/TEMP in any profile").isFalse();
         for (String table : IDENTITY_TABLES) {
             String qualified = "public." + table;
             assertThat(runtimeJdbc.queryForObject(
@@ -553,10 +575,13 @@ class IdentityLoginPostgresIT {
                     select has_table_privilege(current_user, cast(? as regclass),
                         'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
                     """, Boolean.class, qualified)).as("No table mutation/maintenance on %s", table).isFalse();
-            assertThat(runtimeJdbc.queryForObject("""
-                    select has_any_column_privilege(current_user, cast(? as regclass),
-                        'INSERT,UPDATE,REFERENCES')
-                    """, Boolean.class, qualified)).as("No column mutation/reference grants on %s", table).isFalse();
+            for(String column:runtimeJdbc.queryForList("select attname from pg_attribute where attrelid=cast(? as regclass) and attnum>0 and not attisdropped",String.class,qualified)) {
+                for(String operation:List.of("SELECT","INSERT","UPDATE","REFERENCES")) {
+                    boolean expected=operation.equals("SELECT") || (operation.equals("UPDATE") && privilegeProfile.permitsUpdate(table,column));
+                    assertThat(runtimeJdbc.queryForObject("select has_column_privilege(current_user,cast(? as regclass),?,?)",Boolean.class,qualified,column,operation))
+                            .as("Effective %s on %s.%s in %s",operation,table,column,privilegeProfile).isEqualTo(expected);
+                }
+            }
             if (!Set.of("account", "principal", "credential", "permission").contains(table)) {
                 assertThat(runtimeJdbc.queryForObject("""
                         select relrowsecurity and relforcerowsecurity
@@ -599,7 +624,7 @@ class IdentityLoginPostgresIT {
                         'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
                     """, Boolean.class, "public." + table)).as("Only required Session operations on %s", table).isFalse();
         }
-        if (validateRuntimePrivilegeProfile(runtimeJdbc.queryForObject("select current_database()", String.class))) {
+        if (privilegeProfile.business) {
             assertThat(runtimeJdbc.queryForObject("select to_regclass('public.p0_finding_projection') is null", Boolean.class))
                     .as("Business target is independent of the P0 probe schema").isTrue();
             for (String operation : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
@@ -641,6 +666,24 @@ class IdentityLoginPostgresIT {
                       and left(relname, 4) in ('act_', 'flw_')
                       and has_table_privilege(current_user, oid, 'SELECT')
                     """, Integer.class)).as("No Flowable table read privileges").isZero();
+        }
+
+        if(privilegeProfile.passwordChange) {
+            assertThat(runtimeJdbc.queryForObject("select to_regclass('public.security_event') is not null",Boolean.class)).isTrue();
+            assertThat(runtimeJdbc.queryForObject("select relrowsecurity and relforcerowsecurity and pg_get_userbyid(relowner)<>current_user from pg_class where oid='public.security_event'::regclass",Boolean.class)).isTrue();
+            for(String operation:List.of("SELECT","INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER","MAINTAIN")) {
+                assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,'public.security_event',?)",Boolean.class,operation))
+                        .as("Exact security-event table %s",operation).isEqualTo(operation.equals("INSERT"));
+            }
+            for(String column:runtimeJdbc.queryForList("select attname from pg_attribute where attrelid='public.security_event'::regclass and attnum>0 and not attisdropped",String.class)) {
+                for(String operation:List.of("SELECT","INSERT","UPDATE","REFERENCES")) {
+                    assertThat(runtimeJdbc.queryForObject("select has_column_privilege(current_user,'public.security_event',?,?)",Boolean.class,column,operation))
+                            .as("Exact security-event column %s %s",column,operation).isEqualTo(operation.equals("INSERT"));
+                }
+            }
+        } else if(Boolean.TRUE.equals(runtimeJdbc.queryForObject("select to_regclass('public.security_event') is not null",Boolean.class))) {
+            assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,'public.security_event','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') or has_any_column_privilege(current_user,'public.security_event','SELECT,INSERT,UPDATE,REFERENCES')",Boolean.class))
+                    .as("Old profiles have no security_event consumer").isFalse();
         }
 
         String forbiddenTable = "identity_forbidden_" + java.util.UUID.randomUUID().toString().replace("-", "");
