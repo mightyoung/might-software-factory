@@ -111,10 +111,14 @@ class IdentityLoginPostgresIT {
     private int backendPid;
 
     enum RuntimePrivilegeProfile {
-        IDENTITY_ONLY(false,false), BUSINESS_WORKFLOW(true,false), BUSINESS_PASSWORD_CHANGE(true,true);
+        IDENTITY_ONLY(false,false,false), BUSINESS_WORKFLOW(true,false,false), BUSINESS_PASSWORD_CHANGE(true,true,false),
+        BUSINESS_AUTHENTICATION_AUDIT(true,true,true);
         final boolean business;
         final boolean passwordChange;
-        RuntimePrivilegeProfile(boolean business,boolean passwordChange) { this.business=business;this.passwordChange=passwordChange; }
+        final boolean authenticationAudit;
+        RuntimePrivilegeProfile(boolean business,boolean passwordChange,boolean authenticationAudit) {
+            this.business=business;this.passwordChange=passwordChange;this.authenticationAudit=authenticationAudit;
+        }
         boolean permitsUpdate(String table,String column) {
             return passwordChange && ((table.equals("account") && column.equals("credential_version"))
                     || (table.equals("credential") && Set.of("secret_hash","changed_at").contains(column)));
@@ -125,13 +129,18 @@ class IdentityLoginPostgresIT {
     static RuntimePrivilegeProfile validateRuntimePrivilegeProfile(Map<String,String> environment,String database) {
         String profile=environment.getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE","identity-only");
         if("identity-only".equals(profile)) return RuntimePrivilegeProfile.IDENTITY_ONLY;
-        if(!Set.of("business-workflow","business-password-change").contains(profile)
+        if(!Set.of("business-workflow","business-password-change","business-authentication-audit").contains(profile)
                 || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
             throw new IllegalStateException("Runtime privilege profile requires an explicit database-specific business acknowledgement");
         }
-        if("business-password-change".equals(profile)) {
+        if("business-password-change".equals(profile) || "business-authentication-audit".equals(profile)) {
             if(!("I_CONFIRM_PASSWORD_CHANGE_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_PASSWORD_CHANGE_ACCEPTANCE_ACK")))
                 throw new IllegalStateException("Password-change privilege profile requires an explicit database-specific password-change acknowledgement");
+            if("business-authentication-audit".equals(profile)) {
+                if(!("I_CONFIRM_AUTHENTICATION_EVENT_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_AUTHENTICATION_EVENT_ACCEPTANCE_ACK")))
+                    throw new IllegalStateException("Authentication-event privilege profile requires an explicit database-specific authentication-event acknowledgement");
+                return RuntimePrivilegeProfile.BUSINESS_AUTHENTICATION_AUDIT;
+            }
             return RuntimePrivilegeProfile.BUSINESS_PASSWORD_CHANGE;
         }
         return RuntimePrivilegeProfile.BUSINESS_WORKFLOW;
@@ -713,6 +722,24 @@ class IdentityLoginPostgresIT {
                     .as("Old profiles have no security_event consumer").isFalse();
         }
 
+        if(privilegeProfile.authenticationAudit) {
+            assertThat(runtimeJdbc.queryForObject("select to_regclass('public.authentication_event') is not null",Boolean.class)).isTrue();
+            assertThat(runtimeJdbc.queryForObject("select not relrowsecurity and not relforcerowsecurity and pg_get_userbyid(relowner)<>current_user from pg_class where oid='public.authentication_event'::regclass",Boolean.class)).isTrue();
+            for(String operation:List.of("SELECT","INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER","MAINTAIN")) {
+                assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,'public.authentication_event',?)",Boolean.class,operation))
+                        .as("Exact authentication-event table %s",operation).isEqualTo(operation.equals("INSERT"));
+            }
+            for(String column:runtimeJdbc.queryForList("select attname from pg_attribute where attrelid='public.authentication_event'::regclass and attnum>0 and not attisdropped",String.class)) {
+                for(String operation:List.of("SELECT","INSERT","UPDATE","REFERENCES")) {
+                    assertThat(runtimeJdbc.queryForObject("select has_column_privilege(current_user,'public.authentication_event',?,?)",Boolean.class,column,operation))
+                            .as("Exact authentication-event column %s %s",column,operation).isEqualTo(operation.equals("INSERT"));
+                }
+            }
+        } else if(Boolean.TRUE.equals(runtimeJdbc.queryForObject("select to_regclass('public.authentication_event') is not null",Boolean.class))) {
+            assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,'public.authentication_event','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') or has_any_column_privilege(current_user,'public.authentication_event','SELECT,INSERT,UPDATE,REFERENCES')",Boolean.class))
+                    .as("Old profiles have no authentication_event grant").isFalse();
+        }
+
         String forbiddenTable = "identity_forbidden_" + java.util.UUID.randomUUID().toString().replace("-", "");
         Throwable ddlDenied = catchThrowable(() -> runtimeJdbc.execute(
                 "create table public." + forbiddenTable + " (id integer primary key)"));
@@ -933,6 +960,7 @@ class IdentityLoginPostgresIT {
             "org.springframework.modulith.events.config.EventPublicationAutoConfiguration",
             "org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration"})
     @Import({SecurityConfiguration.class,
+            com.mightyoung.softwarefactory.auditops.JooqAuthenticationEvents.class,
             JooqAccountPasswordCredentialReadRepository.class, JooqTenantLoginContextResolver.class,
             JooqTenantApplicationReadRepository.class,
             SessionContextResolver.class, CurrentSessionService.class, JooqCurrentSessionReadRepository.class,

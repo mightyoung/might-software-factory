@@ -91,6 +91,11 @@ class ReportableOrganizationControllerHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        @org.springframework.context.annotation.Bean
+        com.mightyoung.softwarefactory.identity.AuthenticationEvents authenticationEvents() {
+            return event -> { }; // Web-slice observation stub; real append acceptance runs against PostgreSQL.
+        }
+
         // This HTTP slice supplies identity state explicitly; persisted revocation is tested separately.
         @Bean
         com.mightyoung.softwarefactory.identity.AccountStatusReadRepository accountSecurityStates() {

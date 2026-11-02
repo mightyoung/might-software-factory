@@ -42,6 +42,8 @@ final class LocalPasswordAuthenticationFilter extends AbstractAuthenticationProc
         setAuthenticationSuccessHandler((request, response, authentication) -> {
             sessionLifetime.markAuthenticated(request.getSession(true));
             IdentityHttpResponses.noContent(response);
+            var admitted = AuthenticationAttempt.current(request);
+            if (admitted != null) admitted.successHandlerCompleted();
         });
         setAuthenticationFailureHandler((request, response, exception) -> {
             if (exception instanceof LoginRateLimitedException limited) {
@@ -68,9 +70,16 @@ final class LocalPasswordAuthenticationFilter extends AbstractAuthenticationProc
         LocalPasswordAuthenticationToken token = (LocalPasswordAuthenticationToken) converter.convert(request);
         try {
             try (var attempt = attempts.reserve(source, token.loginKey())) {
+                var admitted = AuthenticationAttempt.enroll(request);
                 try {
-                    return getAuthenticationManager().authenticate(token);
+                    Authentication authenticated = getAuthenticationManager().authenticate(token);
+                    if (!(authenticated.getPrincipal() instanceof VerifiedSessionPrincipal principal)) {
+                        throw new AuthenticationServiceException("Authentication is temporarily unavailable");
+                    }
+                    admitted.verified(principal);
+                    return authenticated;
                 } catch (BadCredentialsException badCredentials) {
+                    admitted.denied();
                     attempt.badCredentials();
                     throw badCredentials;
                 }

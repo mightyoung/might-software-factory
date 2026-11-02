@@ -41,6 +41,19 @@ class IdentityRuntimePrivilegeProfileTest {
         environment.put("LAN_PG_RUNTIME_PRIVILEGE_PROFILE","unknown");
         assertThatThrownBy(()->IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,DATABASE)).hasMessageContaining("business acknowledgement");
     }
+    @Test void authenticationAuditProfileRequiresItsOwnExactDatabaseAcknowledgement() {
+        var environment=business("business-authentication-audit");
+        environment.put("LAN_PG_PASSWORD_CHANGE_ACCEPTANCE_ACK","I_CONFIRM_PASSWORD_CHANGE_FIXTURE_WRITES:"+DATABASE);
+        assertThatThrownBy(()->IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,DATABASE))
+                .hasMessageContaining("authentication-event acknowledgement");
+        environment.put("LAN_PG_AUTHENTICATION_EVENT_ACCEPTANCE_ACK","I_CONFIRM_AUTHENTICATION_EVENT_FIXTURE_WRITES:another_test");
+        assertThatThrownBy(()->IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,DATABASE))
+                .hasMessageContaining("authentication-event acknowledgement");
+        environment.put("LAN_PG_AUTHENTICATION_EVENT_ACCEPTANCE_ACK","I_CONFIRM_AUTHENTICATION_EVENT_FIXTURE_WRITES:"+DATABASE);
+        var profile=IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,DATABASE);
+        assertThat(profile.authenticationAudit).isTrue();assertThat(profile.passwordChange).isTrue();assertThat(profile.business).isTrue();
+        assertThat(profile.permitsUpdate("principal","status")).isFalse();
+    }
     private static HashMap<String,String> business(String name) {
         return new HashMap<>(Map.of("LAN_PG_RUNTIME_PRIVILEGE_PROFILE",name,
                 "LAN_PG_BUSINESS_ACCEPTANCE_ACK","I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:"+DATABASE));
