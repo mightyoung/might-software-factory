@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.serializer.support.DeserializingConverter;
 import com.mightyoung.softwarefactory.authorization.EntityReadAccessPolicy;
 import com.mightyoung.softwarefactory.authorization.EntityReadGrant;
 import com.mightyoung.softwarefactory.authorization.FindingReadAuthorizationSnapshot;
@@ -39,6 +41,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -81,6 +84,7 @@ class IdentityAuthenticationHttpTest {
     void resetAuthorizationSnapshot() {
         authorizationSnapshotState.snapshot.set(snapshot("ACTIVE", "HUMAN", ACTOR_ID, ACCOUNT_ID));
         currentSessionReadState.current.set(Optional.of(syntheticCurrentSession()));
+        currentSessionReadState.credentialVersion.set(1L);
     }
 
     @Test
@@ -115,6 +119,39 @@ class IdentityAuthenticationHttpTest {
         mvc.perform(get(CURRENT_SESSION_PATH).session(authenticatedSession()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+    }
+
+    @Test
+    void rotatedCredentialVersionRejectsTheOldCurrentSessionAndFreshLoginUsesTheNewVersion() throws Exception {
+        MockHttpSession oldSession = loginAndReturnSession();
+        assertThat(principalFrom(oldSession).credentialVersion()).isEqualTo(1L);
+        mvc.perform(get(CURRENT_SESSION_PATH).session(oldSession)).andExpect(status().isOk());
+
+        currentSessionReadState.credentialVersion.set(2L);
+
+        mvc.perform(get(CURRENT_SESSION_PATH).session(oldSession))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+        MockHttpSession freshSession = loginAndReturnSession();
+        assertThat(principalFrom(freshSession).credentialVersion()).isEqualTo(2L);
+        mvc.perform(get(CURRENT_SESSION_PATH).session(freshSession)).andExpect(status().isOk());
+    }
+
+    @Test
+    void aRealLegacySessionWithoutCredentialGenerationIsUnauthorized() throws Exception {
+        byte[] legacyBytes = new ClassPathResource(
+                "com/mightyoung/softwarefactory/identity/verified-principal-before-credential-version.ser")
+                .getContentAsByteArray();
+        VerifiedSessionPrincipal legacy = (VerifiedSessionPrincipal)
+                new DeserializingConverter().convert(legacyBytes);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
+                new org.springframework.security.core.context.SecurityContextImpl(
+                        UsernamePasswordAuthenticationToken.authenticated(legacy, null, List.of())));
+
+        mvc.perform(get(CURRENT_SESSION_PATH).session(session))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
     }
 
     @Test
@@ -265,6 +302,12 @@ class IdentityAuthenticationHttpTest {
         return session;
     }
 
+    private static VerifiedSessionPrincipal principalFrom(MockHttpSession session) {
+        SecurityContext context = (SecurityContext) session.getAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
+        return (VerifiedSessionPrincipal) context.getAuthentication().getPrincipal();
+    }
+
     private static RequestPostProcessor validCsrf() {
         return request -> {
             request.setCookies(new jakarta.servlet.http.Cookie("XSRF-TOKEN", CSRF_TOKEN));
@@ -323,15 +366,18 @@ class IdentityAuthenticationHttpTest {
 
         @Bean
         CurrentSessionReadRepository currentSessionReadRepository(CurrentSessionReadState state) {
-            return context -> state.current.get();
+            return context -> context.credentialVersion() == state.credentialVersion.get()
+                    ? state.current.get() : Optional.empty();
         }
 
         /** Exercise the production provider/filter wiring against in-memory synthetic identity rows. */
         @Bean
-        AuthenticationProvider localPasswordAuthenticationProvider(PasswordEncoder passwordEncoder) {
+        AuthenticationProvider localPasswordAuthenticationProvider(
+                PasswordEncoder passwordEncoder, CurrentSessionReadState state) {
             AccountPasswordCredentialReadRepository credentials = loginKey ->
                     "operator-1".equals(loginKey)
                             ? Optional.of(new LocalPasswordCredential(ACTOR_ID, ACCOUNT_ID, "ACTIVE", "ACTIVE",
+                                    state.credentialVersion.get(),
                                     passwordEncoder.encode("synthetic-pass")))
                             : Optional.empty();
             TenantLoginContextResolver tenantContexts = (accountId, tenantCode) ->
@@ -371,6 +417,7 @@ class IdentityAuthenticationHttpTest {
     }
 
     static final class CurrentSessionReadState {
+        private final AtomicLong credentialVersion = new AtomicLong(1L);
         private final AtomicReference<Optional<CurrentSessionDetails>> current =
                 new AtomicReference<>(Optional.of(syntheticCurrentSession()));
     }

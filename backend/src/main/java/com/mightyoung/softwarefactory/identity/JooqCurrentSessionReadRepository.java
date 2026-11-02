@@ -44,11 +44,12 @@ public final class JooqCurrentSessionReadRepository implements CurrentSessionRea
                        and a.id = cast(? as uuid)
                        and p.kind = 'HUMAN' and p.status = 'ACTIVE'
                        and a.status = 'ACTIVE'
+                       and a.credential_version = ?
                        and t.status = 'ACTIVE' and tm.status = 'ACTIVE'
                        and t.auth_epoch = ?
                        and tm.auth_epoch = ?
                     """, context.tenantId(), context.memberId(), context.actorId(), context.accountId(),
-                    context.tenantAuthEpoch(), context.memberAuthEpoch());
+                    context.credentialVersion(), context.tenantAuthEpoch(), context.memberAuthEpoch());
             if (row == null) return Optional.empty();
             return Optional.of(new CurrentSessionDetails(
                     row.get("actor_id", java.util.UUID.class),

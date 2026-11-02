@@ -3,6 +3,7 @@ package com.mightyoung.softwarefactory.authorization;
 import com.mightyoung.softwarefactory.directory.MemberDirectoryReadRepository;
 import com.mightyoung.softwarefactory.directory.MemberDirectorySnapshot;
 import com.mightyoung.softwarefactory.identity.AccountStatusReadRepository;
+import com.mightyoung.softwarefactory.identity.AccountSecurityState;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.PrincipalStatus;
 import com.mightyoung.softwarefactory.identity.PrincipalStatusReadRepository;
@@ -105,7 +106,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
                 },
                 accountId -> {
                     assertThat(accountId).isEqualTo(ACCOUNT_ID);
-                    return Optional.of("ACTIVE");
+                    return Optional.of(new AccountSecurityState("ACTIVE", 1L));
                 },
                 (tenantId, accountId, memberId) -> Optional.of(
                         new TenantMembershipState("ACTIVE", "ACTIVE", 17L, 23L)),
@@ -114,7 +115,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
                 transactionManager);
 
         Optional<FindingReadAuthorizationSnapshot> snapshot = repository.loadFindingReadSnapshot(
-                new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L), "finding.read");
+                new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L, 1L), "finding.read");
 
         assertThat(snapshot).contains(new FindingReadAuthorizationSnapshot(
                 ACTOR_ID, ACCOUNT_ID, "HUMAN", "ACTIVE",
@@ -155,7 +156,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
         PersistentFindingReadAuthorizationRepository repository = repository(
                 dsl,
                 ignored -> Optional.of(activeHumanPrincipal()),
-                ignored -> Optional.of("ACTIVE"),
+                ignored -> Optional.of(new AccountSecurityState("ACTIVE", 1L)),
                 (tenantId, accountId, memberId) -> Optional.of(
                         new TenantMembershipState("ACTIVE", "ACTIVE", 18L, 23L)),
                 directory,
@@ -166,7 +167,7 @@ class PersistentFindingReadAuthorizationRepositoryTest {
                 new CapturingTransactionManager());
 
         var snapshot = repository.loadFindingReadSnapshot(
-                new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L), "finding.read");
+                new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L, 1L), "finding.read");
 
         assertThat(snapshot).isPresent();
         assertThat(snapshot.orElseThrow().organizationIds()).isEmpty();
