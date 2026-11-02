@@ -1,95 +1,68 @@
 # Frontend
 
-首批为电脑浏览器 React + TypeScript + Vite 外壳，示例围绕隐患台账与六个流程节点。导航、字段驱动的查询/列表、详情、分页和当前页选择为本地演示实现。
+电脑浏览器 React + TypeScript + Vite 前端，包含隐患台账、详情、上报、会话状态及部分流程命令的界面与适配器。
 
-## 登录与应用导航（合成）
+## 当前验收边界
 
-登录、会话、受限导航和路由守卫均为**前端合成实现**，用于验证界面结构和后续接入形状；后端目前没有认证端点契约，**不是真实认证，不提供任何安全保证**。
+本批 B2-F 复用 PR16 的 HTTP 适配器、组织选择、命令面板和契约模拟浏览器测试，并修复 Vitest 误收集工具依赖测试的问题。**尚未完成真实 Java/PostgreSQL 浏览器联调。**
 
-- 会话端口 `SessionAdapter`（`src/adapters/sessionAdapter.ts`）：`login` / `restore` / `logout` / `loadMenu`。默认实现只在内存里保存状态，刷新页面即退出；不读写 localStorage/sessionStorage，也不联网。账号只认 `demo.safety`、`demo.manager`、`demo.admin`、`demo.viewer`（只读），密码任意非空，账号不存在与密码为空返回同一个错误。
-- 登录只取最小 bootstrap（身份、租户、有权应用的轻量列表、权限摘要）；应用菜单在进入该应用时才按需读取，切换应用会取消上一个未完成的请求。
-- 路由带租户：`/t/<tenantId>/<应用>/<页面>`。无租户前缀的旧地址登录后自动规范化；路径租户与会话租户不一致显示“无权访问”，不区分租户是否存在。登录返回地址 `?next=` 只接受本站相对路径，拒绝绝对地址、`//host`、反斜杠、控制字符和其他租户。
-- 菜单和路由守卫只用于**界面呈现**，不是授权凭据；服务端必须对每个请求重新鉴权（401/403/404 语义见设计文档）。
-- 头像菜单提供退出登录；个人资料、个人会话尚未接入，显示为禁用。退出请求失败时仍清除本地登录态。
+- 默认演示模式为内存会话和合成台账，界面标注“合成演示”，刷新清空；演示密码任意非空，不是真实认证。
+- HTTP 模式调用服务端会话、台账、上报及已有命令端点。错误不会回退到合成账号或合成数据。
+- HTTP 会话从 `/api/v1/session/bootstrap` 读取身份、应用和权限，菜单按需从 `/api/v1/applications/{id}/menu` 获取；没有静态应用或权限兜底。只映射 `finding.read/create` 到已有 UI 权限，未知权限不授予。菜单仍仅用于呈现，服务端必须逐请求验证。
+- Mock E2E 与真实后端验收分开报告。B2-N 的真实数据库验收仍待完成；G2a 须先通过后端导航读取门禁，真实写入验收另需 G1；本批不声明 G2a/G2b 通过。
 
-尚未实现：顶部“工作台”“系统设置”入口、租户切换、空闲 30 分钟/最长 12 小时会话到期的客户端提示（现仅在服务端返回 401 时回到登录页）、CSRF 令牌、真实 HTTP 会话适配器。
-
-## Local checks
+## 运行和检查
 
 ```sh
-npm install
+npm ci --no-audit --no-fund
+npm run check:api
 npm run typecheck
 npm test
 npm run build
+npm run dev
 ```
 
-## 隐患上报（合成）
+单元测试只发现 `src/**/*.{test,spec}.{ts,tsx}`，保留 Vitest 默认依赖排除并排除 `e2e/`。工具目录嵌套 node_modules 中的第三方测试不会收集。
 
-台账页（仅“隐患台账”视图）有“新建上报”入口，需要 `safety.finding.report` 权限；只读账号看不到。入口显隐只是呈现，服务端仍须鉴权。
-
-- 字段：来源（现场发现 / 检查发现 / 人员举报）、发现时间、所在位置 / 设备、隐患描述、紧急程度（一般 / 紧急 / 需立即处置）、临时措施（选填）。**表单里没有隐患等级、上报人和租户**：等级由有权限人员依据适用规则确认，上报时固定显示“待判定”；上报人和租户只能来自服务端验证过的会话。
-- 校验在 `src/domain/findingDraft.ts`（纯函数）。长度上限是展示层的产品假设，不是后端契约；合成存储会独立重新校验，真实服务端也必须如此。
-- 提交端口 `FindingSubmitAdapter`（`src/adapters/findingSubmit.ts`）带命令**幂等键**：同一份内容重试复用同一个键，内容变化才换新键；错误分类对应 401 / 403 / 409 / 422 / 503 的界面语义。提交中禁用表单并忽略重复触发。合成存储 `createSyntheticFindingStore` 实现了“同键同参只创建一条、同键异参拒绝”，新记录进入“待一人确认”并出现在台账首位。
-- 发现时间早于当前时间超过 24 小时按**补报**处理：发现时间与上报时间分别保存，详情里标注“补报”。
-- 面板打开时主区域为 `inert`，有未提交内容时 Esc / 关闭会先确认，刷新或关闭标签页由浏览器原生提示。提交收到 401 或台账读取收到“未登录”时回到登录页。
-- 所有数据只存在内存里，**不通知任何人，不形成真实记录**，刷新即恢复种子数据；表单顶部和成功页都有明确提示。
-
-尚未实现 / 未知：图片与附件上传、关联风险与检查结果、按“适用规则”给出等级建议；时间一律按北京时间（Asia/Shanghai）展示和填写，记录里是带 +08:00 的 ISO 时间，与浏览器所在时区无关（这是后端建议的约定，后端目前没有已验证的租户时区配置）；应用内导航（侧栏、顶栏链接）离开时不会拦截未提交的草稿，会话在提交时失效会丢失草稿；没有 HTTP 适配器，未验证真实权限、并发与重复提交。
-
-## Backend boundary
-
-隐患台账仍使用明确标注的合成 adapter，没有真实权限、审批、分派、证据上传或数据库持久化；操作按钮保持禁用。
-
-`src/adapters/entityQueryContract.ts` 为共享 `Entity Query Contract` v1.0.0（`contracts/openapi/entity-query.yaml`，来源提交 `3d08108831e4283a38f618944bae30662d13063b`）提供类型化请求映射。该 OpenAPI 文件当前 `paths: {}`，仅发布组件 schema；映射器不发 HTTP 请求。调用方必须提供代码审查发布的实体字段注册 schema 和 UI 字段映射，映射器不会推断或授权字段。当前隐患演示 adapter 尚未调用该映射器，也未取得隐患实体注册字段。
-
-`FindingsLedger` 通过 `FindingLedgerAdapter` 属性注入列表/详情读取端口，默认值为 `mockFindingLedger`。端口接收可选 `AbortSignal`，便于将来由可取消传输实现承接 UI 取消；当前 mock 不联网，现有用例验证取消信号与迟到响应保护。`FindingLedgerAccessError` 的 `unauthenticated` / `forbidden` 是仅供 UI 呈现的语义分类，不映射 HTTP 状态、服务端错误码或认证机制；未知错误显示通用失败状态。后端当前没有真实隐患查询或详情端点契约，尚未实现 HTTP adapter，也未验证真实权限。
-
-映射器使用契约规定的 20/50/100 分页、正整数页码与最大偏移，按已注册运算符生成过滤，并检查显式排序和输出字段。无显式排序/投影时省略对应属性。日期输入只映射到注册为 `DATE` 的字段；不把无时区的日期输入转换成 `DATETIME`。整数查询拒绝超出 JavaScript 安全整数范围的值。金额和小数不设业务小数位数，但仅接受经过 JavaScript 数值转换再序列化后与输入十进制值完全相等的值；否则拒绝，避免静默精度损失。响应类型把 `total` 保持为可选，避免构造占位总数。
-
-此适配器的 fixture 使用合成字段注册，仅验证前端映射行为。测试不读取或解析共享 YAML，也不调用/验证 Java validator；契约来源提交号仅标记来源，不代表跨端一致性验收。内部 `createEntityQueryFilter` helper 只构造基础对象形状，没有 registry 上下文，也不验证字段/运算符/值类型；请求映射入口才按传入的注册 schema 检查 UI 查询。
-
-查询语义：关键词现在只匹配隐患编号（后端的描述字段不可筛选，“编号或描述”的联合检索尚未实现，不在已返回的一页上过滤描述）；v1 过滤组只定义 AND，`CONTAINS` 的大小写规则也未在契约中说明，因此这些查询尚不能声称与后端查询等价。接入时需等后端注册字段与查询语义确认后再配置映射，并让后端对每个业务命令重新校验租户、身份、职责、状态、版本、轮次和证据门槛。
-
-字段定义随前端代码审查发布，不提供在线改 schema、任意 SQL 或任意脚本入口。
-
-## 契约类型（从 OpenAPI 生成）
-
-`contracts/openapi/*.yaml` 是后端的接口契约。前端类型由它生成到 `src/api/generated/*.ts`，**不要手改**。
-
-- 契约变更后，在 `frontend` 目录运行 `npm run gen:api`，并把生成结果一起提交。
-- `npm run check:api` 只比对、不改文件：契约新增、删除或变化而没有重新生成时退出码为 1。CI 在类型检查之前运行它，契约目录变化也会触发前端 CI。
-- 生成器放在 `tools/api-types`（`openapi-typescript` 7.13.0 + TypeScript 5.9.3，自带锁文件），与前端自己的 TypeScript 7 隔离，因为生成器要求 TypeScript 5。
-- `src/api/contractAlignment.test.ts` 把前端的状态枚举和分页大小与生成类型做严格相等的编译期检查：后端改了枚举，`npm run typecheck` 会失败，提醒同步前端。
-
-**能力边界（事实）**：生成物只是类型，只能发现结构和枚举的变化。`minimum`、`maxLength`、`pattern` 等约束不会进入 TypeScript 类型，这类变化不会触发检查，仍要靠契约评审和后端测试。目前**没有任何 HTTP 适配器使用这些类型**，也没有契约模拟服务，前端运行时仍是合成适配器。
-
-## 连接真实后端（登录）
-
-默认仍是合成演示。`VITE_API_MODE=http npm run dev` 切换为同源 `/api` 的真实 Cookie 会话（开发服务器把 `/api` 转发到 `127.0.0.1:8080`，见 `vite.config.ts`）：登录页多一个“租户编码”，演示账号说明隐藏。
-
-后端没有应用、权限、菜单接口，该模式下“只有生产安全应用、菜单沿用演示菜单、权限 `safety.finding.read/report`”是前端的**呈现假设**（`src/adapters/sessionAdapterFactory.ts`），不授权任何操作。
-
-台账读取与上报提交在该模式下也走 HTTP adapter（`createFindingStoreFactory`）：按登录身份和租户新建，避免跨账号复用字段 schema 缓存；页面上的“合成演示”标识和“后端暂未接入”标签随之隐藏。**尚未对真实后端联调过**，仅有假客户端的单元测试；已知差异见 `docs/frontend-contract-gap.md` 第六节（紧急程度“紧急”档、上报日期筛选、上报人/责任人/历史缺失等）。
-
-## 契约模拟服务（无后端时联调前端）
+## 模式和会话
 
 ```sh
-npm run mock                 # 监听 127.0.0.1:8080（PORT 可改），账号 demo / demo，租户码 demo
+VITE_API_MODE=synthetic npm run dev
 VITE_API_MODE=http npm run dev
 ```
 
-`tools/mock-server/server.mjs` 按 `contracts/openapi` 的**书面描述**实现 CSRF 双提交、Cookie 会话、台账查询/详情、上报（含幂等键与同键异参 409、服务端校验、可上报组织），数据在内存里，重启即清空。**它不是后端**，只能证明前端自洽，不能证明与 Java 后端兼容；与真实后端不一致时以后端和契约为准。
+未配置、空值或 `synthetic` 使用演示模式；`http` 使用 HTTP 适配器；其他值启动失败，避免拼写错误静默进入演示。HTTP 登录需要租户编码、账号和密码。
 
-`src/integration/mockServer.test.ts` 用真实的 `httpClient` 和三个 HTTP adapter 对着它跑（含 CSRF、Cookie、幂等重放、越权组织、空白位置被拒）。
+开发服务器代理 `/api` 到 `BACKEND_URL`，默认 `http://127.0.0.1:8080`。真实 Secure Cookie/CSRF 验收须配置同源 HTTPS；当前 HTTP 开发代理不是这项证据，不关闭 TLS 校验作为替代。
 
-## 浏览器端到端测试（Playwright）
+`httpClient` 每次写入从同源 Cookie 读取 CSRF，不缓存令牌或写入 localStorage。错误保留 code、traceId、retryable、fieldErrors、Retry-After 和 currentVersion。会话失效清除本地状态；退出失败也清除受保护界面。
+
+## 台账、上报和命令
+
+HTTP 模式为每次登录身份建立独立 store，避免跨账号复用 schema 缓存。读取使用 schema/query/detail 契约；上报选择授权组织并映射服务端字段。相同内容重试复用幂等键，内容变化才换键；身份、租户、权限、版本和轮次均由后端最终校验。
+
+当前支持初始化、人员确认、安全确认、安全验收与退回整改的 HTTP 命令呈现。缺成员查询契约的派单、缺上传/证据集契约的整改提交及尚无后端动作的退回入口保持禁用并说明原因。演示模式不把按钮伪装成真实命令。
+
+日期按 Asia/Shanghai 展示；没有后端对应枚举的“紧急”档明确拒绝，不静默映射。上报日期筛选、责任人、历史等差异见[契约差异清单](../docs/frontend-contract-gap.md)。
+
+## 契约模拟与浏览器检查
 
 ```sh
+npm run mock
+VITE_API_MODE=http npm run dev
 npm run e2e
 ```
 
-自动起契约模拟服务（18080）和 `VITE_API_MODE=http` 的开发服务器（15173），用**本机已安装的 Chrome**（`channel: "chrome"`，不下载浏览器）跑登录、会话恢复、退出、上报、按编号查询。CI 的 `e2e` 任务（`.github/workflows/frontend-ci.yml`）用 runner 自带的 Chrome 跑它；对着的是模拟服务，不是后端。
+模拟服务只绑定回环地址，默认8080，账号/密码/租户编码均为 `demo`。它模拟 Cookie、CSRF、查询、组织、创建/幂等和有限流程状态，数据在内存中；**它不是 Java 后端**。
 
-## 流程命令（http 模式）
+Playwright 使用本机已有 Chrome，不下载浏览器；自动启动模拟服务18080和前端15173。该套件仅验证真实浏览器与契约模拟服务，不证明真实授权、Secure Cookie、PG或Flowable事务。执行环境需允许回环端口与Chrome启动；不扩大监听范围或复用未知服务。
 
-详情面板在 `VITE_API_MODE=http` 且记录带 `version` 时显示真实可用的流程动作（`FindingCommandPanel`）：启动确认流程、确认发现、安全确认、验收通过 / 退回整改。分派整改（缺成员查询接口）、提交整改证据（缺证据上传接口）、两个“退回”（后端未实现）保持禁用并写明原因，详见 `docs/frontend-contract-gap.md`。按钮按状态显示只是呈现，身份、职责、版本、轮次由服务端最终校验，失败时按 400/401/403/409/422/503 给出提示；版本或状态冲突会自动重新读取最新详情。合成演示模式仍是禁用按钮。
+## 演示模式（合成）细节
+
+- 账号：`demo.safety`、`demo.manager`、`demo.admin`、`demo.viewer`（只读），密码任意非空；账号不存在与密码为空返回同一个错误。状态只在内存，不读写 localStorage/sessionStorage。
+- 路由带租户：`/t/<tenantId>/<应用>/<页面>`；无租户前缀的旧地址登录后规范化；路径租户与会话租户不一致显示“无权访问”，不区分租户是否存在。登录返回地址 `?next=` 只接受本站相对路径，拒绝绝对地址、`//host`、反斜杠、控制字符和其他租户。
+- 上报表单没有隐患等级、上报人、租户：等级由有权限人员确认，上报时固定“待判定”；上报人和租户只来自服务端会话。校验在 `src/domain/findingDraft.ts`（纯函数）：长度按 Unicode 码点计，位置按契约的 White_Space 集合校验；前端的长度上限（位置 100、描述 500、临时措施 300）是产品假设，严于契约。
+- 提交带幂等键：同一份内容重试复用同一个键，内容变化才换新键。发现时间早于当前时间超过 24 小时为补报（HTTP 模式下补报标记由服务端计算，回执暂未返回）。时间一律按 Asia/Shanghai 展示和填写，记录里是带 +08:00 的 ISO 时间。
+- 面板打开时主区域 `inert`；有未提交内容时 Esc / 关闭先确认。应用内导航离开时不会拦截未提交草稿，提交时会话失效会丢失草稿。
+- 查询：关键词只匹配隐患编号（后端的描述字段不可筛选）；过滤组只有 AND。`src/adapters/entityQueryContract.ts` 把界面查询映射为共享 Entity Query Contract 的请求，字段注册表在 HTTP 模式下取自 `GET /entities/finding/schema`；日期输入只映射到 `DATE` 字段，不把无时区日期擅自转成时间点。
+- 契约类型由 `contracts/openapi/*.yaml` 生成（`npm run gen:api`，`npm run check:api` 只比对），生成物不手改；`minimum` / `maxLength` / `pattern` 不进入类型，这类变化仍靠契约评审和后端测试。

@@ -9,14 +9,14 @@ import {
 export interface Credentials {
   username: string;
   password: string;
-  /** 真实后端登录必填；合成实现忽略。登录页尚无此输入。 */
+  /** 真实后端登录必填；合成实现忽略。 */
   tenantCode?: string;
 }
 
 /**
  * 会话读写端口。真实实现应走同域 /api 的 Cookie 会话（HttpOnly、SameSite、CSRF），
  * 凭证与会话标识不进入 localStorage/sessionStorage，也不出现在 URL 或日志中。
- * 当前后端没有认证端点契约，仅提供下面的合成实现。
+ * HTTP 实现见 httpSessionAdapter；下面的合成实现只用于显式演示模式。
  */
 export interface SessionAdapter {
   /** 真实后端登录需要租户码：登录页据此显示输入框并隐藏合成演示说明。 */

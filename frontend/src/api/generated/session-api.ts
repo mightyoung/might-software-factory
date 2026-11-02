@@ -32,7 +32,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start a session using local credentials and a tenant code */
+        /**
+         * Start a session using local credentials and a tenant code
+         * @description Login attempts are limited before password verification. Source/account failure cooling is shared across tenant selections and equivalent normalized login keys. A rate-limited request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not disclose which limit was reached. This protection is local to one running instance.
+         */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -60,6 +63,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/account/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reauthenticate with the current password and advance the account credential generation
+         * @description Identity is taken from the verified session. Current password verification is required for this action; no reusable reauthentication marker is issued. Successful hash, version and audit changes commit together. All old credential generations require a fresh login. A retry after an uncertain response must account for an already committed password change. This endpoint does not reset an absolute session lifetime or upgrade an existing session.
+         */
+        post: operations["changeOwnPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/session/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Revalidate identity and project current application entitlements and scoped permissions */
+        get: operations["getSessionBootstrap"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/applications/{applicationId}/menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current authorized menu for a code-registered application */
+        get: operations["getApplicationMenu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session/current": {
         parameters: {
             query?: never;
@@ -67,7 +124,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read and revalidate the current member identity */
+        /**
+         * Read and revalidate the current member identity
+         * @description An expired absolute session lifetime is unauthenticated, even after recent activity.
+         */
         get: operations["getCurrentSession"];
         put?: never;
         post?: never;
@@ -106,6 +166,11 @@ export interface components {
             password: string;
             tenantCode: string;
         };
+        /** @description Duplicate fields, invalid UTF-8 and bodies above 4096 bytes are rejected. Passwords are never trimmed or normalized. Current passwords retain the existing 1-72 UTF-8 byte limit; new passwords require at least 15 Unicode code points and at most 72 UTF-8 bytes. */
+        PasswordChangeRequest: {
+            currentPassword: string;
+            newPassword: string;
+        };
         CurrentSessionResponse: {
             data: components["schemas"]["CurrentSession"];
         };
@@ -121,6 +186,47 @@ export interface components {
             /** Format: uuid */
             memberId: string;
             displayName: string;
+        };
+        SessionBootstrapResponse: {
+            data: {
+                /** @constant */
+                schemaVersion: 1;
+                identity: components["schemas"]["CurrentSession"];
+                applications: components["schemas"]["ApplicationEntry"][];
+                permissions: components["schemas"]["NavigationPermissions"];
+                authorization: components["schemas"]["NavigationAuthorization"];
+            };
+        };
+        ApplicationEntry: {
+            id: string;
+            name: string;
+            entryPath: string;
+        };
+        NavigationPermissions: string[];
+        NavigationAuthorization: {
+            /** Format: int64 */
+            tenantAuthEpoch: number;
+            /** Format: int64 */
+            memberAuthEpoch: number;
+            /** Format: int64 */
+            applicationVersion: number | null;
+        };
+        ApplicationMenuResponse: {
+            data: {
+                /** @constant */
+                schemaVersion: 1;
+                applicationId: string;
+                title: string;
+                nodes: components["schemas"]["ApplicationMenuNode"][];
+                permissions: components["schemas"]["NavigationPermissions"];
+                authorization: components["schemas"]["NavigationAuthorization"];
+            };
+        };
+        ApplicationMenuNode: {
+            id: string;
+            label: string;
+            path: string;
+            permission: string;
         };
         ReportableOrganizationsResponse: {
             data: components["schemas"]["ReportableOrganization"][];
@@ -181,6 +287,17 @@ export interface components {
         /** @description The current account, tenant, or membership is inactive or no longer authorized. */
         ActionDenied: {
             headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description RATE_LIMITED; wait at least Retry-After seconds before another login attempt. */
+        RateLimited: {
+            headers: {
+                /** @description Positive integer seconds until a bounded retry; another limit may still apply. */
+                "Retry-After": number;
                 [name: string]: unknown;
             };
             content: {
@@ -255,6 +372,7 @@ export interface operations {
             400: components["responses"]["InvalidRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfDenied"];
+            429: components["responses"]["RateLimited"];
             503: components["responses"]["DependencyUnavailable"];
         };
     };
@@ -278,6 +396,95 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["CsrfDenied"];
+        };
+    };
+    changeOwnPassword: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Must match the same-origin XSRF-TOKEN cookie. */
+                "X-XSRF-TOKEN": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Password change committed. Authenticate again using the new password. */
+            204: {
+                headers: {
+                    /** @description Server-generated trace shared with the successful audit and security event. */
+                    "X-Trace-Id"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            /** @description The bounded request-local password verification preparation expired. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    getSessionBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative presentation projection. Empty applications and permissions deny access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBootstrapResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    getApplicationMenu: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current scoped menu. Business endpoints independently enforce the same entitlement. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplicationMenuResponse"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            503: components["responses"]["DependencyUnavailable"];
         };
     };
     getCurrentSession: {

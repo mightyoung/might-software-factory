@@ -7,7 +7,10 @@ x-implementation-status: csrf-login-logout-current-session-and-scoped-reportable
 x-session-policy: >-
   The browser uses the server-issued SESSION cookie and XSRF-TOKEN double-submit cookie. Login
   succeeds with 204 No Content. Tenant, account, actor, and member identity are resolved by the
-  server and never selected by finding requests.
+  server and never selected by finding requests. Only POST can authenticate. The default idle
+  timeout is 30 minutes and the configurable absolute lifetime is 12 hours from successful
+  authentication. Activity does not renew the absolute lifetime. Missing, invalid or expired
+  authentication timestamps invalidate the session; protected requests require a fresh login.
 servers:
   - url: /
 paths:
@@ -27,6 +30,11 @@ paths:
     post:
       operationId: login
       summary: Start a session using local credentials and a tenant code
+      description: >-
+        Login attempts are limited before password verification. Source/account failure cooling
+        is shared across tenant selections and equivalent normalized login keys. A rate-limited
+        request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not
+        disclose which limit was reached. This protection is local to one running instance.
       parameters:
         - $ref: '#/components/parameters/CsrfToken'
       requestBody:
@@ -49,6 +57,8 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           $ref: '#/components/responses/CsrfDenied'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
   /api/v1/auth/logout:
@@ -63,10 +73,97 @@ paths:
           description: Session invalidated if present; session/CSRF cookies are cleared.
         '403':
           $ref: '#/components/responses/CsrfDenied'
+  /api/v1/account/password:
+    post:
+      operationId: changeOwnPassword
+      summary: Reauthenticate with the current password and advance the account credential generation
+      description: >-
+        Identity is taken from the verified session. Current password verification is required
+        for this action; no reusable reauthentication marker is issued. Successful hash, version
+        and audit changes commit together. All old credential generations require a fresh login.
+        A retry after an uncertain response must account for an already committed password change.
+        This endpoint does not reset an absolute session lifetime or upgrade an existing session.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '204':
+          description: Password change committed. Authenticate again using the new password.
+          headers:
+            X-Trace-Id:
+              description: Server-generated trace shared with the successful audit and security event.
+              schema: { type: string, format: uuid }
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '409':
+          description: The bounded request-local password verification preparation expired.
+          content:
+            application/json:
+              schema:
+                $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+  /api/v1/session/bootstrap:
+    get:
+      operationId: getSessionBootstrap
+      summary: Revalidate identity and project current application entitlements and scoped permissions
+      security:
+        - sessionCookieAuth: []
+      responses:
+        '200':
+          description: Authoritative presentation projection. Empty applications and permissions deny access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionBootstrapResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+  /api/v1/applications/{applicationId}/menu:
+    get:
+      operationId: getApplicationMenu
+      summary: Read the current authorized menu for a code-registered application
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: Current scoped menu. Business endpoints independently enforce the same entitlement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationMenuResponse'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
   /api/v1/session/current:
     get:
       operationId: getCurrentSession
       summary: Read and revalidate the current member identity
+      description: An expired absolute session lifetime is unauthenticated, even after recent activity.
       security:
         - sessionCookieAuth: []
       responses:
@@ -127,6 +224,27 @@ components:
         loginKey: { type: string, minLength: 1, maxLength: 200 }
         password: { type: string, minLength: 1, maxLength: 1024, writeOnly: true }
         tenantCode: { type: string, minLength: 1, maxLength: 64 }
+    PasswordChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      description: >-
+        Duplicate fields, invalid UTF-8 and bodies above 4096 bytes are rejected. Passwords are
+        never trimmed or normalized. Current passwords retain the existing 1-72 UTF-8 byte limit;
+        new passwords require at least 15 Unicode code points and at most 72 UTF-8 bytes.
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+          maxLength: 72
+          writeOnly: true
+          x-max-utf8-bytes: 72
+        newPassword:
+          type: string
+          minLength: 15
+          maxLength: 72
+          writeOnly: true
+          x-max-utf8-bytes: 72
     CurrentSessionResponse:
       type: object
       additionalProperties: false
@@ -146,6 +264,77 @@ components:
         tenantName: { type: string }
         memberId: { type: string, format: uuid }
         displayName: { type: string }
+    SessionBootstrapResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [schemaVersion, identity, applications, permissions, authorization]
+          properties:
+            schemaVersion: { type: integer, const: 1 }
+            identity:
+              $ref: '#/components/schemas/CurrentSession'
+            applications:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApplicationEntry'
+            permissions:
+              $ref: '#/components/schemas/NavigationPermissions'
+            authorization:
+              $ref: '#/components/schemas/NavigationAuthorization'
+    ApplicationEntry:
+      type: object
+      additionalProperties: false
+      required: [id, name, entryPath]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        entryPath: { type: string }
+    NavigationPermissions:
+      type: array
+      uniqueItems: true
+      items: { type: string }
+    NavigationAuthorization:
+      type: object
+      additionalProperties: false
+      required: [tenantAuthEpoch, memberAuthEpoch, applicationVersion]
+      properties:
+        tenantAuthEpoch: { type: integer, format: int64, minimum: 0 }
+        memberAuthEpoch: { type: integer, format: int64, minimum: 0 }
+        applicationVersion: { type: [integer, 'null'], format: int64, minimum: 1 }
+    ApplicationMenuResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [schemaVersion, applicationId, title, nodes, permissions, authorization]
+          properties:
+            schemaVersion: { type: integer, const: 1 }
+            applicationId: { type: string }
+            title: { type: string }
+            nodes:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApplicationMenuNode'
+            permissions:
+              $ref: '#/components/schemas/NavigationPermissions'
+            authorization:
+              $ref: '#/components/schemas/NavigationAuthorization'
+    ApplicationMenuNode:
+      type: object
+      additionalProperties: false
+      required: [id, label, path, permission]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        path: { type: string }
+        permission: { type: string }
     ReportableOrganizationsResponse:
       type: object
       additionalProperties: false
@@ -184,6 +373,19 @@ components:
             $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
     ActionDenied:
       description: The current account, tenant, or membership is inactive or no longer authorized.
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: RATE_LIMITED; wait at least Retry-After seconds before another login attempt.
+      headers:
+        Retry-After:
+          required: true
+          description: Positive integer seconds until a bounded retry; another limit may still apply.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:

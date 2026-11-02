@@ -35,7 +35,9 @@ const SCHEMA = {
 const shanghaiDay = (d) => new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10).replaceAll("-", "");
 const cp = (s) => [...s].length;
 
-export function createMockServer() {
+export function createMockServer(options = {}) {
+  // Test-owned mutable projection: no HTTP administration endpoint or real authorization.
+  const navigation = () => options.navigation?.() ?? { enabled: true, permissions: ["finding.read", "finding.create"] };
   const sessions = new Map();
   const findings = [];
   const receipts = new Map(); // Idempotency-Key -> { body, response }
@@ -133,6 +135,20 @@ export function createMockServer() {
     if (!path.startsWith("/api/v1/")) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not found");
     if (!session) return err(res, 401, "AUTH_REQUIRED", "Authentication required");
 
+    if (req.method === "GET" && (path === "/api/v1/session/bootstrap" || /^\/api\/v1\/applications\/[^/]+\/menu$/.test(path))) {
+      const state = navigation();
+      if (state.failure) return err(res, state.failure, "DEPENDENCY_UNAVAILABLE", "Navigation unavailable");
+      const enabled = state.enabled && state.permissions.includes("finding.read");
+      const permissions = enabled ? state.permissions : [];
+      const authorization = { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: state.enabled === null ? null : 1 };
+      if (path === "/api/v1/session/bootstrap") return send(res, 200, { data: {
+        schemaVersion: 1, identity: { ...session, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName: "模拟用户" },
+        applications: enabled ? [{ id: "safety", name: "生产安全", entryPath: "safety/findings" }] : [], permissions, authorization,
+      } });
+      if (path !== "/api/v1/applications/safety/menu" || !enabled) return err(res, 403, "ACTION_DENIED", "Application unavailable");
+      return send(res, 200, { data: { schemaVersion: 1, applicationId: "safety", title: "生产安全",
+        nodes: [{ id: "findings", label: "隐患管理", path: "safety/findings", permission: "finding.read" }], permissions, authorization } });
+    }
     if (req.method === "GET" && path === "/api/v1/session/current")
       return send(res, 200, { data: { ...session, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName: "模拟用户" } });
     if (req.method === "GET" && path === "/api/v1/organizations/reportable") return send(res, 200, { data: ORGS });

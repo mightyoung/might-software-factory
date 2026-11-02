@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createMockServer, type MockServer } from "../../tools/mock-server/server.mjs";
+import { createMockServer, type MockServer, type MockNavigation } from "../../tools/mock-server/server.mjs";
 import { createHttpFindingCommands } from "../adapters/httpFindingCommands";
 import { createHttpFindingLedger } from "../adapters/httpFindingLedger";
 import { createHttpFindingSubmit } from "../adapters/httpFindingSubmit";
@@ -11,6 +11,7 @@ import type { FindingDraft } from "../domain/findingDraft";
 // 这里验证的是前端的 CSRF / Cookie / 错误映射 / 请求形状自洽，不是与 Java 后端的兼容性。
 let server: MockServer;
 let base = "";
+let navigation: MockNavigation;
 let jar = new Map<string, string>();
 
 /** 最小 cookie 罐：SESSION 是 HttpOnly，只存在这里；XSRF-TOKEN 同步到 document.cookie，供 httpClient 读取。 */
@@ -31,30 +32,30 @@ const jarFetch: typeof fetch = async (input, init) => {
 };
 
 const client = () => createHttpClient({ fetchImpl: jarFetch });
-const caps = { applications: [{ id: "safety" as const, name: "生产安全", entryPath: "safety/findings" }], permissions: [] };
 const draft: FindingDraft = { source: "INSPECTION", description: "防护罩松动", location: "B 工房", foundAt: "2026-10-30T09:00", urgency: "IMMEDIATE", interimMeasure: "" };
 const KEY = () => crypto.randomUUID();
 
 beforeAll(async () => {
-  server = createMockServer();
+  server = createMockServer({ navigation: () => navigation });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
+  navigation = { enabled: true, permissions: ["finding.read", "finding.create"] };
   jar = new Map();
   document.cookie = "XSRF-TOKEN=; Max-Age=0; Path=/";
 });
 
 async function signIn() {
   const c = client();
-  await createHttpSessionAdapter(c, caps).login({ username: "demo", password: "demo", tenantCode: "demo" });
+  await createHttpSessionAdapter(c).login({ username: "demo", password: "demo", tenantCode: "demo" });
   return c;
 }
 
 describe("HTTP adapters × 契约模拟服务", () => {
   it("未登录读取当前会话 → restore 为 null；登录后可读，退出后再次为 null", async () => {
-    const adapter = createHttpSessionAdapter(client(), caps);
+    const adapter = createHttpSessionAdapter(client());
     expect(await adapter.restore()).toBeNull();
     const session = await adapter.login({ username: "demo", password: "demo", tenantCode: "demo" });
     expect(session.tenant.name).toContain("演示租户");
@@ -63,8 +64,30 @@ describe("HTTP adapters × 契约模拟服务", () => {
     expect(await adapter.restore()).toBeNull();
   });
 
+  it.each([null, false])("bootstrap omits absent/disabled entitlement (%s) without demo fallback", async (enabled) => {
+    navigation = { enabled, permissions: ["finding.read", "finding.create"] };
+    const adapter = createHttpSessionAdapter(client());
+    expect(await adapter.login({ username: "demo", password: "demo", tenantCode: "demo" })).toMatchObject({ applications: [], permissions: [] });
+    await expect(adapter.loadMenu("safety")).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
+  it("fresh bootstrap/menu reflect revoked grants and dependency failure", async () => {
+    const adapter = createHttpSessionAdapter(client());
+    const session = await adapter.login({ username: "demo", password: "demo", tenantCode: "demo" });
+    expect(session.permissions).toEqual(["safety.finding.read", "safety.finding.report"]);
+    expect((await adapter.loadMenu("safety")).nodes).toHaveLength(1);
+    navigation.permissions = ["finding.read"];
+    expect((await adapter.restore())?.permissions).toEqual(["safety.finding.read"]);
+    navigation.permissions = [];
+    expect(await adapter.restore()).toMatchObject({ applications: [], permissions: [] });
+    await expect(adapter.loadMenu("safety")).rejects.toMatchObject({ kind: "forbidden" });
+    navigation.failure = 503;
+    await expect(adapter.restore()).rejects.toMatchObject({ kind: "unavailable" });
+    await expect(adapter.loadMenu("safety")).rejects.toMatchObject({ kind: "unavailable" });
+  });
+
   it("错误凭证与缺租户码同为 invalid_credentials", async () => {
-    const adapter = createHttpSessionAdapter(client(), caps);
+    const adapter = createHttpSessionAdapter(client());
     await expect(adapter.login({ username: "demo", password: "bad", tenantCode: "demo" })).rejects.toMatchObject({ kind: "invalid_credentials" });
     await expect(adapter.login({ username: "demo", password: "demo" })).rejects.toMatchObject({ kind: "invalid_credentials" });
   });

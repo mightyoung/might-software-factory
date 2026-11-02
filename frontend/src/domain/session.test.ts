@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { visibleMenuNodes, type MenuNode } from "./session";
+import { SessionError, visibleMenuNodes, type MenuNode } from "./session";
 
 const nodes: MenuNode[] = [
   {
@@ -29,5 +29,16 @@ describe("visibleMenuNodes", () => {
   it("不修改传入的菜单定义", () => {
     visibleMenuNodes(nodes, { permissions: ["x.a"] });
     expect(nodes[0]?.children).toHaveLength(2);
+  });
+});
+
+describe("SessionError rate-limit display bounds", () => {
+  it.each([[1, 1], [1.1, 2], [300, 300], [999_999, 300], [Number.MAX_VALUE, 300],
+    [null, null], [0, null], [-1, null], [NaN, null], [Infinity, null]] as const)(
+    "bounds retry seconds %s to %s", (input, expected) => {
+      expect(new SessionError("rate_limited", false, input).retryAfterSeconds).toBe(expected);
+    });
+  it("does not attach a cooldown to other failure kinds", () => {
+    expect(new SessionError("unavailable", true, 30).retryAfterSeconds).toBeNull();
   });
 });

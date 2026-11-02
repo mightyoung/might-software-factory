@@ -1,6 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { loadEnv } from "vite";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => ({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     clearMocks: true,
-    exclude: ["e2e/**", "node_modules/**"],
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 }));

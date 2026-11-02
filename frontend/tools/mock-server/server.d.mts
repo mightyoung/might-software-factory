@@ -3,4 +3,9 @@ export interface MockServer {
   close(callback?: () => void): unknown;
   address(): { port: number } | string | null;
 }
-export function createMockServer(): MockServer;
+export interface MockNavigation {
+  enabled: boolean | null;
+  permissions: string[];
+  failure?: number;
+}
+export function createMockServer(options?: { navigation?: () => MockNavigation }): MockServer;

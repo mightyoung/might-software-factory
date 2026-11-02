@@ -109,3 +109,43 @@ test("验收：退回必须填意见，退回后进入下一轮整改", async ({
   await expect(detail.locator(".status-current")).toHaveText("整改中");
   await expect(detail.getByText(/第 2 轮/)).toBeVisible();
 });
+
+// Browser interception stays contract-mock evidence; it does not revoke real backend grants.
+for (const entitlement of ["absent", "disabled"]) {
+  test(`${entitlement} application has no static navigation fallback`, async ({ page }) => {
+    await page.route("**/api/v1/session/bootstrap", async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      const body = await response.json();
+      body.data.applications = [];
+      body.data.permissions = [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto("/");
+    await page.getByLabel("租户编码").fill("demo");
+    await page.getByLabel("账号").fill("demo");
+    await page.getByLabel("密码").fill("demo");
+    await page.getByRole("button", { name: "登录" }).click();
+    await expect(page.getByRole("heading", { name: "没有可用应用" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "生产安全", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "新建上报" })).toHaveCount(0);
+  });
+}
+
+test("revoked create grant is removed on restore and menu failure has no demo fallback", async ({ page }) => {
+  await signIn(page);
+  await page.route("**/api/v1/session/bootstrap", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data.permissions = ["finding.read", "unknown"];
+    await route.fulfill({ response, json: body });
+  });
+  await page.route("**/api/v1/applications/safety/menu", (route) => route.fulfill({
+    status: 503, contentType: "application/json", body: JSON.stringify({ code: "DEPENDENCY_UNAVAILABLE", retryable: true }),
+  }));
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "隐患台账" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新建上报" })).toHaveCount(0);
+  await expect(page.getByText("导航加载失败。")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "安全管理导航" })).toHaveCount(0);
+});
