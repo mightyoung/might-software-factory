@@ -46,7 +46,8 @@ public class SecurityConfiguration {
             CookieCsrfTokenRepository csrfTokenRepository,
             SecurityContextRepository securityContextRepository,
             LocalPasswordAuthenticationFilter loginFilter,
-            SessionLifetimePolicy sessionLifetime)
+            SessionLifetimePolicy sessionLifetime,
+            AccountStatusReadRepository accountStatusRepository)
             throws Exception {
         return http
                 .csrf(csrf -> csrf
@@ -80,6 +81,7 @@ public class SecurityConfiguration {
                                 IdentityHttpResponses.noContent(response)))
                 .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(new AbsoluteSessionLifetimeFilter(sessionLifetime), SecurityContextHolderFilter.class)
+                .addFilterAfter(new CredentialVersionSessionFilter(accountStatusRepository), AbsoluteSessionLifetimeFilter.class)
                 .build();
     }
 

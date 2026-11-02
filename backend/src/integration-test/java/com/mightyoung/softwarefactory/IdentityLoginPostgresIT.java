@@ -460,8 +460,8 @@ class IdentityLoginPostgresIT {
         String originalId = sessions.idFor(firstLogin.trace());
         assertThat(fixture.storedCredentialVersion(originalId)).isEqualTo(1L);
         fixture.rotatePasswordAndCredentialVersion();
-        expect(client.get(CURRENT), 403);
-        expect(client.get(ORGANIZATIONS), 403);
+        expect(client.get(CURRENT), 401);
+        expect(client.get(ORGANIZATIONS), 401);
         bootstrap(client);
         expect(client.post(LOGIN, loginBody(fixture.password(), fixture.tenantACode()), client.csrf()), 401);
         var newLogin = login(client, fixture.newPassword(), fixture.tenantACode());
@@ -513,9 +513,12 @@ class IdentityLoginPostgresIT {
         login(tenantB, fixture.password(), fixture.tenantBCode());
 
         state.revoke(fixture);
-
-        expect(tenantA.get(CURRENT), 403);
-        expect(tenantA.get(ORGANIZATIONS), 403);
+        int protectedStatus = switch (state) {
+            case ACCOUNT_LOCKED, ACCOUNT_DISABLED -> 401;
+            case PRINCIPAL_DISABLED, TENANT_SUSPENDED -> 403;
+        };
+        expect(tenantA.get(CURRENT), protectedStatus);
+        expect(tenantA.get(ORGANIZATIONS), protectedStatus);
         bootstrap(tenantA);
         assertGenericAuthenticationFailure(tenantA.post(
                 LOGIN, loginBody(fixture.password(), fixture.tenantACode()), tenantA.csrf()));
@@ -523,8 +526,8 @@ class IdentityLoginPostgresIT {
             assertCurrent(tenantB, fixture.tenantBId().toString(), fixture.memberBId().toString());
             assertOrganizations(tenantB, fixture.organizationBId().toString(), fixture.organizationAId().toString());
         } else {
-            expect(tenantB.get(CURRENT), 403);
-            expect(tenantB.get(ORGANIZATIONS), 403);
+            expect(tenantB.get(CURRENT), protectedStatus);
+            expect(tenantB.get(ORGANIZATIONS), protectedStatus);
             bootstrap(tenantB);
             assertGenericAuthenticationFailure(tenantB.post(
                     LOGIN, loginBody(fixture.password(), fixture.tenantBCode()), tenantB.csrf()));

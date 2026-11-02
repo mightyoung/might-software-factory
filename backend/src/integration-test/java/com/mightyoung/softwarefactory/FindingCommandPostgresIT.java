@@ -327,7 +327,7 @@ class FindingCommandPostgresIT {
             UUID finding = UUID.fromString(success.path("findingId").asString());
             assertCommand(commandId,finding,1); assertTask(finding,"personConfirm",fixture.person.memberId());
             Map<String,Long> committed = counts();
-            expect(post(reporter,"/api/v1/findings",UUID.randomUUID(),createBody("stale-after-writer")),403);
+            expect(post(reporter,"/api/v1/findings",UUID.randomUUID(),createBody("stale-after-writer")),401);
             assertThat(counts()).isEqualTo(committed);
         } finally { pause.release.countDown(); late.pause.set(null); stop(workers); }
     }

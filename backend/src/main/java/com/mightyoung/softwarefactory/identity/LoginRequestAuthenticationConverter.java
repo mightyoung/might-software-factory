@@ -26,6 +26,7 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
     @Override
     public Authentication convert(HttpServletRequest request) {
         byte[] serializedBody = null;
+        char[] decodedCharacters = null;
         char[] password = null;
         boolean passwordTransferred = false;
         try {
@@ -34,7 +35,9 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
             }
             MediaType contentType = MediaType.parseMediaType(request.getContentType());
             if (contentType.isWildcardType() || contentType.isWildcardSubtype()
-                    || !MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
+                    || !MediaType.APPLICATION_JSON.isCompatibleWith(contentType)
+                    || (contentType.getCharset() != null
+                        && !java.nio.charset.StandardCharsets.UTF_8.equals(contentType.getCharset()))) {
                 throw new InvalidLoginRequestException();
             }
             // Own the buffer before reading so even a partial I/O failure can wipe it.
@@ -43,10 +46,21 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
             if (bodyLength > MAX_REQUEST_BYTES) {
                 throw new InvalidLoginRequestException();
             }
+            decodedCharacters = new char[MAX_REQUEST_BYTES + 1];
+            var characters = java.nio.CharBuffer.wrap(decodedCharacters);
+            var decoder = java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+            var decoded = decoder.decode(java.nio.ByteBuffer.wrap(serializedBody, 0, bodyLength), characters, true);
+            if (decoded.isError()) decoded.throwException();
+            if (decoded.isOverflow()) throw new InvalidLoginRequestException();
+            var flushed = decoder.flush(characters);
+            if (flushed.isError()) flushed.throwException();
+            if (flushed.isOverflow()) throw new InvalidLoginRequestException();
             String loginKey = null;
             String tenantCode = null;
             int fieldsSeen = 0;
-            try (JsonParser parser = objectMapper.createParser(serializedBody, 0, bodyLength)) {
+            try (JsonParser parser = objectMapper.createParser(decodedCharacters, 0, characters.position())) {
                 if (parser.nextToken() != JsonToken.START_OBJECT) {
                     throw new InvalidLoginRequestException();
                 }
@@ -91,6 +105,9 @@ final class LoginRequestAuthenticationConverter implements AuthenticationConvert
         } finally {
             if (serializedBody != null) {
                 Arrays.fill(serializedBody, (byte) 0);
+            }
+            if (decodedCharacters != null) {
+                Arrays.fill(decodedCharacters, '\0');
             }
             if (!passwordTransferred && password != null) {
                 Arrays.fill(password, '\0');

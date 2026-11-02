@@ -290,6 +290,13 @@ class FindingControllerHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        // This HTTP slice supplies identity state explicitly; persisted revocation is tested separately.
+        @Bean
+        com.mightyoung.softwarefactory.identity.AccountStatusReadRepository accountSecurityStates() {
+            return account -> java.util.Optional.of(
+                    new com.mightyoung.softwarefactory.identity.AccountSecurityState("ACTIVE", 1));
+        }
+
         @Bean TestFindingRepository testFindingRepository() { return new TestFindingRepository(); }
         @Bean TestReadAccessPolicy testReadAccessPolicy() { return new TestReadAccessPolicy(); }
         @Bean AuthenticationProvider localPasswordAuthenticationProvider() {
