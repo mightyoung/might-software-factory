@@ -22,6 +22,7 @@ import org.springframework.transaction.support.AbstractPlatformTransactionManage
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** A credential change invalidates read and action snapshots without retaining a previous scope. */
 class CredentialVersionAuthorizationRepositoryTest {
 
+    private static final OffsetDateTime AT = OffsetDateTime.parse("2026-11-03T10:15:30Z");
     private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID ACCOUNT_ID = UUID.fromString("11000000-0000-0000-0000-000000000001");
     private static final UUID TENANT_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
@@ -120,6 +122,15 @@ class CredentialVersionAuthorizationRepositoryTest {
 
         private Harness(boolean workflow) {
             var dsl = DSL.using(new MockConnection(context -> {
+                if (context.sql().contains("transaction_isolation")) {
+                    var mode = DSL.field("isolation", String.class);
+                    var tx = DSL.field("transaction_at", OffsetDateTime.class);
+                    var statement = DSL.field("statement_at", OffsetDateTime.class);
+                    var values = DSL.using(SQLDialect.POSTGRES);
+                    var result = values.newResult(mode, tx, statement);
+                    result.add(values.newRecord(mode, tx, statement).values("repeatable read", AT, AT.plusHours(1)));
+                    return new MockResult[] {new MockResult(1, result)};
+                }
                 assertThat(context.sql()).contains("set_config");
                 var field = DSL.field("set_config", String.class);
                 var values = DSL.using(SQLDialect.POSTGRES);
@@ -150,6 +161,12 @@ class CredentialVersionAuthorizationRepositoryTest {
                 }
 
                 @Override
+                public MemberDirectorySnapshot findCurrentMembershipsAt(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
+                    assertThat(evaluatedAt).isEqualTo(AT);
+                    return findCurrentMemberships(tenantId, memberId);
+                }
+
+                @Override
                 public Set<UUID> expandDepartmentTree(UUID tenantId, UUID memberId) {
                     return Set.of();
                 }
@@ -159,9 +176,18 @@ class CredentialVersionAuthorizationRepositoryTest {
                     return Set.of();
                 }
             };
-            RoleScopeReadRepository roles = (tenantId, memberId, organizations, positions, groups, permission) -> {
-                roleCalls.incrementAndGet();
-                return List.of(new RoleScopeDescriptor(UUID.randomUUID(), "DEPT", null));
+            RoleScopeReadRepository roles = new RoleScopeReadRepository() {
+                @Override public List<RoleScopeDescriptor> findActiveScopes(UUID tenantId, UUID memberId,
+                        Set<UUID> organizations, Set<UUID> positions, Set<UUID> groups, String permission) {
+                    roleCalls.incrementAndGet();
+                    return List.of(new RoleScopeDescriptor(UUID.randomUUID(), "DEPT", null));
+                }
+                @Override public List<RoleScopeDescriptor> findActiveActionScopesAt(UUID tenantId, UUID memberId,
+                        Set<UUID> organizations, Set<UUID> positions, Set<UUID> groups,
+                        String resource, String action, String permission, OffsetDateTime evaluatedAt) {
+                    assertThat(evaluatedAt).isEqualTo(AT);
+                    return findActiveScopes(tenantId, memberId, organizations, positions, groups, permission);
+                }
             };
             var transactionManager = new TestTransactionManager();
             if (workflow) {

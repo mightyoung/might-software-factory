@@ -5,6 +5,8 @@ import org.jooq.Field;
 import org.jooq.Table;
 import org.springframework.stereotype.Repository;
 
+import java.time.OffsetDateTime;
+import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -17,49 +19,57 @@ import static org.jooq.impl.DSL.table;
 @Repository
 public final class JooqMemberDirectoryReadRepository implements MemberDirectoryReadRepository {
 
+    // A null value is used only by the retained legacy methods, which keep transaction time.
+    private static final String EVALUATION_SQL = "with evaluation_time as (select coalesce(cast(? as timestamptz), current_timestamp) as evaluated_at)\n";
+
     private static final String ORGANIZATIONS_SQL = """
             select distinct mo.org_id
               from public.member_org mo
+              cross join evaluation_time e
               join public.org_unit ou
                 on ou.tenant_id = mo.tenant_id and ou.id = mo.org_id and ou.active = true
              where mo.tenant_id = cast(? as uuid)
                and mo.member_id = cast(? as uuid)
-               and mo.valid_from <= current_timestamp
-               and (mo.valid_to is null or mo.valid_to > current_timestamp)
+               and mo.valid_from <= e.evaluated_at
+               and (mo.valid_to is null or mo.valid_to > e.evaluated_at)
             """;
 
     private static final String POSITIONS_SQL = """
             select distinct mp.position_id
               from public.member_position mp
+              cross join evaluation_time e
               join public."position" pos
                 on pos.tenant_id = mp.tenant_id and pos.id = mp.position_id and pos.active = true
              where mp.tenant_id = cast(? as uuid)
                and mp.member_id = cast(? as uuid)
-               and mp.valid_from <= current_timestamp
-               and (mp.valid_to is null or mp.valid_to > current_timestamp)
+               and mp.valid_from <= e.evaluated_at
+               and (mp.valid_to is null or mp.valid_to > e.evaluated_at)
             """;
 
     private static final String GROUPS_SQL = """
             select distinct gm.group_id
               from public.group_member gm
+              cross join evaluation_time e
               join public.user_group g
                 on g.tenant_id = gm.tenant_id and g.id = gm.group_id and g.active = true
              where gm.tenant_id = cast(? as uuid)
                and gm.member_id = cast(? as uuid)
-               and gm.valid_from <= current_timestamp
-               and (gm.valid_to is null or gm.valid_to > current_timestamp)
+               and gm.valid_from <= e.evaluated_at
+               and (gm.valid_to is null or gm.valid_to > e.evaluated_at)
             """;
 
     private static final String DEPARTMENT_TREE_SQL = """
-            with recursive department_tree (tenant_id, id) as (
+            with recursive evaluation_time as (select coalesce(cast(? as timestamptz), current_timestamp) as evaluated_at),
+            department_tree (tenant_id, id) as (
                 select ou.tenant_id, ou.id
                   from public.member_org mo
+                  cross join evaluation_time e
                   join public.org_unit ou
                     on ou.tenant_id = mo.tenant_id and ou.id = mo.org_id and ou.active = true
                  where mo.tenant_id = cast(? as uuid)
                    and mo.member_id = cast(? as uuid)
-                   and mo.valid_from <= current_timestamp
-                   and (mo.valid_to is null or mo.valid_to > current_timestamp)
+                   and mo.valid_from <= e.evaluated_at
+                   and (mo.valid_to is null or mo.valid_to > e.evaluated_at)
                 union
                 select child.tenant_id, child.id
                   from public.org_unit child
@@ -83,15 +93,30 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
 
     @Override
     public MemberDirectorySnapshot findCurrentMemberships(UUID tenantId, UUID memberId) {
+        return memberships(tenantId, memberId, null);
+    }
+
+    @Override
+    public MemberDirectorySnapshot findCurrentMembershipsAt(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
+        return memberships(tenantId, memberId, Objects.requireNonNull(evaluatedAt, "Evaluation time is required"));
+    }
+
+    private MemberDirectorySnapshot memberships(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
         return new MemberDirectorySnapshot(
-                fetchIds(ORGANIZATIONS_SQL, tenantId, memberId),
-                fetchIds(POSITIONS_SQL, tenantId, memberId),
-                fetchIds(GROUPS_SQL, tenantId, memberId));
+                fetchIds(EVALUATION_SQL + ORGANIZATIONS_SQL, evaluatedAt, tenantId, memberId),
+                fetchIds(EVALUATION_SQL + POSITIONS_SQL, evaluatedAt, tenantId, memberId),
+                fetchIds(EVALUATION_SQL + GROUPS_SQL, evaluatedAt, tenantId, memberId));
     }
 
     @Override
     public Set<UUID> expandDepartmentTree(UUID tenantId, UUID memberId) {
-        return fetchIds(DEPARTMENT_TREE_SQL, tenantId, memberId);
+        return fetchIds(DEPARTMENT_TREE_SQL, null, tenantId, memberId);
+    }
+
+    @Override
+    public Set<UUID> expandDepartmentTreeAt(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
+        return fetchIds(DEPARTMENT_TREE_SQL,
+                Objects.requireNonNull(evaluatedAt, "Evaluation time is required"), tenantId, memberId);
     }
 
     @Override
