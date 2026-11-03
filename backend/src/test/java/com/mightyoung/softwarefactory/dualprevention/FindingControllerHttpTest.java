@@ -161,7 +161,7 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.items[0].createdAt").exists())
                 .andExpect(jsonPath("$.data.page.total").value(11))
                 .andExpect(jsonPath("$.data.page.pageCount").value(1))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
+                .andExpect(jsonPath("$.meta.schemaVersion").value("5"));
 
         assertThat(repository.lastScope.tenantId()).isEqualTo(TENANT_A);
         assertThat(repository.lastScope.organizationIds()).containsExactly(ORG_A);
@@ -190,7 +190,7 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.riskId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.grade").value(synthetic.grade()))
                 .andExpect(jsonPath("$.data.relatedFindingId").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
+                .andExpect(jsonPath("$.meta.schemaVersion").value("5"));
     }
 
     @Test
@@ -239,7 +239,7 @@ class FindingControllerHttpTest {
         mvc.perform(get(SCHEMA_PATH).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.key").value("finding"))
-                .andExpect(jsonPath("$.data.schemaVersion").value("4"))
+                .andExpect(jsonPath("$.data.schemaVersion").value("5"))
                 .andExpect(jsonPath("$.data.fields.organization_id").doesNotExist())
                 .andExpect(jsonPath("$.data.fields.organizationId.type").value("UUID"))
                 .andExpect(jsonPath("$.data.fields.relatedFindingId.type").value("UUID"))

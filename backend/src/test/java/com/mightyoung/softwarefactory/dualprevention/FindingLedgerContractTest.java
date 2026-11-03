@@ -65,7 +65,7 @@ class FindingLedgerContractTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void registersFindingV4WithOnlyLogicalSchemaFieldsAndExactPageSemantics() throws IOException {
+    void registersFindingV5WithOnlyLogicalSchemaFieldsAndExactPageSemantics() throws IOException {
         Map<String, Object> contract = readContract();
         Map<String, Object> schemas = schemas(contract);
         Map<String, Object> findingSchema = (Map<String, Object>) schemas.get("FindingEntitySchema");
@@ -74,7 +74,7 @@ class FindingLedgerContractTest {
         assertThat(((Map<String, Object>) schemaProperties.get("key")).get("const")).isEqualTo("finding");
         assertThat(((Map<String, Object>) schemaProperties.get("schemaVersion")).get("const"))
                 .isEqualTo(FindingEntitySchema.SCHEMA_VERSION);
-        assertThat(FindingEntitySchema.SCHEMA_VERSION).isEqualTo("4");
+        assertThat(FindingEntitySchema.SCHEMA_VERSION).isEqualTo("5");
         assertThat(new FindingEntitySchema().schema().schemaVersion()).isEqualTo(FindingEntitySchema.SCHEMA_VERSION);
         assertThat(((Map<String, Object>) schemaProperties.get("schemaVersion")).get("description").toString())
                 .contains("Cache schema metadata by", "discard the older cached schema", "default ordering changes");
@@ -83,14 +83,26 @@ class FindingLedgerContractTest {
                 .containsExactly("id", "code", "organizationId", "organizationName", "description",
                         "discoveredAt", "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
                         "sourceEventId", "riskId", "relatedFindingId", "grade", "state", "roundNo", "createdAt");
+        assertThat(FindingEntitySchema.DEFAULT_FIELDS).isEqualTo(
+                ((Map<String, Object>) schemaProperties.get("defaultFields")).get("const"));
         Map<String, Object> fieldsObject = (Map<String, Object>) schemaProperties.get("fields");
         Map<String, Object> fields = (Map<String, Object>) fieldsObject.get("properties");
         assertThat(fields.keySet()).containsExactlyInAnyOrder(
                 "id", "code", "organizationId", "organizationName", "description", "discoveredAt",
                 "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
-                "sourceEventId", "riskId", "relatedFindingId", "grade", "state", "roundNo", "version",
+                "sourceEventId", "riskId", "relatedFindingId", "grade", "state", "roundNo", "version", "reviewCycle", "reviewProtocol",
                 "createdAt", "updatedAt");
         Map<String, Object> componentSchemas = schemas(contract);
+        Map<String, Object> detailProperties = (Map<String, Object>)
+                ((Map<String, Object>) componentSchemas.get("FindingDetail")).get("properties");
+        for (String key : List.of("reviewCycle", "reviewProtocol")) {
+            assertThat((Map<String, Object>) detailProperties.get(key)).containsEntry("readOnly", true);
+            var javaField = new FindingEntitySchema().schema().fields().get(key);
+            assertThat(javaField.selectable()).isTrue();
+            assertThat(javaField.sortable()).isFalse();
+            assertThat(javaField.operators()).isEmpty();
+        }
+
         Map<String, Object> sourceCategory = (Map<String, Object>) componentSchemas.get("FindingSourceCategoryField");
         Map<String, Object> sourceValues = (Map<String, Object>) ((Map<String, Object>) sourceCategory.get("properties"))
                 .get("enumValues");
@@ -113,7 +125,7 @@ class FindingLedgerContractTest {
         Map<String, Object> stateProperties = (Map<String, Object>) state.get("properties");
         assertThat((List<String>) ((Map<String, Object>) stateProperties.get("enumValues")).get("const"))
                 .containsExactly("DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING",
-                        "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED");
+                        "REPORTER_SUPPLEMENT_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED");
         Map<String, Object> description = (Map<String, Object>) componentSchemas.get("DescriptionField");
         Map<String, Object> descriptionProperties = (Map<String, Object>) description.get("properties");
         assertThat(((Map<String, Object>) descriptionProperties.get("operators")).get("const"))
@@ -172,11 +184,11 @@ class FindingLedgerContractTest {
                   "location":"North loading dock","interimMeasure":"Temporary barrier installed","backfill":true,
                   "grade":"GENERAL","state":"PERSON_CONFIRM_PENDING","relatedFindingId":null,"roundNo":1}],
                   "page":{"number":1,"size":50,"total":101,"pageCount":3}},
-                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"4"}}
+                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"5"}}
                 """);
         assertInvalid(listResponse, """
                 {"data":{"items":[],"page":{"number":1,"size":50,"pageCount":0}},
-                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"4"}}
+                 "meta":{"requestId":"req-1","traceId":"trace-1","schemaVersion":"5"}}
                 """);
         assertValid(detailResponse, """
                 {"data":{"id":"00112233-4455-6677-8899-aabbccddeeff","code":"FND-1001",
@@ -185,8 +197,8 @@ class FindingLedgerContractTest {
                   "sourceCategory":"INSPECTION","urgency":"NORMAL","location":"Workshop floor",
                   "interimMeasure":null,"backfill":false,
                   "sourceEventId":null,"riskId":null,"grade":"UNKNOWN","state":"PERSON_CONFIRM_PENDING",
-                  "roundNo":1,"version":1,"relatedFindingId":null,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
-                 "meta":{"requestId":"req-2","traceId":"trace-2","schemaVersion":"4"}}
+                  "roundNo":1,"version":1,"reviewCycle":1,"reviewProtocol":"LEGACY","relatedFindingId":null,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
+                 "meta":{"requestId":"req-2","traceId":"trace-2","schemaVersion":"5"}}
                 """);
         assertValid(detailResponse, """
                 {"data":{"id":"00112233-4455-6677-8899-aabbccddeeff","code":"FND-1002",
@@ -194,8 +206,8 @@ class FindingLedgerContractTest {
                   "description":"Legacy synthetic finding","discoveredAt":"2026-10-30T10:00:00Z",
                   "sourceCategory":null,"urgency":null,"location":null,"interimMeasure":null,"backfill":null,
                   "sourceEventId":null,"riskId":null,"grade":"UNKNOWN","state":"DISCOVERED",
-                  "roundNo":1,"version":1,"relatedFindingId":null,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
-                 "meta":{"requestId":"req-3","traceId":"trace-3","schemaVersion":"4"}}
+                  "roundNo":1,"version":1,"reviewCycle":1,"reviewProtocol":"LEGACY","relatedFindingId":null,"createdAt":"2026-10-30T10:00:00Z","updatedAt":"2026-10-30T10:00:00Z"},
+                 "meta":{"requestId":"req-3","traceId":"trace-3","schemaVersion":"5"}}
                 """);
     }
 
@@ -266,7 +278,7 @@ class FindingLedgerContractTest {
 
     private static String findingSchemaFixture() {
         return """
-                {"key":"finding","schemaVersion":"4","idField":"id",
+                {"key":"finding","schemaVersion":"5","idField":"id",
                  "defaultFields":["id","code","organizationId","organizationName","description","discoveredAt","sourceCategory","urgency","location","interimMeasure","backfill","sourceEventId","riskId","relatedFindingId","grade","state","roundNo","createdAt"],
                  "fields":{
                    "id":{"type":"UUID","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":[]},
@@ -284,8 +296,10 @@ class FindingLedgerContractTest {
                    "riskId":{"type":"UUID","nullable":true,"selectable":true,"sortable":false,"operators":["EQ","IN","IS_NULL","IS_NOT_NULL"],"maxLength":0,"enumValues":[]},
                    "relatedFindingId":{"type":"UUID","nullable":true,"selectable":true,"sortable":false,"operators":["EQ","IN","IS_NULL","IS_NOT_NULL"],"maxLength":0,"enumValues":[]},
                    "grade":{"type":"ENUM","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":["UNKNOWN","GENERAL","MAJOR"]},
-                   "state":{"type":"ENUM","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":["DISCOVERED","PERSON_CONFIRM_PENDING","SAFETY_CONFIRM_PENDING","SAFETY_DISPATCH_PENDING","RECTIFYING","ACCEPTANCE_PENDING","NOT_ESTABLISHED","CLOSED"]},
+                   "state":{"type":"ENUM","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","IN"],"maxLength":0,"enumValues":["DISCOVERED","PERSON_CONFIRM_PENDING","SAFETY_CONFIRM_PENDING","REPORTER_SUPPLEMENT_PENDING","SAFETY_DISPATCH_PENDING","RECTIFYING","ACCEPTANCE_PENDING","NOT_ESTABLISHED","CLOSED"]},
                    "roundNo":{"type":"NUMBER","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","GT","GTE","LT","LTE","BETWEEN"],"maxLength":0,"enumValues":[]},
+                   "reviewCycle":{"type":"NUMBER","nullable":false,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":[]},
+                   "reviewProtocol":{"type":"ENUM","nullable":false,"selectable":true,"sortable":false,"operators":[],"maxLength":0,"enumValues":["LEGACY","CYCLE_V1"]},
                    "version":{"type":"NUMBER","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","GT","GTE","LT","LTE","BETWEEN"],"maxLength":0,"enumValues":[]},
                    "createdAt":{"type":"DATETIME","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","GT","GTE","LT","LTE","BETWEEN"],"maxLength":0,"enumValues":[]},
                    "updatedAt":{"type":"DATETIME","nullable":false,"selectable":true,"sortable":true,"operators":["EQ","GT","GTE","LT","LTE","BETWEEN"],"maxLength":0,"enumValues":[]}

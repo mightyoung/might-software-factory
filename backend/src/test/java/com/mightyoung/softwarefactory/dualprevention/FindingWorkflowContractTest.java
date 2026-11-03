@@ -37,6 +37,8 @@ class FindingWorkflowContractTest {
                 "/api/v1/findings/{id}/dispatch-candidates",
                 "/api/v1/findings/{id}/remediation-submissions",
                 "/api/v1/findings/{id}/verifications",
+                "/api/v1/findings/{id}/review-decisions",
+                "/api/v1/findings/{id}/supplements",
                 "/api/v1/findings/{id}/workflow-initialization",
                 "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-items/{evidenceItemId}/content");
 
@@ -56,9 +58,12 @@ class FindingWorkflowContractTest {
             }
             Map<String, Object> post = (Map<String, Object>) path.get("post");
             List<Map<String, Object>> parameters = (List<Map<String, Object>>) post.get("parameters");
+            String idempotencyParameter = entry.getKey().equals("/api/v1/findings/{id}/review-decisions")
+                    || entry.getKey().equals("/api/v1/findings/{id}/supplements")
+                    ? "#/components/parameters/ReviewCycleIdempotencyKey"
+                    : "#/components/parameters/IdempotencyKey";
             assertThat(parameters).extracting(parameter -> parameter.get("$ref"))
-                    .contains("#/components/parameters/IdempotencyKey",
-                            "#/components/parameters/CsrfToken");
+                    .contains(idempotencyParameter, "#/components/parameters/CsrfToken");
         }
 
         Map<String, Object> schemas = (Map<String, Object>) ((Map<String, Object>) document.get("components"))

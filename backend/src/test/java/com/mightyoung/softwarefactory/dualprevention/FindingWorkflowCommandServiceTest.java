@@ -24,6 +24,15 @@ import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipalTestFixture;
 import com.mightyoung.softwarefactory.workflow.WorkflowFacade;
+import com.mightyoung.softwarefactory.workflow.FindingReviewDefinitionProperties;
+import com.mightyoung.softwarefactory.workflow.PinnedFindingReviewDefinitionResolver;
+import com.mightyoung.softwarefactory.workflow.WorkflowDefinitionPin;
+import com.mightyoung.softwarefactory.workflow.WorkflowEngineUnavailableException;
+import org.flowable.engine.RepositoryService;
+import org.flowable.engine.repository.ProcessDefinition;
+import org.flowable.engine.repository.ProcessDefinitionQuery;
+import com.mightyoung.softwarefactory.workflow.WorkflowCommandTaskAuthority;
+import com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot;
 import com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +56,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewCycleContracts.*;
 import java.util.Set;
 import java.util.UUID;
 
@@ -76,6 +86,8 @@ class FindingWorkflowCommandServiceTest {
     private final MemoryWorkflowFacade workflow = new MemoryWorkflowFacade();
     private final List<FindingWorkflowChangedEvent> publishedEvents = new ArrayList<>();
     private FindingWorkflowCommandService service;
+    private final RepositoryService definitions = org.mockito.Mockito.mock(RepositoryService.class);
+    private FindingReviewDefinitionProperties reviewDefinitions = new FindingReviewDefinitionProperties(false, Map.of());
 
     @BeforeEach
     void setUp() {
@@ -623,8 +635,9 @@ class FindingWorkflowCommandServiceTest {
         FindingWorkflowContracts.CommandResult oldResult = new FindingWorkflowContracts.CommandResult(
                 findingId, alreadyConfirmed.code(), FindingWorkflowState.SAFETY_CONFIRM_PENDING, 1, 2L);
         repository.seed(alreadyConfirmed);
+        workflow.processDefinitionKeys.put(findingId, FindingWorkflowCommandService.PROCESS_DEFINITION_KEY);
         repository.seedConfirmation(TENANT_A, confirmation(findingId, "PERSON", PERSON_CONFIRMER,
-                legacyOpinion, "60000000-0000-0000-0000-000000000143"));
+                legacyOpinion, "60000000-0000-0000-0000-000000000142"));
         repository.seedCommand(TENANT_A, oldCommandId, ACTOR_ID, "finding.confirm.person", oldHash, oldResult);
         asMember(PERSON_CONFIRMER, TENANT_A);
 
@@ -660,10 +673,11 @@ class FindingWorkflowCommandServiceTest {
         var oldResult = new FindingWorkflowContracts.CommandResult(findingId, alreadyConfirmed.code(),
                 FindingWorkflowState.SAFETY_DISPATCH_PENDING, 1, 3);
         repository.seed(alreadyConfirmed);
+        workflow.processDefinitionKeys.put(findingId, FindingWorkflowCommandService.PROCESS_DEFINITION_KEY);
         repository.seedConfirmation(TENANT_A, confirmation(findingId, "PERSON", PERSON_CONFIRMER,
                 "Prior personal approval", "60000000-0000-0000-0000-000000000145"));
         repository.seedConfirmation(TENANT_A, confirmation(findingId, "SAFETY", SAFETY_MEMBER,
-                legacyOpinion, "60000000-0000-0000-0000-000000000146"));
+                legacyOpinion, "60000000-0000-0000-0000-000000000144"));
         repository.seedCommand(TENANT_A, key, ACTOR_ID, "finding.confirm.safety", oldHash, oldResult);
         var originalHistory = List.copyOf(repository.confirmations);
         asMember(SAFETY_MEMBER, TENANT_A);
@@ -1233,7 +1247,7 @@ class FindingWorkflowCommandServiceTest {
             UUID findingId, String stage, UUID memberId, String reason, String commandId) {
         return new FindingWorkflowContracts.Confirmation(findingId, stage, memberId,
                 FindingWorkflowContracts.ConfirmationDecision.APPROVE, reason,
-                OffsetDateTime.parse("2026-10-31T10:00:00Z"), 1L, command(commandId));
+                OffsetDateTime.parse("2026-10-31T10:00:00Z"), "SAFETY".equals(stage) ? 2L : 1L, command(commandId));
     }
 
     private static String legacyConfirmationHash(String action, UUID findingId, long expectedVersion) {
@@ -1263,10 +1277,473 @@ class FindingWorkflowCommandServiceTest {
         return value.length() + ":" + value;
     }
 
+    @Test
+    void reviewCyclesRepeatBothStagesAndKeepTypedCyclesAcrossRemediationAndOldReplay() {
+        UUID id = seedCycleFinding();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        UUID returnedKey = UUID.randomUUID();
+        var returnRequest = new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Need detail", null);
+        var returned = service.reviewDecision(returnedKey, id, returnRequest);
+        assertThat(returned.reviewCycle()).isEqualTo(1);
+        assertThat(returned.version()).isEqualTo(2);
+        asMember(CREATOR, TENANT_A);
+        UUID supplementKey = UUID.randomUUID();
+        var statement = new ReportSupplementCommand(2, 1, "\u00a0First statement\u3000");
+        var cycle2 = service.supplement(supplementKey, id, statement);
+        assertThat(cycle2.reviewCycle()).isEqualTo(2);
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(3, 2, ConfirmationStage.PERSON, ReviewDecision.APPROVE, "Person re-review", null));
+        asMember(SAFETY_MEMBER, TENANT_A);
+        service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(4, 2, ConfirmationStage.SAFETY, ReviewDecision.RETURN_FOR_INFORMATION, "More detail", null));
+        asMember(CREATOR, TENANT_A);
+        service.supplement(UUID.randomUUID(), id, new ReportSupplementCommand(5, 2, "Second statement"));
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(6, 3, ConfirmationStage.PERSON, ReviewDecision.APPROVE, "Person third review", null));
+        asMember(SAFETY_MEMBER, TENANT_A);
+        var approved = service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(7, 3, ConfirmationStage.SAFETY, ReviewDecision.APPROVE, "Safety third review", "MAJOR"));
+        assertThat(approved.reviewCycle()).isEqualTo(3);
+        UUID dispatchKey = UUID.randomUUID();
+        var dispatched = service.dispatch(dispatchKey, id, 8, new FindingWorkflowContracts.Dispatch(REMEDIATOR, DUE_AT, "Repair"));
+        assertThat(repository.command(TENANT_A, dispatchKey).result().reviewCycle()).isEqualTo(3);
+        evidencePolicy.allow(EVIDENCE_SET, TENANT_A, id, 1, REMEDIATOR);
+        asMember(REMEDIATOR, TENANT_A);
+        service.submitRemediation(UUID.randomUUID(), id, 9, new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET, "Repaired"));
+        asMember(SAFETY_MEMBER, TENANT_A);
+        UUID failKey = UUID.randomUUID();
+        var failed = service.verify(failKey, id, 10, new FindingWorkflowContracts.Verify(VerificationDecision.FAIL, "Rework"));
+        assertThat(failed.reviewCycle()).isEqualTo(3);
+        assertThat(failed.roundNo()).isEqualTo(2);
+        assertThat(repository.command(TENANT_A, failKey).result().reviewCycle()).isEqualTo(3);
+        service.dispatch(UUID.randomUUID(), id, 11, new FindingWorkflowContracts.Dispatch(REMEDIATOR, DUE_AT, "Repair again"));
+        evidencePolicy.allow(EVIDENCE_SET_REWORK, TENANT_A, id, 2, REMEDIATOR);
+        asMember(REMEDIATOR, TENANT_A);
+        service.submitRemediation(UUID.randomUUID(), id, 12, new FindingWorkflowContracts.SubmitRemediation(EVIDENCE_SET_REWORK, "Repaired again"));
+        asMember(SAFETY_MEMBER, TENANT_A);
+        var closed = service.verify(UUID.randomUUID(), id, 13, new FindingWorkflowContracts.Verify(VerificationDecision.PASS, "Passed"));
+        assertThat(closed.state()).isEqualTo(FindingWorkflowState.CLOSED);
+        assertThat(repository.decisions).hasSize(5);
+        assertThat(repository.supplements).extracting(Supplement::statement).containsExactly("First statement", "Second statement");
+        assertThat(repository.reviewCycles).extracting(ReviewCycle::reviewCycle).containsExactly(1, 2, 3);
+        assertThat(repository.finding(TENANT_A, id).orElseThrow().grade()).isEqualTo("MAJOR");
+        int transitions = repository.transitions.size();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        assertThat(service.reviewDecision(returnedKey, id, returnRequest)).isEqualTo(returned);
+        asMember(CREATOR, TENANT_A);
+        assertThat(service.supplement(supplementKey, id, statement)).isEqualTo(cycle2);
+        assertThat(repository.transitions).hasSize(transitions);
+        assertThat(repository.confirmations).isEmpty();
+    }
+
+    @Test
+    void cycleCommandsRejectStaleCycleWrongReporterLegacyRoutesAndChangedPayloadWithoutEffects() {
+        UUID id = seedCycleFinding();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        int count = repository.commands.size();
+        assertThatThrownBy(() -> service.reviewDecision(UUID.randomUUID(), id,
+                new ReviewDecisionCommand(1, 2, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Reason", null)))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+        assertThatThrownBy(() -> service.confirmPerson(UUID.randomUUID(), id, 1,
+                new FindingWorkflowContracts.PersonConfirmationCommand("Legacy route")))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+        assertThat(repository.commands).hasSize(count);
+        UUID key = UUID.randomUUID();
+        service.reviewDecision(key, id, new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Reason", null));
+        int afterReturn = repository.commands.size();
+        assertThatThrownBy(() -> service.reviewDecision(key, id,
+                new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Changed", null)))
+                .isInstanceOf(FindingWorkflowIdempotencyConflictException.class);
+        assertThatThrownBy(() -> service.supplement(UUID.randomUUID(), id, new ReportSupplementCommand(2, 1, "Statement")))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThat(repository.commands).hasSize(afterReturn);
+        asMember(CREATOR, TENANT_A);
+        service.supplement(UUID.randomUUID(), id, new ReportSupplementCommand(2, 1, "Statement"));
+        asMember(SAFETY_MEMBER, TENANT_A);
+        assertThatThrownBy(() -> service.reviewDecision(UUID.randomUUID(), id,
+                new ReviewDecisionCommand(3, 2, ConfirmationStage.SAFETY, ReviewDecision.APPROVE, "No current person proof", "GENERAL")))
+                .isInstanceOf(FindingWorkflowConfigurationException.class);
+        assertThat(repository.decisions).hasSize(1);
+    }
+
+    @Test
+    void cycleReplayRequiresCurrentAssignmentAndOriginalImmutableParticipant() {
+        UUID id = seedCycleFinding();
+        UUID key = UUID.randomUUID();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        var request = new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.APPROVE, "Approved", null);
+        var result = service.reviewDecision(key, id, request);
+        workflow.assignCurrentTask(id, CREATOR); // Unrelated later SAFETY task cannot become original proof.
+        assertThat(service.reviewDecision(key, id, request)).isEqualTo(result);
+        assignmentResolver.route = new FindingWorkflowContracts.InitialRoute(REPLACEMENT_REMEDIATOR, SAFETY_MEMBER, SAFETY_MEMBER, SAFETY_MEMBER);
+        assertThatThrownBy(() -> service.reviewDecision(key, id, request)).isInstanceOf(AccessDeniedException.class);
+        assignmentResolver.route = new FindingWorkflowContracts.InitialRoute(PERSON_CONFIRMER, SAFETY_MEMBER, SAFETY_MEMBER, SAFETY_MEMBER);
+        accessPolicy.inactiveMembers.add(PERSON_CONFIRMER);
+        assertThatThrownBy(() -> service.reviewDecision(key, id, request)).isInstanceOf(AccessDeniedException.class);
+        accessPolicy.inactiveMembers.clear();
+        repository.participants.clear();
+        assertThatThrownBy(() -> service.reviewDecision(key, id, request)).isInstanceOf(WorkflowTaskStateConflictException.class);
+        assertThat(repository.decisions).hasSize(1);
+    }
+
+    @Test
+    void returningLegacyInstanceDoesNotClaimAReceiptAndLegacyReplayNeedsExactHistoryCommand() {
+        var created = service.create(UUID.randomUUID(), newFinding());
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        int count = repository.commands.size();
+        assertThatThrownBy(() -> service.reviewDecision(UUID.randomUUID(), created.findingId(),
+                new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Reason", null)))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+        assertThat(repository.commands).hasSize(count);
+        UUID key = UUID.randomUUID();
+        var request = new FindingWorkflowContracts.PersonConfirmationCommand("Legacy approval");
+        service.confirmPerson(key, created.findingId(), 1, request);
+        repository.participants.clear();
+        assertThat(service.confirmPerson(key, created.findingId(), 1, request).version()).isEqualTo(2);
+        repository.confirmations.clear();
+        assertThatThrownBy(() -> service.confirmPerson(key, created.findingId(), 1, request))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+    }
+
+    @Test
+    void engineFailureRollsBackNewCycleHistoryAndSameKeyRetryExecutesOnce() {
+        UUID id = seedCycleFinding();
+        asMember(PERSON_CONFIRMER, TENANT_A);
+        UUID key = UUID.randomUUID();
+        var request = new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.RETURN_FOR_INFORMATION, "Need details", null);
+        workflow.failNextCompletion = true;
+        int count = repository.commands.size();
+        assertThatThrownBy(() -> service.reviewDecision(key, id, request)).isInstanceOf(IllegalStateException.class);
+        assertThat(repository.commands).hasSize(count);
+        assertThat(repository.decisions).isEmpty();
+        assertThat(repository.participants).isEmpty();
+        assertThat(repository.finding(TENANT_A, id).orElseThrow().version()).isEqualTo(1);
+        var returned = service.reviewDecision(key, id, request);
+        assertThat(service.reviewDecision(key, id, request)).isEqualTo(returned);
+        asMember(CREATOR, TENANT_A);
+        UUID supplementKey = UUID.randomUUID();
+        workflow.failNextCompletion = true;
+        assertThatThrownBy(() -> service.supplement(supplementKey, id, new ReportSupplementCommand(2, 1, "Details")))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(repository.supplements).isEmpty();
+        assertThat(repository.reviewCycles).hasSize(1);
+        assertThat(repository.finding(TENANT_A, id).orElseThrow().reviewCycle()).isEqualTo(1);
+        assertThat(service.supplement(supplementKey, id, new ReportSupplementCommand(2, 1, "Details")).reviewCycle()).isEqualTo(2);
+    }
+
+    @Test
+    void eitherCycleStageCanEndNotEstablishedWithoutChangingGrade() {
+        for (ConfirmationStage stage : ConfirmationStage.values()) {
+            asMember(CREATOR, TENANT_A);
+            UUID id = seedCycleFinding();
+            long version = 1;
+            if (stage == ConfirmationStage.SAFETY) {
+                asMember(PERSON_CONFIRMER, TENANT_A);
+                service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(1, 1, ConfirmationStage.PERSON, ReviewDecision.APPROVE, "Person approved", null));
+                version = 2;
+            }
+            asMember(stage == ConfirmationStage.PERSON ? PERSON_CONFIRMER : SAFETY_MEMBER, TENANT_A);
+            var result = service.reviewDecision(UUID.randomUUID(), id, new ReviewDecisionCommand(version, 1, stage, ReviewDecision.NOT_ESTABLISHED, "Not established", null));
+            assertThat(result.state()).isEqualTo(FindingWorkflowState.NOT_ESTABLISHED);
+            assertThat(repository.finding(TENANT_A, id).orElseThrow().grade()).isEqualTo("UNKNOWN");
+        }
+    }
+
+    private UUID seedCycleFinding() {
+        // Explicit source fixture only: production creation/initialization remains V2.
+        var created = service.create(UUID.randomUUID(), newFinding());
+        var row = repository.finding(TENANT_A, created.findingId()).orElseThrow();
+        repository.seed(new FindingWorkflowCase(row.tenantId(), row.id(), row.organizationId(), row.code(), row.description(),
+                row.discoveredAt(), row.sourceEventId(), row.riskId(), row.grade(), row.state(), row.roundNo(), row.version(),
+                row.createdByMemberId(), row.updatedByMemberId(), row.sourceCategory(), row.urgency(), row.location(), row.interimMeasure(),
+                row.backfill(), row.relatedFindingId(), 1, com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.CYCLE_V1));
+        workflow.processDefinitionKeys.put(row.id(), FindingWorkflowCommandService.REVIEW_PROCESS_DEFINITION_KEY);
+        workflow.processVariables.get(row.id()).put("reporterMemberId", CREATOR.toString());
+        repository.reviewCycles.add(new ReviewCycle(row.id(), 1, UUID.randomUUID(), DISCOVERED_AT));
+        return row.id();
+    }
+
+    @Test
+    void disabledInitiationPreservesV2CreateAndUnboundInitializationWithoutLookingUpPins() {
+        var created = service.create(UUID.randomUUID(), newFinding());
+        UUID legacyId = seedDiscoveredForInitiation();
+        var initialized = service.initializeDiscoveredWorkflow(UUID.randomUUID(), legacyId, 7);
+        assertThat(workflow.startedProcesses).containsExactly("findingRemediationV2", "findingRemediationV2");
+        assertThat(workflow.startedDefinitionIds).isEmpty();
+        assertThat(repository.reviewCycles).isEmpty();
+        assertThat(repository.finding(TENANT_A, created.findingId()).orElseThrow().reviewProtocol())
+                .isEqualTo(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.LEGACY);
+        assertThat(initialized.version()).isEqualTo(8);
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void enabledInitiationUsesActualPinResolverAndExactIdWithCycleOneAndOriginalReporter() throws Exception {
+        configureReviewedDefinition();
+        UUID createKey = UUID.randomUUID();
+        var created = service.create(createKey, newFinding());
+        var finding = repository.finding(TENANT_A, created.findingId()).orElseThrow();
+        assertThat(finding.reviewProtocol()).isEqualTo(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.CYCLE_V1);
+        assertThat(finding.reviewCycle()).isEqualTo(1);
+        assertThat(created.reviewCycle()).isEqualTo(1);
+        assertThat(repository.reviewCycles).containsExactly(new ReviewCycle(finding.id(), 1, createKey,
+                repository.reviewCycles.getFirst().openedAt()));
+        assertThat(workflow.startedProcesses).containsExactly("findingRemediationV3");
+        assertThat(workflow.startedDefinitionIds).containsExactly("reviewed-definition-id");
+        assertThat(workflow.processVariables.get(finding.id())).containsEntry("reporterMemberId", CREATOR.toString())
+                .containsEntry("reviewDecision", "").containsEntry("personConfirmerMemberId", PERSON_CONFIRMER.toString())
+                .containsEntry("safetyConfirmerMemberId", SAFETY_MEMBER.toString());
+        assertThat(repository.command(TENANT_A, createKey).result()).isEqualTo(created);
+
+        UUID legacyId = seedDiscoveredForInitiation();
+        var before = repository.finding(TENANT_A, legacyId).orElseThrow();
+        asMember(SAFETY_MEMBER, TENANT_A); // Initialization authority does not become the original reporter.
+        UUID initializeKey = UUID.randomUUID();
+        var initialized = service.initializeDiscoveredWorkflow(initializeKey, legacyId, 7);
+        var adopted = repository.finding(TENANT_A, legacyId).orElseThrow();
+        assertThat(adopted.reviewProtocol()).isEqualTo(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.CYCLE_V1);
+        assertThat(adopted.createdByMemberId()).isEqualTo(CREATOR);
+        assertThat(adopted.description()).isEqualTo(before.description());
+        assertThat(adopted.grade()).isEqualTo(before.grade());
+        assertThat(adopted.roundNo()).isEqualTo(before.roundNo());
+        assertThat(initialized.version()).isEqualTo(8);
+        assertThat(repository.reviewCycles.getLast().openedByCommandId()).isEqualTo(initializeKey);
+        assertThat(workflow.processVariables.get(legacyId)).containsEntry("reporterMemberId", CREATOR.toString())
+                .containsEntry("reviewDecision", "");
+        assertThat(workflow.startedDefinitionIds).containsExactly("reviewed-definition-id", "reviewed-definition-id");
+        assertThat(repository.transitions.getLast().fromReviewCycle()).isEqualTo(1);
+        assertThat(repository.transitions.getLast().toReviewCycle()).isEqualTo(1);
+        assertThat(publishedEvents).hasSize(2);
+        org.mockito.Mockito.verify(definitions, org.mockito.Mockito.never()).createDeployment();
+    }
+
+    @Test
+    void enabledMissingPinsFailBeforeAnyReceiptSequenceProjectionCycleOrEngineWrite() {
+        reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of());
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+        assertThatThrownBy(() -> service.create(UUID.randomUUID(), newFinding())).isInstanceOf(WorkflowEngineUnavailableException.class);
+        assertThat(repository.commands).isEmpty();
+        assertThat(repository.numberSequences).isEmpty();
+        assertThat(repository.findings).isEmpty();
+        assertThat(repository.reviewCycles).isEmpty();
+        assertThat(repository.transitions).isEmpty();
+        assertThat(workflow.startedProcesses).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+        UUID id = seedDiscoveredForInitiation();
+        var before = repository.finding(TENANT_A, id).orElseThrow();
+        assertThatThrownBy(() -> service.initializeDiscoveredWorkflow(UUID.randomUUID(), id, 7))
+                .isInstanceOf(WorkflowEngineUnavailableException.class);
+        assertThat(repository.finding(TENANT_A, id)).contains(before);
+        assertThat(repository.commands).isEmpty();
+        assertThat(repository.reviewCycles).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void enabledWrongTenantKeyDigestOrMissingExactDefinitionNeverFallsBackToV2() throws Exception {
+        ProcessDefinition definition = configureReviewedDefinition();
+        org.mockito.Mockito.when(definition.getTenantId()).thenReturn(TENANT_B.toString());
+        rejectsUnreviewedCreate();
+        org.mockito.Mockito.when(definition.getTenantId()).thenReturn(TENANT_A.toString());
+        org.mockito.Mockito.when(definition.getKey()).thenReturn("findingRemediationV2");
+        rejectsUnreviewedCreate();
+        org.mockito.Mockito.when(definition.getKey()).thenReturn("findingRemediationV3");
+        org.mockito.Mockito.when(definition.isSuspended()).thenReturn(true);
+        rejectsUnreviewedCreate();
+        org.mockito.Mockito.when(definition.isSuspended()).thenReturn(false);
+        org.mockito.Mockito.when(definitions.getResourceAsStream("reviewed-deployment", "reviewed.bpmn20.xml"))
+                .thenAnswer(call -> new java.io.ByteArrayInputStream(new byte[]{1, 2, 3}));
+        rejectsUnreviewedCreate();
+        org.mockito.Mockito.when(definitions.createProcessDefinitionQuery().singleResult()).thenReturn(null);
+        rejectsUnreviewedCreate();
+        assertThat(repository.commands).isEmpty();
+        assertThat(repository.numberSequences).isEmpty();
+        assertThat(workflow.startedProcesses).isEmpty();
+        assertThat(workflow.startedDefinitionIds).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+    }
+
+    @Test
+    void oldCreateAndInitializationReceiptsReplayBeforeMissingPinOrCurrentRouteButStillRequireCurrentAction() {
+        UUID createKey = UUID.randomUUID();
+        var created = service.create(createKey, newFinding());
+        UUID legacyId = seedDiscoveredForInitiation();
+        UUID initializeKey = UUID.randomUUID();
+        var initialized = service.initializeDiscoveredWorkflow(initializeKey, legacyId, 7);
+        int transitions = repository.transitions.size();
+        reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of());
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+        assignmentResolver.route = null;
+        assertThat(service.create(createKey, newFinding())).isEqualTo(created);
+        assertThat(service.initializeDiscoveredWorkflow(initializeKey, legacyId, 7)).isEqualTo(initialized);
+        assertThat(repository.transitions).hasSize(transitions);
+        assertThat(repository.reviewCycles).isEmpty();
+        assertThat(workflow.startedProcesses).hasSize(2);
+        accessPolicy.allowed = false;
+        assertThatThrownBy(() -> service.create(createKey, newFinding())).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.initializeDiscoveredWorkflow(initializeKey, legacyId, 7)).isInstanceOf(AccessDeniedException.class);
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void historicalDiscoveredCreateReceiptReplaysOriginalResultAfterTheSameFindingAdoptsCycles() throws Exception {
+        UUID createKey = UUID.randomUUID();
+        var created = service.create(createKey, newFinding());
+        var row = repository.finding(TENANT_A, created.findingId()).orElseThrow();
+        // Unit representation of a pre-workflow DISCOVERED row and its immutable successful create receipt.
+        repository.seed(new FindingWorkflowCase(row.tenantId(), row.id(), row.organizationId(), row.code(), row.description(),
+                row.discoveredAt(), row.sourceEventId(), row.riskId(), row.grade(), FindingWorkflowState.DISCOVERED,
+                1, 1, row.createdByMemberId(), row.updatedByMemberId(), row.sourceCategory(), row.urgency(), row.location(),
+                row.interimMeasure(), row.backfill(), row.relatedFindingId()));
+        var oldResult = new FindingWorkflowContracts.CommandResult(row.id(), row.code(), FindingWorkflowState.DISCOVERED, 1, 1);
+        var oldReceipt = repository.command(TENANT_A, createKey);
+        repository.seedCommand(TENANT_A, createKey, oldReceipt.actorId(), oldReceipt.action(), oldReceipt.hash(), oldResult);
+        workflow.processDefinitionKeys.remove(row.id());
+        workflow.processVariables.remove(row.id());
+        workflow.tasks.remove(row.id());
+        configureReviewedDefinition();
+        service.initializeDiscoveredWorkflow(UUID.randomUUID(), row.id(), 1);
+        assertThat(repository.finding(TENANT_A, row.id()).orElseThrow().reviewProtocol())
+                .isEqualTo(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.CYCLE_V1);
+        reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of());
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+        org.mockito.Mockito.clearInvocations(definitions);
+        assignmentResolver.route = null;
+        assertThat(service.create(createKey, newFinding())).isEqualTo(oldResult);
+        assertThat(repository.command(TENANT_A, createKey).result()).isEqualTo(oldResult);
+        assertThat(repository.finding(TENANT_A, row.id()).orElseThrow().version()).isEqualTo(2);
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void cycleInitiationReceiptsRemainReplayableAfterPinRemovalOrFlagDisable() throws Exception {
+        configureReviewedDefinition();
+        UUID createKey = UUID.randomUUID();
+        var created = service.create(createKey, newFinding());
+        UUID id = seedDiscoveredForInitiation();
+        UUID initializeKey = UUID.randomUUID();
+        var initialized = service.initializeDiscoveredWorkflow(initializeKey, id, 7);
+        org.mockito.Mockito.clearInvocations(definitions);
+        for (boolean enabled : new boolean[]{true, false}) {
+            reviewDefinitions = new FindingReviewDefinitionProperties(enabled, Map.of());
+            service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+            assignmentResolver.route = null;
+            assertThat(service.create(createKey, newFinding())).isEqualTo(created);
+            assertThat(service.initializeDiscoveredWorkflow(initializeKey, id, 7)).isEqualTo(initialized);
+        }
+        assertThat(repository.reviewCycles).hasSize(2);
+        assertThat(workflow.startedDefinitionIds).hasSize(2);
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void alreadyBoundLegacyInstancesAreNotInitializedOrResolvedEvenWhenInitiationIsEnabled() {
+        UUID id = seedDiscoveredForInitiation();
+        reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of());
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+        for (String key : List.of("findingRemediationV1", "findingRemediationV2")) {
+            workflow.processDefinitionKeys.put(id, key);
+            assertThatThrownBy(() -> service.initializeDiscoveredWorkflow(UUID.randomUUID(), id, 7))
+                    .isInstanceOf(WorkflowTaskStateConflictException.class);
+        }
+        assertThat(repository.finding(TENANT_A, id).orElseThrow().state()).isEqualTo(FindingWorkflowState.DISCOVERED);
+        assertThat(repository.commands).isEmpty();
+        assertThat(workflow.startedProcesses).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void existingLegacyReviewCommandsIgnoreNewInitiationPinsAndRemainOnTheirBoundDefinitions() {
+        for (String definitionKey : List.of("findingRemediationV1", "findingRemediationV2")) {
+            asMember(CREATOR, TENANT_A);
+            reviewDefinitions = new FindingReviewDefinitionProperties(false, Map.of());
+            service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+            var created = service.create(UUID.randomUUID(), newFinding());
+            workflow.processDefinitionKeys.put(created.findingId(), definitionKey);
+            reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of());
+            service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+            asMember(PERSON_CONFIRMER, TENANT_A);
+            service.confirmPerson(UUID.randomUUID(), created.findingId(), 1,
+                    new FindingWorkflowContracts.PersonConfirmationCommand("Legacy personal approval"));
+            asMember(SAFETY_MEMBER, TENANT_A);
+            service.confirmSafety(UUID.randomUUID(), created.findingId(), 2,
+                    new FindingWorkflowContracts.SafetyConfirmationCommand("Legacy safety approval", "GENERAL"));
+            assertThat(workflow.processDefinitionKeys.get(created.findingId())).isEqualTo(definitionKey);
+            assertThat(repository.finding(TENANT_A, created.findingId()).orElseThrow().reviewProtocol())
+                    .isEqualTo(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewProtocol.LEGACY);
+        }
+        org.mockito.Mockito.verifyNoInteractions(definitions);
+    }
+
+    @Test
+    void exactStartFailureRollsBackCreateAndInitializationIncludingCycleAndReceiptThenRetriesSameKey() throws Exception {
+        configureReviewedDefinition();
+        UUID createKey = UUID.randomUUID();
+        workflow.failNextExactStart = true;
+        assertThatThrownBy(() -> service.create(createKey, newFinding())).isInstanceOf(WorkflowEngineUnavailableException.class);
+        assertThat(repository.findings).isEmpty();
+        assertThat(repository.commands).isEmpty();
+        assertThat(repository.reviewCycles).isEmpty();
+        assertThat(repository.numberSequences).isEmpty();
+        assertThat(publishedEvents).isEmpty();
+        var created = service.create(createKey, newFinding());
+        assertThat(service.create(createKey, newFinding())).isEqualTo(created);
+        UUID id = seedDiscoveredForInitiation();
+        var before = repository.finding(TENANT_A, id).orElseThrow();
+        UUID initializeKey = UUID.randomUUID();
+        workflow.failNextExactStart = true;
+        assertThatThrownBy(() -> service.initializeDiscoveredWorkflow(initializeKey, id, 7))
+                .isInstanceOf(WorkflowEngineUnavailableException.class);
+        assertThat(repository.finding(TENANT_A, id)).contains(before);
+        assertThat(repository.command(TENANT_A, initializeKey)).isNull();
+        assertThat(repository.reviewCycles).hasSize(1);
+        assertThat(service.initializeDiscoveredWorkflow(initializeKey, id, 7).reviewCycle()).isEqualTo(1);
+        assertThat(workflow.startedDefinitionIds).hasSize(2);
+        assertThat(publishedEvents).hasSize(2);
+    }
+
+    private void rejectsUnreviewedCreate() {
+        assertThatThrownBy(() -> service.create(UUID.randomUUID(), newFinding())).isInstanceOf(WorkflowEngineUnavailableException.class);
+        assertThat(repository.commands).isEmpty();
+        assertThat(repository.findings).isEmpty();
+        assertThat(repository.reviewCycles).isEmpty();
+    }
+
+    private ProcessDefinition configureReviewedDefinition() throws Exception {
+        // Unit fixture: the production resolver checks real packaged bytes against this mocked repository.
+        byte[] bytes;
+        try (var stream = getClass().getResourceAsStream("/processes/finding-remediation-v3.bpmn20.xml")) {
+            bytes = java.util.Objects.requireNonNull(stream).readAllBytes();
+        }
+        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        var query = org.mockito.Mockito.mock(ProcessDefinitionQuery.class, org.mockito.Mockito.RETURNS_SELF);
+        var definition = org.mockito.Mockito.mock(ProcessDefinition.class);
+        org.mockito.Mockito.when(definitions.createProcessDefinitionQuery()).thenReturn(query);
+        org.mockito.Mockito.when(query.singleResult()).thenReturn(definition);
+        org.mockito.Mockito.when(definition.getId()).thenReturn("reviewed-definition-id");
+        org.mockito.Mockito.when(definition.getTenantId()).thenReturn(TENANT_A.toString());
+        org.mockito.Mockito.when(definition.getKey()).thenReturn("findingRemediationV3");
+        org.mockito.Mockito.when(definition.getDeploymentId()).thenReturn("reviewed-deployment");
+        org.mockito.Mockito.when(definition.getResourceName()).thenReturn("reviewed.bpmn20.xml");
+        org.mockito.Mockito.when(definitions.getResourceAsStream("reviewed-deployment", "reviewed.bpmn20.xml"))
+                .thenAnswer(call -> new java.io.ByteArrayInputStream(bytes));
+        reviewDefinitions = new FindingReviewDefinitionProperties(true, Map.of(TENANT_A,
+                new FindingReviewDefinitionProperties.Pin("reviewed-definition-id", digest)));
+        service = serviceAt(Instant.parse("2026-10-30T16:30:00Z"));
+        return definition;
+    }
+
+    private UUID seedDiscoveredForInitiation() {
+        UUID id = UUID.randomUUID();
+        repository.seed(new FindingWorkflowCase(TENANT_A, id, ORGANIZATION_ID, "LEGACY-INIT-" + id,
+                "Original legacy description", DISCOVERED_AT, null, null, "UNKNOWN", FindingWorkflowState.DISCOVERED,
+                1, 7, CREATOR, CREATOR));
+        return id;
+    }
+
     private FindingWorkflowCommandService serviceAt(Instant instant) {
         return new FindingWorkflowCommandService(new SessionContextResolver(), repository,
                 accessPolicy, assignmentResolver, evidencePolicy, workflow, publishedEvents::add,
-                Clock.fixed(instant, ZoneOffset.UTC));
+                Clock.fixed(instant, ZoneOffset.UTC), reviewDefinitions,
+                new PinnedFindingReviewDefinitionResolver(reviewDefinitions, definitions));
     }
 
     private static UUID command(String value) {
@@ -1310,6 +1787,12 @@ class FindingWorkflowCommandServiceTest {
         public FindingWorkflowContracts.InitialRoute resolve(UUID tenantId, UUID organizationId) {
             if (route == null) throw new FindingWorkflowConfigurationException("No route configured");
             return route;
+        }
+
+        @Override
+        public ReviewPair resolveReviewPair(UUID tenantId, UUID organizationId) {
+            if (route == null) throw new FindingWorkflowConfigurationException("No review pair configured");
+            return new ReviewPair(route.personConfirmerMemberId(), route.safetyConfirmerMemberId());
         }
 
         @Override
@@ -1357,22 +1840,77 @@ class FindingWorkflowCommandServiceTest {
 
     private static final class MemoryWorkflowFacade implements WorkflowFacade {
         @Override
-        public com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot readCurrentTask(
-                UUID tenantId, String businessType, UUID businessId, String taskDefinitionKey) {
-            throw new UnsupportedOperationException("Task reads are outside this command fixture");
+        public Optional<com.mightyoung.softwarefactory.workflow.WorkflowBindingReadSnapshot> readBoundDefinition(UUID tenantId, String type, UUID id) {
+            return processDefinitionKey(tenantId, type, id).map(key -> new com.mightyoung.softwarefactory.workflow.WorkflowBindingReadSnapshot(
+                    tenantId, type, id, 1, "definition:" + id, key, "process:" + id));
+        }
+
+        @Override
+        public void startProcessByDefinitionId(UUID tenantId, String businessType, UUID businessId,
+                int revision, com.mightyoung.softwarefactory.workflow.WorkflowDefinitionPin pin,
+                Map<String, Object> variables) {
+            if (failNextExactStart) {
+                failNextExactStart = false;
+                throw new WorkflowEngineUnavailableException(new IllegalStateException("Synthetic exact-start failure"));
+            }
+            startedDefinitionIds.add(pin.definitionId());
+            startProcess(tenantId, businessType, businessId, revision, pin.expectedKey(), variables);
+        }
+
+        @Override
+        public WorkflowCommandTaskAuthority acquireTaskAuthority(UUID tenantId, String businessType,
+                UUID findingId, String taskKey, UUID actorMemberId) {
+            WorkflowTaskReadSnapshot snapshot = readCurrentTask(tenantId, businessType, findingId, taskKey);
+            if (!actorMemberId.toString().equals(snapshot.assignee())) throw new AccessDeniedException("Wrong task assignee");
+            var authority = org.mockito.Mockito.mock(WorkflowCommandTaskAuthority.class);
+            org.mockito.Mockito.when(authority.snapshot()).thenReturn(snapshot);
+            return authority;
+        }
+
+        @Override
+        public void validateReplayParticipant(UUID tenantId, String businessType, UUID findingId,
+                WorkflowTaskReadSnapshot original, UUID actorMemberId) {
+            if (!original.definitionId().equals("definition:" + findingId)
+                    || !original.processInstanceId().equals("process:" + findingId)
+                    || !original.processDefinitionKey().equals(processDefinitionKey(tenantId, businessType, findingId).orElse(null))) {
+                throw new WorkflowTaskStateConflictException();
+            }
+            Task current = tasks.get(findingId);
+            if (current != null && current.id().equals(original.taskId())
+                    && !current.assignee().equals(actorMemberId.toString())) throw new AccessDeniedException("Transferred task");
+        }
+
+        @Override
+        public void completeTask(WorkflowCommandTaskAuthority authority, Map<String, Object> variables) {
+            WorkflowTaskReadSnapshot task = authority.snapshot();
+            Task current = tasks.get(task.businessId());
+            if (current == null || !current.id().equals(task.taskId())) throw new WorkflowTaskStateConflictException();
+            completeTask(task.tenantId(), task.businessType(), task.businessId(), task.taskDefinitionKey(),
+                    UUID.fromString(task.assignee()), variables);
+        }
+
+        @Override
+        public WorkflowTaskReadSnapshot readCurrentTask(UUID tenantId, String businessType, UUID findingId, String taskKey) {
+            Task task = tasks.get(findingId);
+            if (task == null || !task.key().equals(taskKey)) throw new WorkflowTaskStateConflictException();
+            return new WorkflowTaskReadSnapshot(tenantId, businessType, findingId, 1, "definition:" + findingId,
+                    processDefinitionKey(tenantId, businessType, findingId).orElseThrow(), "process:" + findingId,
+                    task.key(), task.id(), task.assignee(), true);
         }
 
         private final Map<UUID, Task> tasks = new HashMap<>();
         private final Map<UUID, Map<String, Object>> processVariables = new HashMap<>();
         private final Map<UUID, String> processDefinitionKeys = new HashMap<>();
         private final List<String> startedProcesses = new ArrayList<>();
+        private final List<String> startedDefinitionIds = new ArrayList<>();
+        private boolean failNextExactStart;
         private final List<String> completedTasks = new ArrayList<>();
         private boolean failNextCompletion;
 
         private void assignCurrentTask(UUID findingId, UUID memberId) {
             Task current = tasks.get(findingId);
             if (current == null) throw new IllegalStateException("No active synthetic workflow task");
-            tasks.put(findingId, new Task(current.key(), memberId.toString()));
+            tasks.put(findingId, new Task(current.key(), memberId.toString(), current.id()));
         }
 
         @Override
@@ -1400,10 +1938,13 @@ class FindingWorkflowCommandServiceTest {
             activeVariables.putAll(variables);
             completedTasks.add(taskDefinitionKey);
             String next = switch (taskDefinitionKey) {
-                case "personConfirm" -> "NOT_ESTABLISHED".equals(activeVariables.get("confirmationDecision"))
-                        ? "END" : "safetyConfirm";
-                case "safetyConfirm" -> "NOT_ESTABLISHED".equals(activeVariables.get("confirmationDecision"))
-                        ? "END" : "safetyDispatch";
+                case "personConfirm" -> "RETURN_FOR_INFORMATION".equals(activeVariables.get("reviewDecision"))
+                        ? "reporterSupplement" : "NOT_ESTABLISHED".equals(activeVariables.get("reviewDecision"))
+                        || "NOT_ESTABLISHED".equals(activeVariables.get("confirmationDecision")) ? "END" : "safetyConfirm";
+                case "safetyConfirm" -> "RETURN_FOR_INFORMATION".equals(activeVariables.get("reviewDecision"))
+                        ? "reporterSupplement" : "NOT_ESTABLISHED".equals(activeVariables.get("reviewDecision"))
+                        || "NOT_ESTABLISHED".equals(activeVariables.get("confirmationDecision")) ? "END" : "safetyDispatch";
+                case "reporterSupplement" -> "personConfirm";
                 case "safetyDispatch" -> "remediation";
                 case "remediation" -> "safetyVerification";
                 case "safetyVerification" -> "FAIL".equals(activeVariables.get("verificationDecision"))
@@ -1416,6 +1957,8 @@ class FindingWorkflowCommandServiceTest {
                 return;
             }
             Object assigned = activeVariables.get(switch (next) {
+                case "personConfirm" -> "personConfirmerMemberId";
+                case "reporterSupplement" -> "reporterMemberId";
                 case "safetyConfirm" -> "safetyConfirmerMemberId";
                 case "safetyDispatch" -> "safetyDispatcherMemberId";
                 case "remediation" -> "remediationAssigneeMemberId";
@@ -1428,10 +1971,12 @@ class FindingWorkflowCommandServiceTest {
 
         @Override
         public Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId) {
-            return Optional.ofNullable(processDefinitionKeys.get(businessId));
+            return Optional.ofNullable(processDefinitionKeys.getOrDefault(businessId, tasks.containsKey(businessId) ? "findingRemediationV2" : null));
         }
 
-        private record Task(String key, String assignee) {}
+        private record Task(String key, String assignee, String id) {
+            private Task(String key, String assignee) { this(key, assignee, UUID.randomUUID().toString()); }
+        }
     }
 
     private static final class MemoryRepository implements FindingWorkflowRepository {
@@ -1444,6 +1989,10 @@ class FindingWorkflowCommandServiceTest {
         private List<FindingWorkflowContracts.Verification> verifications = new ArrayList<>();
         private Map<String, String> rounds = new HashMap<>();
         private Map<SequenceKey, Long> numberSequences = new HashMap<>();
+        private List<ReviewCycle> reviewCycles = new ArrayList<>();
+        private List<Decision> decisions = new ArrayList<>();
+        private List<Supplement> supplements = new ArrayList<>();
+        private Map<String, CommandParticipant> participants = new HashMap<>();
 
         @Override
         public <T> T inTenantTransaction(UUID tenantId,
@@ -1457,6 +2006,10 @@ class FindingWorkflowCommandServiceTest {
             List<FindingWorkflowContracts.Verification> priorVerifications = new ArrayList<>(verifications);
             Map<String, String> priorRounds = new HashMap<>(rounds);
             Map<SequenceKey, Long> priorSequences = new HashMap<>(numberSequences);
+            var priorReviewCycles = new ArrayList<>(reviewCycles);
+            var priorDecisions = new ArrayList<>(decisions);
+            var priorSupplements = new ArrayList<>(supplements);
+            var priorParticipants = new HashMap<>(participants);
             try {
                 return work.apply(new Tx(tenantId));
             } catch (RuntimeException failure) {
@@ -1469,6 +2022,8 @@ class FindingWorkflowCommandServiceTest {
                 verifications = priorVerifications;
                 rounds = priorRounds;
                 numberSequences = priorSequences;
+                reviewCycles = priorReviewCycles; decisions = priorDecisions;
+                supplements = priorSupplements; participants = priorParticipants;
                 throw failure;
             }
         }
@@ -1561,6 +2116,33 @@ class FindingWorkflowCommandServiceTest {
                 }
                 commands.put(key, new StoredCommand(command.actorId(), command.action(), command.requestHash(), null));
                 return FindingWorkflowContracts.CommandClaim.newClaim();
+            }
+
+            @Override
+            public Optional<FindingWorkflowContracts.CommandResult> readCommand(FindingWorkflowContracts.WorkflowCommand command) {
+                StoredCommand prior = commands.get(tenantId + ":" + command.commandId());
+                if (prior == null) return Optional.empty();
+                if (!prior.actorId().equals(command.actorId()) || !prior.action().equals(command.action())
+                        || !prior.hash().equals(command.requestHash())) throw new FindingWorkflowIdempotencyConflictException();
+                return Optional.of(prior.result());
+            }
+            @Override public void appendReviewCycle(ReviewCycle cycle) { reviewCycles.add(cycle); }
+            @Override public void appendReviewDecision(Decision decision) { decisions.add(decision); }
+            @Override public Optional<Decision> findReviewDecision(UUID id, int cycle, ConfirmationStage stage) {
+                if (finding(tenantId, id).isEmpty()) return Optional.empty();
+                return decisions.stream().filter(d -> d.findingId().equals(id) && d.reviewCycle() == cycle && d.stage() == stage).findFirst();
+            }
+            @Override public void appendSupplement(Supplement supplement) { supplements.add(supplement); }
+            @Override public Optional<Decision> findReturnDecision(UUID id, int cycle) {
+                if (finding(tenantId, id).isEmpty()) return Optional.empty();
+                return decisions.stream().filter(d -> d.findingId().equals(id) && d.reviewCycle() == cycle && d.decision() == ReviewDecision.RETURN_FOR_INFORMATION).findFirst();
+            }
+            @Override public void appendParticipant(CommandParticipant participant) { participants.put(tenantId + ":" + participant.commandId(), participant); }
+            @Override public Optional<CommandParticipant> findParticipant(UUID commandId) { return Optional.ofNullable(participants.get(tenantId + ":" + commandId)); }
+            @Override public Optional<LegacyConfirmationProof> findLegacyConfirmation(UUID commandId) {
+                return confirmations.stream().filter(c -> c.tenantId().equals(tenantId) && c.confirmation().commandId().equals(commandId))
+                        .map(StoredConfirmation::confirmation).map(c -> new LegacyConfirmationProof(c.findingId(), c.stage(), c.actorMemberId(),
+                            c.decision().name(), c.reason(), c.expectedVersion(), c.commandId())).findFirst();
             }
 
             @Override

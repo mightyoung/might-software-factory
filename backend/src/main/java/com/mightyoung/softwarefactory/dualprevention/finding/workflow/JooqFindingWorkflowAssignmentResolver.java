@@ -50,6 +50,26 @@ public final class JooqFindingWorkflowAssignmentResolver implements FindingWorkf
     }
 
     @Override
+    public FindingReviewCycleContracts.ReviewPair resolveReviewPair(UUID tenantId, UUID organizationId) {
+        Map<String, UUID> pair = new java.util.HashMap<>();
+        for (Record row : dsl.fetch("""
+                select stage, assignee_member_id from public.finding_stage_assignment
+                 where tenant_id = cast(? as uuid) and organization_id = cast(? as uuid)
+                   and stage in ('PERSON_CONFIRM', 'SAFETY_CONFIRM')
+                   and valid_from <= current_timestamp and (valid_to is null or valid_to > current_timestamp)
+                """, tenantId, organizationId)) {
+            if (pair.putIfAbsent(row.get("stage", String.class), row.get("assignee_member_id", UUID.class)) != null) {
+                throw new FindingWorkflowConfigurationException("More than one effective review stage assignment");
+            }
+        }
+        UUID person = pair.get("PERSON_CONFIRM"), safety = pair.get("SAFETY_CONFIRM");
+        if (person == null || safety == null || person.equals(safety)) {
+            throw new FindingWorkflowConfigurationException("Exactly one distinct member per review stage is required");
+        }
+        return new FindingReviewCycleContracts.ReviewPair(person, safety);
+    }
+
+    @Override
     public UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId) {
         var rows = dsl.fetch("""
                 select assignee_member_id

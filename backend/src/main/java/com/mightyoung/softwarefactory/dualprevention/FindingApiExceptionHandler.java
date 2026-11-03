@@ -31,6 +31,12 @@ import java.util.UUID;
 @RestControllerAdvice
 public final class FindingApiExceptionHandler {
 
+    @ExceptionHandler(FindingReviewCycleRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidReviewCycle(FindingReviewCycleRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The finding review cycle request is invalid", false, List.of());
+    }
+
     @ExceptionHandler(FindingEvidenceSetInitializationRequestParser.RequestFailure.class)
     ResponseEntity<ErrorResponse> invalidEvidenceSetInitialization(FindingEvidenceSetInitializationRequestParser.RequestFailure failure) {
         return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
@@ -144,6 +150,9 @@ public final class FindingApiExceptionHandler {
 
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
             org.springframework.transaction.TransactionTimedOutException.class,
+            org.springframework.transaction.CannotCreateTransactionException.class,
+            org.springframework.transaction.TransactionSystemException.class,
+            org.springframework.transaction.UnexpectedRollbackException.class,
             WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
             AuthorizationWriteGuardUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {

@@ -446,6 +446,116 @@ paths:
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
 
+  /api/v1/findings/{id}/review-decisions:
+    post:
+      operationId: reviewFindingCycle
+      summary: Record a V3 person or safety review decision
+      description: >-
+        Dedicated V3 contract; V1/V2 cases fail with 409 COMMAND_CONFLICT. Legacy confirmation
+        and close routes retain their contracts and cannot perform V3 decisions. Identity comes
+        only from the verified server session; actor, tenant, role and assignee fields are forbidden.
+        Exactly one canonical UUID Idempotency-Key is required. No query string is accepted.
+        JSON is limited to 32768 bytes, strictly decoded as UTF-8; duplicate, unknown, null,
+        coerced, exponent-form integer, trailing-token and unpaired-surrogate input is rejected.
+        A successful command or matching replay returns 200 with its immutable original result,
+        including historical version and reviewCycle, even after later cycles. This endpoint does
+        not activate V3 initiation. Responses and errors use Cache-Control no-store.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - $ref: '#/components/parameters/ReviewCycleIdempotencyKey'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewDecisionRequest'
+      responses:
+        '200':
+          description: Committed command result or its immutable historical replay.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewCycleCommandResponse'
+        '400':
+          $ref: '#/components/responses/ReviewCycleInvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/ReviewCycleConflict'
+        '413':
+          $ref: '#/components/responses/ReviewCycleBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/ReviewCycleUnsupportedMedia'
+        '422':
+          $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/ReviewCycleDependencyUnavailable'
+
+  /api/v1/findings/{id}/supplements:
+    post:
+      operationId: supplementFindingReport
+      summary: Append the original reporter supplement and open a new review cycle
+      description: >-
+        Dedicated V3 contract; V1/V2 cases fail with 409 COMMAND_CONFLICT. Legacy confirmation
+        and close routes retain their contracts and cannot perform V3 decisions. Identity comes
+        only from the verified server session; actor, tenant, role and assignee fields are forbidden.
+        Exactly one canonical UUID Idempotency-Key is required. No query string is accepted.
+        JSON is limited to 32768 bytes, strictly decoded as UTF-8; duplicate, unknown, null,
+        coerced, exponent-form integer, trailing-token and unpaired-surrogate input is rejected.
+        A successful command or matching replay returns 200 with its immutable original result,
+        including historical version and reviewCycle, even after later cycles. This endpoint does
+        not activate V3 initiation. Responses and errors use Cache-Control no-store.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - $ref: '#/components/parameters/ReviewCycleIdempotencyKey'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportSupplementRequest'
+      responses:
+        '200':
+          description: Committed command result or its immutable historical replay.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewCycleCommandResponse'
+        '400':
+          $ref: '#/components/responses/ReviewCycleInvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/ReviewCycleConflict'
+        '413':
+          $ref: '#/components/responses/ReviewCycleBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/ReviewCycleUnsupportedMedia'
+        '422':
+          $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/ReviewCycleDependencyUnavailable'
+
 components:
   securitySchemes:
     sessionCookieAuth:
@@ -453,6 +563,15 @@ components:
       in: cookie
       name: SESSION
   parameters:
+    ReviewCycleIdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: Exactly one canonical UUID; repeated or comma-combined values are rejected.
+      schema:
+        type: string
+        format: uuid
+        pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     FindingId:
       in: path
       name: id
@@ -497,6 +616,54 @@ components:
       schema:
         type: string
   responses:
+    ReviewCycleDependencyUnavailable:
+      description: >-
+        DEPENDENCY_UNAVAILABLE. A transaction/commit failure may have an unknown outcome: the
+        command may already have committed. Recheck using the same key and identical body;
+        do not automatically resend with a new key. No rollback or completion is asserted.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    ReviewCycleInvalidRequest:
+      description: INVALID_REQUEST for malformed JSON, fields, enums, forbidden grade, path, query or key.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    ReviewCycleBodyTooLarge:
+      description: INVALID_REQUEST because the raw body exceeds 32768 bytes.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    ReviewCycleUnsupportedMedia:
+      description: INVALID_REQUEST because Content-Type is not one application/json with optional UTF-8 charset.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
+    ReviewCycleConflict:
+      description: VERSION_CONFLICT for stale version; COMMAND_CONFLICT for stale cycle, task or unsupported protocol; IDEMPOTENCY_CONFLICT for changed payload, actor or action.
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema:
+            $ref: 'entity-query.yaml#/components/schemas/ErrorResponse'
     CommandSucceeded:
       description: Command applied or original idempotent result returned.
       content:
@@ -644,6 +811,100 @@ components:
                 retryable: true
                 fieldErrors: []
   schemas:
+    ReviewDecisionRequest:
+      description: >-
+        expectedVersion and reviewCycle are positive decimal integers without coercion or exponent
+        notation. Only SAFETY APPROVE requires grade GENERAL/MAJOR. Every other stage/decision
+        forbids the grade property, including null. Return and not-established preserve existing grade.
+        reason uses the raw 4000 Java UTF-16 code-unit limit before Unicode White_Space trimming;
+        it must contain a non-White_Space code point. Legacy String.strip canonicalization is unchanged.
+      oneOf:
+        - $ref: '#/components/schemas/PersonReviewDecisionRequest'
+        - $ref: '#/components/schemas/SafetyApprovalDecisionRequest'
+        - $ref: '#/components/schemas/SafetyOtherDecisionRequest'
+    PersonReviewDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reviewCycle, stage, decision, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reviewCycle: { type: integer, format: int32, minimum: 1, maximum: 2147483647 }
+        stage: { type: string, enum: [PERSON] }
+        decision: { type: string, enum: [APPROVE, RETURN_FOR_INFORMATION, NOT_ESTABLISHED] }
+        reason:
+          $ref: '#/components/schemas/ReviewCycleText'
+    SafetyApprovalDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reviewCycle, stage, decision, reason, grade]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reviewCycle: { type: integer, format: int32, minimum: 1, maximum: 2147483647 }
+        stage: { type: string, enum: [SAFETY] }
+        decision: { type: string, enum: [APPROVE] }
+        reason:
+          $ref: '#/components/schemas/ReviewCycleText'
+        grade: { type: string, enum: [GENERAL, MAJOR] }
+    SafetyOtherDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reviewCycle, stage, decision, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reviewCycle: { type: integer, format: int32, minimum: 1, maximum: 2147483647 }
+        stage: { type: string, enum: [SAFETY] }
+        decision: { type: string, enum: [RETURN_FOR_INFORMATION, NOT_ESTABLISHED] }
+        reason:
+          $ref: '#/components/schemas/ReviewCycleText'
+    ReportSupplementRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Only the original reporter may append a statement to the returned cycle. expectedVersion
+        and reviewCycle are positive decimal integers; reviewCycle identifies the returned cycle,
+        not its successor. The service derives reporter identity and resolves fresh reviewers.
+      required: [expectedVersion, reviewCycle, statement]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reviewCycle: { type: integer, format: int32, minimum: 1, maximum: 2147483647 }
+        statement:
+          $ref: '#/components/schemas/ReviewCycleText'
+    ReviewCycleText:
+      type: string
+      minLength: 1
+      maxLength: 4000
+      description: >-
+        Raw input is limited to 4000 Java UTF-16 code units, before Unicode White_Space trimming.
+        At least one non-White_Space code point is required; unpaired surrogates are rejected.
+        Supplement statements and review reasons share these new semantics.
+      pattern: '[\s\S]*[^\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000][\s\S]*'
+    ReviewCycleCommandResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [findingId, code, state, roundNo, version, reviewCycle]
+          properties:
+            findingId: { type: string, format: uuid }
+            code: { type: string, pattern: '^YH-[0-9]{8}-[0-9]{4,}$' }
+            state:
+              type: string
+              enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING,
+                     SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
+            roundNo: { type: integer, minimum: 1 }
+            version: { type: integer, format: int64, minimum: 1 }
+            reviewCycle: { type: integer, format: int32, minimum: 1 }
+        meta:
+          type: object
+          additionalProperties: false
+          required: [requestId, traceId, schemaVersion]
+          properties:
+            requestId: { type: string, format: uuid }
+            traceId: { type: string, format: uuid }
+            schemaVersion: { type: string, const: '1' }
     DispatchCandidate:
       type: object
       additionalProperties: false

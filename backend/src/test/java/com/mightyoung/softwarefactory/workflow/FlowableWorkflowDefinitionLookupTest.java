@@ -42,7 +42,7 @@ class FlowableWorkflowDefinitionLookupTest {
         var definition=mock(ProcessDefinition.class);
         when(repository.createProcessDefinitionQuery()).thenReturn(query);when(query.singleResult()).thenReturn(definition);
         when(definition.getTenantId()).thenReturn(TENANT.toString());when(definition.getKey()).thenReturn("findingRemediationV2");
-        var facade=new FlowableWorkflowFacade(mock(RuntimeService.class),mock(TaskService.class),repository,dsl,lock,mock(javax.sql.DataSource.class),mock(org.flowable.engine.ManagementService.class),mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class));
+        var facade=new FlowableWorkflowFacade(mock(RuntimeService.class),mock(TaskService.class),repository,dsl,lock,mock(javax.sql.DataSource.class),mock(org.flowable.engine.ManagementService.class),mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class),mock(org.flowable.engine.HistoryService.class));
 
         assertThat(facade.processDefinitionKey(TENANT,"FINDING",FINDING)).contains("findingRemediationV2");
         verify(query).processDefinitionId("pinned-definition");
@@ -54,7 +54,7 @@ class FlowableWorkflowDefinitionLookupTest {
         var lock=mock(WorkflowBindingTransactionLock.class);var dsl=mock(org.jooq.DSLContext.class);
         var repository=mock(RepositoryService.class);
         doThrow(new IllegalStateException("Missing managed transaction")).when(lock).acquire(TENANT,"FINDING",FINDING);
-        var facade=new FlowableWorkflowFacade(mock(RuntimeService.class),mock(TaskService.class),repository,dsl,lock,mock(javax.sql.DataSource.class),mock(org.flowable.engine.ManagementService.class),mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class));
+        var facade=new FlowableWorkflowFacade(mock(RuntimeService.class),mock(TaskService.class),repository,dsl,lock,mock(javax.sql.DataSource.class),mock(org.flowable.engine.ManagementService.class),mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class),mock(org.flowable.engine.HistoryService.class));
         assertThatThrownBy(()->facade.processDefinitionKey(TENANT,"FINDING",FINDING)).isInstanceOf(IllegalStateException.class);
         verifyNoInteractions(dsl,repository);
     }

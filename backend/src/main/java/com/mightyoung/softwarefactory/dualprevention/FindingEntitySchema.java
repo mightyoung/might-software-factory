@@ -25,11 +25,11 @@ import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQue
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LT;
 import static com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.LTE;
 
-/** Finding v4 field allowlist shared by schema discovery, query validation, and SQL projection. */
+/** Finding v5 field allowlist shared by schema discovery, query validation, and SQL projection. */
 @Component
 public final class FindingEntitySchema {
 
-    public static final String SCHEMA_VERSION = "4";
+    public static final String SCHEMA_VERSION = "5";
     public static final List<String> DEFAULT_FIELDS =
             List.of("id", "code", "organizationId", "organizationName", "description", "discoveredAt",
                     "sourceCategory", "urgency", "location", "interimMeasure", "backfill",
@@ -65,9 +65,11 @@ public final class FindingEntitySchema {
                 List.of("UNKNOWN", "GENERAL", "MAJOR")));
         fields.put("state", field(FieldType.ENUM, false, true, 0, List.of(EQ, IN),
                 List.of("DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING",
-                        "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED")));
+                        "REPORTER_SUPPLEMENT_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED")));
         fields.put("roundNo", field(FieldType.NUMBER, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
+        fields.put("reviewCycle", field(FieldType.NUMBER, false, false, 0, List.of(), List.of()));
+        fields.put("reviewProtocol", field(FieldType.ENUM, false, false, 0, List.of(), List.of("LEGACY", "CYCLE_V1")));
         fields.put("version", field(FieldType.NUMBER, false, true, 0,
                 List.of(EQ, GT, GTE, LT, LTE, BETWEEN), List.of()));
         fields.put("createdAt", field(FieldType.DATETIME, false, true, 0,

@@ -9,5 +9,7 @@ public interface FindingWorkflowAssignmentResolver {
 
     InitialRoute resolve(UUID tenantId, UUID organizationId);
 
+    FindingReviewCycleContracts.ReviewPair resolveReviewPair(UUID tenantId, UUID organizationId);
+
     UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId);
 }

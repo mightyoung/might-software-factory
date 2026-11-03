@@ -54,6 +54,32 @@ class FindingApiExceptionHandlerHttpTest {
             if (entry[0].equals("QUOTA_EXCEEDED")) result.andExpect(header().string("Retry-After", "1"));
         }
     }
+    @Test void transactionSetupCommitAndUnexpectedRollbackFailuresHaveSafe503WithoutClaimingRollback() throws Exception {
+        var mvc = MockMvcBuilders.standaloneSetup(new TransactionFailureController())
+                .setControllerAdvice(new FindingApiExceptionHandler()).build();
+        for (String reason : new String[]{"setup", "commit", "rollback"}) {
+            mvc.perform(get("/transaction-failure/" + reason)).andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("DEPENDENCY_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.retryable").value(true))
+                    .andExpect(jsonPath("$.message").value("The finding command could not be completed safely"))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private"))))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("rolled back"))));
+        }
+        assertThatThrownBy(() -> mvc.perform(get("/transaction-failure/bug")))
+                .hasRootCauseExactlyInstanceOf(IllegalStateException.class);
+    }
+    @RestController
+    static class TransactionFailureController {
+        @GetMapping("/transaction-failure/{reason}") String fail(@org.springframework.web.bind.annotation.PathVariable String reason) {
+            throw switch (reason) {
+                case "setup" -> new org.springframework.transaction.CannotCreateTransactionException("private database detail");
+                case "commit" -> new org.springframework.transaction.TransactionSystemException("private commit detail");
+                case "rollback" -> new org.springframework.transaction.UnexpectedRollbackException("private rollback detail");
+                default -> new IllegalStateException("private programming defect");
+            };
+        }
+    }
+
     @RestController
     static class InitializationFailureController {
         @GetMapping("/initialization-failure/{reason}") String fail(@org.springframework.web.bind.annotation.PathVariable String reason) {

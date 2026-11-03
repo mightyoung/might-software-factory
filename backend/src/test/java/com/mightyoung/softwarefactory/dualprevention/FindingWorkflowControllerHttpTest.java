@@ -8,6 +8,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandClaim;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.CommandResult;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Confirmation;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.ConfirmationStage;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.InitialRoute;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Notice;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.Submission;
@@ -53,6 +54,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewCycleContracts.*;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -71,6 +73,8 @@ class FindingWorkflowControllerHttpTest {
     private static final UUID ACCOUNT = UUID.fromString("11000000-0000-0000-0000-000000000001");
     private static final UUID TENANT = UUID.fromString("30000000-0000-0000-0000-000000000001");
     private static final UUID MEMBER = UUID.fromString("20000000-0000-0000-0000-000000000001");
+    private static final UUID PERSON_REVIEWER = UUID.fromString("20000000-0000-0000-0000-000000000002");
+    private static final UUID LEGACY_PERSON_FINDING = UUID.fromString("40000000-0000-0000-0000-000000000091");
     private static final UUID ORGANIZATION = UUID.fromString("31000000-0000-0000-0000-000000000001");
     private static final UUID IDEMPOTENCY_KEY = UUID.fromString("60000000-0000-0000-0000-000000000001");
 
@@ -92,14 +96,24 @@ class FindingWorkflowControllerHttpTest {
 
     @Test
     void closesPendingPersonConfirmationAsNotEstablishedWithAnOpinion() throws Exception {
-        UUID findingId = UUID.fromString("40000000-0000-0000-0000-000000000091");
+        UUID findingId = LEGACY_PERSON_FINDING;
         repository.seedFinding(new FindingWorkflowCase(TENANT, findingId, ORGANIZATION, "YH-20261031-0091",
                 "Synthetic finding", Instant.parse("2026-10-30T10:00:00Z").atOffset(ZoneOffset.UTC),
                 null, null, "UNKNOWN", FindingWorkflowState.PERSON_CONFIRM_PENDING,
                 1, 1, UUID.fromString("20000000-0000-0000-0000-000000000099"), MEMBER));
 
+        // The default member is currently unassigned and must remain denied before any finding effect.
         mvc.perform(post("/api/v1/findings/{id}/close-not-established", findingId)
-                        .with(authenticatedMember())
+                        .with(authenticatedMember()).with(validCsrf())
+                        .header("Idempotency-Key", IDEMPOTENCY_KEY).contentType("application/json")
+                        .content("""
+                                {"expectedVersion":1,"stage":"PERSON","reason":"Evidence does not support the report"}
+                                """))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACTION_DENIED"));
+        assertThat(repository.finding(TENANT, findingId).orElseThrow().version()).isEqualTo(1);
+
+        mvc.perform(post("/api/v1/findings/{id}/close-not-established", findingId)
+                        .with(authenticatedMember(PERSON_REVIEWER))
                         .with(validCsrf())
                         .header("Idempotency-Key", IDEMPOTENCY_KEY)
                         .contentType("application/json")
@@ -516,9 +530,11 @@ class FindingWorkflowControllerHttpTest {
                 + "\"location\":\"North loading dock\",\"interimMeasure\":\"Temporary barrier installed\"}";
     }
 
-    private static RequestPostProcessor authenticatedMember() {
+    private static RequestPostProcessor authenticatedMember() { return authenticatedMember(MEMBER); }
+
+    private static RequestPostProcessor authenticatedMember(UUID member) {
         return request -> {
-            var principal = VerifiedSessionPrincipalTestFixture.create(ACTOR, ACCOUNT, TENANT, MEMBER, 1L, 1L);
+            var principal = VerifiedSessionPrincipalTestFixture.create(ACTOR, ACCOUNT, TENANT, member, 1L, 1L);
             SecurityContext context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(new TestingAuthenticationToken(principal, null, "ROLE_AUTHENTICATED"));
             request.setAttribute("SPRING_SECURITY_CONTEXT", context);
@@ -585,13 +601,18 @@ class FindingWorkflowControllerHttpTest {
                 @Override
                 public InitialRoute resolve(UUID tenantId, UUID organizationId) {
                     return new InitialRoute(
-                            UUID.fromString("20000000-0000-0000-0000-000000000002"),
+                            PERSON_REVIEWER,
                             UUID.fromString("20000000-0000-0000-0000-000000000003"),
                             UUID.fromString("20000000-0000-0000-0000-000000000004"),
                             UUID.fromString("20000000-0000-0000-0000-000000000005"));
                 }
                 @Override
                 public UUID resolveSafetyDispatcher(UUID tenantId, UUID organizationId) { return MEMBER; }
+                @Override
+                public ReviewPair resolveReviewPair(UUID tenantId, UUID organizationId) {
+                    InitialRoute route = resolve(tenantId, organizationId);
+                    return new ReviewPair(route.personConfirmerMemberId(), route.safetyConfirmerMemberId());
+                }
             };
         }
 
@@ -611,10 +632,45 @@ class FindingWorkflowControllerHttpTest {
         @Bean
         WorkflowFacade workflowFacade() {
             return new WorkflowFacade() {
+        @Override public java.util.Optional<com.mightyoung.softwarefactory.workflow.WorkflowBindingReadSnapshot> readBoundDefinition(UUID tenantId, String type, UUID id) { throw new UnsupportedOperationException(); }
+
                 @Override
                 public com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot readCurrentTask(
                         UUID tenantId, String businessType, UUID businessId, String taskDefinitionKey) {
                     throw new UnsupportedOperationException("Task reads are outside this HTTP command fixture");
+                }
+
+                @Override
+                public void validateReplayParticipant(UUID tenantId, String businessType, UUID businessId,
+                        com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot original, UUID actor) {
+                    throw new UnsupportedOperationException("Replay proof is outside this legacy HTTP fixture");
+                }
+                @Override
+                public void startProcessByDefinitionId(UUID tenantId, String businessType, UUID businessId,
+                        int businessRevision, com.mightyoung.softwarefactory.workflow.WorkflowDefinitionPin pin,
+                        java.util.Map<String, Object> variables) {
+                    throw new UnsupportedOperationException("Exact start is outside this legacy HTTP fixture");
+                }
+                @Override
+                public com.mightyoung.softwarefactory.workflow.WorkflowCommandTaskAuthority acquireTaskAuthority(
+                        UUID tenantId, String businessType, UUID businessId, String taskKey, UUID actor) {
+                    if (!TENANT.equals(tenantId) || !FindingWorkflowCommandService.BUSINESS_TYPE.equals(businessType)
+                            || !LEGACY_PERSON_FINDING.equals(businessId) || !"personConfirm".equals(taskKey)
+                            || !PERSON_REVIEWER.equals(actor)) throw new WorkflowTaskStateConflictException();
+                    var snapshot = new com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot(
+                            tenantId, businessType, businessId, 1, "fixture-definition-v2",
+                            FindingWorkflowCommandService.PROCESS_DEFINITION_KEY, "fixture-process-v2",
+                            "personConfirm", "fixture-person-task", PERSON_REVIEWER.toString(), true);
+                    var authority = org.mockito.Mockito.mock(com.mightyoung.softwarefactory.workflow.WorkflowCommandTaskAuthority.class);
+                    org.mockito.Mockito.when(authority.snapshot()).thenReturn(snapshot);
+                    return authority;
+                }
+                @Override
+                public void completeTask(com.mightyoung.softwarefactory.workflow.WorkflowCommandTaskAuthority authority,
+                        java.util.Map<String, Object> variables) {
+                    assertThat(authority.snapshot().businessId()).isEqualTo(LEGACY_PERSON_FINDING);
+                    assertThat(authority.snapshot().assignee()).isEqualTo(PERSON_REVIEWER.toString());
+                    assertThat(variables).containsEntry("confirmationDecision", "NOT_ESTABLISHED");
                 }
 
                 @Override
@@ -652,8 +708,11 @@ class FindingWorkflowControllerHttpTest {
                 WorkflowFacade workflowFacade,
                 FindingWorkflowEventPublisher eventPublisher,
                 Clock clock) {
+            var properties = new com.mightyoung.softwarefactory.workflow.FindingReviewDefinitionProperties(false, java.util.Map.of());
+            var pins = new com.mightyoung.softwarefactory.workflow.PinnedFindingReviewDefinitionResolver(properties,
+                    org.mockito.Mockito.mock(org.flowable.engine.RepositoryService.class));
             return new FindingWorkflowCommandService(resolver, repository, accessPolicy, assignmentResolver,
-                    evidencePolicy, workflowFacade, eventPublisher, clock);
+                    evidencePolicy, workflowFacade, eventPublisher, clock, properties, pins);
         }
     }
 
@@ -677,6 +736,16 @@ class FindingWorkflowControllerHttpTest {
             }
             @Override
             public CommandClaim claimCommand(WorkflowCommand command) { return CommandClaim.newClaim(); }
+            @Override public Optional<CommandResult> readCommand(WorkflowCommand command) { return Optional.empty(); }
+            @Override public void appendReviewCycle(ReviewCycle cycle) { throw new UnsupportedOperationException(); }
+            @Override public void appendReviewDecision(Decision decision) { throw new UnsupportedOperationException(); }
+            @Override public Optional<Decision> findReviewDecision(UUID findingId, int cycle, ConfirmationStage stage) { return Optional.empty(); }
+            @Override public void appendSupplement(Supplement supplement) { throw new UnsupportedOperationException(); }
+            @Override public Optional<Decision> findReturnDecision(UUID findingId, int cycle) { return Optional.empty(); }
+            @Override public void appendParticipant(CommandParticipant participant) { }
+            @Override public Optional<CommandParticipant> findParticipant(UUID commandId) { return Optional.empty(); }
+            @Override public Optional<LegacyConfirmationProof> findLegacyConfirmation(UUID commandId) { return Optional.empty(); }
+
             @Override
             public void completeCommand(UUID commandId, CommandResult result) { }
             @Override
