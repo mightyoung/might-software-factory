@@ -43,6 +43,14 @@ public final class FindingDefinitionController {
         if (new ServletWebRequest(request, response).checkNotModified(result.etag())) {
             return ResponseEntity.status(response.getStatus()).headers(headers).build();
         }
+        // Spring 7's ServletWebRequest wildcard branch only covers unsafe methods.
+        // Preserve its decisions first, then match a sole wildcard against the
+        // existing representation whose current authority was resolved above.
+        var validators = request.getHeaders(HttpHeaders.IF_NONE_MATCH);
+        String validator = validators.hasMoreElements() ? validators.nextElement() : null;
+        if (validator != null && "*".equals(validator.trim()) && !validators.hasMoreElements()) {
+            return ResponseEntity.status(304).headers(headers).build();
+        }
         return ResponseEntity.ok().headers(headers).body(new DefinitionResponse(result.data(), metadata()));
     }
 

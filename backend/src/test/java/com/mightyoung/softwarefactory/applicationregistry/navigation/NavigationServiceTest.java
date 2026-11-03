@@ -87,6 +87,80 @@ class NavigationServiceTest {
         assertThat(service.bootstrap().permissions()).containsExactly("finding.read");
     }
 
+    @Test void createOnlyReceivesApplicationAndCreateMenuWithoutReadPermission() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(), "safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(true, 4)));
+        when(actions.loadActionSnapshot(context, "finding.create", "create"))
+                .thenReturn(Optional.of(snapshot(context, Set.of(organization), 3)));
+        var bootstrap = service.bootstrap();
+        assertThat(bootstrap.applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("safety");
+        assertThat(bootstrap.permissions()).containsExactly("finding.create");
+        var menu = service.menu("safety");
+        assertThat(menu.permissions()).containsExactly("finding.create");
+        assertThat(menu.nodes()).extracting(NavigationService.MenuNode::permission).containsExactly("finding.create");
+        assertThat(menu.nodes()).extracting(NavigationService.MenuNode::path).containsExactly("safety/findings");
+        verify(reads, times(2)).resolveEntityReadGrant(context, "finding");
+        verify(actions, times(2)).loadActionSnapshot(context, "finding.create", "create");
+    }
+
+    @Test void readOnlyAndCombinedMenusKeepReadPermission() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(), "safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(true, 4)));
+        when(reads.resolveEntityReadGrant(context, "finding"))
+                .thenReturn(Optional.of(new EntityReadGrant(context.tenantId(), Set.of(organization))));
+        assertThat(service.menu("safety").nodes()).extracting(NavigationService.MenuNode::permission)
+                .containsExactly("finding.read");
+        when(actions.loadActionSnapshot(context, "finding.create", "create"))
+                .thenReturn(Optional.of(snapshot(context, Set.of(organization), 3)));
+        var combined = service.menu("safety");
+        assertThat(combined.permissions()).containsExactly("finding.read", "finding.create");
+        assertThat(combined.nodes()).extracting(NavigationService.MenuNode::permission).containsExactly("finding.read");
+    }
+
+    @Test void absentReadDoesNotAuthorizeStaleOrInactiveCreateOrMissingScope() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(), "safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(true, 4)));
+        var disabled = new FindingReadAuthorizationSnapshot(context.actorId(), context.accountId(), "HUMAN",
+                "ACTIVE", "DISABLED", "ACTIVE", "ACTIVE", 2, 3, Set.of(organization));
+        var wrongIdentity = snapshot(new CurrentTenantContext(UUID.randomUUID(), context.accountId(),
+                context.tenantId(), context.memberId(), 2, 3, 1), Set.of(organization), 3);
+        when(actions.loadActionSnapshot(context, "finding.create", "create")).thenReturn(
+                Optional.empty(), Optional.of(snapshot(context, Set.of(organization), 4)),
+                Optional.of(disabled), Optional.of(wrongIdentity), Optional.of(snapshot(context, Set.of(), 3)));
+        for (int attempt = 0; attempt < 5; attempt++) {
+            var bootstrap = service.bootstrap();
+            assertThat(bootstrap.applications()).isEmpty();
+            assertThat(bootstrap.permissions()).isEmpty();
+        }
+        assertThatThrownBy(() -> service.menu("safety")).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test void disabledApplicationAndMismatchedSessionDoNotResolveAnyPermissions() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(), "safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(false, 5)));
+        assertThat(service.bootstrap().applications()).isEmpty();
+        verify(reads, never()).resolveEntityReadGrant(any(), any());
+        verify(actions, never()).loadActionSnapshot(any(), any(), any());
+        when(sessions.current()).thenReturn(new CurrentSessionDetails(UUID.randomUUID(), context.accountId(),
+                context.tenantId(), "tenant", "Tenant", context.memberId(), "Member"));
+        assertThatThrownBy(service::bootstrap).isInstanceOf(AccessDeniedException.class);
+        verify(applications, times(1)).findCurrent(context.tenantId(), "safety");
+    }
+
+    @Test void createDependencyFailureIsNotConvertedToAvailableNavigation() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(), "safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(true, 4)));
+        when(actions.loadActionSnapshot(context, "finding.create", "create"))
+                .thenThrow(new IllegalStateException("unavailable"));
+        assertThatThrownBy(service::bootstrap).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.menu("safety")).isInstanceOf(IllegalStateException.class);
+    }
+
     @Test void unknownApplicationsAreDeniedWithoutLookingUpAnyClientTenant() {
         assertThatThrownBy(() -> service.menu("equipment")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> service.menu(null)).isInstanceOf(AccessDeniedException.class);

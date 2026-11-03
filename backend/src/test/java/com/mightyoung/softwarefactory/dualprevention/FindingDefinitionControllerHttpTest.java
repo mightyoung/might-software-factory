@@ -69,6 +69,29 @@ class FindingDefinitionControllerHttpTest {
         mvc.perform(get(DEFINITION).param("use", "READ").with(member()).header("If-None-Match", etag))
                 .andExpect(status().isOk()).andExpect(header().string("ETag", org.hamcrest.Matchers.not(etag)));
     }
+    @Test void authorizedWildcardReturnsBodylessPrivate304AfterCurrentAuthorityResolution() throws Exception {
+        String etag = mvc.perform(get(DEFINITION).param("use", "READ").with(member()))
+                .andExpect(status().isOk()).andReturn().getResponse().getHeader("ETag");
+        for (String method : List.of("GET", "HEAD")) {
+            int before = reads.calls;
+            mvc.perform(request(org.springframework.http.HttpMethod.valueOf(method), DEFINITION)
+                    .param("use", "READ").with(member()).header("If-None-Match", "*"))
+                    .andExpect(status().isNotModified()).andExpect(content().string(""))
+                    .andExpect(header().string("ETag", etag)).andExpect(header().string("Vary", "Cookie"))
+                    .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.allOf(
+                            org.hamcrest.Matchers.containsString("private"), org.hamcrest.Matchers.containsString("no-cache"))));
+            assertThat(reads.calls).isEqualTo(before + 1);
+        }
+    }
+    @Test void nonmatchingMalformedMixedAndDuplicateValidatorsDoNotBecomeWildcardMatches() throws Exception {
+        for (Object[] values : List.of(new Object[]{"\"unrelated\""}, new Object[]{"*, \"unrelated\""},
+                new Object[]{"*", "\"unrelated\""}, new Object[]{"*", "*"}, new Object[]{"W/*"})) {
+            int before = reads.calls;
+            mvc.perform(get(DEFINITION).param("use", "READ").with(member()).header("If-None-Match", values))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.data.use").value("READ"));
+            assertThat(reads.calls).isEqualTo(before + 1);
+        }
+    }
     @Test void revocationIsCheckedBeforeWildcardOrWarmValidatorAndProjectionDoesNotGrantTheOtherAction() throws Exception {
         var etag = mvc.perform(get(DEFINITION).param("use", "READ").with(member())).andReturn().getResponse().getHeader("ETag");
         reads.read = false;
