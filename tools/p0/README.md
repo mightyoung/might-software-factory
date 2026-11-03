@@ -88,9 +88,53 @@ License declarations are marked `DECLARED` only when the exact artifact POM has 
 nonempty name or URL without unresolved properties. This is an unverified raw
 declaration, not an SPDX identifier or legal conclusion. Missing declarations,
 possible inheritance and unresolved properties stay **UNKNOWN**, even when a
-LICENSE/NOTICE file exists. Parent POM inheritance is deliberately not guessed.
+LICENSE/NOTICE file exists. The original raw declaration status is not upgraded by parent lookup.
 Unknowns do not hide or invalidate otherwise exact artifact coverage; consumers
 must separately decide whether unresolved license evidence blocks distribution.
+
+### Offline nearest-declaration provenance
+
+Each dependency additionally has `nearestLicenseDeclarationEvidence`, separate
+from its original `pom` fields and `unknownLicenseCoordinates`. Its provenance
+is `DIRECT`, `PARENT`, or `UNKNOWN`. Literal nonempty declarations are selected
+from the first POM in the chain containing a license list. An empty `<licenses/>`
+can continue to its parent; a nonempty but incomplete/unresolved declaration is
+UNKNOWN and is not silently replaced with a more convenient parent declaration.
+This source-selection policy does not assert that other legal obligations cease.
+
+Only a POM's exact literal published parent group/artifact/version selects the
+next Maven-relative cache path. `relativePath` is ignored. No cache scan, remote
+repository lookup, property interpolation, profile activation, BOM/license
+heuristic or complete Maven ModelBuilder execution occurs. Referenced POMs must
+match the claimed published coordinate. Every declared parent is checked for
+unique coordinate scalars and safe literal components before a DIRECT/PARENT
+source result, even when its file need not be read. The new nearest-declaration
+parser independently rejects duplicate license containers/fields, nested scalars
+and unexpected declaration structure; it does not trust the legacy raw view's
+first-value projection. Duplicate coordinate/parent model fields, unsafe paths,
+repository-escaping symlinks, malformed XML and DTD/entities are rejected using
+the generic invalid-input contract. The legacy raw fields remain unchanged for
+valid evidence.
+
+Evidence includes the declaration's POM coordinate, Maven-relative path and
+SHA256; `parentChain` lists successfully read parents in nearest-first order,
+including the declaration source. Missing parents, cycles, unresolved coordinates
+or declarations, absent declarations and traversal limits remain explicit UNKNOWN.
+Lookup is bounded to 16 parents and 32 MiB of POM bytes per chain, with the existing
+16 MiB per-document limit. `requestedParent` identifies a known next coordinate
+that could not be resolved. Once the referenced POM's identity and strict license
+structure are accepted, this pending coordinate is cleared; a parent that was
+read successfully but has no declaration or further parent is not still pending.
+Stops before acceptance (missing POM, byte limit or unresolved identity) retain
+the requested coordinate. No absolute local paths or execution timestamps are added.
+
+`unresolvedNearestLicenseDeclarationCoordinates` is a separate list for resolved
+project dependencies. It never clears their original raw UNKNOWN list or changes
+artifact byte-coverage completeness. The explicit packaging host has its own
+`hostNearestLicenseDeclarationEvidence`, separate from both dependency lists.
+These fields record source provenance, not legal clearance, a complete effective
+license model, or all distribution obligations. The project's license, frontend,
+JDK, and full build-tool distribution review remain separate.
 
 Input bounds: JSON/POM documents 16 MiB; at most 10,000 tree nodes and depth 128.
 Before constructing `ZipFile`, a bounded EOCD tail-window check rejects ZIP64,
