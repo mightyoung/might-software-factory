@@ -2,6 +2,7 @@ target/
 .idea/
 .vscode/
 *.iml
+tools/p0/__pycache__/
 .DS_Store
 # Local environment files may contain service credentials.
 .[Ee][Nn][Vv]
