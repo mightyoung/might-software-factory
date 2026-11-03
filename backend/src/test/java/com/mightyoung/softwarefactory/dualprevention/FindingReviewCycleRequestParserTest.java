@@ -50,6 +50,17 @@ class FindingReviewCycleRequestParserTest {
             assertThatThrownBy(() -> parser.review(request(REVIEW.replace(":2", ":" + cycle)))).isInstanceOf(FindingReviewCycleRequestParser.RequestFailure.class);
         }
     }
+    @Test void rejectsJsonEscapedNullCharactersForBothNewTextFields() {
+        for (String value : new String[]{"\\u0000", "before\\u0000after"}) {
+            assertThatThrownBy(() -> parser.review(request(REVIEW.replace("need detail", value))))
+                    .isInstanceOfSatisfying(FindingReviewCycleRequestParser.RequestFailure.class,
+                            failure -> assertThat(failure.status()).isEqualTo(400));
+            assertThatThrownBy(() -> parser.supplement(request(SUPPLEMENT.replace("detail", value))))
+                    .isInstanceOfSatisfying(FindingReviewCycleRequestParser.RequestFailure.class,
+                            failure -> assertThat(failure.status()).isEqualTo(400));
+        }
+    }
+
     @Test void rejectsEveryForbiddenGradeIncludingNullAndRequiresSafetyApprovalGrade() {
         for (String stage : new String[]{"PERSON", "SAFETY"}) {
             for (String decision : new String[]{"APPROVE", "RETURN_FOR_INFORMATION", "NOT_ESTABLISHED"}) {

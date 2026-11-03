@@ -77,3 +77,18 @@ The bounded `ai-slop-cleaner` writer pass recommended no source changes, and the
 - Complete actual producer/scanner/evidence integration and the remaining cross-story P0–P2 acceptance. No CLEAN/READY claim follows from review-cycle source or mocked services.
 
 These gates remain **NOT_RUN/open**. This batch supplies reviewable source and scoped verification; it establishes neither G006 completion nor production readiness.
+
+## Follow-up: reject PostgreSQL-incompatible NUL text
+
+After the original source checkpoint at `eacd741535ef8ccd52e825e49c79c0b2a9654075`, a read-only PostgreSQL 18 probe and a Java 21 constructor probe exposed a new V3 input gap: review reasons and supplement statements accepted U+0000, which PostgreSQL text cannot store. The shared V3 text validator now rejects that character before command-service execution. Legacy text validation, fingerprints, parser structure and SQL are unchanged. Independent source review cleared the minimal correction.
+
+A fresh isolated Linux Java 21 focused gate passed **93 tests across 5 classes**, with zero failures/errors/skips: review-cycle contracts 6, parser 8, controller 7, legacy workflow contracts 13 and command service 59. Three new regressions executed at the value-contract, JSON-parser and HTTP boundaries; the HTTP regression verifies rejection before either command service. Evidence: `/tmp/msf-review-cycles-nul-linux-20261103/focused-verification-summary.json`. Its 412-file input manifest SHA-256 is `8594783d42605c1b646ed0931a2555efa196dae8d9f84b153f8778797e770b88`, unchanged before and after execution.
+
+| Corrected source | SHA-256 |
+| --- | --- |
+| `FindingReviewCycleContracts.java` | `313a2a93b2c9ce2631835302cce1c9e3fa271ec33e3f3c304098d5517f120a99` |
+| `FindingReviewCycleContractTest.java` | `cce94746e4b534fcfae7e494050a01175f4cb78f620dcc59c232ca5ec82cbcc4` |
+| `FindingReviewCycleRequestParserTest.java` | `0075c7fd45c0d58dbc9937509301ed391a1ae6bca7fe2f1201071def6f75f81f` |
+| `FindingReviewCycleControllerHttpTest.java` | `b7e3b5c3ef6d94ee07a4d0cc421af84a42c0eedebba241a2f65ac9890ed760dd` |
+
+The original checkpoint's hosted [Backend CI](https://github.com/mightyoung/might-software-factory/actions/runs/41616873278) and [Frontend CI](https://github.com/mightyoung/might-software-factory/actions/runs/41616873327) succeeded at `eacd741`; those results predate this correction. The earlier 697/752 full-run and repaired-IT compile evidence remain bound to their respective older snapshots. This focused 93-test gate verifies the four-file correction and selected legacy regressions; it is not a fresh full-suite or actual database/IT run. No migration, grant, process deployment or acceptance fixture write occurred for this correction. All remaining acceptance gates above stay open.

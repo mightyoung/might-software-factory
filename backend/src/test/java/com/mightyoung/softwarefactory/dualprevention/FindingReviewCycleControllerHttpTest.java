@@ -97,6 +97,18 @@ class FindingReviewCycleControllerHttpTest {
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST")).andExpect(header().string("Cache-Control", "no-store"));
         verifyNoInteractions(service);
     }
+    @Test void nullCharactersReturn400BeforeEitherCommandService() throws Exception {
+        for (String value : new String[]{"\\u0000", "before\\u0000after"}) {
+            mvc.perform(valid(REVIEW_PATH, REVIEW.replace("need detail", value)))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(header().string("Cache-Control", "no-store"));
+            mvc.perform(valid(SUPPLEMENT_PATH, SUPPLEMENT.replace("detail", value)))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(header().string("Cache-Control", "no-store"));
+        }
+        verifyNoInteractions(service);
+    }
+
     @Test void mapsDomainErrorsForBothRoutesWithoutLeakingInternalMessages() throws Exception {
         RuntimeException[] failures = {new UnauthenticatedSessionException(),
                 new org.springframework.security.access.AccessDeniedException("private"), new FindingNotVisibleException(),

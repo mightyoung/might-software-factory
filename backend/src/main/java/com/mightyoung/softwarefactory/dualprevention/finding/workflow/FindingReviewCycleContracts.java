@@ -88,8 +88,8 @@ public final class FindingReviewCycleContracts {
     }
 
     private static String text(String value) {
-        if (value == null || value.length() > 4000 || !ConfirmationOpinionText.hasContent(value)) {
-            throw new IllegalArgumentException("Text must contain content and fit 4000 UTF-16 units before trimming");
+        if (value == null || value.length() > 4000 || value.indexOf('\0') >= 0 || !ConfirmationOpinionText.hasContent(value)) {
+            throw new IllegalArgumentException("Text must contain content without NUL and fit 4000 UTF-16 units before trimming");
         }
         return ConfirmationOpinionText.trim(value);
     }

@@ -59,6 +59,16 @@ class FindingReviewCycleContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test void newTextRejectsNullCharactersThatCannotBeStoredInPostgres() {
+        for (String value : new String[]{"\0", "before\0after"}) {
+            assertThatThrownBy(() -> new ReportSupplementCommand(1, 1, value))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ReviewDecisionCommand(1, 1, PERSON,
+                    ReviewDecision.RETURN_FOR_INFORMATION, value, null))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
     @Test void legacyResultConstructorKeepsCycleOne() {
         var row = finding(FindingReviewProtocol.LEGACY);
         assertThat(new FindingWorkflowContracts.CommandResult(row.id(), row.code(), row.state(), 1, 1).reviewCycle()).isEqualTo(1);
