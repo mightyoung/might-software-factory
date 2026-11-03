@@ -4,6 +4,7 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import org.springframework.session.web.http.CookieHttpSessionIdResolver;
+import org.springframework.session.web.http.CookieSerializer;
 import org.springframework.session.web.http.DefaultCookieSerializer;
 
 import java.util.Arrays;
@@ -11,7 +12,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-/** Trusted bootstrap bundle; not a bean or an activation switch. Configure once, then share the resolver. */
+/** Trusted cookie bootstrap bundle; no session-authority activation. Configure once, then share its instances. */
 public final class KnownLogoutRequests {
     private final ObservedCookieSerializer serializer;
     private final CookieHttpSessionIdResolver resolver;
@@ -27,6 +28,9 @@ public final class KnownLogoutRequests {
 
     /** The actual Spring Session filter must receive this same instance during trusted bootstrap. */
     public CookieHttpSessionIdResolver sessionIdResolver() { return resolver; }
+
+    /** Stable sealed serializer capability for the same trusted filter assembly. */
+    public CookieSerializer cookieSerializer() { return serializer; }
 
     public KnownLineageLogoutCapture capture(HttpServletRequest request) {
         if (request == null) throw SessionSensitiveException.unavailable();
