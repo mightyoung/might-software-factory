@@ -46,8 +46,10 @@ public final class FindingEvidenceUploadContracts {
             } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
         }
     }
-    public enum State { INTENT_CREATED, EXPIRED }
-    public record Status(UUID intentId, State state, OffsetDateTime expiresAt) {}
+    public enum State { INTENT_CREATED, RECEIVING, QUARANTINED, SCANNING, VERIFIED_PENDING_FINALIZATION, RETRY_WAIT, FAILED, REJECTED, CANCELLED, EXPIRED, FINALIZED }
+    public record Status(UUID intentId, State state, OffsetDateTime expiresAt, boolean cancelRequested) {
+        public Status(UUID intentId,State state,OffsetDateTime expiresAt){this(intentId,state,expiresAt,false);}
+    }
     public record Reservation(Status status, boolean replayed) {}
     public record Finding(UUID id, UUID organizationId, String state, int roundNo, long version) {}
     public record Notice(UUID id, UUID assigneeMemberId, boolean openRound) {}
@@ -55,9 +57,14 @@ public final class FindingEvidenceUploadContracts {
             long revision, boolean sealed) {}
     public record Intent(UUID id, UUID ownerAccountId, UUID ownerActorId, UUID ownerMemberId,
             UUID findingId, int roundNo, UUID noticeId, UUID evidenceSetId, String payloadSha256,
-            OffsetDateTime createdAt, OffsetDateTime expiresAt) {
+            OffsetDateTime createdAt, OffsetDateTime expiresAt, State storedState, boolean cancelRequested) {
+        public Intent(UUID id,UUID ownerAccountId,UUID ownerActorId,UUID ownerMemberId,UUID findingId,int roundNo,
+                UUID noticeId,UUID evidenceSetId,String payloadSha256,OffsetDateTime createdAt,OffsetDateTime expiresAt){
+            this(id,ownerAccountId,ownerActorId,ownerMemberId,findingId,roundNo,noticeId,evidenceSetId,payloadSha256,
+                    createdAt,expiresAt,State.INTENT_CREATED,false);
+        }
         public Status status(OffsetDateTime now) {
-            return new Status(id, now.isBefore(expiresAt) ? State.INTENT_CREATED : State.EXPIRED, expiresAt);
+            return new Status(id, storedState==State.INTENT_CREATED&&!now.isBefore(expiresAt)?State.EXPIRED:storedState, expiresAt,cancelRequested);
         }
     }
     public record Quota(long ownerCount, long ownerBytes, long tenantCount, long tenantBytes, long setCount) {}

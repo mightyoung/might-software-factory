@@ -43,21 +43,35 @@ class FindingEvidenceUploadRequestParserTest {
             assertThatThrownBy(() -> parser.parse(request(body), FINDING, 2, KEY)).isInstanceOfSatisfying(FindingEvidenceUploadRequestParser.RequestFailure.class, e -> assertThat(e.status()).isEqualTo(413));
         assertThat(parser.parse(request(BODY + " ".repeat(4096 - BODY.getBytes(StandardCharsets.UTF_8).length)), FINDING, 2, KEY)).isNotNull();
     }
-    @Test @SuppressWarnings("unchecked") void openApiMatchesIntentOnlyBoundary() throws Exception {
+    @Test @SuppressWarnings("unchecked") void openApiMatchesReservationAndTechnicalIngestionBoundary() throws Exception {
         java.util.Map<String,Object> document = new org.yaml.snakeyaml.Yaml().load(java.nio.file.Files.readString(
                 java.nio.file.Path.of("..", "contracts", "openapi", "finding-evidence-upload.yaml")));
         var paths = (java.util.Map<String,Object>) document.get("paths");
-        assertThat(paths).hasSize(2);
-        var reserve = (java.util.Map<String,Object>) paths.get("/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads");
+        String base="/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads";
+        var expectedMethods=java.util.Map.of(base,"post",base+"/{intentId}","get",base+"/{intentId}/content","put",base+"/{intentId}/cancel","post");
+        assertThat(paths).containsOnlyKeys(expectedMethods.keySet().toArray(String[]::new));
+        for(var entry:expectedMethods.entrySet()){
+            var path=(java.util.Map<String,Object>)paths.get(entry.getKey());
+            assertThat(path).containsOnlyKeys("parameters",entry.getValue());
+            var operation=(java.util.Map<String,Object>)path.get(entry.getValue());
+            var security="get".equals(entry.getValue())?java.util.Map.of("session",java.util.List.of()):
+                    java.util.Map.of("session",java.util.List.of(),"csrf",java.util.List.of());
+            assertThat(operation.get("security")).isEqualTo(java.util.List.of(security));
+        }
+        var reserve = (java.util.Map<String,Object>) paths.get(base);
         var post = (java.util.Map<String,Object>) reserve.get("post");
         assertThat((java.util.Map<String,Object>) post.get("responses")).containsKeys("201", "200", "400", "413", "415", "429", "503").doesNotContainKey("202");
+        var receive=(java.util.Map<String,Object>)((java.util.Map<String,Object>)paths.get(base+"/{intentId}/content")).get("put");
+        assertThat((java.util.Map<String,Object>)receive.get("responses")).containsKeys("202","409","415").doesNotContainKey("201");
+        assertThat((java.util.Map<String,Object>)((java.util.Map<String,Object>)receive.get("requestBody")).get("content"))
+                .containsOnlyKeys("image/png","image/jpeg");
         var components = (java.util.Map<String,Object>) document.get("components");
         var schemas = (java.util.Map<String,Object>) components.get("schemas");
         var declaration = (java.util.Map<String,Object>) schemas.get("Declaration");
         assertThat(declaration.get("additionalProperties")).isEqualTo(false);
         assertThat((java.util.List<String>) declaration.get("required")).containsExactlyInAnyOrder("evidenceSetId", "expectedFindingVersion", "expectedEvidenceRevision", "filename", "declaredMediaType", "declaredSizeBytes");
         var status = (java.util.Map<String,Object>) schemas.get("StatusData");
-        assertThat((java.util.Map<String,Object>) status.get("properties")).containsOnlyKeys("uploadIntentId", "state", "expiresAt", "recoveryAction");
+        assertThat((java.util.Map<String,Object>) status.get("properties")).containsOnlyKeys("uploadIntentId", "state", "expiresAt", "recoveryAction", "cancelRequested");
     }
     @Test void unexpectedParserFailureIsNotReportedAsClientInput() {
         var mapper = org.mockito.Mockito.spy(new ObjectMapper());
