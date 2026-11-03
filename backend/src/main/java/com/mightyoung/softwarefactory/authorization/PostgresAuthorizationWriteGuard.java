@@ -30,11 +30,19 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
         this.dataSource = Objects.requireNonNull(dataSource);
     }
 
+    void requireDataSource(DataSource expected) {
+        if (dataSource != expected) throw new AuthorizationWriteGuardException("The security writer datasource does not match its guard");
+    }
+
     @Override public void forFindingCommand(UUID tenantId) {
         acquire(new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId))));
     }
 
     @Override public void requireFindingCommand(UUID tenantId) {
+        requireScope(new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId))));
+    }
+
+    private void requireScope(Scope expected) {
         Object resource = TransactionSynchronizationManager.getResource(dataSource);
         ConnectionHolder holder = resource instanceof ConnectionHolder h ? h : null;
         try {
@@ -45,7 +53,6 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
             }
             Connection connection = holder.getConnection();
             requireReadCommittedWriteTransaction(connection);
-            Scope expected = new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId)));
             for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
                 if (synchronization instanceof GuardScope held && held.owner == this
                         && held.holder == holder && held.connection == connection
@@ -63,6 +70,14 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
 
     @Override public void forGlobalSecurityChange() {
         acquire(new Scope(Mode.GLOBAL, List.of()));
+    }
+
+    @Override public void forGlobalSecurityChange(Collection<UUID> tenantIds) {
+        acquire(new Scope(Mode.GLOBAL, tenantKeys(Objects.requireNonNull(tenantIds, "Declared tenants"))));
+    }
+
+    @Override public void requireGlobalSecurityChange(Collection<UUID> tenantIds) {
+        requireScope(new Scope(Mode.GLOBAL, tenantKeys(Objects.requireNonNull(tenantIds, "Declared tenants"))));
     }
 
     @Override public void forTenantSecurityChange(Collection<UUID> tenantIds) {
@@ -106,7 +121,7 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
                     if (previous.invalidated) {
                         throw new AuthorizationWriteGuardException("Authorization guard scope was invalidated by savepoint rollback");
                     }
-                    if (previous.connection != connection || !previous.scope.equals(scope)) {
+                    if (previous.holder != holder || previous.connection != connection || !previous.scope.equals(scope)) {
                         throw new AuthorizationWriteGuardException("Authorization guard scope cannot be changed or upgraded");
                     }
                     return;

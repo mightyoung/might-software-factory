@@ -15,5 +15,13 @@ public interface AuthorizationWriteGuard {
     /** Validates an existing command guard without acquiring or upgrading any lock. */
     void requireFindingCommand(UUID tenantId);
     void forGlobalSecurityChange();
+    /** Global identity writes declare every affected tenant before any row access. */
+    default void forGlobalSecurityChange(Collection<UUID> tenantIds) {
+        throw new AuthorizationWriteGuardException("Declared global security scopes are not supported");
+    }
+    /** Assertion only: never acquires or upgrades a global scope. */
+    default void requireGlobalSecurityChange(Collection<UUID> tenantIds) {
+        throw new AuthorizationWriteGuardException("An existing declared global security scope is required");
+    }
     void forTenantSecurityChange(Collection<UUID> tenantIds);
 }

@@ -165,6 +165,49 @@ class PostgresAuthorizationWriteGuardTest {
                 .containsExactly("select pg_advisory_xact_lock(?, ?)");
     }
 
+    @Test void declaredGlobalWriterLocksRootThenSortedExclusiveTenantsAndAssertionDoesNotAcquire() {
+        var tenants = List.of(UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"), TENANT, TENANT);
+        guard.forGlobalSecurityChange(tenants);
+        assertThat(operations.stream().filter(sql -> sql.contains("pg_advisory")))
+                .containsExactly("select pg_advisory_xact_lock(?, ?)",
+                        "select pg_advisory_xact_lock(?)", "select pg_advisory_xact_lock(?)");
+        assertThat(operations.stream().filter(sql -> sql.startsWith("long=")))
+                .containsExactly("long=-2188433459312971883", "long=5294606846127505921");
+        operations.clear();
+        guard.requireGlobalSecurityChange(List.of(TENANT, tenants.getFirst()));
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory") || sql.contains("set_config"));
+    }
+
+    @Test void globalAssertionNeverAcquiresMissingScopeOrUpgradesEmptyScope() {
+        assertThatThrownBy(() -> guard.requireGlobalSecurityChange(List.of(TENANT)))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory"));
+        holder.resetRollbackOnly();
+        guard.forGlobalSecurityChange();
+        assertThatThrownBy(() -> guard.forGlobalSecurityChange(List.of(TENANT)))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(holder.isRollbackOnly()).isTrue();
+    }
+
+    @Test void declaredGlobalAssertionRejectsSavepointAndReplacementHolder() {
+        guard.forGlobalSecurityChange(List.of(TENANT));
+        TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.savepointRollback(new Object()));
+        holder.resetRollbackOnly();
+        assertThatThrownBy(() -> guard.requireGlobalSecurityChange(List.of(TENANT)))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        TransactionSynchronizationManager.clearSynchronization();
+        TransactionSynchronizationManager.initSynchronization();
+        holder.resetRollbackOnly();
+        guard.forGlobalSecurityChange(List.of(TENANT));
+        TransactionSynchronizationManager.unbindResource(source);
+        var replacement = new ConnectionHolder(connection);
+        replacement.setSynchronizedWithTransaction(true);
+        TransactionSynchronizationManager.bindResource(source, replacement);
+        assertThatThrownBy(() -> guard.forGlobalSecurityChange(List.of(TENANT)))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(replacement.isRollbackOnly()).isTrue();
+    }
+
     @Test void rejectsUpgradeAndMarksWholeTransactionRollbackOnly() {
         guard.forFindingCommand(TENANT);
         assertThatThrownBy(() -> guard.forTenantSecurityChange(List.of(TENANT)))
