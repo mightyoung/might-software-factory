@@ -1,3 +1,5 @@
+import { parseWallTime } from "./time";
+
 export interface DateRange {
   from: string;
   to: string;
@@ -30,6 +32,13 @@ export interface DateRangeQueryField<T> {
   read: (record: T) => string;
 }
 
+export interface DateTimeRangeQueryField<T> {
+  key: string;
+  label: string;
+  kind: "dateTimeRange";
+  read: (record: T) => string;
+}
+
 export interface NumberQueryField<T> {
   key: string;
   label: string;
@@ -52,6 +61,7 @@ export type LedgerQueryField<T> =
   | TextQueryField<T>
   | EnumQueryField<T>
   | DateRangeQueryField<T>
+  | DateTimeRangeQueryField<T>
   | NumberQueryField<T>
   | ReferenceQueryField<T>;
 
@@ -93,7 +103,7 @@ export interface LedgerAdapter<T> {
 
 export function createEmptyQuery<T>(fields: readonly LedgerQueryField<T>[]): Record<string, QueryValue> {
   return Object.fromEntries(
-    fields.map((field) => [field.key, field.kind === "dateRange" ? { from: "", to: "" } : ""]),
+    fields.map((field) => [field.key, (field.kind === "dateRange" || field.kind === "dateTimeRange") ? { from: "", to: "" } : ""]),
   );
 }
 
@@ -133,7 +143,14 @@ export function matchesQuery<T>(
       return typeof value === "string" && field.read(record) === value;
     }
 
-    if (typeof value === "string") return true;
+    if (typeof value === "string") return field.kind !== "dateTimeRange";
+    if (field.kind === "dateTimeRange") {
+      const actual = Date.parse(field.read(record));
+      const from = value.from ? parseWallTime(value.from)?.getTime() : undefined;
+      const to = value.to ? parseWallTime(value.to)?.getTime() : undefined;
+      return Number.isFinite(actual) && (!value.from || (from !== undefined && actual >= from))
+        && (!value.to || (to !== undefined && actual <= to));
+    }
     const day = field.read(record).slice(0, 10);
     return (!value.from || day >= value.from) && (!value.to || day <= value.to);
   });

@@ -31,6 +31,12 @@ import java.util.UUID;
 @RestControllerAdvice
 public final class FindingApiExceptionHandler {
 
+    @ExceptionHandler(FindingOrganizationReferenceRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidOrganizationReference(FindingOrganizationReferenceRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The organization reference request is invalid", false, List.of());
+    }
+
     @ExceptionHandler(FindingReviewCycleRequestParser.RequestFailure.class)
     ResponseEntity<ErrorResponse> invalidReviewCycle(FindingReviewCycleRequestParser.RequestFailure failure) {
         return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
@@ -154,7 +160,7 @@ public final class FindingApiExceptionHandler {
             org.springframework.transaction.TransactionSystemException.class,
             org.springframework.transaction.UnexpectedRollbackException.class,
             WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
-            AuthorizationWriteGuardUnavailableException.class})
+            AuthorizationWriteGuardUnavailableException.class, FindingDefinitionUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
                 "The finding command could not be completed safely", true, List.of());

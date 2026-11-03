@@ -1,27 +1,22 @@
 import type { components } from "../api/generated/finding-ledger";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import type { FindingRecord, FindingState } from "../domain/finding";
-import { findingLedgerSchema } from "../features/findings/schema";
+import { displayPublishedValue, findingSchemaFromDefinition, loadFindingDefinition, queryBindings, registeredFindingSchema, type FindingDefinition } from "./findingDefinition";
 import {
   mapLedgerQueryToEntityRequest,
   type EntityQueryRequest,
-  type RegisteredEntityV1,
 } from "./entityQueryContract";
 import {
   FindingLedgerAccessError,
   type FindingLedgerAdapter,
+  type FindingDetailSnapshot,
+  type FindingReadOptions,
   type FindingListRequest,
   type FindingView,
 } from "./findingLedger";
 
 type Item = components["schemas"]["FindingListItem"];
 type Detail = components["schemas"]["FindingDetail"];
-
-/**
- * 界面查询项 → 后端字段。reportedAt 没有绑定：契约里 createdAt 是 DATETIME，而映射器只把日期输入映射到 DATE 字段，
- * 不把无时区日期擅自转成时间点，所以按上报日期筛选会明确失败，而不是被悄悄忽略。
- */
-const FIELD_BINDINGS = { keyword: "code", state: "state" } as const;
 
 const VIEW_STATES: Record<Exclude<FindingView, "all">, readonly FindingState[]> = {
   confirmation: ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING"],
@@ -31,14 +26,9 @@ const VIEW_STATES: Record<Exclude<FindingView, "all">, readonly FindingState[]> 
 /** 契约列表/详情没有上报人、责任人、历史（frontend-contract-gap R4），不臆造。 */
 const NOT_PROVIDED = "—";
 
-const GRADE_LABELS: Record<components["schemas"]["FindingDetail"]["grade"], string> = {
-  UNKNOWN: "待专业评估",
-  GENERAL: "一般",
-  MAJOR: "重大",
-};
-
-export function toFindingRecord(item: Item | Detail): FindingRecord {
+export function toFindingRecord(item: Item | Detail, definition: FindingDefinition): FindingRecord {
   return {
+    registeredValues: Object.fromEntries(Object.entries(item).filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value))) as Readonly<Record<string, string | number | boolean | null>>,
     id: item.id,
     code: item.code ?? NOT_PROVIDED,
     description: item.description ?? "",
@@ -47,7 +37,7 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
     reportedAt: item.createdAt ?? "",
     reporter: NOT_PROVIDED,
     responsible: NOT_PROVIDED,
-    riskLabel: GRADE_LABELS[item.grade ?? "UNKNOWN"],
+    riskLabel: definition.fields.grade ? displayPublishedValue(definition.fields.grade, item.grade ?? null) : NOT_PROVIDED,
     round: item.roundNo ?? 1,
     ...(item.version ? { version: item.version } : {}),
     history: [],
@@ -79,40 +69,34 @@ function withViewFilter(request: EntityQueryRequest, view: FindingView): EntityQ
   return { ...request, filterAST: { operator: "AND", conditions } };
 }
 
-/**
- * 隐患台账读取的 HTTP 实现。字段注册表取自 GET /entities/finding/schema 并按 schemaVersion 之外的
- * 生命周期缓存在本适配器实例内——登录、切租户或换账号时必须新建实例，不得跨授权范围复用。
- */
+/** Every read obtains a current effective definition; no adapter-lifetime cache. */
 export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapter {
-  let schemaPromise: Promise<RegisteredEntityV1> | null = null;
-
-  /**
-   * 共享请求不绑定任何一个调用方的取消信号：React StrictMode 会先挂载、卸载再挂载，
-   * 第一次调用的取消不能让第二次调用拿到一个已被取消的缓存请求。调用方各自在等待结束后检查自己的信号。
-   */
-  async function registeredSchema(signal?: AbortSignal): Promise<RegisteredEntityV1> {
-    if (!schemaPromise) {
-      const pending = client.get<{ data: RegisteredEntityV1 }>("/api/v1/entities/finding/schema").then((body) => body.data);
-      // 失败不缓存，下次重试。
-      pending.catch(() => {
-        if (schemaPromise === pending) schemaPromise = null;
-      });
-      schemaPromise = pending;
+  async function getDetailSnapshot(id: string, options?: FindingReadOptions): Promise<FindingDetailSnapshot> {
+    try {
+      const definition = await loadFindingDefinition(client, "READ", options?.signal);
+      const body = await client.get<components["schemas"]["FindingDetailResponse"]>(
+        `/api/v1/entities/finding/${encodeURIComponent(id)}`, { signal: options?.signal },
+      );
+      options?.signal?.throwIfAborted();
+      return { record: toFindingRecord(body.data, definition), definition };
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return { record: null, definition: null };
+      throw toAccessError(error);
     }
-    const schema = await schemaPromise;
-    signal?.throwIfAborted();
-    return schema;
   }
-
   return {
+    publishedDefinition: true,
+    getDetailSnapshot,
     async list({ query, page, view }: FindingListRequest, options) {
       try {
-        const schema = await registeredSchema(options?.signal);
+        const definition = await loadFindingDefinition(client, "READ", options?.signal);
+        const schema = registeredFindingSchema(definition);
         const request = withViewFilter(
           mapLedgerQueryToEntityRequest({
-            ledgerSchema: findingLedgerSchema,
+            ledgerSchema: findingSchemaFromDefinition(definition),
             registeredSchema: schema,
-            fieldBindings: FIELD_BINDINGS,
+            fieldBindings: queryBindings(definition),
+            fields: schema.defaultFields,
             query,
             page,
           }),
@@ -123,7 +107,8 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
           { body: request, signal: options?.signal },
         );
         return {
-          items: body.data.items.map(toFindingRecord),
+          definition,
+          items: body.data.items.map((item) => toFindingRecord(item, definition)),
           page: { index: body.data.page.number, size: body.data.page.size },
           total: body.data.page.total,
           pageCount: body.data.page.pageCount,
@@ -133,17 +118,7 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
       }
     },
     async get(id, options) {
-      try {
-        const body = await client.get<components["schemas"]["FindingDetailResponse"]>(
-          `/api/v1/entities/finding/${encodeURIComponent(id)}`,
-          { signal: options?.signal },
-        );
-        return toFindingRecord(body.data);
-      } catch (error) {
-        // 不存在与无权限同为 404，按契约呈现为“找不到”，不区分原因。
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw toAccessError(error);
-      }
+      return (await getDetailSnapshot(id, options)).record;
     },
   };
 }

@@ -51,6 +51,8 @@ export interface FindingHistoryEntry {
 }
 
 export interface FindingRecord {
+  /** Authorized entity response values used by the published list/detail presentation. */
+  registeredValues?: Readonly<Record<string, string | number | boolean | null>>;
   /** 稳定的内部标识（契约里是 UUID）：用于路由、勾选和读取详情，不用于展示。 */
   id: string;
   /** 业务编号（契约里的 code）：展示给人看和按编号查询。 */

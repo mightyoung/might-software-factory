@@ -2,6 +2,7 @@
 // 仅用于没有后端时开发和测试前端；它不是后端，不代表真实行为、权限或持久化。内存数据，重启即清空。
 // 账号：loginKey=demo / password=demo / tenantCode=demo。
 import { createReviewCycleFixture } from "./review-cycle-fixture.mjs";
+import { syntheticFindingDefinition } from "./definition-fixture.mjs";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
@@ -95,10 +96,10 @@ export function createMockServer(options = {}) {
 
   function validateCreate(b) {
     const errors = [];
-    const known = ["organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade", "sourceCategory", "urgency", "location", "interimMeasure"];
+    const known = ["organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade", "sourceCategory", "urgency", "location", "interimMeasure", "relatedFindingId"];
     for (const k of Object.keys(b)) if (!known.includes(k)) errors.push({ field: k, reason: "UnknownProperty" });
     if (!ORGS.some((o) => o.id === b.organizationId)) errors.push({ field: "organizationId", reason: "NotInScope" });
-    if (typeof b.description !== "string" || cp(b.description) < 1 || cp(b.description) > 20000) errors.push({ field: "description", reason: "Size" });
+    if (typeof b.description !== "string" || b.description.length < 1 || b.description.length > 20000) errors.push({ field: "description", reason: "Size" });
     if (typeof b.discoveredAt !== "string" || Number.isNaN(Date.parse(b.discoveredAt))) errors.push({ field: "discoveredAt", reason: "Pattern" });
     if (b.grade !== "UNKNOWN") errors.push({ field: "grade", reason: "Pattern" });
     if (!["FIELD_OBSERVATION", "INSPECTION", "PERSON_REPORT"].includes(b.sourceCategory)) errors.push({ field: "sourceCategory", reason: "Pattern" });
@@ -141,6 +142,8 @@ export function createMockServer(options = {}) {
     if (!session) return err(res, 401, "AUTH_REQUIRED", "Authentication required");
 
     const visibleFindings = session.mockReviewRole && cycleFixture ? [cycleFixture.finding] : findings;
+    const access = session.mockReviewRole ? { enabled: true, permissions: ["finding.read", ...(session.mockReviewRole === "REPORTER" ? ["finding.create"] : [])] } : navigation();
+    const permits = permission => access.enabled === true && access.permissions.includes(permission);
     const identity = { actorId: session.actorId, accountId: session.accountId, tenantId: session.tenantId, memberId: session.memberId };
     const displayName = session.mockReviewRole ? `MOCK ${session.mockReviewRole}` : "模拟用户";
     if (req.method === "GET" && (path === "/api/v1/session/bootstrap" || /^\/api\/v1\/applications\/[^/]+\/menu$/.test(path))) {
@@ -161,6 +164,29 @@ export function createMockServer(options = {}) {
       return send(res, 200, { data: { ...identity, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName } });
     if (req.method === "GET" && path === "/api/v1/organizations/reportable") return send(res, 200, { data: ORGS });
     if (req.method === "GET" && path === "/api/v1/entities/finding/schema") return send(res, 200, { data: SCHEMA, meta: meta() });
+
+    if (req.method === "GET" && path === "/api/v1/entities/finding/definition") {
+      const use = url.searchParams.get("use");
+      if (!["READ", "CREATE"].includes(use) || [...url.searchParams.keys()].length !== 1) return err(res, 400, "INVALID_REQUEST", "Use must be READ or CREATE");
+      if (access.failure) return err(res, access.failure, "DEPENDENCY_UNAVAILABLE", "Definition unavailable");
+      if (!permits(use === "READ" ? "finding.read" : "finding.create")) return err(res, 403, "ACTION_DENIED", "Definition unavailable");
+      return send(res, 200, { data: syntheticFindingDefinition(SCHEMA, use), meta: { ...meta(), schemaVersion: "1" } });
+    }
+    if (req.method === "POST" && path === "/api/v1/entities/finding/references/report-organization/query") {
+      if (access.failure) return err(res, access.failure, "DEPENDENCY_UNAVAILABLE", "Reference unavailable");
+      if (!permits("finding.create")) return err(res, 403, "ACTION_DENIED", "Reference unavailable");
+      const b = await readJson(req);
+      const limit = b?.limit === undefined ? 20 : b.limit;
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!b || Array.isArray(b) || typeof b.query !== "string" || cp(b.query) > 100 || b.query.includes("\0")
+        || !Number.isInteger(limit) || limit < 1 || limit > 50
+        || (b.afterId != null && (typeof b.afterId !== "string" || !uuid.test(b.afterId)))
+        || Object.keys(b).some(key => !["query", "limit", "afterId"].includes(key))) return err(res, 400, "INVALID_REQUEST", "Invalid reference query");
+      const keyword = b.query.toLowerCase();
+      const matches = ORGS.filter(org => (!b.afterId || org.id > b.afterId.toLowerCase()) && (org.code.toLowerCase().includes(keyword) || org.name.toLowerCase().includes(keyword)));
+      const items = matches.slice(0, limit);
+      return send(res, 200, { data: { items, ...(matches.length > limit ? { nextAfterId: items.at(-1).id } : {}) }, meta: { ...meta(), schemaVersion: "1" } });
+    }
 
     if (req.method === "POST" && path === "/api/v1/entities/finding/query") {
       const b = await readJson(req);

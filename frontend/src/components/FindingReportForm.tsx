@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   FindingSubmitError,
   newIdempotencyKey,
@@ -6,6 +6,7 @@ import {
   type FindingSubmitFailureKind,
   type FindingSubmitResult,
   type ReportableOrganization,
+  type ReportableOrganizationPage,
 } from "../adapters/findingSubmit";
 import {
   findingSourceLabels,
@@ -30,13 +31,16 @@ import {
   type FindingDraftField,
 } from "../domain/findingDraft";
 
+import { CREATE_DRAFT_FIELDS, publishedInputLength, validatePublishedFindingDraft, type FindingDefinition } from "../adapters/findingDefinition";
+
 export interface FindingReportFormProps {
   adapter: FindingSubmitAdapter;
   /** 关闭面板：用户放弃（已确认）或提交成功后选择关闭。 */
   onClose: () => void;
   /** 提交成功：用于让台账刷新列表。 */
   onSubmitted: (result: FindingSubmitResult) => void;
-  onOpenSubmitted: (id: string) => void;
+  /** Present only when the caller has a read flow; a report receipt alone does not grant one. */
+  onOpenSubmitted?: (id: string) => void;
   /** 服务端判定未登录（401）：由应用回到登录页。 */
   onUnauthenticated?: () => void;
   now?: () => Date;
@@ -100,7 +104,16 @@ function Field({
   );
 }
 
-export function FindingReportForm({
+export function FindingReportForm(props: FindingReportFormProps) {
+  const [scope, setScope] = useState({ adapter: props.adapter, generation: 0 });
+  if (scope.adapter !== props.adapter) {
+    setScope({ adapter: props.adapter, generation: scope.generation + 1 });
+    return null;
+  }
+  return <FindingReportFormBody key={scope.generation} {...props} />;
+}
+
+function FindingReportFormBody({
   adapter,
   onClose,
   onSubmitted,
@@ -126,13 +139,21 @@ export function FindingReportForm({
   const [submitFailure, setSubmitFailure] = useState<FindingSubmitFailureKind | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
-  const needsOrganization = adapter.listOrganizations !== undefined;
+  const needsOrganization = adapter.queryOrganizations !== undefined || adapter.listOrganizations !== undefined;
+  const published = adapter.loadDefinition !== undefined;
+  const [definitionState, setDefinitionState] = useState<{ status: "loading" | "error" } | { status: "ready"; value: FindingDefinition }>({ status: "loading" });
+  const definition = definitionState.status === "ready" ? definitionState.value : null;
+  const [definitionReload, setDefinitionReload] = useState(0);
   // 提供组织列表的适配器即真实服务端；合成演示不提供。
   const live = needsOrganization;
   const [orgState, setOrgState] = useState<
-    { status: "loading" } | { status: "error" } | { status: "ready"; items: readonly ReportableOrganization[] }
+    { status: "loading" } | { status: "error" } | ({ status: "ready" } & ReportableOrganizationPage)
   >({ status: "loading" });
   const [organizationId, setOrganizationId] = useState("");
+  const [selectedOrganization, setSelectedOrganization] = useState<ReportableOrganization | null>(null);
+  const [organizationQuery, setOrganizationQuery] = useState("");
+  const [organizationCursor, setOrganizationCursor] = useState<string | undefined>();
+  const organizationGeneration = useRef(0);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [orgReloadTick, setOrgReloadTick] = useState(0);
   const [pendingFocus, setPendingFocus] = useState<FindingDraftField | null>(null);
@@ -157,25 +178,44 @@ export function FindingReportForm({
   }, []);
 
   useEffect(() => {
-    if (!adapter.listOrganizations) return;
+    if (!adapter.loadDefinition) return;
+    let current = true;
     const abort = new AbortController();
+    setDefinitionState({ status: "loading" });
+    adapter.loadDefinition(abort.signal).then((value) => {
+      if (current && !abort.signal.aborted) setDefinitionState({ status: "ready", value });
+    }).catch((error: unknown) => {
+      if (!current || abort.signal.aborted) return;
+      setDefinitionState({ status: "error" });
+      setOrganizationId(""); setSelectedOrganization(null);
+      if (error instanceof FindingSubmitError && error.kind === "unauthenticated") onUnauthenticated?.();
+    });
+    return () => { current = false; abort.abort(); };
+  }, [adapter, definitionReload]);
+
+  useEffect(() => {
+    if (!needsOrganization || (published && !definition)) return;
+    const abort = new AbortController();
+    const generation = ++organizationGeneration.current;
     setOrgState({ status: "loading" });
-    adapter
-      .listOrganizations(abort.signal)
-      .then((items) => {
-        setOrgState({ status: "ready", items });
-        // 只有一个可选组织时直接选中，仍显示出来。
-        if (items.length === 1) setOrganizationId(items[0]!.id);
-      })
-      .catch((error: unknown) => {
-        if (abort.signal.aborted) return;
-        if (error instanceof FindingSubmitError && error.kind === "unauthenticated") onUnauthenticated?.();
-        setOrgState({ status: "error" });
-      });
-    return () => abort.abort();
-    // onUnauthenticated 是回调属性，不作为重新加载的依据。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, orgReloadTick]);
+    const result = adapter.queryOrganizations
+      ? adapter.queryOrganizations({ query: organizationQuery, ...(organizationCursor ? { afterId: organizationCursor } : {}), limit: 20 }, abort.signal)
+      : adapter.listOrganizations!(abort.signal).then((items) => ({ items }));
+    result.then((page) => {
+      if (abort.signal.aborted || organizationGeneration.current !== generation) return;
+      setOrgState({ status: "ready", ...page });
+      // Only the legacy complete-array seam can prove that one item is the entire set.
+      if (!adapter.queryOrganizations && page.items.length === 1) {
+        setOrganizationId(page.items[0]!.id); setSelectedOrganization(page.items[0]!);
+      }
+    }).catch((error: unknown) => {
+      if (abort.signal.aborted || organizationGeneration.current !== generation) return;
+      setOrganizationId(""); setSelectedOrganization(null);
+      if (error instanceof FindingSubmitError && error.kind === "unauthenticated") onUnauthenticated?.();
+      setOrgState({ status: "error" });
+    });
+    return () => { ++organizationGeneration.current; abort.abort(); };
+  }, [adapter, definition, needsOrganization, published, organizationQuery, organizationCursor, orgReloadTick]);
 
   // 字段在提交期间是禁用的，禁用元素无法获得焦点：等重新渲染成可编辑后再聚焦出错字段。
   // 用 layout effect 在提交阶段同步聚焦，焦点不会比错误文字晚一帧出现。
@@ -208,7 +248,8 @@ export function FindingReportForm({
   }
 
   function focusFirstError(next: FindingDraftErrors) {
-    const first = DRAFT_FIELD_ORDER.find((field) => next[field]);
+    const order = definition ? definition.layout.create.map((key) => CREATE_DRAFT_FIELDS[key]).filter((key): key is FindingDraftField => key !== undefined) : DRAFT_FIELD_ORDER;
+    const first = order.find((field) => next[field]);
     if (first) setPendingFocus(first);
   }
 
@@ -234,14 +275,17 @@ export function FindingReportForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting || controller.current) return;
+    if (submitting || controller.current || (published && !definition)) return;
 
-    const found = validateFindingDraft(draft, now());
+    const found = definition ? validatePublishedFindingDraft(draft, definition, now()) : validateFindingDraft(draft, now());
     setErrors(found);
     setSubmitFailure(null);
     if (needsOrganization && !organizationId) setOrgError("请选择所属组织");
+    if (needsOrganization && !organizationId) {
+      document.getElementById(`${uid}-org`)?.focus();
+    }
     if (hasDraftErrors(found)) {
-      focusFirstError(found);
+      if (!needsOrganization || organizationId) focusFirstError(found);
       return;
     }
     if (needsOrganization && !organizationId) return;
@@ -282,11 +326,195 @@ export function FindingReportForm({
     setConfirmDiscard(false);
     lastAttempt.current = null;
     setPhase({ name: "editing" });
+    if (published) { setDefinitionReload((value) => value + 1); setOrganizationId(""); setSelectedOrganization(null); setOrganizationCursor(undefined); setOrganizationQuery(""); }
     queueMicrotask(() => fieldRefs.current.source?.focus());
   }
 
   const describedBy = (field: FindingDraftField, hasHint = false) =>
     [hasHint ? `${ids[field]}-hint` : null, errors[field] ? `${ids[field]}-error` : null].filter(Boolean).join(" ") || undefined;
+
+  const label = (key: string, fallback: string) => definition?.fields[key]?.presentation.label ?? fallback;
+  const required = (key: string, fallback: boolean) => definition?.fields[key]?.presentation.edit?.required ?? fallback;
+  const limit = (key: string, fallback: number) => definition?.fields[key]?.presentation.edit?.maxLength ?? fallback;
+  const length = (key: string, value: string) => definition ? publishedInputLength(value, definition.fields[key]!) : codePointLength(value);
+  const htmlMaxLength = (key: string) => {
+    const hints = definition?.fields[key]?.presentation.edit;
+    return hints?.lengthUnit === "UTF16_CODE_UNITS" && hints.maxLength > 0 ? hints.maxLength : undefined;
+  };
+  const valueLabel = (key: string, value: string, fallback: string) => definition?.fields[key]?.presentation.valueLabels[value] ?? fallback;
+  const sources = definition ? definition.fields.sourceCategory!.presentation.edit!.allowedValues as FindingSource[] : findingSources;
+  const urgencies: readonly FindingUrgency[] = definition
+    ? definition.fields.urgency!.presentation.edit!.allowedValues.map((value) => value === "URGENT" ? "IMMEDIATE" : value) as FindingUrgency[] : findingUrgencies;
+
+  function renderOrganization() {
+    if (!needsOrganization) return null;
+    const pinned = selectedOrganization && (orgState.status !== "ready" || !orgState.items.some((item) => item.id === selectedOrganization.id)) ? selectedOrganization : null;
+    return <Field id={`${uid}-org`} label={label("organizationId", "所属组织")} required={required("organizationId", true)} error={orgError ?? undefined}>
+      {adapter.queryOrganizations && <label><span>检索组织</span><input type="search" value={organizationQuery} autoFocus={published}
+        disabled={submitting} onChange={(event) => { const value = event.target.value; if ([...value].length <= 100) { setOrganizationQuery(value); setOrganizationCursor(undefined); } }} /></label>}
+      {orgState.status === "error" ? <p>组织列表加载失败。<button type="button" className="button button-subtle" onClick={() => setOrgReloadTick((n) => n + 1)}>重试</button></p> : <>
+        <select id={`${uid}-org`} value={organizationId} aria-invalid={Boolean(orgError)} disabled={submitting || orgState.status !== "ready"}
+          onChange={(event) => { const id = event.target.value; setOrganizationId(id); setSelectedOrganization(id ? (orgState.status === "ready" ? orgState.items.find((item) => item.id === id) ?? pinned : pinned) : null); setOrgError(null); }}>
+          <option value="">{orgState.status === "loading" ? "加载中…" : "请选择"}</option>
+          {pinned && <option value={pinned.id}>{pinned.name}（已选）</option>}
+          {orgState.status === "ready" && orgState.items.map((org) => <option key={org.id} value={org.id}>{adapter.queryOrganizations ? `${org.name}（${org.code}）` : org.name}</option>)}
+        </select>
+        {orgState.status === "ready" && orgState.items.length === 0 && <p className="field-hint">当前检索没有可上报的组织。</p>}
+        {adapter.queryOrganizations && orgState.status === "ready" && orgState.nextAfterId && <button type="button" className="button button-subtle" disabled={submitting}
+          onClick={() => { setOrganizationCursor(orgState.nextAfterId); }}>下一页组织</button>}
+      </>}
+    </Field>;
+  }
+
+  function renderControl(key: string): ReactNode {
+    switch (key) {
+      case "organizationId": return (renderOrganization());
+      case "sourceCategory": return (<Field id={ids.source} label={label("sourceCategory", "来源")} required={required("sourceCategory", true)} notWired={!live} error={errors.source}>
+          <select
+            id={ids.source}
+            ref={(node) => {
+              fieldRefs.current.source = node;
+            }}
+            value={draft.source}
+            aria-invalid={Boolean(errors.source)}
+            aria-describedby={describedBy("source")}
+            disabled={submitting}
+            onChange={(event) => update("source", event.target.value as FindingSource)}
+          >
+            {sources.map((source) => (
+              <option key={source} value={source}>
+                {valueLabel("sourceCategory", source, findingSourceLabels[source])}
+              </option>
+            ))}
+          </select>
+        </Field>);
+      case "discoveredAt": return (<Field
+          id={ids.foundAt}
+          label={label("discoveredAt", "发现时间")}
+          required={required("discoveredAt", true)}
+          error={errors.foundAt}
+          hint={
+            isBackfill(draft.foundAt, now())
+              ? "发现时间早于当前时间超过 24 小时，将按补报处理：发现时间和上报时间会分别保存。"
+              : "按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。"
+          }
+        >
+          <input
+            id={ids.foundAt}
+            ref={(node) => {
+              fieldRefs.current.foundAt = node;
+            }}
+            type="datetime-local"
+            value={draft.foundAt}
+            max={formatLocalDateTime(now())}
+            aria-invalid={Boolean(errors.foundAt)}
+            aria-describedby={describedBy("foundAt", true)}
+            disabled={submitting}
+            onChange={(event) => update("foundAt", event.target.value)}
+          />
+        </Field>);
+      case "location": return (<Field id={ids.location} label={label("location", "所在位置 / 设备")} required={required("location", true)} notWired={!live} error={errors.location}>
+          <input
+            id={ids.location}
+            ref={(node) => {
+              fieldRefs.current.location = node;
+            }}
+            type="text"
+            value={draft.location}
+            maxLength={definition ? htmlMaxLength("location") : DRAFT_LIMITS.locationMax + 20}
+            aria-invalid={Boolean(errors.location)}
+            aria-describedby={describedBy("location")}
+            disabled={submitting}
+            onChange={(event) => update("location", event.target.value)}
+          />
+        </Field>);
+      case "description": return (<Field
+          id={ids.description}
+          label={label("description", "隐患描述")}
+          required={required("description", true)}
+          error={errors.description}
+          hint={`写清楚看到了什么、在哪里。${length("description", draft.description.trim())}/${limit("description", DRAFT_LIMITS.descriptionMax)}`}
+        >
+          <textarea
+            id={ids.description}
+            ref={(node) => {
+              fieldRefs.current.description = node;
+            }}
+            rows={4}
+            maxLength={definition ? htmlMaxLength("description") : undefined}
+            value={draft.description}
+            aria-invalid={Boolean(errors.description)}
+            aria-describedby={describedBy("description", true)}
+            disabled={submitting}
+            onChange={(event) => update("description", event.target.value)}
+          />
+        </Field>);
+      case "urgency": return (<fieldset
+          className="report-field report-radios"
+          aria-describedby={describedBy("urgency")}
+          aria-invalid={Boolean(errors.urgency)}
+          disabled={submitting}
+        >
+          <legend>
+            {label("urgency", "紧急程度")}{required("urgency", true) && <span className="required-mark" aria-hidden="true"> *</span>}
+            {!live && <NotWiredTag />}
+          </legend>
+          <div className="report-radio-row">
+            {urgencies.map((urgency, index) => (
+              <label key={urgency} className="report-radio">
+                <input
+                  type="radio"
+                  name={ids.urgency}
+                  value={urgency}
+                  checked={draft.urgency === urgency}
+                  ref={
+                    index === 0
+                      ? (node) => {
+                          fieldRefs.current.urgency = node;
+                        }
+                      : undefined
+                  }
+                  onChange={() => update("urgency", urgency as FindingUrgency)}
+                />
+                {valueLabel("urgency", urgency === "IMMEDIATE" ? "URGENT" : urgency, findingUrgencyLabels[urgency])}
+              </label>
+            ))}
+          </div>
+          {errors.urgency && (
+            <p className="field-error" id={`${ids.urgency}-error`}>
+              {errors.urgency}
+            </p>
+          )}
+          {draft.urgency === "IMMEDIATE" && (
+            <p className="report-warning" role="note">
+              选择“需立即处置”不会触发任何通知或呼叫。请先通过现场应急渠道报告。
+            </p>
+          )}
+        </fieldset>);
+      case "interimMeasure": return (<Field
+          id={ids.interimMeasure}
+          label={label("interimMeasure", "已采取的临时措施（选填）")}
+          required={required("interimMeasure", false)} notWired={!live}
+          error={errors.interimMeasure}
+          hint={`${length("interimMeasure", draft.interimMeasure.trim())}/${limit("interimMeasure", DRAFT_LIMITS.interimMeasureMax)}`}
+        >
+          <textarea
+            id={ids.interimMeasure}
+            ref={(node) => {
+              fieldRefs.current.interimMeasure = node;
+            }}
+            rows={2}
+            maxLength={definition ? htmlMaxLength("interimMeasure") : undefined}
+            value={draft.interimMeasure}
+            aria-invalid={Boolean(errors.interimMeasure)}
+            aria-describedby={describedBy("interimMeasure", true)}
+            disabled={submitting}
+            onChange={(event) => update("interimMeasure", event.target.value)}
+          />
+        </Field>);
+      default: return null;
+    }
+  }
 
   if (phase.name === "submitted") {
     const { result } = phase;
@@ -317,9 +545,9 @@ export function FindingReportForm({
           )}
         </section>
         <div className="report-actions">
-          <button type="button" className="button button-primary" onClick={() => onOpenSubmitted(result.id)}>
+          {onOpenSubmitted && <button type="button" className="button button-primary" onClick={() => onOpenSubmitted(result.id)}>
             查看详情
-          </button>
+          </button>}
           <button type="button" className="button button-subtle" onClick={startAnother}>
             继续上报
           </button>
@@ -336,7 +564,7 @@ export function FindingReportForm({
       <div className="detail-heading">
         <div>
           <h2>新建上报</h2>
-          <p>隐患发现 · 合成演示</p>
+          <p>隐患发现{live ? "" : " · 合成演示"}</p>
         </div>
         <button className="icon-button" type="button" aria-label="关闭上报" onClick={requestClose} disabled={submitting}>
           ×
@@ -367,199 +595,14 @@ export function FindingReportForm({
           </p>
         )}
 
-        {needsOrganization && (
-          <Field
-            id={`${uid}-org`}
-            label="所属组织"
-            required
-            error={orgError ?? undefined}
-            hint={
-              orgState.status === "ready" && orgState.items.length === 0
-                ? "你当前没有可上报的组织，无法提交。请联系管理员授权。"
-                : undefined
-            }
-          >
-            {orgState.status === "error" ? (
-              <p>
-                组织列表加载失败。
-                <button type="button" className="button button-subtle" onClick={() => setOrgReloadTick((n) => n + 1)}>
-                  重试
-                </button>
-              </p>
-            ) : (
-              <select
-                id={`${uid}-org`}
-                value={organizationId}
-                aria-invalid={Boolean(orgError)}
-                disabled={submitting || orgState.status !== "ready" || orgState.items.length === 0}
-                onChange={(event) => {
-                  setOrganizationId(event.target.value);
-                  setOrgError(null);
-                }}
-              >
-                <option value="">{orgState.status === "loading" ? "加载中…" : "请选择"}</option>
-                {orgState.status === "ready" &&
-                  orgState.items.map((org) => (
-                    <option key={org.id} value={org.id}>
-                      {org.name}
-                    </option>
-                  ))}
-              </select>
-            )}
-          </Field>
-        )}
-
-        <Field id={ids.source} label="来源" required notWired={!live} error={errors.source}>
-          <select
-            id={ids.source}
-            ref={(node) => {
-              fieldRefs.current.source = node;
-            }}
-            value={draft.source}
-            aria-invalid={Boolean(errors.source)}
-            aria-describedby={describedBy("source")}
-            disabled={submitting}
-            onChange={(event) => update("source", event.target.value as FindingSource)}
-          >
-            {findingSources.map((source) => (
-              <option key={source} value={source}>
-                {findingSourceLabels[source]}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field
-          id={ids.foundAt}
-          label="发现时间"
-          required
-          error={errors.foundAt}
-          hint={
-            isBackfill(draft.foundAt, now())
-              ? "发现时间早于当前时间超过 24 小时，将按补报处理：发现时间和上报时间会分别保存。"
-              : "按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。"
-          }
-        >
-          <input
-            id={ids.foundAt}
-            ref={(node) => {
-              fieldRefs.current.foundAt = node;
-            }}
-            type="datetime-local"
-            value={draft.foundAt}
-            max={formatLocalDateTime(now())}
-            aria-invalid={Boolean(errors.foundAt)}
-            aria-describedby={describedBy("foundAt", true)}
-            disabled={submitting}
-            onChange={(event) => update("foundAt", event.target.value)}
-          />
-        </Field>
-
-        <Field id={ids.location} label="所在位置 / 设备" required notWired={!live} error={errors.location}>
-          <input
-            id={ids.location}
-            ref={(node) => {
-              fieldRefs.current.location = node;
-            }}
-            type="text"
-            value={draft.location}
-            maxLength={DRAFT_LIMITS.locationMax + 20}
-            aria-invalid={Boolean(errors.location)}
-            aria-describedby={describedBy("location")}
-            disabled={submitting}
-            onChange={(event) => update("location", event.target.value)}
-          />
-        </Field>
-
-        <Field
-          id={ids.description}
-          label="隐患描述"
-          required
-          error={errors.description}
-          hint={`写清楚看到了什么、在哪里。${codePointLength(draft.description.trim())}/${DRAFT_LIMITS.descriptionMax}`}
-        >
-          <textarea
-            id={ids.description}
-            ref={(node) => {
-              fieldRefs.current.description = node;
-            }}
-            rows={4}
-            value={draft.description}
-            aria-invalid={Boolean(errors.description)}
-            aria-describedby={describedBy("description", true)}
-            disabled={submitting}
-            onChange={(event) => update("description", event.target.value)}
-          />
-        </Field>
-
-        <fieldset
-          className="report-field report-radios"
-          aria-describedby={describedBy("urgency")}
-          aria-invalid={Boolean(errors.urgency)}
-          disabled={submitting}
-        >
-          <legend>
-            紧急程度<span className="required-mark" aria-hidden="true"> *</span>
-            {!live && <NotWiredTag />}
-          </legend>
-          <div className="report-radio-row">
-            {findingUrgencies.map((urgency, index) => (
-              <label key={urgency} className="report-radio">
-                <input
-                  type="radio"
-                  name={ids.urgency}
-                  value={urgency}
-                  checked={draft.urgency === urgency}
-                  ref={
-                    index === 0
-                      ? (node) => {
-                          fieldRefs.current.urgency = node;
-                        }
-                      : undefined
-                  }
-                  onChange={() => update("urgency", urgency as FindingUrgency)}
-                />
-                {findingUrgencyLabels[urgency]}
-              </label>
-            ))}
-          </div>
-          {errors.urgency && (
-            <p className="field-error" id={`${ids.urgency}-error`}>
-              {errors.urgency}
-            </p>
-          )}
-          {draft.urgency === "IMMEDIATE" && (
-            <p className="report-warning" role="note">
-              选择“需立即处置”不会触发任何通知或呼叫。请先通过现场应急渠道报告。
-            </p>
-          )}
-        </fieldset>
-
-        <Field
-          id={ids.interimMeasure}
-          label="已采取的临时措施（选填）"
-          notWired={!live}
-          error={errors.interimMeasure}
-          hint={`${codePointLength(draft.interimMeasure.trim())}/${DRAFT_LIMITS.interimMeasureMax}`}
-        >
-          <textarea
-            id={ids.interimMeasure}
-            ref={(node) => {
-              fieldRefs.current.interimMeasure = node;
-            }}
-            rows={2}
-            value={draft.interimMeasure}
-            aria-invalid={Boolean(errors.interimMeasure)}
-            aria-describedby={describedBy("interimMeasure", true)}
-            disabled={submitting}
-            onChange={(event) => update("interimMeasure", event.target.value)}
-          />
-        </Field>
+        {published && definitionState.status === "loading" && <p role="status">正在读取上报定义…</p>}
+        {published && definitionState.status === "error" && <p role="alert">上报定义读取失败，尚不能提交。<button type="button" onClick={() => setDefinitionReload((value) => value + 1)}>重试定义</button></p>}
+        {(!published || definition) && (definition?.layout.create ?? ["organizationId", "sourceCategory", "discoveredAt", "location", "description", "urgency", "interimMeasure"]).map((key) => <Fragment key={key}>{renderControl(key)}</Fragment>)}
 
         <div className="report-readonly">
           <div>
-            <span>隐患等级</span>
-            <strong className="status-label status-muted">待判定</strong>
+            <span>{label("grade", "隐患等级")}</span>
+            <strong className="status-label status-muted">{valueLabel("grade", "UNKNOWN", "待判定")}</strong>
           </div>
           <p>由有权限人员依据适用规则确认，上报时不可选择。</p>
         </div>
@@ -585,9 +628,9 @@ export function FindingReportForm({
             <button
               type="submit"
               className="button button-primary"
-              disabled={submitting || (needsOrganization && orgState.status === "ready" && orgState.items.length === 0)}
+              disabled={submitting || (published && !definition) || (needsOrganization && !organizationId && (orgState.status !== "ready" || orgState.items.length === 0))}
             >
-              {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : "提交上报"}
+              {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : definition?.actions["finding.create"]?.label ?? "提交上报"}
             </button>
           </div>
         )}

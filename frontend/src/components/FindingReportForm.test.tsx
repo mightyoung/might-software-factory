@@ -9,6 +9,8 @@ import {
 } from "../adapters/findingSubmit";
 import type { FindingDraft } from "../domain/findingDraft";
 
+import { findingDefinitionFixture } from "../adapters/findingDefinition.fixtures";
+
 const NOW = new Date("2026-10-30T14:30:00+08:00"); // 上海时间
 const RESULT: FindingSubmitResult = {
   id: "00000000-0000-4000-8000-000000000008",
@@ -439,5 +441,86 @@ describe("所属组织选择", () => {
     fireEvent.click(await screen.findByRole("button", { name: "重试" }));
     expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
     expect(list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("published create form and bounded organization search", () => {
+  const orgA = { id: "00000000-0000-4000-8000-000000000101", code: "A", name: "甲车间" };
+  const orgB = { id: "00000000-0000-4000-8000-000000000102", code: "B", name: "乙车间" };
+
+  it("uses published labels/order and never auto-selects a one-item page", async () => {
+    const definition = findingDefinitionFixture("CREATE"); definition.fields.description!.presentation.label = "现场描述";
+    const adapter: FindingSubmitAdapter = { loadDefinition: async () => definition, queryOrganizations: vi.fn(async () => ({ items: [orgA], nextAfterId: orgA.id })), submit: vi.fn(async () => RESULT) };
+    setup(undefined, { adapter });
+    const description = await screen.findByLabelText(/现场描述/);
+    const org = await screen.findByLabelText(/所属组织/);
+    await waitFor(() => expect(org).toBeEnabled());
+    expect(org).toHaveValue("");
+    expect(org.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(field(/所在位置/)).not.toHaveAttribute("maxlength");
+    expect(description).toHaveAttribute("maxlength", "20000");
+    expect(screen.queryByLabelText(/来源事件|关联风险|关联隐患/)).not.toBeInTheDocument();
+    fireEvent.change(description, { target: { value: "短" } });
+    fireEvent.change(field(/所在位置/), { target: { value: "😀".repeat(200) } });
+    fireEvent.click(submitButton());
+    expect(adapter.submit).not.toHaveBeenCalled();
+    expect(screen.getByText("请选择所属组织")).toBeInTheDocument();
+    fireEvent.change(org, { target: { value: orgA.id } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(adapter.submit).toHaveBeenCalledOnce());
+    expect(adapter.queryOrganizations).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests only the selected next page and retains the selected stable ID", async () => {
+    const query = vi.fn(async ({ afterId }: { afterId?: string }) => afterId ? { items: [orgB] } : { items: [orgA], nextAfterId: orgA.id });
+    const adapter: FindingSubmitAdapter = { loadDefinition: async () => findingDefinitionFixture("CREATE"), queryOrganizations: query, submit: vi.fn(async () => RESULT) };
+    setup(undefined, { adapter });
+    const org = await screen.findByLabelText(/所属组织/);
+    await screen.findByRole("button", { name: "下一页组织" });
+    fireEvent.change(org, { target: { value: orgA.id } });
+    fireEvent.click(screen.getByRole("button", { name: "下一页组织" }));
+    await screen.findByRole("option", { name: /乙车间/ });
+    expect(org).toHaveValue(orgA.id);
+    expect(screen.getByRole("option", { name: /甲车间.*已选/ })).toBeInTheDocument();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[0]).toEqual({ query: "", afterId: orgA.id, limit: 20 });
+  });
+
+  it("aborts obsolete search and ignores stale results even if the port ignores cancellation", async () => {
+    const old = deferred<{ items: typeof orgA[] }>();
+    const query = vi.fn(({ query }: { query: string }) => query ? Promise.resolve({ items: [orgB] }) : old.promise);
+    const adapter: FindingSubmitAdapter = { loadDefinition: async () => findingDefinitionFixture("CREATE"), queryOrganizations: query, submit: async () => RESULT };
+    setup(undefined, { adapter });
+    const search = await screen.findByLabelText("检索组织");
+    await waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+    fireEvent.change(search, { target: { value: "乙" } });
+    await screen.findByRole("option", { name: /乙车间/ });
+    await act(async () => old.resolve({ items: [orgA] }));
+    expect(screen.queryByRole("option", { name: /甲车间/ })).not.toBeInTheDocument();
+    expect((query.mock.calls[0] as unknown[])[1]).toMatchObject({ aborted: true });
+  });
+
+  it("clears old draft, selection and pending results when the adapter context changes", async () => {
+    const old = deferred<{ items: typeof orgA[] }>();
+    const first: FindingSubmitAdapter = { loadDefinition: async () => findingDefinitionFixture("CREATE"), queryOrganizations: () => old.promise, submit: async () => RESULT };
+    const second: FindingSubmitAdapter = { loadDefinition: async () => findingDefinitionFixture("CREATE"), queryOrganizations: async () => ({ items: [orgB] }), submit: async () => RESULT };
+    const view = setup(undefined, { adapter: first });
+    fireEvent.change(await screen.findByLabelText(/隐患描述/), { target: { value: "上个身份的内容" } });
+    view.rerender(<FindingReportForm {...view.props} adapter={second} />);
+    await screen.findByRole("option", { name: /乙车间/ });
+    expect(field(/隐患描述/)).toHaveValue("");
+    expect(field(/所属组织/)).toHaveValue("");
+    await act(async () => old.resolve({ items: [orgA] }));
+    expect(screen.queryByRole("option", { name: /甲车间/ })).not.toBeInTheDocument();
+  });
+
+  it("does not fall back to synthetic fields or submit when the definition is denied", async () => {
+    const adapter: FindingSubmitAdapter = { loadDefinition: async () => { throw new FindingSubmitError("forbidden"); }, queryOrganizations: vi.fn(), submit: vi.fn() };
+    setup(undefined, { adapter });
+    await screen.findByText(/上报定义读取失败/);
+    expect(screen.queryByLabelText(/隐患描述/)).not.toBeInTheDocument();
+    expect(submitButton()).toBeDisabled();
+    expect(adapter.queryOrganizations).not.toHaveBeenCalled();
+    expect(adapter.submit).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,10 @@ import type { FindingCommandAdapter } from "../adapters/findingCommands";
 import { FindingCommandPanel } from "./FindingCommandPanel";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
+import { displayPublishedValue, publishedFieldValue, type FindingDefinition } from "../adapters/findingDefinition";
+
 interface FindingDetailsProps {
+  definition?: FindingDefinition | null;
   finding: FindingRecord | null;
   loading: boolean;
   error: FindingLedgerReadFailureKind | null;
@@ -26,7 +29,7 @@ interface FindingDetailsProps {
   onForbidden?: () => void;
 }
 
-export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
+export function FindingDetails({ definition, finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
       <div className="detail-heading">
@@ -53,7 +56,10 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
         <>
           <section className="detail-section">
             <h3>基本信息</h3>
-            <dl className="detail-list">
+            {definition ? <dl className="detail-list">{definition.layout.detail.map((key) => <div key={key}>
+              <dt>{definition.fields[key]!.presentation.label}</dt>
+              <dd>{displayPublishedValue(definition.fields[key]!, publishedFieldValue(finding, key))}</dd>
+            </div>)}</dl> : (            <dl className="detail-list">
               <div>
                 <dt>隐患摘要</dt>
                 <dd>{finding.description}</dd>
@@ -101,17 +107,18 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                 <dt>整改责任人</dt>
                 <dd>{finding.responsible}</dd>
               </div>
-            </dl>
+            </dl>)}
+
           </section>
 
           <section className="detail-section state-summary" aria-label="当前状态">
             <div>
               <span>当前状态</span>
-              <strong className="status-label status-current">{findingStateLabels[finding.state]}</strong>
+              <strong className="status-label status-current">{definition?.fields.state ? displayPublishedValue(definition.fields.state, publishedFieldValue(finding, "state")) : findingStateLabels[finding.state]}</strong>
             </div>
             <div>
               <span>风险等级</span>
-              <strong className="status-label status-muted">{finding.riskLabel}</strong>
+              <strong className="status-label status-muted">{definition?.fields.grade ? displayPublishedValue(definition.fields.grade, publishedFieldValue(finding, "grade")) : finding.riskLabel}</strong>
             </div>
             {!commandAdapter && <p>风险等级保持待评估，合成样例不作专业判断。</p>}
           </section>

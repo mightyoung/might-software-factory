@@ -4,16 +4,8 @@ import { findingUrgencyLabels } from "../domain/finding";
 import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpFindingLedger } from "./httpFindingLedger";
 
-const field = (type: string, operators: string[], extra = {}) => ({ type, nullable: false, selectable: true, sortable: true, operators, maxLength: 0, enumValues: [], ...extra });
-const schema = {
-  key: "finding", schemaVersion: "5", idField: "id", defaultFields: ["id"],
-  fields: {
-    id: field("UUID", ["EQ", "IN"]),
-    code: field("TEXT", ["EQ", "CONTAINS"], { maxLength: 64 }),
-    state: field("ENUM", ["EQ", "IN"], { enumValues: ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "ACCEPTANCE_PENDING", "CLOSED"] }),
-    createdAt: field("DATETIME", ["GTE", "LTE"]),
-  },
-};
+import { definitionResponse } from "./findingDefinition.fixtures";
+
 const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, reviewCycle: 3, reviewProtocol: "CYCLE_V1", createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
 const q = { keyword: "", state: "", reportedAt: { from: "", to: "" } };
 
@@ -22,7 +14,7 @@ function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string
   let schemaCalls = 0;
   const client = {
     get: async (path: string) => {
-      if (path.endsWith("/schema")) { schemaCalls++; return { data: schema }; }
+      if (path.includes("/definition?use=")) { schemaCalls++; return definitionResponse(path.endsWith("CREATE") ? "CREATE" : "READ"); }
       const r = handlers.get!(path); if (r instanceof Error) throw r; return r;
     },
     post: async (_p: string, req: { body: unknown }) => { posts.push(req.body); const r = handlers.post!(req.body); if (r instanceof Error) throw r; return r; },
@@ -32,12 +24,12 @@ function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string
 const listBody = { data: { items: [item], page: { number: 2, size: 20, total: 41, pageCount: 3 } }, meta: {} };
 
 describe("createHttpFindingLedger", () => {
-  it("maps query, appends the view filter, maps records, and fetches the schema once", async () => {
+  it("maps query, appends the view filter, maps records, and revalidates the definition for every list read", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);
     const result = await ledger.list({ query: { ...q, keyword: "YH" }, page: { index: 2, size: 20 }, view: "confirmation" });
     await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
-    expect(f.schemaCalls()).toBe(1);
+    expect(f.schemaCalls()).toBe(2);
     expect(f.posts[0]).toMatchObject({
       page: { number: 2 }, size: 20,
       filterAST: { operator: "AND", conditions: [
@@ -72,7 +64,7 @@ describe("createHttpFindingLedger", () => {
   it.each(["NORMAL", "IMMEDIATE"] as const)("preserves %s urgency through submit, list and detail", async (urgency) => {
     let persisted: typeof item | undefined;
     const client = {
-      get: async (path: string) => ({ data: path.endsWith("/schema") ? schema : persisted }),
+      get: async (path: string) => path.includes("/definition?use=") ? definitionResponse(path.endsWith("CREATE") ? "CREATE" : "READ") : ({ data: persisted }),
       post: async (path: string, request: { body: { urgency: string } }) => {
         if (path === "/api/v1/findings") {
           persisted = { ...item, urgency: request.body.urgency };
@@ -92,7 +84,7 @@ describe("createHttpFindingLedger", () => {
     expect((await ledger.get(created.id))?.urgency).toBe(urgency);
   });
 
-  it("a cancelled first call does not poison the shared schema request for the next call (StrictMode)", async () => {
+  it("a cancelled first call does not poison the next definition request for the next call (StrictMode)", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);
     const first = new AbortController();
@@ -101,13 +93,13 @@ describe("createHttpFindingLedger", () => {
     first.abort();
     await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
     await expect(ledger.list(req, { signal: new AbortController().signal })).resolves.toMatchObject({ total: 41 });
-    expect(f.schemaCalls()).toBe(1);
+    expect(f.schemaCalls()).toBe(2);
   });
 
   it("refuses a report-date filter instead of silently ignoring it", async () => {
     const f = fake({ post: () => listBody });
     const call = createHttpFindingLedger(f.client).list({ query: { ...q, reportedAt: { from: "2026-10-01", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
-    await expect(call).rejects.toThrow(/binding/);
+    await expect(call).rejects.toThrow(/schema|field/);
     expect(f.posts).toHaveLength(0);
   });
 
@@ -126,4 +118,14 @@ describe("createHttpFindingLedger", () => {
     expect(await createHttpFindingLedger(f.client).get("a/b")).toBeNull();
     expect(paths).toEqual(["/api/v1/entities/finding/a%2Fb"]);
   });
+});
+
+it("does not reuse a warm definition after current authorization is denied", async () => {
+  let denied = false, posts = 0;
+  const client = { get: async () => { if (denied) throw new ApiError(403, "FORBIDDEN", null, false); return definitionResponse(); }, post: async () => { ++posts; return listBody; } } as unknown as HttpClient;
+  const ledger = createHttpFindingLedger(client);
+  await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+  denied = true;
+  await expect(ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" })).rejects.toMatchObject({ kind: "forbidden" });
+  expect(posts).toBe(1);
 });

@@ -1,0 +1,325 @@
+{
+  "key": "finding",
+  "schemaVersion": "5",
+  "idField": "id",
+  "defaultFields": [
+    "id",
+    "code",
+    "organizationId",
+    "organizationName",
+    "description",
+    "discoveredAt",
+    "sourceCategory",
+    "urgency",
+    "location",
+    "interimMeasure",
+    "backfill",
+    "sourceEventId",
+    "riskId",
+    "relatedFindingId",
+    "grade",
+    "state",
+    "roundNo",
+    "createdAt"
+  ],
+  "fields": {
+    "id": {
+      "type": "UUID",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "IN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "code": {
+      "type": "TEXT",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "CONTAINS"
+      ],
+      "maxLength": 64,
+      "enumValues": []
+    },
+    "organizationId": {
+      "type": "UUID",
+      "nullable": false,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "organizationName": {
+      "type": "TEXT",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "description": {
+      "type": "TEXT",
+      "nullable": false,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "discoveredAt": {
+      "type": "DATETIME",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE",
+        "BETWEEN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "sourceCategory": {
+      "type": "ENUM",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IN",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": [
+        "FIELD_OBSERVATION",
+        "INSPECTION",
+        "PERSON_REPORT"
+      ]
+    },
+    "urgency": {
+      "type": "ENUM",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IN",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": [
+        "NORMAL",
+        "URGENT"
+      ]
+    },
+    "location": {
+      "type": "TEXT",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "interimMeasure": {
+      "type": "TEXT",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "backfill": {
+      "type": "BOOLEAN",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "sourceEventId": {
+      "type": "UUID",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IN",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "riskId": {
+      "type": "UUID",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IN",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "relatedFindingId": {
+      "type": "UUID",
+      "nullable": true,
+      "selectable": true,
+      "sortable": false,
+      "operators": [
+        "EQ",
+        "IN",
+        "IS_NULL",
+        "IS_NOT_NULL"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "grade": {
+      "type": "ENUM",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "IN"
+      ],
+      "maxLength": 0,
+      "enumValues": [
+        "UNKNOWN",
+        "GENERAL",
+        "MAJOR"
+      ]
+    },
+    "state": {
+      "type": "ENUM",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "IN"
+      ],
+      "maxLength": 0,
+      "enumValues": [
+        "DISCOVERED",
+        "PERSON_CONFIRM_PENDING",
+        "SAFETY_CONFIRM_PENDING",
+        "REPORTER_SUPPLEMENT_PENDING",
+        "SAFETY_DISPATCH_PENDING",
+        "RECTIFYING",
+        "ACCEPTANCE_PENDING",
+        "NOT_ESTABLISHED",
+        "CLOSED"
+      ]
+    },
+    "roundNo": {
+      "type": "NUMBER",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE",
+        "BETWEEN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "reviewCycle": {
+      "type": "NUMBER",
+      "nullable": false,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "reviewProtocol": {
+      "type": "ENUM",
+      "nullable": false,
+      "selectable": true,
+      "sortable": false,
+      "operators": [],
+      "maxLength": 0,
+      "enumValues": [
+        "LEGACY",
+        "CYCLE_V1"
+      ]
+    },
+    "version": {
+      "type": "NUMBER",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE",
+        "BETWEEN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "createdAt": {
+      "type": "DATETIME",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE",
+        "BETWEEN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    },
+    "updatedAt": {
+      "type": "DATETIME",
+      "nullable": false,
+      "selectable": true,
+      "sortable": true,
+      "operators": [
+        "EQ",
+        "GT",
+        "GTE",
+        "LT",
+        "LTE",
+        "BETWEEN"
+      ],
+      "maxLength": 0,
+      "enumValues": []
+    }
+  }
+}

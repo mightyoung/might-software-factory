@@ -93,10 +93,10 @@ class SoftwareFactoryStartupContextTest {
                 .contains("JdbcEventPublicationRepository");
 
         var repositories = applicationContext.getBeansWithAnnotation(Repository.class);
-        assertThat(repositories).hasSize(27).containsKeys(
+        assertThat(repositories).hasSize(28).containsKeys(
                 "jooqFindingReviewHistoryRepository", "jooqAuthenticationEvents", "jooqFindingDispatchCandidateReadRepository",
                 "jooqFindingEvidenceUploadRepository", "jooqFindingEvidenceUploadReadRepository",
-                "jooqFindingEvidenceSetInitializationRepository");
+                "jooqFindingEvidenceSetInitializationRepository", "jooqFindingDefinitionReadRepository");
         repositories.forEach((name, repository) ->
                 assertThat(AopUtils.isJdkDynamicProxy(repository)).as(name).isTrue());
 

@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import type { FindingDraft } from "../domain/findingDraft";
 import { createHttpFindingSubmit } from "./httpFindingSubmit";
+import { definitionResponse } from "./findingDefinition.fixtures";
 
 const draft: FindingDraft = { source: "INSPECTION", description: "防护罩松动", location: "B 工房", foundAt: "2026-10-30T09:00", urgency: "IMMEDIATE", interimMeasure: "" };
 const ok = { data: { findingId: "f1", code: "YH-20261030-0001", state: "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1 } };
 
 function client(result: unknown) {
   const calls: { path: string; req: { body: Record<string, unknown>; headers: Record<string, string> } }[] = [];
-  const c = { post: async (path: string, req: never) => { calls.push({ path, req }); if (result instanceof Error) throw result; return result; } } as unknown as HttpClient;
+  const c = { get: async () => definitionResponse("CREATE"), post: async (path: string, req: never) => { calls.push({ path, req }); if (result instanceof Error) throw result; return result; } } as unknown as HttpClient;
   return { c, calls };
 }
 
@@ -32,8 +33,10 @@ describe("createHttpFindingSubmit", () => {
     const { c, calls } = client(ok);
     await expect(createHttpFindingSubmit(c).submit(draft, { idempotencyKey: "k" })).rejects.toMatchObject({ kind: "validation" });
     expect(calls).toHaveLength(0);
-    const list = { get: async () => ({ data: [{ id: "o1", code: "A", name: "一车间" }] }) } as unknown as HttpClient;
-    expect(await createHttpFindingSubmit(list).listOrganizations!()).toEqual([{ id: "o1", code: "A", name: "一车间" }]);
+    const id = "00000000-0000-4000-8000-000000000001";
+    const list = { post: async () => ({ data: { items: [{ id, code: "A", name: "一车间" }] }, meta: { schemaVersion: "1" } }) } as unknown as HttpClient;
+    expect(await createHttpFindingSubmit(list).queryOrganizations!({ query: "", limit: 20 })).toEqual({ items: [{ id, code: "A", name: "一车间" }] });
+
   });
 
   it("maps statuses and backend field paths", async () => {
@@ -45,5 +48,32 @@ describe("createHttpFindingSubmit", () => {
     const { c } = client(new ApiError(400, "INVALID", "t", false, [{ field: "sourceCategory", reason: "NotNull" }, { field: "items[0].x", reason: "Size" }]));
     const error = await createHttpFindingSubmit(c).submit(draft, { idempotencyKey: "k", organizationId: "o" }).catch((e) => e);
     expect(Object.keys(error.fieldErrors)).toEqual(["source"]);
+  });
+});
+
+describe("bounded current organization reference transport", () => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  it("uses the fixed CSRF-protected POST seam and passes only bounded search/cursor inputs", async () => {
+    const calls: unknown[] = [];
+    const c = { post: async (path: string, request: unknown) => { calls.push([path, request]); return { data: { items: [{ id, code: "A", name: "甲" }], nextAfterId: id }, meta: { schemaVersion: "1" } }; } } as unknown as HttpClient;
+    const adapter = createHttpFindingSubmit(c);
+    expect(adapter.listOrganizations).toBeUndefined();
+    expect(await adapter.queryOrganizations!({ query: "%_字", limit: 20 })).toMatchObject({ nextAfterId: id });
+    expect(calls).toEqual([["/api/v1/entities/finding/references/report-organization/query", { body: { query: "%_字", limit: 20 }, signal: undefined }]]);
+    await expect(adapter.queryOrganizations!({ query: "😀".repeat(101) })).rejects.toMatchObject({ kind: "validation" });
+    await expect(adapter.queryOrganizations!({ query: "", limit: 51 })).rejects.toMatchObject({ kind: "validation" });
+    expect(calls).toHaveLength(1);
+  });
+  it("rejects malformed/duplicate/stalled pages rather than constructing a total or loading every page", async () => {
+    for (const page of [{ items: [], nextAfterId: id }, { items: [{ id, code: "A", name: "甲" }], nextAfterId: "bad" }, { items: [{ id, code: "A", name: "甲" }, { id, code: "A", name: "甲" }] }]) {
+      const c = { post: async () => ({ data: page, meta: { schemaVersion: "1" } }) } as unknown as HttpClient;
+      await expect(createHttpFindingSubmit(c).queryOrganizations!({ query: "" })).rejects.toMatchObject({ kind: "unavailable" });
+    }
+  });
+  it("reauthorizes the create definition before posting the command and never falls back after denial", async () => {
+    let posts = 0;
+    const c = { get: async () => { throw new ApiError(403, "FORBIDDEN", null, false); }, post: async () => { ++posts; return ok; } } as unknown as HttpClient;
+    await expect(createHttpFindingSubmit(c).submit(draft, { idempotencyKey: "k", organizationId: id })).rejects.toMatchObject({ kind: "forbidden" });
+    expect(posts).toBe(0);
   });
 });

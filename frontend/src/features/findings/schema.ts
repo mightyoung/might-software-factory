@@ -2,6 +2,7 @@ import type { LedgerSchema } from "../../domain/ledger";
 import { dateKey } from "../../domain/time";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
 
+/** Explicit synthetic/demo presentation. HTTP consumers use the current published definition. */
 export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
   entityKey: "safety.finding",
   title: "隐患台账",

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
   mockFindingLedger,
   type FindingLedgerAdapter,
+  type FindingDetailSnapshot,
   type FindingLedgerReadFailureKind,
   type FindingView,
 } from "../../adapters/findingLedger";
@@ -16,10 +17,15 @@ import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } 
 import type { FindingRecord } from "../../domain/finding";
 import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { findingLedgerSchema } from "./schema";
+import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
 import { navigate, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
+  /** Session mode controls demo wording independently of adapter metadata capabilities. */
+  synthetic?: boolean;
+  /** Clear a previous security context's URL selection, while preserving cold deep links. */
+  resetInitialSelection?: boolean;
   view: FindingView;
   title: string;
   description: string;
@@ -40,11 +46,22 @@ const firstPage: PageResult<FindingRecord> = {
   pageCount: 1,
 };
 
-export function FindingsLedger({
+export function FindingsLedger(props: FindingsLedgerProps) {
+  const [scope, setScope] = useState({ adapter: props.adapter, submit: props.submitAdapter, generation: 0 });
+  if (scope.adapter !== props.adapter || scope.submit !== props.submitAdapter) {
+    setScope({ adapter: props.adapter, submit: props.submitAdapter, generation: scope.generation + 1 });
+    return null;
+  }
+  return <FindingsLedgerBody key={scope.generation} {...props} resetInitialSelection={props.resetInitialSelection || scope.generation > 0} />;
+}
+
+function FindingsLedgerBody({
+  resetInitialSelection = false,
   view,
   title,
   description,
   adapter = mockFindingLedger,
+  synthetic = adapter.publishedDefinition !== true,
   submitAdapter,
   commandAdapter,
   canReport = false,
@@ -52,7 +69,19 @@ export function FindingsLedger({
 }: FindingsLedgerProps) {
   const location = useLocation();
   const [path, search = ""] = location.split("?");
-  const selectedFindingId = new URLSearchParams(search).get("caseId");
+  const selectionReady = useRef(!resetInitialSelection);
+  const selectedFindingId = selectionReady.current ? new URLSearchParams(search).get("caseId") : null;
+  useEffect(() => {
+    if (selectionReady.current) return;
+    selectionReady.current = true;
+    const parameters = new URLSearchParams(search);
+    parameters.delete("caseId");
+    const suffix = parameters.toString();
+    navigate(`${path}${suffix ? `?${suffix}` : ""}`, true);
+  }, [path, search]);
+  const [definition, setDefinition] = useState<FindingDefinition | null>(null);
+  const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : findingLedgerSchema, [definition]);
+  const published = adapter.publishedDefinition === true;
   const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
   const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
   const [pageIndex, setPageIndex] = useState(1);
@@ -62,7 +91,8 @@ export function FindingsLedger({
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [detail, setDetail] = useState<FindingRecord | null>(null);
+  const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
+  const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
@@ -84,15 +114,17 @@ export function FindingsLedger({
           { signal: controller.signal },
         );
         if (!current || controller.signal.aborted) return;
+        setDefinition(result.definition ?? null);
         setPage(result);
         setPageIndex(result.page.index);
       } catch (error) {
         if (!current || controller.signal.aborted) return;
         const kind = classifyFindingLedgerReadFailure(error);
         setListError(kind);
+        if (published) { setDefinition(null); setPage(firstPage); setDetailSnapshot({ record: null, definition: null }); setDetailError(kind); setReporting(false); }
         if (kind === "unauthenticated" || kind === "forbidden") {
           detailController.current?.abort();
-          setDetail(null);
+          setDetailSnapshot({ record: null, definition: null });
           setDetailError(kind);
           setDetailLoading(false);
           setSelectedIds(new Set());
@@ -115,7 +147,7 @@ export function FindingsLedger({
   useEffect(() => {
     let current = true;
     if (!selectedFindingId) {
-      setDetail(null);
+      setDetailSnapshot({ record: null, definition: null });
       setDetailError(null);
       setDetailLoading(false);
       return () => {
@@ -125,18 +157,21 @@ export function FindingsLedger({
     const controller = new AbortController();
     detailController.current = controller;
     // 刷新同一条记录时保留旧内容直到新内容到达（流程命令成功后的提示不会被卸载）；换记录才清空。
-    setDetail((previous) => (previous?.id === selectedFindingId ? previous : null));
+    setDetailSnapshot((previous) => previous.record?.id === selectedFindingId ? previous : { record: null, definition: null });
     setDetailError(null);
     setDetailLoading(true);
     void (async () => {
       try {
-        const record = await adapter.get(selectedFindingId, { signal: controller.signal });
+        const snapshot = adapter.getDetailSnapshot
+          ? await adapter.getDetailSnapshot(selectedFindingId, { signal: controller.signal })
+          : { record: await adapter.get(selectedFindingId, { signal: controller.signal }), definition: null };
+        if (published && adapter.getDetailSnapshot && snapshot.record && !snapshot.definition) throw new Error("Missing published detail definition");
         if (!current || controller.signal.aborted) return;
-        setDetail(record);
+        setDetailSnapshot(snapshot);
       } catch (error) {
         if (!current || controller.signal.aborted) return;
         const kind = classifyFindingLedgerReadFailure(error);
-        if (kind !== "unknown") setDetail(null);
+        if (kind !== "unknown") setDetailSnapshot({ record: null, definition: null });
         setDetailError(kind);
         if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
@@ -192,7 +227,7 @@ export function FindingsLedger({
   }
 
   function handleReset() {
-    const emptyQuery = createEmptyQuery(findingLedgerSchema.queryFields);
+    const emptyQuery = createEmptyQuery(schema.queryFields);
     setQuery(emptyQuery);
     runQuery(emptyQuery);
   }
@@ -215,7 +250,7 @@ export function FindingsLedger({
       <section className="ledger-main" aria-label={title} inert={reporting}>
         <div className="page-heading">
           <div>
-            <h1>{title}</h1>
+            <h1>{view === "all" ? definition?.title ?? title : title}</h1>
             <p>{description}</p>
           </div>
           {showReport && (
@@ -225,7 +260,7 @@ export function FindingsLedger({
           )}
         </div>
 
-        {submitAdapter?.listOrganizations === undefined && (
+        {synthetic && (
         <div className="demo-notice" role="note">
           <span className="notice-mark" aria-hidden="true">i</span>
           <p>
@@ -234,7 +269,7 @@ export function FindingsLedger({
         </div>
         )}
 
-        {view !== "all" && (
+        {synthetic && view !== "all" && (
           <p className="view-scope-note">
             {view === "confirmation"
               ? "展示处于两级确认节点的演示记录，不代表具体成员已获待办授权。"
@@ -242,21 +277,21 @@ export function FindingsLedger({
           </p>
         )}
 
-        <LedgerQueryForm
-          schema={findingLedgerSchema}
+        {(!published || definition) && <LedgerQueryForm
+          schema={schema}
           values={query}
           onChange={updateQuery}
           onSearch={() => runQuery(query)}
           onReset={handleReset}
-        />
+        />}
 
         <div className="table-toolbar">
           <span className="selection-summary">已选 {selectedIds.size} 条（当前页）</span>
-          <span className="data-kind-label">示例对象 · 隐患</span>
+          <span className="data-kind-label">{synthetic ? "示例对象 · 隐患" : "隐患"}</span>
         </div>
 
         <div className="table-frame" aria-busy={loading}>
-          {loading && <div className="table-loading" role="status">正在加载演示记录…</div>}
+          {loading && <div className="table-loading" role="status">正在加载{synthetic ? "演示记录" : "记录"}…</div>}
           {!loading && listError && (
             <div className="table-error" role="alert">
               <span>{findingReadFailureMessage(listError, "list")}</span>
@@ -267,10 +302,10 @@ export function FindingsLedger({
           )}
           {!loading && !listError && (
             <LedgerTable
-              columns={findingLedgerSchema.columns}
+              columns={schema.columns}
               rows={page.items}
-              getKey={(record) => findingLedgerSchema.recordKey(record)}
-              getLabel={(record) => findingLedgerSchema.recordLabel?.(record) ?? findingLedgerSchema.recordKey(record)}
+              getKey={(record) => schema.recordKey(record)}
+              getLabel={(record) => schema.recordLabel?.(record) ?? schema.recordKey(record)}
               selectedIds={selectedIds}
               onToggleRow={(id) => setSelectedIds((current) => toggleRow(current, id))}
               onTogglePage={() => setSelectedIds((current) => toggleVisibleRows(current, visibleIds))}
@@ -281,7 +316,7 @@ export function FindingsLedger({
 
         {!listError && (
         <div className="table-footer">
-          <span>共 {page.total} 条{submitAdapter?.listOrganizations === undefined ? "演示" : ""}记录</span>
+          <span>共 {page.total} 条{synthetic ? "演示" : ""}记录</span>
           <div className="pagination-controls">
             <label className="page-size-select">
               <span className="visually-hidden">每页条数</span>
@@ -322,13 +357,14 @@ export function FindingsLedger({
 
       {selectedFindingId && !reporting && (
         <FindingDetails
+          definition={detailSnapshot.definition}
           finding={detail}
           loading={detailLoading}
           error={detailError}
           onClose={() => navigate(path, true)}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}
-          onForbidden={() => { setDetail(null); setDetailError("forbidden"); }}
+          onForbidden={() => { setDetailSnapshot({ record: null, definition: null }); setDetailError("forbidden"); }}
           onCommandChanged={() => {
             setDetailRefreshKey((value) => value + 1);
             setRefreshKey((value) => value + 1);

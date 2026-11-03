@@ -37,10 +37,16 @@ const KEY = () => crypto.randomUUID();
 
 beforeAll(async () => {
   server = createMockServer({ navigation: () => navigation });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => { console.error("Owned synthetic mock listen failed", error); reject(error); };
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => { server.off("error", onError); resolve(); });
+  });
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(async () => {
+  if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+});
 beforeEach(() => {
   navigation = { enabled: true, permissions: ["finding.read", "finding.create"] };
   jar = new Map();
@@ -54,6 +60,47 @@ async function signIn() {
 }
 
 describe("HTTP adapters × 契约模拟服务", () => {
+  it("synthetic definitions project READ/CREATE separately and reject nonfinite use or revoked grants", async () => {
+    const c = await signIn();
+    const read = await c.get<{ data: { use: string; actions: object; references: object; fields: Record<string, { presentation: { edit: unknown } }> } }>("/api/v1/entities/finding/definition?use=READ");
+    expect(read.data.use).toBe("READ");
+    expect(read.data.actions).toEqual({});
+    expect(read.data.references).toEqual({});
+    expect(Object.values(read.data.fields).every(field => field.presentation.edit === null)).toBe(true);
+    const create = await createHttpFindingSubmit(c).loadDefinition!();
+    expect(create.layout.create).toHaveLength(7);
+    expect(create.actions["finding.create"]!.inputFields).toHaveLength(11);
+    expect(create.fields.grade!.query.enumValues).toEqual(["UNKNOWN"]);
+    expect(create.fields.grade!.presentation.valueLabels).toEqual({ UNKNOWN: "待专业评估" });
+    await expect(c.get("/api/v1/entities/finding/definition?use=UPDATE")).rejects.toMatchObject({ status: 400 });
+    await expect(c.get("/api/v1/entities/finding/definition?use=READ&use=CREATE")).rejects.toMatchObject({ status: 400 });
+    navigation.permissions = ["finding.read"];
+    await expect(createHttpFindingSubmit(c).loadDefinition!()).rejects.toMatchObject({ kind: "forbidden" });
+    navigation.permissions = [];
+    await expect(createHttpFindingLedger(c).list({ query: {}, page: { index: 1, size: 20 }, view: "all" })).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
+  it("synthetic organization lookup is bounded, UUID-cursored and literal; legacy fixture route remains explicit", async () => {
+    const c = await signIn();
+    const query = createHttpFindingSubmit(c).queryOrganizations!;
+    const first = await query({ query: "", limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.nextAfterId).toBe(first.items[0]!.id);
+    const next = await query({ query: "", limit: 1, afterId: first.nextAfterId });
+    expect(next.items).toHaveLength(1);
+    expect(next.items[0]!.id).not.toBe(first.items[0]!.id);
+    expect(next.nextAfterId).toBeUndefined();
+    expect((await query({ query: "二车间", limit: 20 })).items.map(item => item.name)).toEqual(["二车间"]);
+    expect((await query({ query: "%_\\", limit: 20 })).items).toEqual([]);
+    const route = "/api/v1/entities/finding/references/report-organization/query";
+    expect((await c.post<{ data: { items: unknown[] } }>(route, { body: { query: "", afterId: null } })).data.items).toHaveLength(2);
+    await expect(c.post(route, { body: { query: "", limit: 51 } })).rejects.toMatchObject({ status: 400 });
+    await expect(c.post(route, { body: { query: "", limit: 1, afterId: "invalid" } })).rejects.toMatchObject({ status: 400 });
+    expect((await c.get<{ data: unknown[] }>("/api/v1/organizations/reportable")).data).toHaveLength(2);
+    navigation.permissions = ["finding.read"];
+    await expect(query({ query: "", limit: 20 })).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
   it("未登录读取当前会话 → restore 为 null；登录后可读，退出后再次为 null", async () => {
     const adapter = createHttpSessionAdapter(client());
     expect(await adapter.restore()).toBeNull();
@@ -125,7 +172,7 @@ describe("HTTP adapters × 契约模拟服务", () => {
   it("上报：选组织 → 创建 → 台账出现；同键重放返回同一条；同键异参 conflict", async () => {
     const c = await signIn();
     const submit = createHttpFindingSubmit(c);
-    const orgs = await submit.listOrganizations!();
+    const orgs = (await submit.queryOrganizations!({ query: "", limit: 20 })).items;
     expect(orgs.length).toBe(2);
     const key = KEY();
     const first = await submit.submit(draft, { idempotencyKey: key, organizationId: orgs[0]!.id });
@@ -145,7 +192,7 @@ describe("HTTP adapters × 契约模拟服务", () => {
     const submit = createHttpFindingSubmit(await signIn());
     await expect(submit.submit(draft, { idempotencyKey: KEY(), organizationId: "99999999-9999-4999-8999-999999999999" })).rejects.toMatchObject({ kind: "validation" });
     // 前端表单会先拦住空白位置；这里直接绕过表单，确认服务端也拒绝且映射到“位置”字段。
-    const orgs = await submit.listOrganizations!();
+    const orgs = (await submit.queryOrganizations!({ query: "", limit: 20 })).items;
     await expect(submit.submit({ ...draft, location: "\u0085" }, { idempotencyKey: KEY(), organizationId: orgs[0]!.id })).rejects.toMatchObject({
       kind: "validation",
       fieldErrors: { location: expect.any(String) },
@@ -157,7 +204,7 @@ describe("HTTP adapters × 契约模拟服务", () => {
     const submit = createHttpFindingSubmit(c);
     const commands = createHttpFindingCommands(c);
     const ledger = createHttpFindingLedger(c);
-    const orgs = await submit.listOrganizations!();
+    const orgs = (await submit.queryOrganizations!({ query: "", limit: 20 })).items;
     const created = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: orgs[0]!.id });
     let record = (await ledger.get(created.id))!;
     expect(record.version).toBe(1);

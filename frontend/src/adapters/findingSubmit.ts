@@ -1,5 +1,6 @@
 import type { FindingState } from "../domain/finding";
 import type { FindingDraft, FindingDraftErrors } from "../domain/findingDraft";
+import type { FindingDefinition } from "./findingDefinition";
 
 export interface FindingSubmitContext {
   /**
@@ -18,6 +19,16 @@ export interface ReportableOrganization {
   name: string;
 }
 
+export interface ReportableOrganizationQuery {
+  query: string;
+  afterId?: string;
+  limit?: number;
+}
+export interface ReportableOrganizationPage {
+  items: readonly ReportableOrganization[];
+  nextAfterId?: string;
+}
+
 export interface FindingSubmitResult {
   id: string;
   code: string;
@@ -29,9 +40,11 @@ export interface FindingSubmitResult {
 
 /**
  * 上报提交端口。请求不携带上报人、租户或角色：这些只能来自服务端验证过的会话。
- * 当前后端没有隐患上报端点契约，只有合成实现，没有 HTTP 适配器。
+ * HTTP 实现读取当前 CREATE 定义并使用分页组织引用；合成实现保持显式演示。
  */
 export interface FindingSubmitAdapter {
+  loadDefinition?(signal?: AbortSignal): Promise<FindingDefinition>;
+  queryOrganizations?(request: ReportableOrganizationQuery, signal?: AbortSignal): Promise<ReportableOrganizationPage>;
   submit(draft: FindingDraft, context: FindingSubmitContext): Promise<FindingSubmitResult>;
   /** 有此方法时表单要求先选择组织；列表为空表示当前没有可上报的组织。失败抛 FindingSubmitError。 */
   listOrganizations?(signal?: AbortSignal): Promise<readonly ReportableOrganization[]>;

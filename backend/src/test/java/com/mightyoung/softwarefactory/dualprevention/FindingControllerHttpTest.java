@@ -50,6 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         FindingReadAuthorizer.class,
         FindingReadService.class,
         FindingEntitySchema.class,
+        FindingDefinitionProvider.class,
         FindingApiExceptionHandler.class,
         com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryValidator.class,
         FindingControllerHttpTest.TestDependencies.class
