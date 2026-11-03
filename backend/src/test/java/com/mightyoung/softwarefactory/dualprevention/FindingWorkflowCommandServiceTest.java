@@ -1356,6 +1356,12 @@ class FindingWorkflowCommandServiceTest {
     }
 
     private static final class MemoryWorkflowFacade implements WorkflowFacade {
+        @Override
+        public com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot readCurrentTask(
+                UUID tenantId, String businessType, UUID businessId, String taskDefinitionKey) {
+            throw new UnsupportedOperationException("Task reads are outside this command fixture");
+        }
+
         private final Map<UUID, Task> tasks = new HashMap<>();
         private final Map<UUID, Map<String, Object>> processVariables = new HashMap<>();
         private final Map<UUID, String> processDefinitionKeys = new HashMap<>();

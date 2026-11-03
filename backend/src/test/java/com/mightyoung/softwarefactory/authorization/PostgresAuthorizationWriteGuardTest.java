@@ -67,6 +67,53 @@ class PostgresAuthorizationWriteGuardTest {
         TransactionSynchronizationManager.clear();
     }
 
+    @Test void validatesExistingCommandGuardWithoutAcquiringLocks() {
+        guard.forFindingCommand(TENANT);
+        operations.clear();
+        guard.requireFindingCommand(TENANT);
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory") || sql.contains("set_config"));
+    }
+
+    @Test void absentCommandGuardRefusesWithoutAcquiringLocks() {
+        assertThatThrownBy(() -> guard.requireFindingCommand(TENANT))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory") || sql.contains("set_config"));
+        assertThat(holder.isRollbackOnly()).isTrue();
+    }
+
+    @Test void existingTenantWriterCannotBeUsedAsCommandGuard() {
+        guard.forTenantSecurityChange(List.of(TENANT));
+        operations.clear();
+        assertThatThrownBy(() -> guard.requireFindingCommand(TENANT))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory"));
+    }
+
+    @Test void guardForDifferentTenantIsRejected() {
+        guard.forFindingCommand(TENANT);
+        assertThatThrownBy(() -> guard.requireFindingCommand(UUID.randomUUID()))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+    }
+
+    @Test void replacementHolderCannotReuseGuardEvenWithSameConnection() {
+        guard.forFindingCommand(TENANT);
+        TransactionSynchronizationManager.unbindResource(source);
+        var replacement = new ConnectionHolder(connection);
+        replacement.setSynchronizedWithTransaction(true);
+        TransactionSynchronizationManager.bindResource(source, replacement);
+        assertThatThrownBy(() -> guard.requireFindingCommand(TENANT))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(replacement.isRollbackOnly()).isTrue();
+    }
+
+    @Test void invalidatedCommandGuardCannotBeReadAfterSavepointRollback() {
+        guard.forFindingCommand(TENANT);
+        TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.savepointRollback(new Object()));
+        holder.resetRollbackOnly();
+        assertThatThrownBy(() -> guard.requireFindingCommand(TENANT))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+    }
+
     @Test void stableKeysAndSignedOrdering() {
         UUID zero = UUID.fromString("00000000-0000-0000-0000-000000000000");
         UUID high = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");

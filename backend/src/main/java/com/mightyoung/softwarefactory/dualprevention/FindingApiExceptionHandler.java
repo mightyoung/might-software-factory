@@ -31,6 +31,50 @@ import java.util.UUID;
 @RestControllerAdvice
 public final class FindingApiExceptionHandler {
 
+    @ExceptionHandler(FindingEvidenceSetInitializationRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidEvidenceSetInitialization(FindingEvidenceSetInitializationRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The evidence set initialization request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceSetInitializationException.class)
+    ResponseEntity<ErrorResponse> evidenceSetInitializationFailure(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceSetInitializationException failure) {
+        return switch (failure.reason()) {
+            case IDEMPOTENCY_CONFLICT -> error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "The idempotency key conflicts with a prior initialization", false, List.of());
+            case VERSION_CONFLICT -> error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "The finding version is stale", false, List.of());
+            case ASSIGNMENT_UNRESOLVED -> error(HttpStatus.UNPROCESSABLE_ENTITY, "WORKFLOW_ASSIGNMENT_UNRESOLVED", "The remediation assignment is unresolved", false, List.of());
+            case UNAVAILABLE -> unavailable();
+            case QUOTA_EXCEEDED -> ResponseEntity.status(429).header("Retry-After", "1")
+                    .body(new ErrorResponse("RATE_LIMITED", "The evidence set initialization limit has been reached",
+                            UUID.randomUUID().toString(), true, List.of(), null));
+        };
+    }
+
+    @ExceptionHandler(FindingEvidenceUploadRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidUpload(FindingEvidenceUploadRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The evidence upload request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceUploadException.class)
+    ResponseEntity<ErrorResponse> uploadFailure(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceUploadException failure) {
+        return switch (failure.reason()) {
+            case DECLARED_SIZE_EXCEEDED -> error(HttpStatus.PAYLOAD_TOO_LARGE, "INVALID_REQUEST", "The upload declaration exceeds the size limit", false, List.of());
+            case MEDIA_TYPE_NOT_ALLOWED -> error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "INVALID_REQUEST", "The upload media type is not allowed", false, List.of());
+            case IDEMPOTENCY_CONFLICT -> error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "The idempotency key conflicts with a prior upload", false, List.of());
+            case VERSION_CONFLICT -> error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "The finding version is stale", false, List.of());
+            case EVIDENCE_REVISION_CONFLICT -> error(HttpStatus.CONFLICT, "EVIDENCE_REVISION_CONFLICT", "The evidence revision is stale", false, List.of());
+            case CONFLICT -> error(HttpStatus.CONFLICT, "COMMAND_CONFLICT", "The upload command conflicts with the current context", false, List.of());
+            case ASSIGNMENT_UNRESOLVED -> error(HttpStatus.UNPROCESSABLE_ENTITY, "WORKFLOW_ASSIGNMENT_UNRESOLVED", "The remediation assignment is unresolved", false, List.of());
+            case UNAVAILABLE -> unavailable();
+            case QUOTA_EXCEEDED -> ResponseEntity.status(429).header("Cache-Control", "no-store").header("Retry-After", "1")
+                    .body(new ErrorResponse("RATE_LIMITED", "The upload reservation limit has been reached",
+                            UUID.randomUUID().toString(), true, List.of(), null));
+        };
+    }
+
     @ExceptionHandler(UnauthenticatedSessionException.class)
     ResponseEntity<ErrorResponse> unauthenticated() {
         return error(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "A verified session is required", false, List.of());

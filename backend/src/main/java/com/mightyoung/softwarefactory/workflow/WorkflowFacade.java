@@ -26,6 +26,13 @@ public interface WorkflowFacade {
             UUID actorMemberId,
             Map<String, Object> variables);
 
+    /** Reads the pinned active task in the caller's managed tenant transaction, without a binding lock.
+     * Currently bounded to the existing revision-1, submission-1 binding contract.
+     * Missing binding/task is a conflict; unresolved assignment is returned as a null/blank assignee.
+     */
+    WorkflowTaskReadSnapshot readCurrentTask(
+            UUID tenantId, String businessType, UUID businessId, String taskDefinitionKey);
+
     /** Returns the exact process definition key bound to this tenant-scoped business record. */
     Optional<String> processDefinitionKey(UUID tenantId, String businessType, UUID businessId);
 }

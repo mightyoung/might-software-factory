@@ -36,6 +36,12 @@ public class FileEvidenceVerificationAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(UploadProducerReadiness.class)
+    UploadProducerReadiness unconfiguredUploadProducerReadiness() {
+        return new UnconfiguredUploadProducerReadiness();
+    }
+
+    @Bean
     @ConditionalOnMissingBean(StorageContentVerificationPort.class)
     StorageContentVerificationPort unconfiguredStorageContentVerificationAdapter() {
         return new UnconfiguredStorageContentVerificationAdapter();

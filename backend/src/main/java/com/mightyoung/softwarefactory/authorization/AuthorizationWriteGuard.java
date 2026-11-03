@@ -12,6 +12,8 @@ import java.util.UUID;
  */
 public interface AuthorizationWriteGuard {
     void forFindingCommand(UUID tenantId);
+    /** Validates an existing command guard without acquiring or upgrading any lock. */
+    void requireFindingCommand(UUID tenantId);
     void forGlobalSecurityChange();
     void forTenantSecurityChange(Collection<UUID> tenantIds);
 }

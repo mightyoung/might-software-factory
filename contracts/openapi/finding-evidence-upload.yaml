@@ -1,0 +1,222 @@
+openapi: 3.1.0
+info:
+  title: Finding evidence upload intents
+  version: 1.0.0
+  description: >-
+    Durable reservation metadata only. Successful creation requires the configured actual private
+    producer, scanner and policy, approved database schema and grants, and a current authorized
+    unsealed evidence set. The default unconfigured producer returns 503 before reservation writes.
+    No bytes, scan verdict, READY evidence, content URL or finalization is provided by this API.
+    Status authorization is point-in-time within a bounded read-only repeatable-read snapshot;
+    concurrent revocation may affect the next request. Mock HTTP tests prove mapping only.
+paths:
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads:
+    parameters:
+      - $ref: '#/components/parameters/FindingId'
+      - $ref: '#/components/parameters/RoundNo'
+    post:
+      operationId: reserveFindingEvidenceUpload
+      security:
+        - session: []
+          csrf: []
+      description: >-
+        No query parameters. Exactly one canonical UUID Idempotency-Key and one Content-Type
+        application/json with optional UTF-8 charset; no other media parameters. Body is at most
+        4096 UTF-8 bytes, without BOM. Exactly six unique fields, no unknown or missing fields,
+        nulls, nested objects, arrays, coercion, fractional/exponent numbers, invalid surrogates
+        or trailing value. Versions are nonnegative decimal int64. The service returns only after
+        its independently managed transaction commits. Current authorization precedes replay;
+        matched replay ignores old expected versions. Response loss is recovered using the same key
+        and identical body. Expired replay preserves identity and requires a fresh key.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Declaration'}
+      responses:
+        '201':
+          description: New committed intent; not proof of received or verified bytes.
+          headers:
+            Location: {schema: {type: string}, description: Relative status URL}
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReservationResponse'}
+        '200':
+          description: Stable authorized replay, including EXPIRED recovery.
+          headers:
+            Location: {schema: {type: string}}
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReservationResponse'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Denied'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '415': {$ref: '#/components/responses/Media'}
+        '422': {$ref: '#/components/responses/Assignment'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads/{intentId}:
+    parameters:
+      - $ref: '#/components/parameters/FindingId'
+      - $ref: '#/components/parameters/RoundNo'
+      - in: path
+        name: intentId
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: getFindingEvidenceUploadStatus
+      security:
+        - session: []
+      description: >-
+        No query or body. All UUIDs must use canonical hyphenated spelling (case insensitive).
+        Current exact owner and finding/round/notice/task/set context are required. Missing,
+        cross-tenant, cross-owner and no-longer-authorized intents are uniformly invisible.
+        Status has no filename, storage path, object key, digest, receipt, scan output or progress.
+      responses:
+        '200':
+          description: Minimal currently authorized intent status.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StatusResponse'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Assignment'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    session: {type: apiKey, in: cookie, name: SESSION}
+    csrf: {type: apiKey, in: header, name: X-XSRF-TOKEN}
+  parameters:
+    FindingId:
+      in: path
+      name: findingId
+      required: true
+      schema: {type: string, format: uuid}
+    RoundNo:
+      in: path
+      name: roundNo
+      required: true
+      schema: {type: integer, minimum: 1, maximum: 2147483647}
+      description: Canonical positive decimal integer, no leading zero or sign.
+  schemas:
+    Declaration:
+      type: object
+      additionalProperties: false
+      required: [evidenceSetId, expectedFindingVersion, expectedEvidenceRevision, filename, declaredMediaType, declaredSizeBytes]
+      properties:
+        evidenceSetId: {type: string, format: uuid}
+        expectedFindingVersion: {type: integer, minimum: 0, maximum: 9223372036854775807}
+        expectedEvidenceRevision: {type: integer, minimum: 0, maximum: 9223372036854775807}
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Display metadata, nonblank Unicode code points; no controls, slash, backslash, or dot path components.
+        declaredMediaType:
+          type: string
+          maxLength: 255
+          pattern: '^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$'
+          description: Exact lowercase type/subtype without parameters, additionally checked against configured producer policy.
+        declaredSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 67108864
+          description: Also bounded by configured producer maximum. Declaration is not byte verification.
+    StatusData:
+      type: object
+      additionalProperties: false
+      required: [uploadIntentId, state, expiresAt]
+      properties:
+        uploadIntentId: {type: string, format: uuid}
+        state: {type: string, enum: [INTENT_CREATED, EXPIRED]}
+        expiresAt: {type: string, format: date-time}
+        recoveryAction: {type: string, const: FRESH_KEY_REQUIRED, description: Present only for EXPIRED.}
+    ReservationData:
+      type: object
+      additionalProperties: false
+      required: [uploadIntentId, state, expiresAt, statusUrl]
+      properties:
+        uploadIntentId: {type: string, format: uuid}
+        state: {type: string, enum: [INTENT_CREATED, EXPIRED]}
+        expiresAt: {type: string, format: date-time}
+        recoveryAction: {type: string, const: FRESH_KEY_REQUIRED}
+        statusUrl: {type: string, description: Relative metadata status URL; not a byte upload URL.}
+    Meta:
+      type: object
+      additionalProperties: false
+      required: [requestId, traceId, schemaVersion]
+      properties:
+        requestId: {type: string, format: uuid}
+        traceId: {type: string, format: uuid}
+        schemaVersion: {type: string, const: '1'}
+    StatusResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/StatusData'}
+        meta: {$ref: '#/components/schemas/Meta'}
+    ReservationResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/ReservationData'}
+        meta: {$ref: '#/components/schemas/Meta'}
+    Error:
+      type: object
+      required: [code, message, traceId, retryable, fieldErrors]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string, format: uuid}
+        retryable: {type: boolean}
+        fieldErrors: {type: array, items: {type: object}}
+        currentVersion: {type: [integer, 'null']}
+  responses:
+    Invalid:
+      description: 400 INVALID_REQUEST; safe malformed input error.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthenticated:
+      description: 401 AUTH_REQUIRED; verified current session required.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Denied:
+      description: 403 ACTION_DENIED, including CSRF failure.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Invisible:
+      description: 404 RESOURCE_NOT_VISIBLE.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Conflict:
+      description: 409 IDEMPOTENCY_CONFLICT, VERSION_CONFLICT, EVIDENCE_REVISION_CONFLICT or COMMAND_CONFLICT.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    TooLarge:
+      description: 413 INVALID_REQUEST; body exceeds 4096 bytes or declaration exceeds configured or absolute size maximum.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Media:
+      description: 415 INVALID_REQUEST; request media contract is invalid or declaration is outside configured media policy.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Assignment:
+      description: 422 WORKFLOW_ASSIGNMENT_UNRESOLVED.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    RateLimited:
+      description: 429 RATE_LIMITED; no new reservation; retry remains subject to current limits.
+      headers:
+        Retry-After: {schema: {type: integer, const: 1}, description: Bounded one-second retry delay.}
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unavailable:
+      description: 503 DEPENDENCY_UNAVAILABLE, retryable. Does not imply database rollback; recover with the same key/body.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}

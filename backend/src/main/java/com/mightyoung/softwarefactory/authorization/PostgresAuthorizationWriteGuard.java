@@ -34,6 +34,33 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
         acquire(new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId))));
     }
 
+    @Override public void requireFindingCommand(UUID tenantId) {
+        Object resource = TransactionSynchronizationManager.getResource(dataSource);
+        ConnectionHolder holder = resource instanceof ConnectionHolder h ? h : null;
+        try {
+            if (holder == null || !holder.isSynchronizedWithTransaction() || holder.isRollbackOnly()
+                    || !TransactionSynchronizationManager.isActualTransactionActive()
+                    || !TransactionSynchronizationManager.isSynchronizationActive()) {
+                throw new AuthorizationWriteGuardException("An existing managed command guard is required");
+            }
+            Connection connection = holder.getConnection();
+            requireReadCommittedWriteTransaction(connection);
+            Scope expected = new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId)));
+            for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+                if (synchronization instanceof GuardScope held && held.owner == this
+                        && held.holder == holder && held.connection == connection
+                        && held.scope.equals(expected) && !held.invalidated) {
+                    return;
+                }
+            }
+            throw new AuthorizationWriteGuardException("The current transaction has no matching command guard");
+        } catch (SQLException | RuntimeException failure) {
+            if (holder != null) holder.setRollbackOnly();
+            if (failure instanceof AuthorizationWriteGuardException guardFailure) throw guardFailure;
+            throw new AuthorizationWriteGuardException("Cannot validate the current command guard", failure);
+        }
+    }
+
     @Override public void forGlobalSecurityChange() {
         acquire(new Scope(Mode.GLOBAL, List.of()));
     }

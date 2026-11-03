@@ -612,6 +612,12 @@ class FindingWorkflowControllerHttpTest {
         WorkflowFacade workflowFacade() {
             return new WorkflowFacade() {
                 @Override
+                public com.mightyoung.softwarefactory.workflow.WorkflowTaskReadSnapshot readCurrentTask(
+                        UUID tenantId, String businessType, UUID businessId, String taskDefinitionKey) {
+                    throw new UnsupportedOperationException("Task reads are outside this HTTP command fixture");
+                }
+
+                @Override
                 public void startProcess(UUID tenantId, String businessType, UUID businessId, int businessRevision,
                                          String processDefinitionKey, java.util.Map<String, Object> variables) { }
                 @Override
