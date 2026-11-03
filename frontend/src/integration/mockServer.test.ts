@@ -92,6 +92,11 @@ describe("HTTP adapters × 契约模拟服务", () => {
     await expect(adapter.login({ username: "demo", password: "demo" })).rejects.toMatchObject({ kind: "invalid_credentials" });
   });
 
+  it("does not enable MOCK V3 fixture accounts without the explicit server option", async () => {
+    await expect(createHttpSessionAdapter(client()).login({ username: "mock-person", password: "demo", tenantCode: "demo" }))
+      .rejects.toMatchObject({ kind: "invalid_credentials" });
+  });
+
   it("没有 CSRF 头的写请求被拒绝（403）", async () => {
     const error = await jarFetch("/api/v1/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     expect(error.status).toBe(403);

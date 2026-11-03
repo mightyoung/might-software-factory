@@ -1,11 +1,12 @@
 // 按 contracts/openapi/{session-api,finding-ledger,finding-workflow}.yaml 的**书面描述**写的本地模拟服务，
 // 仅用于没有后端时开发和测试前端；它不是后端，不代表真实行为、权限或持久化。内存数据，重启即清空。
 // 账号：loginKey=demo / password=demo / tenantCode=demo。
+import { createReviewCycleFixture } from "./review-cycle-fixture.mjs";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
-const STATES = ["DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "CLOSED"];
+const STATES = ["DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "REPORTER_SUPPLEMENT_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "CLOSED"];
 const ORGS = [
   { id: "11111111-1111-4111-8111-111111111111", code: "WS-A", name: "一车间" },
   { id: "22222222-2222-4222-8222-222222222222", code: "WS-B", name: "二车间" },
@@ -13,7 +14,7 @@ const ORGS = [
 const WHITESPACE_ONLY = new RegExp("^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$");
 const field = (type, operators, extra = {}) => ({ type, nullable: false, selectable: true, sortable: false, operators, maxLength: 0, enumValues: [], ...extra });
 const SCHEMA = {
-  key: "finding", schemaVersion: "3", idField: "id",
+  key: "finding", schemaVersion: "5", idField: "id",
   defaultFields: ["id", "code", "organizationId", "organizationName", "description", "discoveredAt", "sourceCategory", "urgency", "location", "interimMeasure", "backfill", "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt"],
   fields: {
     id: field("UUID", ["EQ", "IN"], { sortable: true }),
@@ -28,6 +29,7 @@ const SCHEMA = {
     grade: field("ENUM", ["EQ", "IN"], { enumValues: ["UNKNOWN", "GENERAL", "MAJOR"] }),
     state: field("ENUM", ["EQ", "IN"], { sortable: true, enumValues: STATES }),
     roundNo: field("NUMBER", []), version: field("NUMBER", []),
+    reviewCycle: field("NUMBER", []), reviewProtocol: field("ENUM", [], { enumValues: ["LEGACY", "CYCLE_V1"] }),
     createdAt: field("DATETIME", ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"], { sortable: true }), updatedAt: field("DATETIME", ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"]),
   },
 };
@@ -38,8 +40,10 @@ const cp = (s) => [...s].length;
 export function createMockServer(options = {}) {
   // Test-owned mutable projection: no HTTP administration endpoint or real authorization.
   const navigation = () => options.navigation?.() ?? { enabled: true, permissions: ["finding.read", "finding.create"] };
+  const cycleFixture = options.reviewCycles === true ? createReviewCycleFixture() : null;
   const sessions = new Map();
   const findings = [];
+  const reviewEntries = new Map();
   const receipts = new Map(); // Idempotency-Key -> { body, response }
   const seqByDay = new Map();
 
@@ -53,7 +57,7 @@ export function createMockServer(options = {}) {
       id: randomUUID(), code: `YH-${day}-${String(seq).padStart(4, "0")}`, organizationId: org.id, organizationName: org.name,
       description: input.description, discoveredAt: discovered.toISOString(), sourceCategory: input.sourceCategory, urgency: input.urgency,
       location: input.location ?? null, interimMeasure: input.interimMeasure ?? null, backfill: now.getTime() - discovered.getTime() > 24 * 3600_000,
-      sourceEventId: null, riskId: null, grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1,
+      sourceEventId: null, riskId: null, grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1, reviewCycle: 1, reviewProtocol: "LEGACY",
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     findings.unshift(row);
@@ -71,7 +75,7 @@ export function createMockServer(options = {}) {
   }
   const err = (res, status, code, message, extra = {}, headers = {}) =>
     send(res, status, { code, message, traceId: randomUUID(), retryable: status === 503, fieldErrors: [], ...extra }, headers);
-  const meta = () => ({ requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "3" });
+  const meta = () => ({ requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "5" });
 
   async function readJson(req) {
     const chunks = [];
@@ -122,9 +126,10 @@ export function createMockServer(options = {}) {
       const b = await readJson(req);
       if (!b || typeof b.loginKey !== "string" || typeof b.password !== "string" || typeof b.tenantCode !== "string" || !b.loginKey || !b.password || !b.tenantCode)
         return err(res, 400, "INVALID_REQUEST", "Malformed login");
-      if (b.loginKey !== "demo" || b.password !== "demo" || b.tenantCode !== "demo") return err(res, 401, "AUTH_REQUIRED", "Invalid credentials");
+      const fixtureIdentity = cycleFixture?.login(b.loginKey);
+      if ((!fixtureIdentity && b.loginKey !== "demo") || b.password !== "demo" || b.tenantCode !== "demo") return err(res, 401, "AUTH_REQUIRED", "Invalid credentials");
       const id = randomUUID();
-      sessions.set(id, { actorId: randomUUID(), accountId: randomUUID(), tenantId: randomUUID(), memberId: randomUUID() });
+      sessions.set(id, fixtureIdentity ?? { actorId: randomUUID(), accountId: randomUUID(), tenantId: randomUUID(), memberId: randomUUID() });
       return send(res, 204, undefined, { "Set-Cookie": [`SESSION=${id}; Path=/; HttpOnly; SameSite=Lax`, newCsrf()] });
     }
     if (req.method === "POST" && path === "/api/v1/auth/logout") {
@@ -135,14 +140,17 @@ export function createMockServer(options = {}) {
     if (!path.startsWith("/api/v1/")) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not found");
     if (!session) return err(res, 401, "AUTH_REQUIRED", "Authentication required");
 
+    const visibleFindings = session.mockReviewRole && cycleFixture ? [cycleFixture.finding] : findings;
+    const identity = { actorId: session.actorId, accountId: session.accountId, tenantId: session.tenantId, memberId: session.memberId };
+    const displayName = session.mockReviewRole ? `MOCK ${session.mockReviewRole}` : "模拟用户";
     if (req.method === "GET" && (path === "/api/v1/session/bootstrap" || /^\/api\/v1\/applications\/[^/]+\/menu$/.test(path))) {
-      const state = navigation();
+      const state = session.mockReviewRole ? { enabled: true, permissions: ["finding.read", ...(session.mockReviewRole === "REPORTER" ? ["finding.create"] : [])] } : navigation();
       if (state.failure) return err(res, state.failure, "DEPENDENCY_UNAVAILABLE", "Navigation unavailable");
       const enabled = state.enabled && state.permissions.includes("finding.read");
       const permissions = enabled ? state.permissions : [];
       const authorization = { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: state.enabled === null ? null : 1 };
       if (path === "/api/v1/session/bootstrap") return send(res, 200, { data: {
-        schemaVersion: 1, identity: { ...session, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName: "模拟用户" },
+        schemaVersion: 1, identity: { ...identity, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName },
         applications: enabled ? [{ id: "safety", name: "生产安全", entryPath: "safety/findings" }] : [], permissions, authorization,
       } });
       if (path !== "/api/v1/applications/safety/menu" || !enabled) return err(res, 403, "ACTION_DENIED", "Application unavailable");
@@ -150,7 +158,7 @@ export function createMockServer(options = {}) {
         nodes: [{ id: "findings", label: "隐患管理", path: "safety/findings", permission: "finding.read" }], permissions, authorization } });
     }
     if (req.method === "GET" && path === "/api/v1/session/current")
-      return send(res, 200, { data: { ...session, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName: "模拟用户" } });
+      return send(res, 200, { data: { ...identity, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName } });
     if (req.method === "GET" && path === "/api/v1/organizations/reportable") return send(res, 200, { data: ORGS });
     if (req.method === "GET" && path === "/api/v1/entities/finding/schema") return send(res, 200, { data: SCHEMA, meta: meta() });
 
@@ -162,14 +170,38 @@ export function createMockServer(options = {}) {
         return err(res, 400, "INVALID_REQUEST", "Invalid page");
       const conditions = b.filterAST?.conditions ?? [];
       for (const c of conditions) if (!SCHEMA.fields[c.field]?.operators.includes(c.operator)) return err(res, 400, "INVALID_REQUEST", "Unsupported filter");
-      const rows = findings.filter((r) => matches(r, conditions)); // 已按 createdAt DESC 排列（新建插到头部）
+      const rows = visibleFindings.filter((r) => matches(r, conditions)); // 已按 createdAt DESC 排列（新建插到头部）
       const total = rows.length;
       return send(res, 200, { data: { items: rows.slice((number - 1) * size, number * size), page: { number, size, total, pageCount: Math.ceil(total / size) } }, meta: meta() });
     }
     const detail = /^\/api\/v1\/entities\/finding\/([^/]+)$/.exec(path);
     if (req.method === "GET" && detail) {
-      const row = findings.find((r) => r.id === decodeURIComponent(detail[1]));
+      const row = visibleFindings.find((r) => r.id === decodeURIComponent(detail[1]));
       return row ? send(res, 200, { data: row, meta: meta() }) : err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+    }
+
+    // Legacy browser fixture only: one mock account represents both review roles.
+    // These hints are not evidence of real server authorization or assignment.
+    const reviewHistory = /^\/api\/v1\/findings\/([^/]+)\/review-history$/.exec(path);
+    if (req.method === "GET" && reviewHistory) {
+      const row = visibleFindings.find(r => r.id === decodeURIComponent(reviewHistory[1]));
+      if (!row) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      if (session.mockReviewRole && cycleFixture) return send(res, 200, cycleFixture.history(session));
+      const stage = row.state === "PERSON_CONFIRM_PENDING" ? "PERSON" : row.state === "SAFETY_CONFIRM_PENDING" ? "SAFETY" : null;
+      return send(res, 200, { data: {
+        entries: reviewEntries.get(row.id) ?? [], currentVersion: row.version, currentState: row.state,
+        reviewCycle: row.reviewCycle, reviewProtocol: row.reviewProtocol,
+        processDefinitionKey: row.state === "DISCOVERED" ? null : "findingRemediationV2", reviewStage: stage,
+        availableReviewActions: stage ? ["APPROVE"] : [], blockedReason: stage ? null : "NO_REVIEW_ACTION_AT_CURRENT_STATE",
+        hasMore: false, nextCursor: null,
+      }, meta: meta() });
+    }
+
+    const cycleCommand = /^\/api\/v1\/findings\/([^/]+)\/(review-decisions|supplements)$/.exec(path);
+    if (req.method === "POST" && cycleCommand) {
+      if (!cycleFixture || !session.mockReviewRole || cycleCommand[1] !== cycleFixture.finding.id) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const result = cycleFixture.command(session, path, await readJson(req), req.headers["idempotency-key"]);
+      return send(res, result.status, result.body);
     }
 
     if (req.method === "POST" && path === "/api/v1/findings") {
@@ -193,8 +225,9 @@ export function createMockServer(options = {}) {
       if (typeof key !== "string" || !/^[0-9a-f-]{36}$/i.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
       const b = await readJson(req);
       if (!b || typeof b !== "object") return err(res, 400, "INVALID_REQUEST", "Malformed body");
-      const row = findings.find((r) => r.id === decodeURIComponent(command[1]));
+      const row = visibleFindings.find((r) => r.id === decodeURIComponent(command[1]));
       if (!row) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      if (row.reviewProtocol === "CYCLE_V1") return err(res, 409, "COMMAND_CONFLICT", "MOCK V3 requires cycle commands");
       const receiptKey = `${key}`;
       const canonical = JSON.stringify([path, b]);
       const prior = receipts.get(receiptKey);
@@ -223,6 +256,15 @@ export function createMockServer(options = {}) {
       else if (op === "confirm/safety") { row.state = "SAFETY_DISPATCH_PENDING"; row.grade = b.grade; }
       else if (b.decision === "PASS") row.state = "CLOSED";
       else { row.state = "RECTIFYING"; row.roundNo += 1; }
+      if (op === "confirm/person" || op === "confirm/safety") {
+        const stage = op === "confirm/person" ? "PERSON" : "SAFETY";
+        reviewEntries.set(row.id, [...(reviewEntries.get(row.id) ?? []), {
+          id: `legacy-confirmation:${row.id}:${stage}`, origin: "LEGACY_CONFIRMATION", reviewCycle: 1,
+          stage, decision: "APPROVE", actorMemberId: session.memberId,
+          actorDisplay: { label: null, provenance: "UNAVAILABLE" }, occurredAt: new Date().toISOString(),
+          text: b.reason, recordedGrade: null, nextReviewCycle: null,
+        }]);
+      }
       row.version += 1;
       row.updatedAt = new Date().toISOString();
       const response = { data: { findingId: row.id, code: row.code, state: row.state, roundNo: row.roundNo, version: row.version } };
@@ -235,5 +277,5 @@ export function createMockServer(options = {}) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const port = Number(process.env.PORT ?? 8080);
-  createMockServer().listen(port, "127.0.0.1", () => console.log(`contract mock listening on http://127.0.0.1:${port} (demo/demo/demo)`));
+  createMockServer({ reviewCycles: process.env.MOCK_REVIEW_CYCLES === "1" }).listen(port, "127.0.0.1", () => console.log(`contract mock listening on http://127.0.0.1:${port} (demo/demo/demo)`));
 }

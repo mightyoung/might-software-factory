@@ -51,6 +51,8 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
     round: item.roundNo ?? 1,
     ...(item.version ? { version: item.version } : {}),
     history: [],
+    ...(item.reviewCycle ? { reviewCycle: item.reviewCycle } : {}),
+    ...(item.reviewProtocol ? { reviewProtocol: item.reviewProtocol } : {}),
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),
     ...(item.sourceCategory ? { source: item.sourceCategory } : {}),
     // 后端 URGENT 表示“需立即处置”，与提交适配器的 IMMEDIATE → URGENT 对应。

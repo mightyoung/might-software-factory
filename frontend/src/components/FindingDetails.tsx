@@ -23,9 +23,10 @@ interface FindingDetailsProps {
   commandAdapter?: FindingCommandAdapter;
   onCommandChanged?: () => void;
   onUnauthenticated?: () => void;
+  onForbidden?: () => void;
 }
 
-export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated }: FindingDetailsProps) {
+export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
       <div className="detail-heading">
@@ -112,15 +113,15 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
               <span>风险等级</span>
               <strong className="status-label status-muted">{finding.riskLabel}</strong>
             </div>
-            <p>风险等级保持待评估，合成样例不作专业判断。</p>
+            {!commandAdapter && <p>风险等级保持待评估，合成样例不作专业判断。</p>}
           </section>
 
           <section className="detail-section workflow-section">
             <div className="section-title-row">
               <h3>流程进度</h3>
-              <span>第 {finding.round} 轮 · 演示</span>
+              <span>第 {finding.round} 轮整改{!commandAdapter && " · 演示"}</span>
             </div>
-            <ol className="workflow-list" aria-label="隐患流程节点">
+            {finding.state === "REPORTER_SUPPLEMENT_PENDING" ? <p>确认已退回，等待原上报人补充说明。补充后重新完成两级确认。</p> : <ol className="workflow-list" aria-label="隐患流程节点">
               {workflowSteps.map((step, index) => {
                 const terminal = finding.state === "CLOSED" || finding.state === "NOT_ESTABLISHED";
                 const complete = finding.state === "CLOSED" ||
@@ -136,10 +137,10 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                   </li>
                 );
               })}
-            </ol>
+            </ol>}
           </section>
 
-          <section className="detail-section history-section">
+          {!commandAdapter?.history && <section className="detail-section history-section">
             <h3>演示轨迹</h3>
             <ul>
               {finding.history.map((entry) => (
@@ -152,17 +153,9 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                 </li>
               ))}
             </ul>
-          </section>
+          </section>}
 
-          {commandAdapter ? (
-            <FindingCommandPanel
-              key={finding.id}
-              finding={finding}
-              adapter={commandAdapter}
-              onChanged={onCommandChanged ?? onRetry}
-              onUnauthenticated={onUnauthenticated}
-            />
-          ) : (
+          {!commandAdapter && (
             <>
               <p className="action-hint" role="note">
                 审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
@@ -179,6 +172,17 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </>
           )}
         </>
+      )}
+      {finding && commandAdapter && (!error || error === "unknown") && (
+        <FindingCommandPanel
+          key={finding.id}
+          finding={finding}
+          adapter={commandAdapter}
+          onChanged={onCommandChanged ?? onRetry}
+          onUnauthenticated={onUnauthenticated}
+          readBlocked={Boolean(error)}
+          onForbidden={onForbidden}
+        />
       )}
     </aside>
   );

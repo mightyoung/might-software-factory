@@ -200,10 +200,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/findings/{id}/review-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a V3 person or safety review decision
+         * @description Dedicated V3 contract; V1/V2 cases fail with 409 COMMAND_CONFLICT. Legacy confirmation and close routes retain their contracts and cannot perform V3 decisions. Identity comes only from the verified server session; actor, tenant, role and assignee fields are forbidden. Exactly one canonical UUID Idempotency-Key is required. No query string is accepted. JSON is limited to 32768 bytes, strictly decoded as UTF-8; duplicate, unknown, null, coerced, exponent-form integer, trailing-token and unpaired-surrogate input is rejected. A successful command or matching replay returns 200 with its immutable original result, including historical version and reviewCycle, even after later cycles. This endpoint does not activate V3 initiation. Responses and errors use Cache-Control no-store.
+         */
+        post: operations["reviewFindingCycle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/findings/{id}/supplements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append the original reporter supplement and open a new review cycle
+         * @description Dedicated V3 contract; V1/V2 cases fail with 409 COMMAND_CONFLICT. Legacy confirmation and close routes retain their contracts and cannot perform V3 decisions. Identity comes only from the verified server session; actor, tenant, role and assignee fields are forbidden. Exactly one canonical UUID Idempotency-Key is required. No query string is accepted. JSON is limited to 32768 bytes, strictly decoded as UTF-8; duplicate, unknown, null, coerced, exponent-form integer, trailing-token and unpaired-surrogate input is rejected. A successful command or matching replay returns 200 with its immutable original result, including historical version and reviewCycle, even after later cycles. This endpoint does not activate V3 initiation. Responses and errors use Cache-Control no-store.
+         */
+        post: operations["supplementFindingReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description expectedVersion and reviewCycle are positive decimal integers without coercion or exponent notation. Only SAFETY APPROVE requires grade GENERAL/MAJOR. Every other stage/decision forbids the grade property, including null. Return and not-established preserve existing grade. reason uses the raw 4000 Java UTF-16 code-unit limit before Unicode White_Space trimming; it must contain a non-White_Space code point. Legacy String.strip canonicalization is unchanged. */
+        ReviewDecisionRequest: components["schemas"]["PersonReviewDecisionRequest"] | components["schemas"]["SafetyApprovalDecisionRequest"] | components["schemas"]["SafetyOtherDecisionRequest"];
+        PersonReviewDecisionRequest: {
+            /** Format: int64 */
+            expectedVersion: number;
+            /** Format: int32 */
+            reviewCycle: number;
+            /** @enum {string} */
+            stage: "PERSON";
+            /** @enum {string} */
+            decision: "APPROVE" | "RETURN_FOR_INFORMATION" | "NOT_ESTABLISHED";
+            reason: components["schemas"]["ReviewCycleText"];
+        };
+        SafetyApprovalDecisionRequest: {
+            /** Format: int64 */
+            expectedVersion: number;
+            /** Format: int32 */
+            reviewCycle: number;
+            /** @enum {string} */
+            stage: "SAFETY";
+            /** @enum {string} */
+            decision: "APPROVE";
+            reason: components["schemas"]["ReviewCycleText"];
+            /** @enum {string} */
+            grade: "GENERAL" | "MAJOR";
+        };
+        SafetyOtherDecisionRequest: {
+            /** Format: int64 */
+            expectedVersion: number;
+            /** Format: int32 */
+            reviewCycle: number;
+            /** @enum {string} */
+            stage: "SAFETY";
+            /** @enum {string} */
+            decision: "RETURN_FOR_INFORMATION" | "NOT_ESTABLISHED";
+            reason: components["schemas"]["ReviewCycleText"];
+        };
+        /** @description Only the original reporter may append a statement to the returned cycle. expectedVersion and reviewCycle are positive decimal integers; reviewCycle identifies the returned cycle, not its successor. The service derives reporter identity and resolves fresh reviewers. */
+        ReportSupplementRequest: {
+            /** Format: int64 */
+            expectedVersion: number;
+            /** Format: int32 */
+            reviewCycle: number;
+            statement: components["schemas"]["ReviewCycleText"];
+        };
+        /** @description Raw input is limited to 4000 Java UTF-16 code units, before Unicode White_Space trimming. At least one non-White_Space code point is required; unpaired surrogates are rejected. Supplement statements and review reasons share these new semantics. */
+        ReviewCycleText: string;
+        ReviewCycleCommandResponse: {
+            data: {
+                /** Format: uuid */
+                findingId: string;
+                code: string;
+                /** @enum {string} */
+                state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "REPORTER_SUPPLEMENT_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
+                roundNo: number;
+                /** Format: int64 */
+                version: number;
+                /** Format: int32 */
+                reviewCycle: number;
+            };
+            meta: {
+                /** Format: uuid */
+                requestId: string;
+                /** Format: uuid */
+                traceId: string;
+                /** @constant */
+                schemaVersion: "1";
+            };
+        };
         DispatchCandidate: {
             /** Format: uuid */
             memberId: string;
@@ -340,6 +449,56 @@ export interface components {
         };
     };
     responses: {
+        /** @description DEPENDENCY_UNAVAILABLE. A transaction/commit failure may have an unknown outcome: the command may already have committed. Recheck using the same key and identical body; do not automatically resend with a new key. No rollback or completion is asserted. */
+        ReviewCycleDependencyUnavailable: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description INVALID_REQUEST for malformed JSON, fields, enums, forbidden grade, path, query or key. */
+        ReviewCycleInvalidRequest: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description INVALID_REQUEST because the raw body exceeds 32768 bytes. */
+        ReviewCycleBodyTooLarge: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description INVALID_REQUEST because Content-Type is not one application/json with optional UTF-8 charset. */
+        ReviewCycleUnsupportedMedia: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description VERSION_CONFLICT for stale version; COMMAND_CONFLICT for stale cycle, task or unsupported protocol; IDEMPOTENCY_CONFLICT for changed payload, actor or action. */
+        ReviewCycleConflict: {
+            headers: {
+                "Cache-Control"?: "no-store";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description Command applied or original idempotent result returned. */
         CommandSucceeded: {
             headers: {
@@ -423,6 +582,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Exactly one canonical UUID; repeated or comma-combined values are rejected. */
+        ReviewCycleIdempotencyKey: string;
         FindingId: string;
         FindingResourceId: string;
         RoundNo: number;
@@ -749,6 +910,88 @@ export interface operations {
             403: components["responses"]["ActionDenied"];
             404: components["responses"]["NotVisible"];
             503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    reviewFindingCycle: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one canonical UUID; repeated or comma-combined values are rejected. */
+                "Idempotency-Key": components["parameters"]["ReviewCycleIdempotencyKey"];
+                /** @description Must match the server-issued XSRF-TOKEN cookie. */
+                "X-XSRF-TOKEN": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: components["parameters"]["FindingId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed command result or its immutable historical replay. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewCycleCommandResponse"];
+                };
+            };
+            400: components["responses"]["ReviewCycleInvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            404: components["responses"]["NotVisible"];
+            409: components["responses"]["ReviewCycleConflict"];
+            413: components["responses"]["ReviewCycleBodyTooLarge"];
+            415: components["responses"]["ReviewCycleUnsupportedMedia"];
+            422: components["responses"]["WorkflowRule"];
+            503: components["responses"]["ReviewCycleDependencyUnavailable"];
+        };
+    };
+    supplementFindingReport: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Exactly one canonical UUID; repeated or comma-combined values are rejected. */
+                "Idempotency-Key": components["parameters"]["ReviewCycleIdempotencyKey"];
+                /** @description Must match the server-issued XSRF-TOKEN cookie. */
+                "X-XSRF-TOKEN": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: components["parameters"]["FindingId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportSupplementRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed command result or its immutable historical replay. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewCycleCommandResponse"];
+                };
+            };
+            400: components["responses"]["ReviewCycleInvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            404: components["responses"]["NotVisible"];
+            409: components["responses"]["ReviewCycleConflict"];
+            413: components["responses"]["ReviewCycleBodyTooLarge"];
+            415: components["responses"]["ReviewCycleUnsupportedMedia"];
+            422: components["responses"]["WorkflowRule"];
+            503: components["responses"]["ReviewCycleDependencyUnavailable"];
         };
     };
 }

@@ -6,7 +6,7 @@ import { createHttpFindingLedger } from "./httpFindingLedger";
 
 const field = (type: string, operators: string[], extra = {}) => ({ type, nullable: false, selectable: true, sortable: true, operators, maxLength: 0, enumValues: [], ...extra });
 const schema = {
-  key: "finding", schemaVersion: "3", idField: "id", defaultFields: ["id"],
+  key: "finding", schemaVersion: "5", idField: "id", defaultFields: ["id"],
   fields: {
     id: field("UUID", ["EQ", "IN"]),
     code: field("TEXT", ["EQ", "CONTAINS"], { maxLength: 64 }),
@@ -14,7 +14,7 @@ const schema = {
     createdAt: field("DATETIME", ["GTE", "LTE"]),
   },
 };
-const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
+const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, reviewCycle: 3, reviewProtocol: "CYCLE_V1", createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
 const q = { keyword: "", state: "", reportedAt: { from: "", to: "" } };
 
 function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string) => unknown }) {
@@ -47,7 +47,7 @@ describe("createHttpFindingLedger", () => {
     });
     expect(f.posts[1]).not.toHaveProperty("filterAST");
     expect(result).toMatchObject({ page: { index: 2, size: 20 }, total: 41, pageCount: 3 });
-    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "IMMEDIATE", riskLabel: "待专业评估", round: 2 });
+    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "IMMEDIATE", riskLabel: "待专业评估", round: 2, reviewCycle: 3, reviewProtocol: "CYCLE_V1" });
     expect(result.items[0]).not.toHaveProperty("backfill");
   });
 

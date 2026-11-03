@@ -139,7 +139,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
   // 按身份和租户重建：适配器可能缓存 schema，不得跨账号或租户复用。
-  const identityKey = session ? `${session.tenant.id}/${session.actor.id}` : "";
+  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId]) : "";
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const findingStore = useMemo(() => createFindingStore(), [identityKey]);
 
@@ -230,7 +230,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
   return (
     // 以身份为 key：切换账号后丢弃上一个身份的页面状态（筛选、选中、详情）。
     <AppShell
-      key={session.actor.id}
+      key={identityKey}
       session={session}
       application={authorizedApplication}
       currentRest={parsed.rest}

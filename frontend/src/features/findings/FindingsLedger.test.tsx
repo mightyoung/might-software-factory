@@ -162,7 +162,7 @@ describe("隐患台账分页与详情", () => {
     // 用现有演示行派生边界状态，避免改动台账总数和编号。
     const record =
       syntheticFindings.find((item) => item.state === state) ??
-      (state === "DISCOVERED" || state === "NOT_ESTABLISHED"
+      (state === "DISCOVERED" || state === "NOT_ESTABLISHED" || state === "REPORTER_SUPPLEMENT_PENDING"
         ? { ...syntheticFindings[0]!, state }
         : undefined);
     if (!record) throw new Error(`Missing synthetic record for state ${state}`);
@@ -184,6 +184,10 @@ describe("隐患台账分页与详情", () => {
     expect(await within(detail).findByText(findingStateLabels[state])).toBeInTheDocument();
     expect(within(detail).getByText("待专业评估")).toBeInTheDocument();
 
+    if (state === "REPORTER_SUPPLEMENT_PENDING") {
+      expect(within(detail).getByText(/确认已退回，等待原上报人补充说明/)).toBeInTheDocument();
+      expect(within(detail).queryByRole("list", { name: "隐患流程节点" })).not.toBeInTheDocument();
+    } else {
     const workflow = within(detail).getByRole("list", { name: "隐患流程节点" });
     expect(within(workflow).getAllByRole("listitem")).toHaveLength(workflowSteps.length);
     if (state === "CLOSED" || state === "NOT_ESTABLISHED") {
@@ -197,6 +201,8 @@ describe("隐患台账分页与详情", () => {
       const currentNode = within(workflow).getByText("当前节点");
       expect(currentNode.closest("li")?.querySelector(".workflow-step-name")?.textContent)
         .toBe(workflowSteps[workflowCurrentIndex(state)]);
+    }
+
     }
 
     const actionHint = within(detail).getByRole("note");
