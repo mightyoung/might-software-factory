@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://mightyoung.com/software-factory/workflow">
+  <process id="findingRemediationV3" name="Finding remediation v3" isExecutable="true">
+    <startEvent id="start"/>
+    <sequenceFlow id="startToPersonConfirm" sourceRef="start" targetRef="personConfirm"/>
+    <userTask id="personConfirm" name="Person confirmation" flowable:assignee="${personConfirmerMemberId}"/>
+    <sequenceFlow id="personToDecision" sourceRef="personConfirm" targetRef="personDecision"/>
+    <exclusiveGateway id="personDecision"/>
+    <sequenceFlow id="personApproved" sourceRef="personDecision" targetRef="safetyConfirm">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'APPROVE'}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="personNotEstablished" sourceRef="personDecision" targetRef="notEstablishedEnd">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'NOT_ESTABLISHED'}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="personReturned" sourceRef="personDecision" targetRef="reporterSupplement">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'RETURN_FOR_INFORMATION'}]]></conditionExpression>
+    </sequenceFlow>
+    <userTask id="safetyConfirm" name="Safety department confirmation" flowable:assignee="${safetyConfirmerMemberId}"/>
+    <sequenceFlow id="safetyToDecision" sourceRef="safetyConfirm" targetRef="safetyDecision"/>
+    <exclusiveGateway id="safetyDecision"/>
+    <sequenceFlow id="safetyApproved" sourceRef="safetyDecision" targetRef="safetyDispatch">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'APPROVE'}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="safetyNotEstablished" sourceRef="safetyDecision" targetRef="notEstablishedEnd">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'NOT_ESTABLISHED'}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="safetyReturned" sourceRef="safetyDecision" targetRef="reporterSupplement">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${reviewDecision == 'RETURN_FOR_INFORMATION'}]]></conditionExpression>
+    </sequenceFlow>
+    <userTask id="reporterSupplement" name="Reporter supplement" flowable:assignee="${reporterMemberId}"/>
+    <sequenceFlow id="supplementToPerson" sourceRef="reporterSupplement" targetRef="personConfirm"/>
+    <userTask id="safetyDispatch" name="Issue remediation notice" flowable:assignee="${safetyDispatcherMemberId}"/>
+    <sequenceFlow id="dispatchToRemediation" sourceRef="safetyDispatch" targetRef="remediation"/>
+    <userTask id="remediation" name="Remediate finding" flowable:assignee="${remediationAssigneeMemberId}"/>
+    <sequenceFlow id="remediationToVerification" sourceRef="remediation" targetRef="safetyVerification"/>
+    <userTask id="safetyVerification" name="Safety acceptance" flowable:assignee="${safetyVerifierMemberId}"/>
+    <sequenceFlow id="verificationToDecision" sourceRef="safetyVerification" targetRef="verificationDecision"/>
+    <exclusiveGateway id="verificationDecision" default="verificationFailure"/>
+    <sequenceFlow id="verificationPass" sourceRef="verificationDecision" targetRef="end">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${verificationDecision == 'PASS'}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="verificationFailure" sourceRef="verificationDecision" targetRef="safetyDispatch"/>
+    <endEvent id="notEstablishedEnd"/>
+    <endEvent id="end"/>
+  </process>
+</definitions>
