@@ -23,7 +23,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Mocked service proves HTTP mapping only, never database commit or producer acceptance. */
-@WebMvcTest(controllers = FindingEvidenceUploadController.class)
+// MockHttpServletRequest appends charset to the raw Content-Type when its character encoding is set.
+// Keep raw binary headers intact in this slice; the full session/CSRF security chain remains enabled.
+@WebMvcTest(controllers = FindingEvidenceUploadController.class, properties = "spring.servlet.encoding.enabled=false")
 @Import({SecurityConfiguration.class, FindingApiExceptionHandler.class, FindingEvidenceUploadRequestParser.class,
         FindingEvidenceUploadControllerHttpTest.Dependencies.class})
 class FindingEvidenceUploadControllerHttpTest {
@@ -32,7 +34,8 @@ class FindingEvidenceUploadControllerHttpTest {
     static final OffsetDateTime EXPIRY = OffsetDateTime.parse("2026-11-03T01:00:00Z");
     @Autowired MockMvc mvc;
     @MockitoBean FindingEvidenceUploadService service;
-    @BeforeEach void resetService() { reset(service); }
+    @MockitoBean FindingEvidenceReceiveService receiver;
+    @BeforeEach void resetService() { reset(service,receiver); }
 
     @Test void mapsReturnedNewReservationAndResponseLossReplayWithoutAdvertisingBytes() throws Exception {
         when(service.reserve(any())).thenReturn(new Reservation(new Status(INTENT, State.INTENT_CREATED, EXPIRY), false),
@@ -83,7 +86,7 @@ class FindingEvidenceUploadControllerHttpTest {
         request.addHeader("Idempotency-Key", KEY.toString());
         request.setContent("x=".repeat(10000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var controller = new FindingEvidenceUploadController(service,
-                new FindingEvidenceUploadRequestParser(new tools.jackson.databind.ObjectMapper()));
+                new FindingEvidenceUploadRequestParser(new tools.jackson.databind.ObjectMapper()),receiver);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.reserve(FINDING.toString(), "2", request,
                 new org.springframework.mock.web.MockHttpServletResponse()))
                 .isInstanceOfSatisfying(FindingEvidenceUploadRequestParser.RequestFailure.class,
@@ -99,6 +102,19 @@ class FindingEvidenceUploadControllerHttpTest {
                     .andExpect(header().string("Cache-Control", "no-store"));
         }
         verifyNoInteractions(service);
+    }
+    @Test void jsonDeclarationStillEnforcesExplicitUtf8AndRejectsOtherOrMalformedEncoding() throws Exception {
+        when(service.reserve(any())).thenReturn(new Reservation(new Status(INTENT,State.INTENT_CREATED,EXPIRY),false));
+        mvc.perform(post(PATH).with(authenticatedMember()).with(validCsrf()).header("Idempotency-Key",KEY)
+                .contentType("application/json;charset=UTF-8").content(BODY.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .andExpect(status().isCreated());
+        mvc.perform(post(PATH).with(authenticatedMember()).with(validCsrf()).header("Idempotency-Key",KEY)
+                .contentType("application/json;charset=UTF-16").content(BODY.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .andExpect(status().isUnsupportedMediaType()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(post(PATH).with(authenticatedMember()).with(validCsrf()).header("Idempotency-Key",KEY)
+                .contentType("application/json;charset=UTF-8").content(new byte[]{(byte)0xc3,0x28}))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        verify(service).reserve(any());
     }
     @Test void configuredPolicyFailureMapsTo413And415WithoutExposingPolicyInternals() throws Exception {
         for (var reason : new FindingEvidenceUploadException.Reason[]{FindingEvidenceUploadException.Reason.DECLARED_SIZE_EXCEEDED, FindingEvidenceUploadException.Reason.MEDIA_TYPE_NOT_ALLOWED}) {
@@ -129,6 +145,46 @@ class FindingEvidenceUploadControllerHttpTest {
         when(service.status(FINDING, 2, INTENT)).thenThrow(new FindingNotVisibleException());
         mvc.perform(get(PATH + "/" + INTENT).with(authenticatedMember())).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_VISIBLE"));
+    }
+    @Test void acceptedBytesAndCancelRemainTechnicalStatusesOnly() throws Exception {
+        var quarantined=new Status(INTENT,State.QUARANTINED,EXPIRY);
+        when(receiver.receive(eq(FINDING),eq(2),eq(INTENT),eq("image/png"),eq(3L),any()))
+                .thenReturn(new FindingEvidenceReceiveService.ReceiveResult(quarantined));
+        mvc.perform(put(PATH+"/"+INTENT+"/content").with(authenticatedMember()).with(validCsrf())
+                .header("Content-Length","3").contentType("image/png").content(new byte[]{1,2,3}))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.state").value("QUARANTINED"))
+                .andExpect(jsonPath("$.meta.schemaVersion").value("2")).andExpect(jsonPath("$.data.receipt").doesNotExist());
+        when(receiver.cancel(FINDING,2,INTENT)).thenReturn(new Status(INTENT,State.SCANNING,EXPIRY,true));
+        mvc.perform(post(PATH+"/"+INTENT+"/cancel").with(authenticatedMember()).with(validCsrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.cancelRequested").value(true))
+                .andExpect(jsonPath("$.data.state").value("SCANNING"));
+    }
+    @Test void alreadyReceivedHasSafeConflictAndStatusPointer() throws Exception {
+        when(receiver.receive(any(),anyInt(),any(),any(),anyLong(),any()))
+                .thenThrow(new FindingEvidenceReceiveService.AlreadyReceived(FINDING,2,INTENT));
+        mvc.perform(put(PATH+"/"+INTENT+"/content").with(authenticatedMember()).with(validCsrf())
+                .header("Content-Length","3").contentType("image/png").content(new byte[]{1,2,3}))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ALREADY_RECEIVED"))
+                .andExpect(header().string("Location",PATH+"/"+INTENT)).andExpect(header().string("Cache-Control","no-store"));
+    }
+    @Test void binaryMediaParametersRemainUnsupportedBeforeReceiver() throws Exception {
+        for(String media:new String[]{"image/png;charset=UTF-8","image/png;arbitrary=parameter"}) {
+            mvc.perform(put(PATH+"/"+INTENT+"/content").with(authenticatedMember()).with(validCsrf())
+                    .header("Content-Length","3").contentType(media).content(new byte[]{1,2,3}))
+                    .andExpect(status().isUnsupportedMediaType()).andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(header().string("Cache-Control","no-store"));
+        }
+        verifyNoInteractions(receiver);
+    }
+    @Test void binaryFramingAndCsrfRejectBeforeReceiver() throws Exception {
+        for(String header:new String[]{"Transfer-Encoding","Content-Encoding","Content-Range","Range","Trailer"}) {
+            mvc.perform(put(PATH+"/"+INTENT+"/content").with(authenticatedMember()).with(validCsrf())
+                    .header("Content-Length","3").header(header,"untrusted").contentType("image/png").content(new byte[]{1,2,3}))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(put(PATH+"/"+INTENT+"/content").with(authenticatedMember())
+                .header("Content-Length","3").contentType("image/png").content(new byte[]{1,2,3})).andExpect(status().isForbidden());
+        verifyNoInteractions(receiver);
     }
     private static org.springframework.test.web.servlet.request.RequestPostProcessor authenticatedMember() {
         return request -> {

@@ -67,7 +67,9 @@ public final class JooqFindingEvidenceUploadRepository implements FindingEvidenc
                                (select count(*) from public.evidence_item where tenant_id=cast(? as uuid)
                                    and evidence_set_id=cast(? as uuid)) as set_count
                       from public.finding_evidence_upload_intent where tenant_id=cast(? as uuid)
-                       and expires_at>current_timestamp
+                       and state<>'FINALIZED'
+                       and (expires_at>current_timestamp or state in
+                         ('RECEIVING','QUARANTINED','SCANNING','VERIFIED_PENDING_FINALIZATION','RETRY_WAIT'))
                     """,memberId,memberId,setId,tenantId,setId,tenantId);
             return new Quota(r.get("owner_count",Long.class),r.get("owner_bytes",Long.class),
                     r.get("tenant_count",Long.class),r.get("tenant_bytes",Long.class),r.get("set_count",Long.class));
@@ -81,15 +83,15 @@ public final class JooqFindingEvidenceUploadRepository implements FindingEvidenc
                       (tenant_id,id,owner_account_id,owner_actor_id,owner_member_id,operation,idempotency_key,
                        fingerprint_version,payload_sha256,finding_id,round_no,notice_id,evidence_set_id,
                        expected_finding_version,expected_evidence_revision,filename,declared_media_type,declared_size_bytes,
-                       producer_configuration_version,upload_policy_version,state,created_at,expires_at)
+                       producer_configuration_version,upload_policy_version,state,created_at,expires_at,technical_updated_at)
                     values (cast(? as uuid),cast(? as uuid),cast(? as uuid),cast(? as uuid),cast(? as uuid),?,cast(? as uuid),
                        ?,?,cast(? as uuid),?,cast(? as uuid),cast(? as uuid),?,?,?,?,?,?,?,'INTENT_CREATED',
-                       cast(? as timestamptz),cast(? as timestamptz))
+                       cast(? as timestamptz),cast(? as timestamptz),cast(? as timestamptz))
                     on conflict (tenant_id,owner_actor_id,operation,idempotency_key) do nothing
                     """,tenantId,id,owner.accountId(),owner.actorId(),owner.memberId(),OPERATION,c.idempotencyKey(),
                     FINGERPRINT_VERSION,hash,c.findingId(),c.roundNo(),notice.id(),c.evidenceSetId(),c.expectedFindingVersion(),
                     c.expectedEvidenceRevision(),c.filename(),c.declaredMediaType(),c.declaredSizeBytes(),
-                    capability.configurationVersion(),capability.policyVersion(),created,expires);
+                    capability.configurationVersion(),capability.policyVersion(),created,expires,created);
             if (inserted==0) {
                 var replay=existing(owner.actorId(),c.idempotencyKey()).orElseThrow(() -> new IllegalStateException("Upload collision unresolved"));
                 if (!hash.equals(replay.payloadSha256())) throw new FindingEvidenceUploadException(FindingEvidenceUploadException.Reason.IDEMPOTENCY_CONFLICT);

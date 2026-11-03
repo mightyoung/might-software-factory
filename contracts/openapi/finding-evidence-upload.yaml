@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: Finding evidence upload intents
-  version: 1.0.0
+  version: 2.0.0
   description: >-
-    Durable reservation metadata only. Successful creation requires the configured actual private
-    producer, scanner and policy, approved database schema and grants, and a current authorized
-    unsealed evidence set. The default unconfigured producer returns 503 before reservation writes.
-    No bytes, scan verdict, READY evidence, content URL or finalization is provided by this API.
-    Status authorization is point-in-time within a bounded read-only repeatable-read snapshot;
-    concurrent revocation may affect the next request. Mock HTTP tests prove mapping only.
+    Durable upload reservation, private byte intake and truthful technical status. Actual storage,
+    scanner generation, containment, keys and capacity must be ready before new intake; missing
+    resources return 503 without byte allocation. Accepted bytes are QUARANTINED, never READY.
+    Scanning can reach VERIFIED_PENDING_FINALIZATION, which requires a separate current-user
+    finalization service before business evidence publication. This API cannot finalize, seal,
+    submit evidence or advance a workflow. Database schema and grants require separate authority.
+    Status authorization is a bounded point-in-time snapshot; actual producer/PG/browser acceptance
+    is not established by source, mocked HTTP tests or compilation.
 paths:
   /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads:
     parameters:
@@ -81,7 +83,7 @@ paths:
         No query or body. All UUIDs must use canonical hyphenated spelling (case insensitive).
         Current exact owner and finding/round/notice/task/set context are required. Missing,
         cross-tenant, cross-owner and no-longer-authorized intents are uniformly invisible.
-        Status has no filename, storage path, object key, digest, receipt, scan output or progress.
+        Status has no filename, storage path, object key, digest, receipt or scan output. FINALIZED is reserved for separately implemented G025 and cannot be produced by this ingestion service.
       responses:
         '200':
           description: Minimal currently authorized intent status.
@@ -96,6 +98,88 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/Assignment'}
         '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads/{intentId}/content:
+    parameters:
+      - $ref: '#/components/parameters/FindingId'
+      - $ref: '#/components/parameters/RoundNo'
+      - $ref: '#/components/parameters/IntentId'
+    put:
+      operationId: receiveFindingEvidenceUpload
+      security:
+        - session: []
+          csrf: []
+      description: >-
+        Exactly one positive canonical Content-Length equal to the immutable declared size,
+        and one exact declared Content-Type without parameters. No query, metadata body,
+        transfer encoding, compression, range, multipart or trailers. Reads at most declared
+        length plus one within the bounded transport/producer deadline. Server-derived current
+        owner/task/notice/round/set/version/revision, unsealed state and resource generation are
+        rechecked before capacity reservation and after external streaming. All quarantine,
+        scanner scratch/spool, immutable-copy and receipt capacity is reserved before streaming.
+        202 follows committed complete quarantine/technical-state/audit/publication only.
+        It proves neither CLEAN, READY nor finalization. Unknown commit is resolved by GET status;
+        do not automatically resend. After durable receipt, repeated PUT returns ALREADY_RECEIVED
+        409 and Location pointing to the same status route, without reading/replacing bytes.
+        Resume and overwrite are unsupported. Denied/failed/expired/cancelled attempts retain
+        uncertain bytes and capacity until actual controlled disposal is confirmed.
+      parameters:
+        - in: header
+          name: Content-Length
+          required: true
+          schema: {type: integer, minimum: 1, maximum: 67108864}
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: {type: string, format: binary}
+          image/jpeg:
+            schema: {type: string, format: binary}
+      responses:
+        '202':
+          description: Committed durable quarantine, pending technical scan and explicit finalization.
+          headers: {Cache-Control: {schema: {const: no-store}}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StatusResponse'}}}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Denied'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409':
+          description: ALREADY_RECEIVED with status Location, or current context/version/lease conflict.
+          headers:
+            Location: {schema: {type: string}, description: Present for ALREADY_RECEIVED; relative metadata status URL.}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '415': {$ref: '#/components/responses/Media'}
+        '422': {$ref: '#/components/responses/Assignment'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads/{intentId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/FindingId'
+      - $ref: '#/components/parameters/RoundNo'
+      - $ref: '#/components/parameters/IntentId'
+    post:
+      operationId: cancelFindingEvidenceUpload
+      security:
+        - session: []
+          csrf: []
+      description: >-
+        No query or body. Requires current exact human owner and task/round/set authority.
+        Records a monotonic cancellation request with technical CAS and audit; repeated calls
+        return current status. cancelRequested is a request, not proof that a child exited or
+        bytes were deleted. Cancellation never releases capacity or publishes evidence.
+      responses:
+        '200':
+          description: Current technical state after recording the cancellation request or an existing terminal result.
+          headers: {Cache-Control: {schema: {const: no-store}}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/StatusResponse'}}}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Denied'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
 components:
   securitySchemes:
     session: {type: apiKey, in: cookie, name: SESSION}
@@ -104,6 +188,11 @@ components:
     FindingId:
       in: path
       name: findingId
+      required: true
+      schema: {type: string, format: uuid}
+    IntentId:
+      in: path
+      name: intentId
       required: true
       schema: {type: string, format: uuid}
     RoundNo:
@@ -142,7 +231,8 @@ components:
       required: [uploadIntentId, state, expiresAt]
       properties:
         uploadIntentId: {type: string, format: uuid}
-        state: {type: string, enum: [INTENT_CREATED, EXPIRED]}
+        state: {type: string, enum: [INTENT_CREATED, RECEIVING, QUARANTINED, SCANNING, VERIFIED_PENDING_FINALIZATION, RETRY_WAIT, FAILED, REJECTED, CANCELLED, EXPIRED, FINALIZED]}
+        cancelRequested: {type: boolean, const: true, description: Present when requested; does not prove child exit or byte disposal.}
         expiresAt: {type: string, format: date-time}
         recoveryAction: {type: string, const: FRESH_KEY_REQUIRED, description: Present only for EXPIRED.}
     ReservationData:
@@ -151,7 +241,8 @@ components:
       required: [uploadIntentId, state, expiresAt, statusUrl]
       properties:
         uploadIntentId: {type: string, format: uuid}
-        state: {type: string, enum: [INTENT_CREATED, EXPIRED]}
+        state: {type: string, enum: [INTENT_CREATED, RECEIVING, QUARANTINED, SCANNING, VERIFIED_PENDING_FINALIZATION, RETRY_WAIT, FAILED, REJECTED, CANCELLED, EXPIRED, FINALIZED]}
+        cancelRequested: {type: boolean, const: true, description: Present when requested; does not prove child exit or byte disposal.}
         expiresAt: {type: string, format: date-time}
         recoveryAction: {type: string, const: FRESH_KEY_REQUIRED}
         statusUrl: {type: string, description: Relative metadata status URL; not a byte upload URL.}
@@ -162,7 +253,7 @@ components:
       properties:
         requestId: {type: string, format: uuid}
         traceId: {type: string, format: uuid}
-        schemaVersion: {type: string, const: '1'}
+        schemaVersion: {type: string, const: '2'}
     StatusResponse:
       type: object
       additionalProperties: false

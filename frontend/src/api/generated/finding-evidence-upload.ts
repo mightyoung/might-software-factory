@@ -39,10 +39,54 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description No query or body. All UUIDs must use canonical hyphenated spelling (case insensitive). Current exact owner and finding/round/notice/task/set context are required. Missing, cross-tenant, cross-owner and no-longer-authorized intents are uniformly invisible. Status has no filename, storage path, object key, digest, receipt, scan output or progress. */
+        /** @description No query or body. All UUIDs must use canonical hyphenated spelling (case insensitive). Current exact owner and finding/round/notice/task/set context are required. Missing, cross-tenant, cross-owner and no-longer-authorized intents are uniformly invisible. Status has no filename, storage path, object key, digest, receipt or scan output. FINALIZED is reserved for separately implemented G025 and cannot be produced by this ingestion service. */
         get: operations["getFindingEvidenceUploadStatus"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads/{intentId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+                intentId: components["parameters"]["IntentId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Exactly one positive canonical Content-Length equal to the immutable declared size, and one exact declared Content-Type without parameters. No query, metadata body, transfer encoding, compression, range, multipart or trailers. Reads at most declared length plus one within the bounded transport/producer deadline. Server-derived current owner/task/notice/round/set/version/revision, unsealed state and resource generation are rechecked before capacity reservation and after external streaming. All quarantine, scanner scratch/spool, immutable-copy and receipt capacity is reserved before streaming. 202 follows committed complete quarantine/technical-state/audit/publication only. It proves neither CLEAN, READY nor finalization. Unknown commit is resolved by GET status; do not automatically resend. After durable receipt, repeated PUT returns ALREADY_RECEIVED 409 and Location pointing to the same status route, without reading/replacing bytes. Resume and overwrite are unsupported. Denied/failed/expired/cancelled attempts retain uncertain bytes and capacity until actual controlled disposal is confirmed. */
+        put: operations["receiveFindingEvidenceUpload"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads/{intentId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+                intentId: components["parameters"]["IntentId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description No query or body. Requires current exact human owner and task/round/set authority. Records a monotonic cancellation request with technical CAS and audit; repeated calls return current status. cancelRequested is a request, not proof that a child exited or bytes were deleted. Cancellation never releases capacity or publishes evidence. */
+        post: operations["cancelFindingEvidenceUpload"];
         delete?: never;
         options?: never;
         head?: never;
@@ -69,7 +113,12 @@ export interface components {
             /** Format: uuid */
             uploadIntentId: string;
             /** @enum {string} */
-            state: "INTENT_CREATED" | "EXPIRED";
+            state: "INTENT_CREATED" | "RECEIVING" | "QUARANTINED" | "SCANNING" | "VERIFIED_PENDING_FINALIZATION" | "RETRY_WAIT" | "FAILED" | "REJECTED" | "CANCELLED" | "EXPIRED" | "FINALIZED";
+            /**
+             * @description Present when requested; does not prove child exit or byte disposal.
+             * @constant
+             */
+            cancelRequested?: true;
             /** Format: date-time */
             expiresAt: string;
             /**
@@ -82,7 +131,12 @@ export interface components {
             /** Format: uuid */
             uploadIntentId: string;
             /** @enum {string} */
-            state: "INTENT_CREATED" | "EXPIRED";
+            state: "INTENT_CREATED" | "RECEIVING" | "QUARANTINED" | "SCANNING" | "VERIFIED_PENDING_FINALIZATION" | "RETRY_WAIT" | "FAILED" | "REJECTED" | "CANCELLED" | "EXPIRED" | "FINALIZED";
+            /**
+             * @description Present when requested; does not prove child exit or byte disposal.
+             * @constant
+             */
+            cancelRequested?: true;
             /** Format: date-time */
             expiresAt: string;
             /** @constant */
@@ -96,7 +150,7 @@ export interface components {
             /** Format: uuid */
             traceId: string;
             /** @constant */
-            schemaVersion: "1";
+            schemaVersion: "2";
         };
         StatusResponse: {
             data: components["schemas"]["StatusData"];
@@ -212,6 +266,7 @@ export interface components {
     };
     parameters: {
         FindingId: string;
+        IntentId: string;
         /** @description Canonical positive decimal integer, no leading zero or sign. */
         RoundNo: number;
     };
@@ -304,6 +359,91 @@ export interface operations {
             404: components["responses"]["Invisible"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Assignment"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    receiveFindingEvidenceUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                "Content-Length": number;
+            };
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+                intentId: components["parameters"]["IntentId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "image/png": string;
+                "image/jpeg": string;
+            };
+        };
+        responses: {
+            /** @description Committed durable quarantine, pending technical scan and explicit finalization. */
+            202: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusResponse"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["Invisible"];
+            /** @description ALREADY_RECEIVED with status Location, or current context/version/lease conflict. */
+            409: {
+                headers: {
+                    /** @description Present for ALREADY_RECEIVED; relative metadata status URL. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["Media"];
+            422: components["responses"]["Assignment"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    cancelFindingEvidenceUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+                intentId: components["parameters"]["IntentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current technical state after recording the cancellation request or an existing terminal result. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusResponse"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Denied"];
+            404: components["responses"]["Invisible"];
+            409: components["responses"]["Conflict"];
             503: components["responses"]["Unavailable"];
         };
     };

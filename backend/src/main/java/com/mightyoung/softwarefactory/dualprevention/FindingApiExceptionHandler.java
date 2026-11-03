@@ -63,6 +63,22 @@ public final class FindingApiExceptionHandler {
         };
     }
 
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceReceiveService.AlreadyReceived.class)
+    ResponseEntity<ErrorResponse> contentAlreadyReceived(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceReceiveService.AlreadyReceived failure) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).header("Cache-Control","no-store").header("Location",failure.statusUrl())
+                .body(new ErrorResponse("ALREADY_RECEIVED","Upload content was already received; read its status",
+                        UUID.randomUUID().toString(),false,List.of(),null));
+    }
+    @ExceptionHandler(com.mightyoung.softwarefactory.files.FileIngestionPort.ContentRejected.class)
+    ResponseEntity<ErrorResponse> contentRejected(com.mightyoung.softwarefactory.files.FileIngestionPort.ContentRejected failure) {
+        return switch(failure.reason()) {
+            case INVALID_LENGTH,MALFORMED_CONTENT -> error(HttpStatus.BAD_REQUEST,"INVALID_REQUEST","The upload bytes are invalid",false,List.of());
+            case UNSUPPORTED_MEDIA -> error(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"INVALID_REQUEST","The upload media is not allowed",false,List.of());
+            case SCANNER_REJECTED -> error(HttpStatus.UNPROCESSABLE_ENTITY,"CONTENT_REJECTED","The content policy rejected the upload",false,List.of());
+        };
+    }
+
     @ExceptionHandler(FindingEvidenceUploadRequestParser.RequestFailure.class)
     ResponseEntity<ErrorResponse> invalidUpload(FindingEvidenceUploadRequestParser.RequestFailure failure) {
         return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",

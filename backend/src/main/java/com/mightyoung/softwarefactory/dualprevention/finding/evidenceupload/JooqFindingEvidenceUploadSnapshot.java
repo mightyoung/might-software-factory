@@ -55,6 +55,7 @@ class JooqFindingEvidenceUploadSnapshot implements FindingEvidenceUploadReadRepo
         TransactionSynchronizationManager.registerSynchronization(lifetime);
     }
     final void close() { open=false; }
+    final void invalidate() { invalidated=true; holder.setRollbackOnly(); }
     private static IllegalStateException inactive() {
         return new IllegalStateException("Evidence upload transaction context is no longer active");
     }
@@ -122,10 +123,14 @@ class JooqFindingEvidenceUploadSnapshot implements FindingEvidenceUploadReadRepo
     @Override public OffsetDateTime now() {
         requireOpen(); return dsl.fetchOne("select current_timestamp as now").get("now",OffsetDateTime.class);
     }
+    private static State state(String value) {
+        try { return State.valueOf(value); }
+        catch (IllegalArgumentException failure) { throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException(); }
+    }
     static Intent toIntent(org.jooq.Record r) {
         return new Intent(r.get("id",UUID.class),r.get("owner_account_id",UUID.class),r.get("owner_actor_id",UUID.class),
                 r.get("owner_member_id",UUID.class),r.get("finding_id",UUID.class),r.get("round_no",Integer.class),
                 r.get("notice_id",UUID.class),r.get("evidence_set_id",UUID.class),r.get("payload_sha256",String.class),
-                r.get("created_at",OffsetDateTime.class),r.get("expires_at",OffsetDateTime.class));
+                r.get("created_at",OffsetDateTime.class),r.get("expires_at",OffsetDateTime.class),state(r.get("state",String.class)),r.get("cancel_requested",Boolean.class));
     }
 }

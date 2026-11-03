@@ -19,6 +19,8 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Compile native scanner broker and verify unprivileged protocol
+        run: make -C backend/src/main/native protocol-test OUT_DIR="$RUNNER_TEMP/msf-scanner-broker"
       - name: Verify dependency evidence tool
         run: python3 -B -m unittest discover -s tools/p0 -p 'test_*.py' -v
       - name: Verify backend
