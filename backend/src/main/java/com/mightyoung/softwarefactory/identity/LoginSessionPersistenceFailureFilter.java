@@ -37,6 +37,15 @@ final class LoginSessionPersistenceFailureFilter extends OncePerRequestFilter {
     }
 
     static void unavailable(HttpServletResponse response) throws IOException {
+        unavailable(response,"DEPENDENCY_UNAVAILABLE","Authentication could not be completed",null);
+    }
+
+    static void lifecycleFailure(HttpServletResponse response,boolean handlerEntered,java.util.UUID trace) throws IOException {
+        unavailable(response,handlerEntered?"OUTCOME_UNKNOWN":"DEPENDENCY_UNAVAILABLE",
+                "Identity operation outcome could not be confirmed",trace);
+    }
+
+    private static void unavailable(HttpServletResponse response,String code,String message,java.util.UUID trace) throws IOException {
         // Servlet implementations may retain a special Content-Length after setHeader(null).
         // Reset the uncommitted response, then restore unrelated/security headers.
         var retainedHeaders = new java.util.LinkedHashMap<String, java.util.List<String>>();
@@ -59,6 +68,6 @@ final class LoginSessionPersistenceFailureFilter extends OncePerRequestFilter {
         IdentityHttpResponses.clearSessionCookies(response);
         // No native getSession(), save retry or rollback claim: commit outcome may be unknown.
         IdentityHttpResponses.writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                "DEPENDENCY_UNAVAILABLE", "Authentication could not be completed", true);
+                code,message,true,trace);
     }
 }

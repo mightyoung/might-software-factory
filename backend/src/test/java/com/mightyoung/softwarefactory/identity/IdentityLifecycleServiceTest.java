@@ -61,6 +61,24 @@ class IdentityLifecycleServiceTest {
         verify(store,times(1)).terminal(any(),any(),eq(State.CONSUMED),any());verify(audit,times(1)).success(any(),any());
         verifyNoInteractions(sessions,delivery,members,authorization);
     }
+    @Test void invitationRouteRejectsAProvedResetCapabilityBeforeBudgetPasswordOrWrite() {
+        assertThatThrownBy(()->service.consumeInvitation("source",()->new ConsumeCommand(challengeId,key,OneUseSecret.parse(token),password.toCharArray()),UUID.randomUUID()))
+                .isInstanceOfSatisfying(IdentityLifecycleException.class,e->assertThat(e.reason()).isEqualTo(IdentityLifecycleException.Reason.CAPABILITY_REJECTED));
+        verify(store,never()).reserveRate(any(),anyString(),any(),anyInt(),anyInt());verify(store,never()).lockChallenge(any(),any());verifyNoInteractions(encoder,sessions,members);
+    }
+    @Test void resetRouteRejectsAProvedInvitationCapabilityBeforePasswordOrWrite() {
+        UUID tenant=UUID.randomUUID();IssuerBinding issuer=new IssuerBinding(UUID.randomUUID(),UUID.randomUUID(),tenant,UUID.randomUUID(),1,0,0);
+        ChallengeSnapshot old=challenge.get();challenge.set(new ChallengeSnapshot(challengeId,Purpose.NEW_ACCOUNT,null,tenant,issuer,"person","Person",destination,null,null,null,old.secretDigest(),State.ISSUED,1,old.createdAt(),old.expiresAt(),null));
+        assertThatThrownBy(()->service.consumeReset("source",()->new ConsumeCommand(challengeId,key,OneUseSecret.parse(token),password.toCharArray()),UUID.randomUUID())).isInstanceOf(IdentityLifecycleException.class);
+        verify(store,never()).lockChallenge(any(),any());verifyNoInteractions(encoder,sessions,members,authorization);
+    }
+    @Test void existingInvitationCannotDowngradeAMissingFreshSessionToAnonymous() {
+        UUID tenant=UUID.randomUUID();IssuerBinding issuer=new IssuerBinding(UUID.randomUUID(),UUID.randomUUID(),tenant,UUID.randomUUID(),1,0,0);
+        ChallengeSnapshot old=challenge.get();challenge.set(new ChallengeSnapshot(challengeId,Purpose.EXISTING_ACCOUNT_MEMBERSHIP,accountId,tenant,issuer,null,null,destination,contactId,1L,null,old.secretDigest(),State.ISSUED,1,old.createdAt(),old.expiresAt(),null));
+        when(sessions.capture()).thenThrow(new UnauthenticatedSessionException());
+        assertThatThrownBy(()->service.consumeInvitation("source",()->new ConsumeCommand(challengeId,key,OneUseSecret.parse(token),null),UUID.randomUUID())).isInstanceOf(UnauthenticatedSessionException.class);
+        verify(store,never()).lockChallenge(any(),any());verifyNoInteractions(encoder,members);
+    }
     @Test void replayWithChangedBodyConflictsAndDifferentKeyCannotConsumeAgain(){
         consume(key,password);
         assertThatThrownBy(()->consume(key,"a different sufficiently long password")).isInstanceOfSatisfying(IdentityLifecycleException.class,e->assertThat(e.reason()).isEqualTo(IdentityLifecycleException.Reason.CONFLICT));

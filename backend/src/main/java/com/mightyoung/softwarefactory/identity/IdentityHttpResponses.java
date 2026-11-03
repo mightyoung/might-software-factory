@@ -34,6 +34,12 @@ final class IdentityHttpResponses {
         }
     }
 
+    /** Capability retry keeps its independently valid CSRF cookie/header. */
+    static void clearSessionCookie(HttpServletResponse response) {
+        response.addHeader("Set-Cookie", org.springframework.http.ResponseCookie.from("SESSION", "")
+                .path("/").secure(true).httpOnly(true).sameSite("Lax").maxAge(0).build().toString());
+    }
+
     static void noContent(HttpServletResponse response) {
         response.setStatus(HttpServletResponse.SC_NO_CONTENT);
     }

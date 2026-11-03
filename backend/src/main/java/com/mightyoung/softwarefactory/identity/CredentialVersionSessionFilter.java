@@ -15,11 +15,19 @@ final class CredentialVersionSessionFilter extends OncePerRequestFilter {
     private final AccountStatusReadRepository accounts;
     CredentialVersionSessionFilter(AccountStatusReadRepository accounts){this.accounts=accounts;}
     @Override protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path=request.getRequestURI().substring(request.getContextPath().length());
+        String path=IdentityCapabilityRoutePolicy.path(request);
         return PUBLIC_AUTH.contains(path);
     }
     @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain)throws IOException,ServletException {
-        var authentication=SecurityContextHolder.getContext().getAuthentication();
+        boolean capability=IdentityCapabilityRoutePolicy.matches(request);
+        if(capability)IdentityCapabilityRoutePolicy.noStore(response);
+        org.springframework.security.core.Authentication authentication;
+        try {authentication=SecurityContextHolder.getContext().getAuthentication();}
+        catch(RuntimeException unavailable) {
+            if(!capability)throw unavailable;
+            SecurityContextHolder.clearContext();
+            IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+        }
         if(authentication!=null&&authentication.isAuthenticated()&&authentication.getPrincipal() instanceof VerifiedSessionPrincipal principal) {
             AccountSecurityState state;
             try { state=accounts.findState(principal.accountId()).orElse(null); }
@@ -29,7 +37,18 @@ final class CredentialVersionSessionFilter extends OncePerRequestFilter {
             if(state==null||!"ACTIVE".equals(state.status())||state.credentialVersion()!=principal.credentialVersion()) {
                 SecurityContextHolder.clearContext();
                 try { var session=request.getSession(false);if(session!=null)session.invalidate(); }
-                catch(RuntimeException unavailable) { /* A stale generation must fail even if cleanup is unavailable. */ }
+                catch(RuntimeException unavailable) {
+                    if(capability) {
+                        IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                    }
+                    /* A stale generation must fail even if cleanup is unavailable. */
+                }
+                if(capability) {
+                    IdentityHttpResponses.clearSessionCookie(response);
+                    request.setAttribute(IdentityCapabilityRoutePolicy.ANONYMOUS_CLASSIFICATION,
+                            IdentityCapabilityRoutePolicy.AnonymousClassification.STALE_CREDENTIAL);
+                    chain.doFilter(request,response);return;
+                }
                 IdentityHttpResponses.clearSessionCookies(response);
                 IdentityHttpResponses.writeError(response,401,"AUTH_REQUIRED","A current verified session is required",false);return;
             }

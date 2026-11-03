@@ -59,6 +59,7 @@ public class SecurityConfiguration {
                         .csrfTokenRequestHandler(new EagerCookieCsrfTokenRequestHandler()))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/api/v1/auth/csrf", "/api/v1/auth/login").permitAll()
+                        .requestMatchers(IdentityCapabilityRoutePolicy::matches).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) -> IdentityHttpResponses.writeError(
@@ -114,6 +115,18 @@ public class SecurityConfiguration {
         }
         var registration = new FilterRegistrationBean<>(new LoginSessionPersistenceFailureFilter());
         registration.setOrder(sessionOrder - 1);
+        registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
+        return registration;
+    }
+
+    @Bean
+    FilterRegistrationBean<IdentityLifecycleSessionPersistenceFilter> lifecycleSessionPersistenceFailureBoundary(
+            org.springframework.core.env.Environment environment) {
+        int sessionOrder=environment.getProperty("spring.session.servlet.filter-order",Integer.class,
+                org.springframework.session.web.http.SessionRepositoryFilter.DEFAULT_ORDER);
+        if(sessionOrder==Integer.MIN_VALUE)throw new IllegalStateException("Session filter order must allow a capability persistence boundary");
+        var registration=new FilterRegistrationBean<>(new IdentityLifecycleSessionPersistenceFilter());
+        registration.setOrder(sessionOrder-1);
         registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
         return registration;
     }

@@ -182,14 +182,24 @@ public final class IdentityLifecycleService implements AutoCloseable {
     }
 
     public void consume(String source,Supplier<ConsumeCommand> parser,UUID traceId) {
-        safe(traceId,()->{consumeInternal(source,parser,traceId);return null;});
+        consumeForOperation(source,parser,traceId,null);
     }
-    private void consumeInternal(String source,Supplier<ConsumeCommand> parser,UUID traceId) {
+    public void consumeReset(String source,Supplier<ConsumeCommand> parser,UUID traceId) {
+        consumeForOperation(source,parser,traceId,Operation.CONSUME_RESET);
+    }
+    public void consumeInvitation(String source,Supplier<ConsumeCommand> parser,UUID traceId) {
+        consumeForOperation(source,parser,traceId,Operation.CONSUME_INVITATION);
+    }
+    private void consumeForOperation(String source,Supplier<ConsumeCommand> parser,UUID traceId,Operation expected) {
+        safe(traceId,()->{consumeInternal(source,parser,traceId,expected);return null;});
+    }
+    private void consumeInternal(String source,Supplier<ConsumeCommand> parser,UUID traceId,Operation expected) {
         try(var admitted=admit(source);var command=parser.get()) {
             required(command,traceId);
             ChallengeSnapshot hint=store.readChallenge(command.challengeId()).orElseThrow(IdentityLifecycleService::rejected);
             if(!command.token().matches(hint.secretDigest()))throw rejected();
             Operation operation=hint.purpose()==Purpose.PASSWORD_RESET?Operation.CONSUME_RESET:Operation.CONSUME_INVITATION;
+            if(expected!=null&&operation!=expected)throw rejected();
             if((hint.purpose()==Purpose.EXISTING_ACCOUNT_MEMBERSHIP)!=(command.password()==null))throw rejected();
             var session=hint.purpose()==Purpose.EXISTING_ACCOUNT_MEMBERSHIP?sessions.capture():null;
             if(session!=null&&!session.context().accountId().equals(hint.accountId()))throw rejected();
