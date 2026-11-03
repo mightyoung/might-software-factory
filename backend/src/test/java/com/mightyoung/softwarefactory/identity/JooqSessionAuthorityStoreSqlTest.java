@@ -38,7 +38,7 @@ class JooqSessionAuthorityStoreSqlTest {
         when(boundary.observedAt()).thenReturn(now);
         when(source.getConnection()).thenAnswer(call->new MockConnection(execution->{
             String sql=execution.sql().stripLeading();statements.add(sql);
-            if(sql.startsWith("select state,version,activation_evidence_sha256"))return row(Map.of("state","ENFORCING","version",1L,"activation_evidence_sha256","a".repeat(64)));
+            if(sql.startsWith("select state,version,"))return row(Map.of("state","ENFORCING","version",1L,"activated_at",offset(now.minusSeconds(1)),"activated_by_database_role","migrator","activation_event_id",eventId,"activation_evidence_sha256","a".repeat(64)));
             if(sql.contains("from public.spring_session stored"))return row(Map.of("primary_id",sourceHandle.toString(),"session_key_id","k1",
                     "session_digest",keys.sessionDigest("k1",captured.bearerId()),"authenticated_at",offset(captured.authenticatedAt()),"absolute_expires_at",offset(captured.absoluteExpiresAt())));
             if(sql.startsWith("select session_id,principal_name"))return row(Map.of("session_id","remote-private-bearer","principal_name",foreignTarget?UUID.randomUUID().toString():context.accountId().toString()));

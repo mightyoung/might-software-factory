@@ -9,6 +9,7 @@ public interface SessionAuthorityStore {
     SessionHandle requireCurrent(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary);
     SessionHandle requireCurrent(CapturedHumanRequest request,SessionSensitiveSecurityTransaction.ReadSnapshotBoundary boundary);
     FenceResult revoke(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary,RevokeCommand command,java.util.UUID eventId);
-    FenceResult logout(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary,java.util.UUID eventId);
+    SessionLogoutResult logout(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,java.util.UUID eventId);
+    void requireLogoutLookup(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,SessionLogoutResult result);
     SessionPage readOwnPage(CapturedHumanRequest request,SessionSensitiveSecurityTransaction.ReadSnapshotBoundary boundary,SessionHandle after,int limit);
 }

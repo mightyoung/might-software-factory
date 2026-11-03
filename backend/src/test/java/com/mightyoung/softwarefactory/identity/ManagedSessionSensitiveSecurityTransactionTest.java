@@ -28,7 +28,8 @@ class ManagedSessionSensitiveSecurityTransactionTest {
     final DataSource source=mock(DataSource.class);
     final Connection connection=mock(Connection.class);
     final DataSourceTransactionManager manager=new DataSourceTransactionManager(source);
-    final ManagedSessionSensitiveSecurityTransaction boundaries=new ManagedSessionSensitiveSecurityTransaction(source,manager,new PostgresAuthorizationWriteGuard(source));
+    final PostgresAuthorizationWriteGuard guard=new PostgresAuthorizationWriteGuard(source);
+    final ManagedSessionSensitiveSecurityTransaction boundaries=new ManagedSessionSensitiveSecurityTransaction(source,manager,guard);
     final AtomicBoolean autoCommit=new AtomicBoolean(true),readOnly=new AtomicBoolean(false);
     final AtomicInteger isolation=new AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
     final AtomicReference<String> tenant=new AtomicReference<>("");
@@ -105,4 +106,71 @@ class ManagedSessionSensitiveSecurityTransactionTest {
         var request=capture();assertThatThrownBy(()->boundaries.read(request,proof->{readOnly.set(false);return null;})).isInstanceOf(AuthorizationWriteGuardException.class);
         verify(connection).rollback();verify(connection,never()).commit();
     }
+    @Test void logoutUsesGlobalWriterWithoutFreshTenantOrLifetime()throws Exception{
+        var raw=CapturedHumanRequestTest.authenticatedRequest();raw.getSession(false).removeAttribute(SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE);
+        SecurityContextHolder.getContext().getAuthentication().setAuthenticated(false);
+        try(var captured=new KnownLogoutRequests(serializer->serializer.setUseBase64Encoding(false)).capture(raw)){
+            var scope=SessionSensitiveSecurityTransaction.LogoutScope.knownLineage(captured);
+            boundaries.executeLogout(scope,proof->{boundaries.requireLogout(scope,proof,source,connection);
+                assertThat(tenant.get()).isEmpty();assertThat(proof.observedAt()).isEqualTo(databaseTime);return null;});
+        }
+        assertThat(statements.indexOf("select pg_advisory_xact_lock(?, ?)")).isLessThan(statements.indexOf("select statement_timestamp()"));
+        verify(connection).commit();
+    }
+    @Test void logoutCannotEnterFreshHumanScope(){
+        assertThatThrownBy(()->SessionSensitiveSecurityTransaction.Scope.human(Operation.LOGOUT,capture())).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void controlReadNeedsNoHumanAndCannotBeBorrowedAsHumanProof()throws Exception{
+        boundaries.readControl(proof->{boundaries.requireControl(proof,source,connection);
+            assertThat(proof.observedAt()).isEqualTo(databaseTime);assertThat(readOnly).isTrue();assertThat(tenant.get()).isEmpty();return null;});
+        assertThat(statements).contains("select transaction_timestamp()").noneMatch(sql->sql.contains("pg_advisory_xact_lock"));verify(connection).commit();
+    }
+    @Test void borrowedReadKeepsCallerTransactionAndDoesNotAlterRls()throws Exception{
+        var captured=capture();var caller=callerWriter();caller.setReadOnly(true);caller.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        caller.execute(status->{tenant.set(captured.context().tenantId().toString());
+            return boundaries.withRead(captured,proof->{boundaries.requireRead(captured,proof,source,connection);
+                assertThat(proof.observedAt()).isEqualTo(databaseTime);return null;});});
+        assertThat(statements).noneMatch(sql->sql.contains("set_config('app.tenant_id'"));verify(connection).commit();
+    }
+    @Test void borrowedFindingWriterOnlyAcceptsItsAlreadyHeldSharedGuard()throws Exception{
+        var captured=capture();var scope=new HumanSessionAuthorityTransaction.WriteScope(captured,HumanSessionAuthorityTransaction.Guard.FINDING_COMMAND,List.of(captured.context().tenantId()));
+        callerWriter().execute(status->{tenant.set(captured.context().tenantId().toString());guard.forFindingCommand(captured.context().tenantId());
+            return boundaries.withGuarded(scope,proof->{boundaries.requireGuarded(scope,proof,source,connection);assertThat(proof.observedAt()).isEqualTo(databaseTime);return null;});});
+        assertThat(statements.stream().filter(sql->sql.equals("select statement_timestamp()"))).hasSize(1);
+        assertThat(statements).noneMatch(sql->sql.contains("set_config('app.tenant_id'"));verify(connection).commit();
+    }
+    @Test void missingCallerGuardFailsWithoutAcquiringOrUpgrading()throws Exception{
+        var captured=capture();var scope=new HumanSessionAuthorityTransaction.WriteScope(captured,HumanSessionAuthorityTransaction.Guard.GLOBAL_SECURITY,List.of(captured.context().tenantId()));
+        assertThatThrownBy(()->callerWriter().execute(status->{tenant.set(captured.context().tenantId().toString());return boundaries.withGuarded(scope,proof->null);}))
+                .isInstanceOf(AuthorizationWriteGuardException.class);
+        assertThat(statements).noneMatch(sql->sql.contains("pg_advisory_xact_lock"));verify(connection).rollback();
+    }
+    @Test void copiedCallerScopeAndEscapedProofCannotBeReused()throws Exception{
+        var captured=capture();var scope=new HumanSessionAuthorityTransaction.WriteScope(captured,HumanSessionAuthorityTransaction.Guard.FINDING_COMMAND,List.of(captured.context().tenantId()));
+        assertThatThrownBy(()->callerWriter().execute(status->{tenant.set(captured.context().tenantId().toString());guard.forFindingCommand(captured.context().tenantId());
+            return boundaries.withGuarded(scope,proof->{var copied=new HumanSessionAuthorityTransaction.WriteScope(captured,scope.guard(),scope.declaredTenants());
+                boundaries.requireGuarded(copied,proof,source,connection);return null;});})).isInstanceOf(AuthorizationWriteGuardException.class);
+        verify(connection).rollback();
+    }
+    @Test void borrowedProofExpiresAtCallbackEndEvenBeforeOuterCommit()throws Exception{
+        var captured=capture();var caller=callerWriter();caller.setReadOnly(true);caller.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        AtomicReference<HumanSessionAuthorityTransaction.ReadBoundary> escaped=new AtomicReference<>();
+        assertThatThrownBy(()->caller.execute(status->{tenant.set(captured.context().tenantId().toString());boundaries.withRead(captured,proof->{escaped.set(proof);return null;});
+            escaped.get().observedAt();return null;})).isInstanceOf(AuthorizationWriteGuardException.class);verify(connection).rollback();
+    }
+    @Test void completedSourceAssertionDoesNotReenterSourceRlsAtCallerCommit()throws Exception{
+        var captured=capture();var target=java.util.UUID.randomUUID();var declared=List.of(captured.context().tenantId(),target);
+        var scope=new HumanSessionAuthorityTransaction.WriteScope(captured,HumanSessionAuthorityTransaction.Guard.GLOBAL_SECURITY,declared);
+        AtomicInteger sourceChecks=new AtomicInteger();
+        callerWriter().execute(status->{tenant.set(captured.context().tenantId().toString());guard.forGlobalSecurityChange(declared);
+            boundaries.withGuarded(scope,proof->{boundaries.requireGuarded(scope,proof,source,connection);return null;});
+            sourceChecks.set((int)statements.stream().filter(sql->sql.contains("current_setting('app.tenant_id'")).count());
+            tenant.set(target.toString());return null;});
+        assertThat(statements.stream().filter(sql->sql.contains("current_setting('app.tenant_id'"))).hasSize(sourceChecks.get());
+        verify(connection).commit();
+    }
+    private TransactionTemplate callerWriter(){
+        var template=new TransactionTemplate(manager);template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);return template;
+    }
+
 }
