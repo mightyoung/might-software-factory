@@ -26,12 +26,12 @@ public final class JooqSessionAuthorityStore implements SessionAuthorityStore {
         this.source=Objects.requireNonNull(source);this.boundaries=Objects.requireNonNull(boundaries);this.keys=Objects.requireNonNull(keys);
     }
     @Override public Enforcement enforcement(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary){
-        return write(scope,boundary,JooqSessionAuthorityStore::control);
+        return write(scope,boundary,SessionAuthoritySql::control);
     }
     @Override public Registration register(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary,java.util.UUID eventId){
         if(scope.operation()!=Operation.REGISTER_SESSION)throw SessionSensitiveException.rejected();
         return write(scope,boundary,db->{
-            if(control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
+            if(SessionAuthoritySql.control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
             CapturedHumanRequest request=scope.request();CurrentTenantContext context=request.context();Instant now=boundary.observedAt();
             if(request.authenticatedAt().isAfter(now)||!request.absoluteExpiresAt().isAfter(now))throw SessionSensitiveException.rejected();
             Record stored=db.fetchOne("""
@@ -154,44 +154,95 @@ public final class JooqSessionAuthorityStore implements SessionAuthorityStore {
             if(inserted!=1)throw conflict();return new FenceResult(sourceHandle,command.target(),version,true,eventId,now);
         });
     }
-    @Override public FenceResult logout(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary,java.util.UUID eventId){
-        if(scope.operation()!=Operation.LOGOUT)throw SessionSensitiveException.rejected();
-        return write(scope,boundary,db->{
-            if(control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
-            CapturedHumanRequest request=scope.request();CurrentTenantContext context=request.context();Instant now=boundary.observedAt();
-            Record stored=db.fetchOne("select primary_id from public.spring_session where session_id=? and principal_name=?",request.bearerId(),context.accountId().toString());
-            // Retained lineage may prove this actual ID after framework row cleanup. Scan only
-            // the bounded retained key set, never client handles or serialized attributes.
-            SessionHandle handle=stored==null?null:SessionHandle.parse(stored.get("primary_id",String.class));
-            if(handle==null){
-                for(var candidate:keys.sessionCandidates(request.bearerId()).entrySet()){
-                    Record retained=db.fetchOne("select primary_id from public.account_session_authority where account_id=cast(? as uuid) and session_key_id=? and session_digest=?",
-                            context.accountId(),candidate.getKey(),candidate.getValue());
-                    if(retained!=null){
-                        SessionHandle found=SessionHandle.parse(retained.get("primary_id",String.class));
-                        if(handle!=null&&!handle.equals(found))throw SessionSensitiveException.unavailable();handle=found;
+    @Override public SessionLogoutResult logout(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,java.util.UUID eventId){
+        return logoutSql(scope,boundary,(db,connection)->{
+            if(SessionAuthoritySql.control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
+            KnownLineageLogoutCapture request=scope.request();Instant now=boundary.observedAt();
+            // Complete retained-key coverage is needed even for a negative ownership result.
+            SessionAuthoritySql.requireRetainedKeys(db,keys);
+            String bearer=request.bearerId();
+            Record stored=bearer==null?null:db.fetchOne("select primary_id,session_id,principal_name from public.spring_session where session_id=? for update",bearer);
+            Record retained=null;
+            if(bearer!=null){
+                for(var candidate:keys.sessionCandidates(bearer).entrySet()){
+                    Record found=db.fetchOne("select * from public.account_session_authority where session_key_id=? and session_digest=? for update",candidate.getKey(),candidate.getValue());
+                    if(found!=null){
+                        if(retained!=null&&(!Objects.equals(retained.get("primary_id"),found.get("primary_id"))
+                                ||!Objects.equals(retained.get("account_id"),found.get("account_id"))))throw SessionSensitiveException.unavailable();
+                        retained=found;
                     }
                 }
             }
-            if(handle==null)throw new SessionSensitiveException(SessionSensitiveException.Reason.NO_TRUSTED_LINEAGE);
-            OwnedTarget target=owned(db,context.accountId(),handle);
-            if(target.authority()!=null&&!keys.matchesSession(target.authority().get("session_key_id",String.class),target.authority().get("session_digest",String.class),request.bearerId()))throw SessionSensitiveException.rejected();
+            if(stored==null&&retained==null)return new SessionLogoutResult(scope,boundary,source,connection,null,null);
+            SessionHandle handle=SessionHandle.parse((stored!=null?stored:retained).get("primary_id",String.class));
+            if(retained!=null&&!handle.toString().equals(retained.get("primary_id",String.class)))throw SessionSensitiveException.unavailable();
+            java.util.UUID canonicalAccount=stored==null?null:canonicalAccount(stored.get("principal_name",String.class));
+            java.util.UUID account=retained==null?canonicalAccount:retained.get("account_id",java.util.UUID.class);
+            if(account==null||(canonicalAccount!=null&&!account.equals(canonicalAccount))
+                    ||(request.claimedAccount()!=null&&!account.equals(request.claimedAccount())))throw SessionSensitiveException.unavailable();
+            if(db.fetchOne("select id from public.account where id=cast(? as uuid)",account)==null)throw SessionSensitiveException.unavailable();
+            if(stored==null)stored=db.fetchOne("select session_id,principal_name from public.spring_session where primary_id=? for update",handle.toString());
+            if(stored!=null){
+                java.util.UUID index=canonicalAccount(stored.get("principal_name",String.class));
+                if(index!=null&&!account.equals(index))throw SessionSensitiveException.unavailable();
+                if(index==null&&retained==null)throw SessionSensitiveException.unavailable();
+            }
+            Record authority=db.fetchOne("select * from public.account_session_authority where primary_id=? for update",handle.toString());
+            if(authority!=null&&(!account.equals(authority.get("account_id",java.util.UUID.class))
+                    ||!keys.matchesSession(authority.get("session_key_id",String.class),authority.get("session_digest",String.class),bearer)))
+                throw SessionSensitiveException.unavailable();
+            if(authority==null&&stored==null)throw SessionSensitiveException.unavailable();
+            java.util.UUID actor=null;
+            if(request.claimedActor()!=null&&account.equals(request.claimedAccount())){
+                Record principal=db.fetchOne("select id from public.principal where id=cast(? as uuid) and account_id=cast(? as uuid) and kind='HUMAN'",request.claimedActor(),account);
+                if(principal!=null)actor=principal.get("id",java.util.UUID.class);
+            }
+            LogoutOwnership ownership=new LogoutOwnership(scope,boundary,source,connection,account,actor,handle);
+            ownership.requireOwned(scope,boundary,source,connection);
+            OwnedTarget target=new OwnedTarget(stored,authority);
             if(target.revoked()){
                 Record original=db.fetchOne("""
                         select event_id,completed_at from public.session_authority_command_receipt
-                         where target_primary_id=? and account_id=cast(? as uuid) and result_authority_version=?
-                        """,handle.toString(),context.accountId(),target.version());
-                if(original==null)throw SessionSensitiveException.unavailable();
-                return new FenceResult(handle,handle,target.version(),false,original.get("event_id",java.util.UUID.class),original.get("completed_at",OffsetDateTime.class).toInstant());
+                         where operation in ('LOGOUT','REVOKE_SESSION') and target_primary_id=?
+                           and account_id=cast(? as uuid) and result_authority_version=?
+                        """,handle.toString(),account,target.version());
+                if(original==null||!Objects.equals(original.get("event_id"),authority.get("revocation_event_id"))
+                        ||!Objects.equals(original.get("completed_at",OffsetDateTime.class),authority.get("revoked_at",OffsetDateTime.class)))
+                    throw SessionSensitiveException.unavailable();
+                FenceResult replay=new FenceResult(handle,handle,target.version(),false,original.get("event_id",java.util.UUID.class),
+                        original.get("completed_at",OffsetDateTime.class).toInstant());
+                return new SessionLogoutResult(scope,boundary,source,connection,ownership,replay);
             }
-            long version=fence(db,context.accountId(),handle,target,true,eventId,now);
+            long version=fence(db,account,handle,target,true,eventId,now);
             int inserted=db.execute("""
                     insert into public.session_authority_command_receipt(id,operation,account_id,actor_id,source_primary_id,target_primary_id,
                      expected_authority_version,result_authority_version,event_id,completed_at)
                     values(cast(? as uuid),'LOGOUT',cast(? as uuid),cast(? as uuid),?,?,?,?,cast(? as uuid),cast(? as timestamptz))
-                    """,java.util.UUID.randomUUID(),context.accountId(),context.actorId(),handle.toString(),handle.toString(),target.version(),version,eventId,time(now));
-            if(inserted!=1)throw conflict();return new FenceResult(handle,handle,version,true,eventId,now);
+                    """,java.util.UUID.randomUUID(),account,actor,handle.toString(),handle.toString(),target.version(),version,eventId,time(now));
+            if(inserted!=1)throw conflict();
+            return new SessionLogoutResult(scope,boundary,source,connection,ownership,new FenceResult(handle,handle,version,true,eventId,now));
         });
+    }
+    @Override public void requireLogoutLookup(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,SessionLogoutResult result){
+        logoutSql(scope,boundary,(db,connection)->{result.requireLookup(scope,boundary,source,connection);return null;});
+    }
+    private <T>T logoutSql(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,
+                          java.util.function.BiFunction<DSLContext,java.sql.Connection,T> work){
+        var connection=DataSourceUtils.getConnection(source);
+        try {
+            boundaries.requireLogout(scope,boundary,source,connection);
+            DSLContext db=DSL.using(connection,SQLDialect.POSTGRES,new Settings().withExecuteLogging(false));
+            T result=work.apply(db,connection);boundaries.requireLogout(scope,boundary,source,connection);return result;
+        }catch(RuntimeException failure){
+            if(TransactionSynchronizationManager.getResource(source) instanceof ConnectionHolder holder)holder.setRollbackOnly();
+            throw SessionSensitiveException.unavailable();
+        }finally{DataSourceUtils.releaseConnection(connection,source);}
+    }
+    private static java.util.UUID canonicalAccount(String value){
+        try {
+            java.util.UUID id=java.util.UUID.fromString(value);
+            return id.toString().equals(value)?id:null;
+        }catch(IllegalArgumentException|NullPointerException malformed){return null;}
     }
     private OwnedTarget owned(DSLContext db,java.util.UUID account,SessionHandle handle){
         Record stored=db.fetchOne("select session_id,principal_name from public.spring_session where primary_id=?",handle.toString());
@@ -231,41 +282,7 @@ public final class JooqSessionAuthorityStore implements SessionAuthorityStore {
         return actionCanonical(context,source,command)+"|"+command.proofId()+"|"+command.secret().digest();
     }
     private static SessionSensitiveException conflict(){return new SessionSensitiveException(SessionSensitiveException.Reason.CONFLICT);}
-    private SessionHandle current(DSLContext db,CapturedHumanRequest request,Instant now){
-        if(control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
-        request.requireCurrent();CurrentTenantContext context=request.context();
-        Record row=db.fetchOne("""
-                select stored.primary_id,authority.session_key_id,authority.session_digest,
-                       authority.authenticated_at,authority.absolute_expires_at
-                  from public.spring_session stored
-                  join public.account_session_authority authority on authority.primary_id=stored.primary_id
-                  join public.account a on a.id=authority.account_id
-                  join public.principal p on p.account_id=a.id
-                  join public.tenant t on t.id=cast(? as uuid)
-                  join public.tenant_member m on m.tenant_id=t.id and m.account_id=a.id and m.id=cast(? as uuid)
-                 where stored.session_id=? and stored.principal_name=? and authority.account_id=cast(? as uuid)
-                   and stored.expiry_time>? and authority.state='ACTIVE'
-                   and authority.bound_credential_version=? and authority.authenticated_at<=cast(? as timestamptz)
-                   and authority.absolute_expires_at>cast(? as timestamptz)
-                   and a.status='ACTIVE' and a.credential_version=?
-                   and p.id=cast(? as uuid) and p.kind='HUMAN' and p.status='ACTIVE'
-                   and t.status='ACTIVE' and t.auth_epoch=? and m.status='ACTIVE' and m.auth_epoch=?
-                """,context.tenantId(),context.memberId(),request.bearerId(),context.accountId().toString(),context.accountId(),
-                now.toEpochMilli(),context.credentialVersion(),time(now),time(now),context.credentialVersion(),context.actorId(),context.tenantAuthEpoch(),context.memberAuthEpoch());
-        if(row==null||!request.authenticatedAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS).equals(row.get("authenticated_at",OffsetDateTime.class).toInstant())
-                ||!request.absoluteExpiresAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS).equals(row.get("absolute_expires_at",OffsetDateTime.class).toInstant())
-                ||!keys.matchesSession(row.get("session_key_id",String.class),row.get("session_digest",String.class),request.bearerId()))throw SessionSensitiveException.rejected();
-        request.requireCurrent();return SessionHandle.parse(row.get("primary_id",String.class));
-    }
-    private static Enforcement control(DSLContext db){
-        Record row=db.fetchOne("select state,version,activation_evidence_sha256 from public.session_authority_activation where singleton=true");
-        if(row==null)throw SessionSensitiveException.unavailable();
-        String state=row.get("state",String.class);Long version=row.get("version",Long.class);
-        if("OFF".equals(state)&&Long.valueOf(0).equals(version)&&row.get("activation_evidence_sha256")==null)return Enforcement.OFF;
-        if("ENFORCING".equals(state)&&Long.valueOf(1).equals(version)&&row.get("activation_evidence_sha256",String.class)!=null
-                &&row.get("activation_evidence_sha256",String.class).matches("[0-9a-f]{64}"))return Enforcement.ENFORCING;
-        throw SessionSensitiveException.unavailable();
-    }
+    private SessionHandle current(DSLContext db,CapturedHumanRequest request,Instant now){return SessionAuthoritySql.current(db,request,now,keys);}
     private <T> T write(SessionSensitiveSecurityTransaction.Scope scope,SessionSensitiveSecurityTransaction.GuardedBoundary boundary,Function<DSLContext,T> work){
         return sql(connection->boundaries.requireGuarded(scope,boundary,source,connection),work);
     }

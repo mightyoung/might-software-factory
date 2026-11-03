@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.auditops;
 
 import com.mightyoung.softwarefactory.identity.SessionSensitiveAudit;
+import com.mightyoung.softwarefactory.identity.LogoutOwnership;
 import com.mightyoung.softwarefactory.identity.SessionSensitiveException;
 import com.mightyoung.softwarefactory.identity.SessionSensitiveSecurityTransaction;
 import static com.mightyoung.softwarefactory.identity.SessionSensitiveContracts.*;
@@ -39,6 +40,20 @@ public final class JooqSessionSensitiveAudit implements SessionSensitiveAudit {
                     ||!boundary.observedAt().equals(event.occurredAt()))throw SessionSensitiveException.unavailable();
             insert(DSL.using(connection,SQLDialect.POSTGRES,new Settings().withExecuteLogging(false)),event);
             boundaries.requireGuarded(scope,boundary,source,connection);
+        }catch(RuntimeException failure){poison();throw SessionSensitiveException.unavailable();}
+        finally{DataSourceUtils.releaseConnection(connection,source);}
+    }
+    @Override public void logoutSuccess(SessionSensitiveSecurityTransaction.LogoutScope scope,SessionSensitiveSecurityTransaction.LogoutBoundary boundary,
+                                        LogoutOwnership ownership,SensitiveEvent event){
+        var connection=DataSourceUtils.getConnection(source);
+        try {
+            boundaries.requireLogout(scope,boundary,source,connection);ownership.requireOwned(scope,boundary,source,connection);
+            if(event.operation()!=Operation.LOGOUT||!"SUCCESS".equals(event.result())||event.provenance()!=Provenance.KNOWN_LINEAGE
+                    ||!ownership.accountId().equals(event.accountId())||!Objects.equals(ownership.actorId(),event.actorId())
+                    ||!ownership.handle().equals(event.source())||!ownership.handle().equals(event.target())
+                    ||!boundary.observedAt().equals(event.occurredAt()))throw SessionSensitiveException.unavailable();
+            insert(DSL.using(connection,SQLDialect.POSTGRES,new Settings().withExecuteLogging(false)),event);
+            ownership.requireOwned(scope,boundary,source,connection);boundaries.requireLogout(scope,boundary,source,connection);
         }catch(RuntimeException failure){poison();throw SessionSensitiveException.unavailable();}
         finally{DataSourceUtils.releaseConnection(connection,source);}
     }

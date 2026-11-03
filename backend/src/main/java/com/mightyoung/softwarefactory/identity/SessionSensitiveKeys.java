@@ -23,6 +23,7 @@ public final class SessionSensitiveKeys {
         if(!copy.containsKey(current))throw SessionSensitiveException.unavailable();
         this.current=current;this.retained=Map.copyOf(copy);
     }
+    java.util.Set<String> retainedKeyIds(){return retained.keySet();}
     public String currentKeyId(){return current;}
     Map<String,String> sessionCandidates(String bearerId){
         Map<String,String> result=new LinkedHashMap<>();
