@@ -15,6 +15,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,10 +31,19 @@ public final class PersistentFindingWorkflowAuthorizationRepository
     // Both the bounded search and the authoritative write check use this complete predicate.
     // Direct target membership makes DEPT and DEPT_TREE sufficient; other grant subjects may
     // come from any effective active membership, independently of the target organization.
+    private static final String EVALUATION_SQL =
+            "with evaluation_time as (select cast(? as timestamptz) as evaluated_at)\n";
+    private static final String CLOCK_SQL = """
+            select current_setting('transaction_isolation') as isolation,
+                   transaction_timestamp() as transaction_at,
+                   statement_timestamp() as statement_at
+            """;
+
     private static final String ASSIGNABLE_MEMBER_SQL = """
               from public.tenant_member m
               join public.account a on a.id = m.account_id and a.status = 'ACTIVE'
               join public.tenant t on t.id = m.tenant_id and t.status = 'ACTIVE'
+              cross join evaluation_time evaluation
              where m.tenant_id = cast(? as uuid)
                and m.status = 'ACTIVE'
                and exists (
@@ -48,9 +58,9 @@ public final class PersistentFindingWorkflowAuthorizationRepository
                     where target_membership.tenant_id = m.tenant_id
                       and target_membership.member_id = m.id
                       and target_membership.org_id = cast(? as uuid)
-                      and target_membership.valid_from <= current_timestamp
+                      and target_membership.valid_from <= evaluation.evaluated_at
                       and (target_membership.valid_to is null
-                           or target_membership.valid_to > current_timestamp)
+                           or target_membership.valid_to > evaluation.evaluated_at)
                       and exists (
                           select 1 from public.role_grant rg
                           join public."role" r
@@ -63,8 +73,8 @@ public final class PersistentFindingWorkflowAuthorizationRepository
                           join public.scope_rule sr
                             on sr.tenant_id = rp.tenant_id and sr.id = rp.scope_rule_id
                          where rg.tenant_id = m.tenant_id
-                           and rg.valid_from <= current_timestamp
-                           and (rg.valid_to is null or rg.valid_to > current_timestamp)
+                           and rg.valid_from <= evaluation.evaluated_at
+                           and (rg.valid_to is null or rg.valid_to > evaluation.evaluated_at)
                            and (
                                (rg.subject_kind = 'MEMBER' and rg.member_id = m.id)
                                or (rg.subject_kind = 'ORG' and exists (
@@ -73,8 +83,8 @@ public final class PersistentFindingWorkflowAuthorizationRepository
                                      on ou.tenant_id = mo.tenant_id and ou.id = mo.org_id
                                     and ou.active = true
                                     where mo.tenant_id = m.tenant_id and mo.member_id = m.id
-                                      and mo.org_id = rg.org_id and mo.valid_from <= current_timestamp
-                                      and (mo.valid_to is null or mo.valid_to > current_timestamp)
+                                      and mo.org_id = rg.org_id and mo.valid_from <= evaluation.evaluated_at
+                                      and (mo.valid_to is null or mo.valid_to > evaluation.evaluated_at)
                                ))
                                or (rg.subject_kind = 'POSITION' and exists (
                                    select 1 from public.member_position mp
@@ -83,8 +93,8 @@ public final class PersistentFindingWorkflowAuthorizationRepository
                                     and pos.active = true
                                     where mp.tenant_id = m.tenant_id and mp.member_id = m.id
                                       and mp.position_id = rg.position_id
-                                      and mp.valid_from <= current_timestamp
-                                      and (mp.valid_to is null or mp.valid_to > current_timestamp)
+                                      and mp.valid_from <= evaluation.evaluated_at
+                                      and (mp.valid_to is null or mp.valid_to > evaluation.evaluated_at)
                                ))
                                or (rg.subject_kind = 'GROUP' and exists (
                                    select 1 from public.group_member gm
@@ -92,8 +102,8 @@ public final class PersistentFindingWorkflowAuthorizationRepository
                                      on g.tenant_id = gm.tenant_id and g.id = gm.group_id
                                     and g.active = true
                                     where gm.tenant_id = m.tenant_id and gm.member_id = m.id
-                                      and gm.group_id = rg.group_id and gm.valid_from <= current_timestamp
-                                      and (gm.valid_to is null or gm.valid_to > current_timestamp)
+                                      and gm.group_id = rg.group_id and gm.valid_from <= evaluation.evaluated_at
+                                      and (gm.valid_to is null or gm.valid_to > evaluation.evaluated_at)
                                ))
                            )
                            and (sr.kind in ('DEPT', 'DEPT_TREE')
@@ -151,12 +161,13 @@ public final class PersistentFindingWorkflowAuthorizationRepository
 
             Set<UUID> organizationIds = Set.of();
             if (isCurrentHuman(context, principal, accountStatus, membership)) {
-                MemberDirectorySnapshot directory = directoryRepository.findCurrentMemberships(
-                        context.tenantId(), context.memberId());
-                var scopes = roleScopeRepository.findActiveActionScopes(context.tenantId(), context.memberId(),
+                OffsetDateTime evaluatedAt = evaluationTime();
+                MemberDirectorySnapshot directory = directoryRepository.findCurrentMembershipsAt(
+                        context.tenantId(), context.memberId(), evaluatedAt);
+                var scopes = roleScopeRepository.findActiveActionScopesAt(context.tenantId(), context.memberId(),
                         directory.organizationIds(), directory.positionIds(), directory.groupIds(),
-                        "finding", action, permissionCode);
-                organizationIds = resolveOrganizationScope(context, directory, scopes);
+                        "finding", action, permissionCode, evaluatedAt);
+                organizationIds = resolveOrganizationScope(context, directory, scopes, evaluatedAt);
             }
 
             return Optional.of(new FindingReadAuthorizationSnapshot(
@@ -181,10 +192,10 @@ public final class PersistentFindingWorkflowAuthorizationRepository
         }
         return readTransaction.execute(status -> {
             setLocalTenant(tenantId);
-            StringBuilder sql = new StringBuilder("select m.id, m.display_name\n")
+            StringBuilder sql = new StringBuilder(EVALUATION_SQL + "select m.id, m.display_name\n")
                     .append(ASSIGNABLE_MEMBER_SQL);
             List<Object> bindings = new ArrayList<>(List.of(
-                    tenantId, organizationId, permissionCode, permissionCode.substring("finding.".length())));
+                    evaluationTime(), tenantId, organizationId, permissionCode, permissionCode.substring("finding.".length())));
             if (namePrefix != null && !namePrefix.isEmpty()) {
                 sql.append(" and m.display_name like ? escape '\\'\n");
                 bindings.add(namePrefix.replace("\\", "\\\\")
@@ -210,9 +221,9 @@ public final class PersistentFindingWorkflowAuthorizationRepository
         }
         return Boolean.TRUE.equals(readTransaction.execute(status -> {
             setLocalTenant(tenantId);
-            return (Boolean) dsl.fetchValue("select exists (select 1\n" + ASSIGNABLE_MEMBER_SQL
+            return (Boolean) dsl.fetchValue(EVALUATION_SQL + "select exists (select 1\n" + ASSIGNABLE_MEMBER_SQL
                             + " and m.id = cast(? as uuid))",
-                    tenantId, organizationId, permissionCode,
+                    evaluationTime(), tenantId, organizationId, permissionCode,
                     permissionCode.substring("finding.".length()), memberId);
         }));
     }
@@ -241,7 +252,7 @@ public final class PersistentFindingWorkflowAuthorizationRepository
     private Set<UUID> resolveOrganizationScope(
             CurrentTenantContext context,
             MemberDirectorySnapshot directory,
-            java.util.List<RoleScopeDescriptor> roleScopes) {
+            java.util.List<RoleScopeDescriptor> roleScopes, OffsetDateTime evaluatedAt) {
         Set<UUID> organizations = new LinkedHashSet<>();
         Set<UUID> explicitOrganizations = new LinkedHashSet<>();
         boolean includeDepartmentTree = false;
@@ -260,10 +271,24 @@ public final class PersistentFindingWorkflowAuthorizationRepository
             }
         }
         if (includeDepartmentTree) {
-            organizations.addAll(directoryRepository.expandDepartmentTree(context.tenantId(), context.memberId()));
+            organizations.addAll(directoryRepository.expandDepartmentTreeAt(context.tenantId(), context.memberId(), evaluatedAt));
         }
         organizations.addAll(directoryRepository.findActiveOrganizations(context.tenantId(), explicitOrganizations));
         return Set.copyOf(organizations);
+    }
+
+    /** Each invocation observes a new statement after any caller's guard wait. */
+    private OffsetDateTime evaluationTime() {
+        var row = dsl.fetchOne(CLOCK_SQL);
+        if (row == null) throw new IllegalStateException("Authorization clock is unavailable");
+        String isolation = row.get("isolation", String.class);
+        OffsetDateTime observed = switch (isolation == null ? "" : isolation) {
+            case "read committed" -> row.get("statement_at", OffsetDateTime.class);
+            case "repeatable read", "serializable" -> row.get("transaction_at", OffsetDateTime.class);
+            default -> throw new IllegalStateException("Authorization clock isolation is unsupported");
+        };
+        if (observed == null) throw new IllegalStateException("Authorization clock is unavailable");
+        return observed;
     }
 
     private void setLocalTenant(UUID tenantId) {

@@ -10,13 +10,14 @@ import org.jooq.tools.jdbc.MockDataProvider;
 import org.jooq.tools.jdbc.MockResult;
 import org.junit.jupiter.api.Test;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 class JooqMemberDirectoryReadRepositoryTest {
 
@@ -35,7 +36,7 @@ class JooqMemberDirectoryReadRepositoryTest {
         DSLContext values = DSL.using(SQLDialect.POSTGRES);
         MockDataProvider provider = context -> {
             statements.add(context.sql());
-            bindings.add(Arrays.asList(context.bindings()));
+            bindings.add(Arrays.stream(context.bindings()).map(JooqMemberDirectoryReadRepositoryTest::temporalBinding).toList());
             String sql = context.sql().toLowerCase(java.util.Locale.ROOT);
             if (sql.contains("with recursive")) {
                 return new MockResult[] {ids(values, "id", ORG_ID, CHILD_ORG_ID)};
@@ -69,18 +70,52 @@ class JooqMemberDirectoryReadRepositoryTest {
         assertThat(statements).hasSize(5);
         assertThat(statements.subList(0, 3)).allSatisfy(sql -> {
             assertThat(sql.toLowerCase(java.util.Locale.ROOT))
-                    .contains("valid_from <= current_timestamp", "valid_to is null", "active = true");
+                    .contains("valid_from <= e.evaluated_at", "valid_to is null", "active = true",
+                            "coalesce(cast(? as timestamptz), current_timestamp)");
         });
         assertThat(statements.get(0).toLowerCase(java.util.Locale.ROOT)).contains("member_org", "tenant_id");
         assertThat(statements.get(1).toLowerCase(java.util.Locale.ROOT)).contains("member_position", "tenant_id");
         assertThat(statements.get(2).toLowerCase(java.util.Locale.ROOT)).contains("group_member", "tenant_id");
         assertThat(statements.get(3).toLowerCase(java.util.Locale.ROOT))
-                .contains("with recursive department_tree", "child.parent_id = parent.id");
+                .contains("with recursive evaluation_time", "department_tree", "child.parent_id = parent.id");
         assertThat(statements.get(4).toLowerCase(java.util.Locale.ROOT))
                 .contains("from \"public\".\"org_unit\"", "\"active\" = true", "\"tenant_id\"");
         assertThat(bindings.subList(0, 4)).allSatisfy(queryBindings ->
-                assertThat(queryBindings).containsExactly(TENANT_ID, MEMBER_ID));
+                assertThat(queryBindings).containsExactly(null, TENANT_ID, MEMBER_ID));
         assertThat(bindings.get(4)).contains(TENANT_ID, EXPLICIT_ORG_ID);
+    }
+
+    @Test
+    void explicitTimeBindsTheSameDatabaseInstantToEveryMembershipAndTreeQuery() {
+        var at = OffsetDateTime.parse("2026-11-03T10:15:30.123456Z");
+        List<List<Object>> bindings = new ArrayList<>();
+        var values = DSL.using(SQLDialect.POSTGRES);
+        var repository = new JooqMemberDirectoryReadRepository(DSL.using(new MockConnection(context -> {
+            bindings.add(Arrays.stream(context.bindings()).map(JooqMemberDirectoryReadRepositoryTest::temporalBinding).toList());
+            assertThat(context.sql()).contains("cast(? as timestamptz)", "e.evaluated_at").doesNotContain("2026-11");
+            return new MockResult[] {ids(values, "id", ORG_ID)};
+        }), SQLDialect.POSTGRES));
+        repository.findCurrentMembershipsAt(TENANT_ID, MEMBER_ID, at);
+        repository.expandDepartmentTreeAt(TENANT_ID, MEMBER_ID, at);
+        assertThat(bindings).hasSize(4).allSatisfy(bound ->
+                assertThat(bound).containsExactly(at, TENANT_ID, MEMBER_ID));
+        assertThatNullPointerException().isThrownBy(() -> repository.findCurrentMembershipsAt(TENANT_ID, MEMBER_ID, null));
+        assertThatNullPointerException().isThrownBy(() -> repository.expandDepartmentTreeAt(TENANT_ID, MEMBER_ID, null));
+        assertThat(bindings).hasSize(4);
+    }
+
+    @Test
+    void legacyOnlyAdaptersCannotSilentlyProvideExplicitTimeAuthority() {
+        MemberDirectoryReadRepository legacy = new MemberDirectoryReadRepository() {
+            public MemberDirectorySnapshot findCurrentMemberships(UUID tenant, UUID member) { throw new AssertionError("Legacy fallback"); }
+            public Set<UUID> expandDepartmentTree(UUID tenant, UUID member) { throw new AssertionError("Legacy fallback"); }
+            public Set<UUID> findActiveOrganizations(UUID tenant, Set<UUID> organizations) { return Set.of(); }
+        };
+        var at = OffsetDateTime.parse("2026-11-03T10:15:30Z");
+        assertThatThrownBy(() -> legacy.findCurrentMembershipsAt(TENANT_ID, MEMBER_ID, at))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> legacy.expandDepartmentTreeAt(TENANT_ID, MEMBER_ID, at))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private static MockResult ids(DSLContext dsl, String column, UUID... values) {
@@ -93,4 +128,13 @@ class JooqMemberDirectoryReadRepositoryTest {
         }
         return new MockResult(result.size(), result);
     }
+    // PostgreSQL jOOQ may encode timestamptz as a bound JDBC String; compare its exact instant.
+    private static Object temporalBinding(Object value) {
+        if (value instanceof String encoded && encoded.matches("\\d{4}-\\d{2}-\\d{2} .*")) {
+            return OffsetDateTime.parse(encoded.replace(' ', 'T')).withOffsetSameInstant(java.time.ZoneOffset.UTC);
+        }
+        return value;
+    }
+
+
 }

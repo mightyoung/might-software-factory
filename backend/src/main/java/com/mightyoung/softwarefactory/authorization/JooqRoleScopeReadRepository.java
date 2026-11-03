@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -91,8 +92,26 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
             String resourceType,
             String action,
             String permissionCode) {
-        Condition currentGrant = GRANT_VALID_FROM.le(CURRENT_TIMESTAMP)
-                .and(GRANT_VALID_TO.isNull().or(GRANT_VALID_TO.gt(CURRENT_TIMESTAMP)));
+        return actionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
+                resourceType, action, permissionCode, CURRENT_TIMESTAMP);
+    }
+
+    @Override
+    public List<RoleScopeDescriptor> findActiveActionScopesAt(
+            UUID tenantId, UUID memberId, Set<UUID> organizationIds, Set<UUID> positionIds,
+            Set<UUID> groupIds, String resourceType, String action, String permissionCode,
+            OffsetDateTime evaluatedAt) {
+        return actionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
+                resourceType, action, permissionCode,
+                DSL.val(Objects.requireNonNull(evaluatedAt, "Evaluation time is required"), OffsetDateTime.class));
+    }
+
+    private List<RoleScopeDescriptor> actionScopes(
+            UUID tenantId, UUID memberId, Set<UUID> organizationIds, Set<UUID> positionIds,
+            Set<UUID> groupIds, String resourceType, String action, String permissionCode,
+            Field<OffsetDateTime> evaluatedAt) {
+        Condition currentGrant = GRANT_VALID_FROM.le(evaluatedAt)
+                .and(GRANT_VALID_TO.isNull().or(GRANT_VALID_TO.gt(evaluatedAt)));
         Condition subject = SUBJECT_KIND.eq("MEMBER").and(GRANT_MEMBER_ID.eq(memberId))
                 .or(SUBJECT_KIND.eq("ORG").and(GRANT_ORG_ID.in(organizationIds)))
                 .or(SUBJECT_KIND.eq("POSITION").and(GRANT_POSITION_ID.in(positionIds)))
