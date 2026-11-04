@@ -1,11 +1,11 @@
 # G014 基础实体与事务守卫源码验证 — 2026-11-04
 
-本批新增限定的基础实体、关系命令及事务守卫源码。独立复审已在明确的源码／夹具边界关闭原五项问题；最新业务／审计组合通过 25 项，启动／模块与受影响接口通过 83 项。**同一最终源码的完整回归尚未取得结果，交付保持面向 `dev` 的草稿 PR，Linux CI 门禁待确认。** 持久 HUMAN 身份、真实 PostgreSQL、完整业务 HTTP 和默认 Modulith 发布闭环仍未验收，不代表完整 G014 或 P0–P2 完成。
+本批新增限定的基础实体、关系命令及事务守卫源码。独立复审已在明确的源码／夹具边界关闭原五项问题；最新业务／审计组合通过 25 项，启动／模块与受影响接口通过 83 项。**提交 `24646a7ab2e960bd1d5ff885b1df9ad6f3bad7c1` 的托管 Linux CI 已通过完整默认 1326 项、兼容配置 1387 项及前端工作流。** [PR #48](https://github.com/mightyoung/might-software-factory/pull/48) 保持面向 `dev` 的草稿；持久 HUMAN 身份、真实 PostgreSQL、完整业务 HTTP 和默认 Modulith 发布闭环仍未验收，不代表完整 G014 或 P0–P2 完成。
 
 ## 源码范围
 
 - 六类根实体为 workshop、production_line、process_stage、equipment、work_unit、hazard_source，实现 17 项变更命令；三类关系 line_workshop、stage_equipment、responsibility_binding 实现 6 项 BIND／END。控制器源码共 29 条固定路由，包含六类详情读取。
-- OpenAPI 定义 67 条固定路径并提供生成的 TypeScript 类型。路径契约不等于服务端实现：查询、历史、17 个选择器、元数据与导航仍待接线。
+- OpenAPI 定义 67 条固定路径并提供生成的 TypeScript 类型。已实现 29 条，其余 38 条契约路径的查询、历史、17 个选择器及元数据仍待实现，导航也待接线。
 - 命令先校验当前身份、动作与实际对象范围，再读取限定范围的历史回执。授权后的精确重放保留原结果，跳过旧 CAS、旧来源资格和 NEW 锁计划，不新增业务、修订、审计、回执或发布写入；仍执行固定约束确认与最终当前授权。
 - NEW 命令使用同连接 jOOQ 和固定类型投影；先取得 SQL 所有者提供的自然键、对象／修订／命令键，再按固定实体种类及无符号 UUID 顺序锁定完整父对象／目标集合。业务、修订、审计、完整回执和实际发布写入应全部处于同一 STAGING 边界。
 - V21 候选包含 19 张表、40 项延迟约束及 46 个函数。19 个写入路径核验本连接已持有的统一编码锁，再非阻塞固化事务锁；缺失键立即拒绝。源检查和参考编码向量没有执行 PostgreSQL 函数或触发器。
@@ -34,16 +34,29 @@ V5 使用 legacy `event_publication` 结构，而固定的 Modulith 2.1.1 默认
 | 实际 JdbcTemplate Timestamp 绑定修复 | 70 项／5 套件，F0／E0／S0 | 精确二参数 setter、防御复制及拒绝其他重载；限定支持层审查 APPROVE |
 | 最新真实 Managed 业务／审计组合 | **25 项／2 套件，F0／E0／S0** | 23 项业务：workshop NEW／重放、三类关系 NEW／重放、五类根归档的成功／下游不空／状态错误；另有 2 项审计时间绑定测试。使用实际默认 legacy 仓储和 JdbcTemplate，底层驱动与身份／授权为声明夹具 |
 | 启动／模块及受影响接口 | **83 项／11 套件，F0／E0／S0** | 真实非延迟 Boot／H2、默认 legacy 仓储与 listener；含 Cookie、缺密钥接口及四个受影响既有 HTTP 套件。限定启动架构审查 CLEAR |
+| 托管 Linux CI 完整默认后端 | **1326 项，F0／E0／S0，BUILD SUCCESS** | 绑定上述提交；普通配置执行，安全存储必需标记为 true |
+| 托管 Linux CI 兼容配置 | **1387 项，F0／E0／S0，BUILD SUCCESS** | `lan-postgres-compatibility`／`skipITs`；安全存储必需标记为 true，Failsafe 明确跳过集成测试，不计为实库执行 |
+| 托管前端 CI | 工作流 SUCCESS | 同一提交的工作流结果；未从该结果推导新增前端用例数量 |
 
 最新 25 项组合使用 Linux Java 21，绑定 800 项源码／构建输入，清洁编译 351 项主源码和 186 项测试源码；1153 个 class 均为 major 65，并从保留的编译产物副本核对 SourceFile、源码／class 哈希、25 项运行资源和实际 XML 类路径。83 项启动验证使用另一份 800 输入冻结切片，产物为 1152 个 class／25 项资源，未包含后续时间类型修正；两个切片不可互相替代。它们没有执行 PostgreSQL IT、V21 schema 或持久 HUMAN 验收。
 
-定向目标使用 Maven 离线 `clean test`、明确测试集合和既有 Mockito 5.20.0 agent；容器取消三个 Java 选项环境变量，使用只读本地依赖缓存和无网络环境。精确参数保留于各运行入口的 `target-command.json`／`target.sh`。本地完整默认回归因 Docker daemon 无响应，在 Java 启动前停止，执行 0 项测试；兼容配置未启动。草稿 PR 的 Linux CI 将执行普通默认 `clean verify` 及 `lan-postgres-compatibility`／`skipITs` 验证，结果待确认；兼容配置即使通过也不计为实库执行。
+定向目标使用 Maven 离线 `clean test`、明确测试集合和既有 Mockito 5.20.0 agent；容器取消三个 Java 选项环境变量，使用只读本地依赖缓存和无网络环境。精确参数保留于各运行入口的 `target-command.json`／`target.sh`。本地完整默认回归因 Docker daemon 无响应，在 Java 启动前停止，执行 0 项测试；本地兼容配置未启动。该基础设施中断与后续托管 CI 成功分别保留，不改写为本地通过。
+
+[后端运行 41795069771](https://github.com/mightyoung/might-software-factory/actions/runs/41795069771) 的实际日志记录以下命令及两次 BUILD SUCCESS，工作目录为 `backend`：
+
+```sh
+./mvnw --batch-mode --no-transfer-progress -Dsoftware-factory.test.require-secure-storage=true clean verify
+./mvnw --batch-mode --no-transfer-progress -Dsoftware-factory.test.require-secure-storage=true -Plan-postgres-compatibility -DskipITs verify
+```
+
+`G014JooqFinalQueryTest` 在两次运行中各执行 3 项且全部通过；兼容配置的 Failsafe 日志明确为跳过。[前端运行 41795069697](https://github.com/mightyoung/might-software-factory/actions/runs/41795069697) 也成功。托管结论来自工作流元数据及原始 job 日志，没有独立下载核验 CI class 字节；本地 25／83 项的 class 绑定证明不能称作 CI 产物绑定证明。
 
 ## 失败与独立审查
 
 - 时间参数与事务挂起先由失败回归复现；修复进一步提前到 Spring 挂起既有同步作用域之前拒绝。原失败及中间失败均保留。
 - 原 6 项清单测试没有覆盖实际 Managed 事务的 `statement_timestamp()`。新增真实事务守卫夹具先复现 1 项失败，再由所属模块复用准确时钟 SQL 并加入两个校验阶段。中间 Mockito 夹具失败也保留。
 - 联合 R7 的前两次编译在新增测试夹具的 jOOQ `Record` API 使用处失败，均执行 0 项测试。按固定 3.21.9 接口核验后，仅将夹具改为 `set(Field<T>, T)`；三次尝试的业务生产源码保持一致。
+- 首轮托管默认验证执行 1325 项并有 6 项错误。随后只修正两份测试的兼容性问题，业务生产源码未变；上述提交重新运行默认及兼容配置后全部通过。原失败没有被覆盖或计作成功。
 - 时间／挂起、固定清单及 Managed 时钟增量均获得限定范围的独立代码审查 APPROVE。统一锁 SQL 与业务 R7 获得独立架构 CLEAR；该结论只覆盖冻结源码，没有执行或批准 PostgreSQL DDL、权限或实库验收。
 
 完整业务审查曾提出 2 项 HIGH、3 项 MEDIUM。独立闭环复审为 **APPROVE，五项均在下述源码／夹具边界关闭**；这不代替完整默认／兼容回归或真实服务验收：
@@ -72,17 +85,15 @@ V5 使用 legacy `event_publication` 结构，而固定的 Modulith 2.1.1 默认
 | 启动／模块完成包 | `de09f27810cc06b72365e4630e3c8aa2aacf275428dac471290b7f58c642644e`；`/tmp/msf-g014-runtime-graph-linux-20261104/final-packet.json` |
 | 启动独立架构审查 | `e4b2c2592babf509db89fcc68613b6c7ec1b13ea7bc0d22d1d060ad51cf939be`；`/tmp/msf-g014-runtime-graph-independent-architecture-review-20261104/README.md` |
 | 五项独立闭环复审 | `bd626aa3e78ebe5e36a8bf98126ebfd424c6ebe1a138b1931554ba93807bdeaa`；`/tmp/msf-g014-business-r8e-audit-closure-independent-code-review-20261104.md` |
-| 待全回归的 800 输入清单 | `ff69806b4fee870c5ef6e389be505d405e5f60d9c9962a869b2d5df1a5c808a3`；`/tmp/msf-g014-typed-full-linux-20261104/attempt1/source-manifest.json`；已冻结不代表已执行 |
+| 本地全回归中断前的 800 输入清单 | `ff69806b4fee870c5ef6e389be505d405e5f60d9c9962a869b2d5df1a5c808a3`；`/tmp/msf-g014-typed-full-linux-20261104/attempt1/source-manifest.json`；已冻结不代表已执行 |
+| 托管 CI 结果证明 | `9dbbd788ee2727f23c3f725f3df2dffc0b4b1c9ec5a8116d72b81874ba5e0a26`；`/private/tmp/msf-g014-pr48-ci-24646a7-20261104/proof.json` |
+| 后端原始 job 工具结果 | `2242dcfcea6b3716860cac3b9b5e54cd34e2983b5d5b90648520c42a534f4a57`；同入口 `backend-job-log-tool-result.json`，job `126457119240` |
 | V21 候选源码 | `1c68e165319f3a46ff8b42625db25c93890f5fa7e1e329fa2ddf1446203ad694` |
 | 统一锁独立架构审查 | `5fd91e3432db0d0fca87ea0922fcfd09cad8d8187e696450bf0f08ae58723c14`；`/tmp/msf-g014-canonical-lock-independent-architecture-review-20261104/README.md` |
 
-## 待补验证与交付状态
+## 交付状态与剩余门禁
 
-以下项目尚无最终结果，后续完成后再更新本节，不沿用旧基线或定向结果填充：
-
-- 冷启动 jOOQ 测试隔离及普通复用 fork 配置的最终整批结果。
-- 同一最终源码的完整默认后端与 `lan-postgres-compatibility` Linux CI 验证；当前没有通过计数，兼容配置使用 `skipITs` 时只编译集成源码。
-- 草稿 PR 推送与 CI 结果核验；源码复审通过不等于完整回归通过。
+PR #48 已提供上述提交的源码复审和托管单元／构建验证，保留为草稿。CI 没有执行 PostgreSQL 集成验收；不能把完整单元测试通过或兼容源码编译表述为实库通过。本文后续文档提交也不改变上述 CI 证据绑定的提交身份。
 
 V21 尚未应用或授予函数执行权限，V15–V17 的新增目标权限方案仍待批准。本地仅整合既有 PR #47 的四项 Cookie 源码／说明文件；没有远端合并、部署、新增目标角色、密钥或服务。不补造历史 V9 源码，不以 baseline、repair 或乱序迁移绕过原门禁。
 
