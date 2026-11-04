@@ -23,6 +23,8 @@ spring:
   modulith:
     events:
       jdbc:
+        # V5 owns the five-column publication schema; Modulith 2.1 defaults to its V2 structure.
+        use-legacy-structure: true
         schema-initialization:
           # The event publication registry is created by the versioned Flyway migration.
           enabled: false
