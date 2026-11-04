@@ -6,7 +6,10 @@ import org.jooq.impl.DSL;
 import org.jooq.tools.jdbc.*;
 import org.junit.jupiter.api.*;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.jdbc.datasource.ConnectionHolder;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import javax.sql.DataSource;
+import java.sql.Connection;
 import java.time.*;
 import java.util.*;
 import java.util.function.Function;
@@ -27,6 +30,7 @@ class SessionAuthorityControlReaderTest {
     final List<String> statements=new ArrayList<>();
     final Instant now=Instant.parse("2026-11-04T00:01:00Z");
     Map<String,Object> control;boolean missing,storageFailure,unknownKey;CapturedHumanRequest captured;
+    ConnectionHolder callerHolder;
     @BeforeEach void setup()throws Exception{
         control=off();captured=CapturedHumanRequestTest.capture(CapturedHumanRequestTest.authenticatedRequest());
         when(readProof.observedAt()).thenReturn(now);when(keyProvider.requireRetainedKeys()).thenReturn(keys);
@@ -42,7 +46,15 @@ class SessionAuthorityControlReaderTest {
             throw new java.sql.SQLException("Unexpected control statement");
         }));
     }
-    @AfterEach void clear(){captured.close();SecurityContextHolder.clearContext();}
+    @AfterEach void clear()throws Exception{
+        try {
+            if(callerHolder!=null){
+                TransactionSynchronizationManager.unbindResource(source);
+                Connection connection=callerHolder.getConnection();callerHolder.clear();
+                TransactionSynchronizationManager.clear();connection.close();
+            }
+        }finally{captured.close();SecurityContextHolder.clearContext();}
+    }
     JooqSessionAuthorityControlReader reader(){return new JooqSessionAuthorityControlReader(source,transactions,keyProvider);}
     JooqCurrentHumanSessionAuthority human(){return new JooqCurrentHumanSessionAuthority(source,callers,keyProvider);}
     @Test void offRequiresActualCompleteRowButDoesNotRequireUnusedKeys(){
@@ -67,19 +79,42 @@ class SessionAuthorityControlReaderTest {
         control=enforcing();when(keyProvider.requireRetainedKeys()).thenThrow(SessionSensitiveException.unavailable());
         assertThatThrownBy(()->reader().read()).isInstanceOf(SessionSensitiveException.class);
     }
-    @Test void borrowedCurrentAssertionPositivelyReadsOffInTheCallerBoundary(){
+    @Test void borrowedCurrentAssertionPositivelyReadsOffInTheCallerBoundary()throws Exception{
+        Connection connection=bindCallerConnection();
         assertThat(human().requireReadSnapshotCurrent(captured,readProof)).isEqualTo(Enforcement.OFF);
-        verify(callers,times(2)).requireRead(eq(captured),eq(readProof),eq(source),any());verifyNoInteractions(keyProvider);
+        verify(callers,times(3)).requireRead(eq(captured),eq(readProof),eq(source),same(connection));verifyNoInteractions(keyProvider);
+        verify(source,times(1)).getConnection();assertThat(connection.isClosed()).isFalse();
     }
-    @Test void enforcingCurrentUsesTheOwnerObservationAndRetainedSessionBinding(){
+    @Test void enforcingCurrentUsesTheOwnerObservationAndRetainedSessionBinding()throws Exception{
+        Connection connection=bindCallerConnection();
         control=enforcing();assertThat(human().requireReadSnapshotCurrent(captured,readProof)).isEqualTo(Enforcement.ENFORCING);
         assertThat(statements).anyMatch(sql->sql.contains("authority.bound_credential_version")&&sql.contains("stored.expiry_time>"));
         verify(keyProvider).requireRetainedKeys();
+        verify(callers,times(3)).requireRead(eq(captured),eq(readProof),eq(source),same(connection));
+        verify(source,times(1)).getConnection();assertThat(connection.isClosed()).isFalse();
+    }
+    @Test void positiveOffRowCannotProduceCheckedAuthorityWithoutTheCallerHolder(){
+        var denied=Assertions.assertThrows(SessionSensitiveException.class,()->human().requireReadSnapshotCurrent(captured,readProof));
+        assertThat(denied.reason()).isEqualTo(SessionSensitiveException.Reason.UNAVAILABLE);
+        assertThat(statements).hasSize(1);verifyNoInteractions(keyProvider);
+        verify(callers,times(2)).requireRead(eq(captured),eq(readProof),eq(source),any());
     }
     @Test void forgedBorrowedBoundaryDeniesBeforeControlSql(){
         doThrow(SessionSensitiveException.unavailable()).when(callers).requireRead(eq(captured),eq(readProof),eq(source),any());
         assertThatThrownBy(()->human().requireReadSnapshotCurrent(captured,readProof)).isInstanceOf(SessionSensitiveException.class);
         assertThat(statements).isEmpty();verifyNoInteractions(keyProvider);
+    }
+    private Connection bindCallerConnection()throws Exception{
+        assertThat(TransactionSynchronizationManager.hasResource(source)).isFalse();
+        assertThat(TransactionSynchronizationManager.isSynchronizationActive()).isFalse();
+        Connection connection=source.getConnection();callerHolder=new ConnectionHolder(connection);
+        callerHolder.setSynchronizedWithTransaction(true);
+        TransactionSynchronizationManager.bindResource(source,callerHolder);
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        TransactionSynchronizationManager.setCurrentTransactionReadOnly(true);
+        TransactionSynchronizationManager.setCurrentTransactionIsolationLevel(Connection.TRANSACTION_REPEATABLE_READ);
+        return connection;
     }
     private static Map<String,Object> off(){
         Map<String,Object> row=new LinkedHashMap<>();row.put("state","OFF");row.put("version",0L);row.put("activated_at",null);

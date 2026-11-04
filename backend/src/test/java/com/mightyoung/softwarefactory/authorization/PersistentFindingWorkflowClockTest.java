@@ -115,8 +115,8 @@ class PersistentFindingWorkflowClockTest {
                     var result=values.newResult(id,name);result.add(values.newRecord(id,name).values(MEMBER,"Synthetic"));
                     return new MockResult[]{new MockResult(1,result)};
                 }
-                if (sql.contains("\"role_grant\"")) {
-                    var id=DSL.field("scope_rule_id",UUID.class); var kind=DSL.field("kind",String.class); var org=DSL.field("org_id",UUID.class);
+                if (JooqRoleScopeReadRepository.commandReadSql().containsKey(sql)) {
+                    var id=DSL.field("id",UUID.class); var kind=DSL.field("kind",String.class); var org=DSL.field("org_id",UUID.class);
                     var result=values.newResult(id,kind,org); result.add(values.newRecord(id,kind,org).values(UUID.randomUUID(),"DEPT_TREE",null));
                     return new MockResult[]{new MockResult(1,result)};
                 }
