@@ -28,12 +28,17 @@ public final class JooqAccountStatusReadRepository implements AccountStatusReadR
         this.dsl = dsl;
     }
 
+    public static java.util.Map<String,Integer> commandReadSql(DSLContext dsl) {
+        return java.util.Map.of(stateQuery(dsl,new UUID(0,0)).getSQL(org.jooq.conf.ParamType.INDEXED),1);
+    }
+
+    private static org.jooq.SelectConditionStep<Record2<String,Long>> stateQuery(DSLContext dsl,UUID accountId) {
+        return dsl.select(STATUS,CREDENTIAL_VERSION).from(ACCOUNT).where(ACCOUNT_ID.eq(accountId));
+    }
+
     @Override
     public Optional<AccountSecurityState> findState(UUID accountId) {
-        Record2<String, Long> row = dsl.select(STATUS, CREDENTIAL_VERSION)
-                .from(ACCOUNT)
-                .where(ACCOUNT_ID.eq(accountId))
-                .fetchOne();
+        Record2<String, Long> row = stateQuery(dsl,accountId).fetchOne();
         return row == null ? Optional.empty() : Optional.of(new AccountSecurityState(row.value1(), row.value2()));
     }
 }

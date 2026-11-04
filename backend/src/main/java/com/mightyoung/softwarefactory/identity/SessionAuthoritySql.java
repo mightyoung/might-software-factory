@@ -8,12 +8,8 @@ import java.time.ZoneOffset;
 import static com.mightyoung.softwarefactory.identity.SessionSensitiveContracts.*;
 
 /** Identity-internal SQL, called only after the owning boundary asserts its connection. */
-final class SessionAuthoritySql {
-    private SessionAuthoritySql(){}
-    static SessionHandle current(DSLContext db,CapturedHumanRequest request,Instant now,SessionSensitiveKeys keys){
-        if(control(db)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
-        request.requireCurrent();CurrentTenantContext context=request.context();
-        Record row=db.fetchOne("""
+public final class SessionAuthoritySql {
+    private static final String CURRENT_SQL = """
                 select stored.primary_id,authority.session_key_id,authority.session_digest,
                        authority.authenticated_at,authority.absolute_expires_at
                   from public.spring_session stored
@@ -29,8 +25,26 @@ final class SessionAuthoritySql {
                    and a.status='ACTIVE' and a.credential_version=?
                    and p.id=cast(? as uuid) and p.kind='HUMAN' and p.status='ACTIVE'
                    and t.status='ACTIVE' and t.auth_epoch=? and m.status='ACTIVE' and m.auth_epoch=?
-                """,context.tenantId(),context.memberId(),request.bearerId(),context.accountId().toString(),context.accountId(),
+                """;
+
+    private static final String CONTROL_SQL = "select state,version,activated_at,activated_by_database_role,activation_event_id,activation_evidence_sha256 from public.session_authority_activation where singleton=true";
+    /** Fixed SQL used by the caller-owned current authority, including persisted OFF checks. */
+    public static java.util.Map<String,Integer> commandReadSql() {
+        return java.util.Map.of(CONTROL_SQL,0,CURRENT_SQL,13);
+    }
+    private SessionAuthoritySql(){}
+    static SessionHandle current(DSLContext db,CapturedHumanRequest request,Instant now,SessionSensitiveKeys keys){
+        return current(db,request,now,keys,false);
+    }
+    static SessionHandle current(DSLContext db,CapturedHumanRequest request,Instant now,SessionSensitiveKeys keys,boolean typed){
+        if(control(db,typed)!=Enforcement.ENFORCING)throw SessionSensitiveException.unavailable();
+        request.requireCurrent();CurrentTenantContext context=request.context();
+        var query=db.resultQuery(CURRENT_SQL,context.tenantId(),context.memberId(),request.bearerId(),context.accountId().toString(),context.accountId(),
                 now.toEpochMilli(),context.credentialVersion(),time(now),time(now),context.credentialVersion(),context.actorId(),context.tenantAuthEpoch(),context.memberAuthEpoch());
+        Record row=typed?query.coerce(
+                org.jooq.impl.DSL.field("primary_id",String.class),org.jooq.impl.DSL.field("session_key_id",String.class),
+                org.jooq.impl.DSL.field("session_digest",String.class),org.jooq.impl.DSL.field("authenticated_at",OffsetDateTime.class),
+                org.jooq.impl.DSL.field("absolute_expires_at",OffsetDateTime.class)).fetchOne():query.fetchOne();
         if(row==null||!request.authenticatedAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS).equals(row.get("authenticated_at",OffsetDateTime.class).toInstant())
                 ||!request.absoluteExpiresAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS).equals(row.get("absolute_expires_at",OffsetDateTime.class).toInstant())
                 ||!keys.matchesSession(row.get("session_key_id",String.class),row.get("session_digest",String.class),request.bearerId()))throw SessionSensitiveException.rejected();
@@ -41,8 +55,13 @@ final class SessionAuthoritySql {
         if(rows.size()>32||rows.stream().anyMatch(row->!keys.retainedKeyIds().contains(row.get("session_key_id",String.class))))
             throw SessionSensitiveException.unavailable();
     }
-    static Enforcement control(DSLContext db){
-        Record row=db.fetchOne("select state,version,activated_at,activated_by_database_role,activation_event_id,activation_evidence_sha256 from public.session_authority_activation where singleton=true");
+    static Enforcement control(DSLContext db){return control(db,false);}
+    static Enforcement control(DSLContext db,boolean typed){
+        var query=db.resultQuery(CONTROL_SQL);
+        Record row=typed?query.coerce(org.jooq.impl.DSL.field("state",String.class),org.jooq.impl.DSL.field("version",Long.class),
+                org.jooq.impl.DSL.field("activated_at",OffsetDateTime.class),org.jooq.impl.DSL.field("activated_by_database_role",String.class),
+                org.jooq.impl.DSL.field("activation_event_id",java.util.UUID.class),org.jooq.impl.DSL.field("activation_evidence_sha256",String.class))
+                .fetchOne():query.fetchOne();
         if(row==null)throw SessionSensitiveException.unavailable();
         String state=row.get("state",String.class);Long version=row.get("version",Long.class);
         Object at=row.get("activated_at"),role=row.get("activated_by_database_role"),event=row.get("activation_event_id");

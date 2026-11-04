@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // MockHttpServletRequest appends charset to the raw Content-Type when its character encoding is set.
 // Keep raw binary headers intact in this slice; the full session/CSRF security chain remains enabled.
 @WebMvcTest(controllers = FindingEvidenceUploadController.class, properties = "spring.servlet.encoding.enabled=false")
-@Import({SecurityConfiguration.class, FindingApiExceptionHandler.class, FindingEvidenceUploadRequestParser.class,
+@Import({SecurityConfiguration.class, SessionContextResolver.class, FindingApiExceptionHandler.class, FindingEvidenceUploadRequestParser.class,
         FindingEvidenceUploadControllerHttpTest.Dependencies.class})
 class FindingEvidenceUploadControllerHttpTest {
     static final UUID INTENT = UUID.fromString("52000000-0000-0000-0000-000000000001");

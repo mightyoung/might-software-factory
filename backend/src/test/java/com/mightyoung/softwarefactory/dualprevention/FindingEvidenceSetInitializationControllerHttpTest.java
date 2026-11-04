@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Mocked service proves mapping and filter boundaries, not PostgreSQL commit acceptance. */
 @WebMvcTest(controllers = FindingEvidenceSetInitializationController.class)
-@Import({SecurityConfiguration.class, FindingApiExceptionHandler.class, FindingEvidenceSetInitializationRequestParser.class,
+@Import({SecurityConfiguration.class, SessionContextResolver.class, FindingApiExceptionHandler.class, FindingEvidenceSetInitializationRequestParser.class,
         FindingEvidenceSetInitializationControllerHttpTest.Dependencies.class})
 class FindingEvidenceSetInitializationControllerHttpTest {
     static final UUID SET = UUID.fromString("51000000-0000-0000-0000-000000000001");

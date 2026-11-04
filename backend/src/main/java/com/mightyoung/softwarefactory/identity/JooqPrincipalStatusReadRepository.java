@@ -11,6 +11,17 @@ import java.util.UUID;
 @Repository
 public final class JooqPrincipalStatusReadRepository implements PrincipalStatusReadRepository {
 
+    private static final String PRINCIPAL_SQL = """
+                select id as principal_id,
+                       account_id as principal_account_id,
+                       kind as principal_kind,
+                       status as principal_status
+                  from public.principal
+                 where id = cast(? as uuid)
+                """;
+
+    public static java.util.Map<String,Integer> commandReadSql() { return java.util.Map.of(PRINCIPAL_SQL,1); }
+
     private final DSLContext dsl;
 
     public JooqPrincipalStatusReadRepository(DSLContext dsl) {
@@ -19,14 +30,11 @@ public final class JooqPrincipalStatusReadRepository implements PrincipalStatusR
 
     @Override
     public Optional<PrincipalStatus> findByActorId(UUID actorId) {
-        Record row = dsl.fetchOne("""
-                select id as principal_id,
-                       account_id as principal_account_id,
-                       kind as principal_kind,
-                       status as principal_status
-                  from public.principal
-                 where id = cast(? as uuid)
-                """, actorId);
+        Record row = dsl.resultQuery(PRINCIPAL_SQL, actorId).coerce(
+                        org.jooq.impl.DSL.field("principal_id", UUID.class),
+                        org.jooq.impl.DSL.field("principal_account_id", UUID.class),
+                        org.jooq.impl.DSL.field("principal_kind", String.class),
+                        org.jooq.impl.DSL.field("principal_status", String.class)).fetchOne();
         if (row == null) {
             return Optional.empty();
         }

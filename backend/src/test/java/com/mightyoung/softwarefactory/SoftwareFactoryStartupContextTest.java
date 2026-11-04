@@ -3,6 +3,16 @@ package com.mightyoung.softwarefactory;
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryValidator;
 import com.mightyoung.softwarefactory.dualprevention.FindingReadService;
 import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowEventListener;
+import com.mightyoung.softwarefactory.dualprevention.AssetFoundationCapabilityUnavailable;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationReadService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationRequestParser;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationEventListener;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationChangedEvent;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationFailure;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetContracts;
+import com.mightyoung.softwarefactory.identity.SessionSensitiveRequests;
+import com.mightyoung.softwarefactory.identity.VerifiedSessionPrincipalTestFixture;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowChangedEvent;
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowState;
 import com.mightyoung.softwarefactory.identity.AccountPasswordCredentialReadRepository;
@@ -28,6 +38,7 @@ import java.time.Duration;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Starts the non-lazy application with the real Spring Modulith JDBC publication registry.
@@ -80,6 +91,12 @@ class SoftwareFactoryStartupContextTest {
     @Autowired
     private ApplicationContext applicationContext;
 
+    @Autowired private AssetFoundationService assetCommands;
+    @Autowired private AssetFoundationReadService assetReads;
+    @Autowired private AssetFoundationRequestParser assetParser;
+    @Autowired private AssetFoundationEventListener assetListener;
+    @Autowired private SessionSensitiveRequests sensitiveRequests;
+
     @Test
     void applicationStartsWithRealModulithListenerAndJdkRepositoryProxies() throws Exception {
         assertThat(port).isPositive();
@@ -89,15 +106,22 @@ class SoftwareFactoryStartupContextTest {
         assertThat(queryValidator).isNotNull();
         assertThat(findingReadService).isNotNull();
         assertThat(eventPublicationRegistry).isNotNull();
+        assertThat(assetCommands).isNotNull();
+        assertThat(assetReads).isNotNull();
+        assertThat(assetParser).isNotNull();
+        assertThat(AopUtils.isCglibProxy(assetListener)).isTrue();
+        assertThat(applicationContext.getBeansOfType(PlatformTransactionManager.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(javax.sql.DataSource.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(org.jooq.DSLContext.class)).hasSize(1);
         assertThat(AopUtils.getTargetClass(eventPublicationRepository).getName())
                 .contains("JdbcEventPublicationRepository");
 
         var repositories = applicationContext.getBeansWithAnnotation(Repository.class);
-        assertThat(repositories).hasSize(30).containsKeys(
+        assertThat(repositories).hasSize(31).containsKeys(
                 "jooqFindingReviewHistoryRepository", "jooqAuthenticationEvents", "jooqFindingDispatchCandidateReadRepository",
                 "jooqFindingEvidenceUploadRepository", "jooqFindingEvidenceUploadReadRepository",
                 "jooqFindingEvidenceSetInitializationRepository", "jooqFindingDefinitionReadRepository",
-                "jooqFindingEvidenceIngestionRepository", "jooqFileIngestionLedger");
+                "jooqFindingEvidenceIngestionRepository", "jooqFileIngestionLedger", "jooqDirectoryReferenceReadRepository");
         repositories.forEach((name, repository) ->
                 assertThat(AopUtils.isJdkDynamicProxy(repository)).as(name).isTrue());
 
@@ -132,5 +156,40 @@ class SoftwareFactoryStartupContextTest {
             completedAfter = eventPublicationRepository.findCompletedPublications().size();
         }
         assertThat(completedAfter).isGreaterThan(completedBefore);
+    }
+
+    @Test
+    void unsupportedDatabaseRejectsARealCapturedReadBeforeAuthorityOrBusinessSql() {
+        var principal=VerifiedSessionPrincipalTestFixture.create(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID());
+        var authentication=org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(principal,"",java.util.List.of());
+        var security=org.springframework.security.core.context.SecurityContextHolder.getContext();
+        var previous=security.getAuthentication();security.setAuthentication(authentication);
+        var request=new org.springframework.mock.web.MockHttpServletRequest();
+        VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(request.getSession());
+        var captured=sensitiveRequests.capture(request);
+        try {
+            Throwable refusal=catchThrowable(()->assetReads.workshop(captured,UUID.randomUUID()));
+            assertThat(refusal).isInstanceOf(AssetFoundationFailure.class);
+            assertThat(((AssetFoundationFailure)refusal).status()).isEqualTo(503);
+            assertThat(AssetFoundationCapabilityUnavailable.causedBy(refusal)).isTrue();
+            Throwable commandRefusal=catchThrowable(()->assetCommands.createWorkshop(captured,UUID.randomUUID(),UUID.randomUUID(),
+                    new AssetContracts.WorkshopCreate("STARTUP","Synthetic workshop",UUID.randomUUID(),null)));
+            assertThat(commandRefusal).isInstanceOf(AssetFoundationFailure.class);
+            assertThat(((AssetFoundationFailure)commandRefusal).status()).isEqualTo(503);
+            assertThat(AssetFoundationCapabilityUnavailable.causedBy(commandRefusal)).isTrue();
+        } finally { captured.close();security.setAuthentication(previous); }
+    }
+
+    /** Ordinary original-manager publication only; this is not a sealed PostgreSQL command acceptance. */
+    @Test
+    void assetTraceListenerUsesTheRealDefaultRegistryAndAsyncCompletion()throws InterruptedException {
+        int before=eventPublicationRepository.findCompletedPublications().size();
+        var event=new AssetFoundationChangedEvent(UUID.randomUUID(),UUID.randomUUID(),"workshop",UUID.randomUUID(),
+                "workshop.update",1,java.time.Instant.parse("2026-11-04T00:00:00.123456Z"),UUID.randomUUID(),"UPDATE");
+        new TransactionTemplate(transactionManager).executeWithoutResult(status->applicationEvents.publishEvent(event));
+        long deadline=System.nanoTime()+Duration.ofSeconds(5).toNanos();
+        int after=before;
+        while(after<=before&&System.nanoTime()<deadline) { Thread.sleep(25);after=eventPublicationRepository.findCompletedPublications().size(); }
+        assertThat(after).isGreaterThan(before);
     }
 }

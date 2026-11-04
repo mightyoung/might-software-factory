@@ -74,6 +74,16 @@ class PostgresAuthorizationWriteGuardTest {
         assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory") || sql.contains("set_config"));
     }
 
+    @Test void neutralBusinessAliasUsesTheExactExistingCommandGuard() {
+        guard.forBusinessCommand(TENANT);
+        operations.clear();
+        guard.forFindingCommand(TENANT);
+        guard.requireBusinessCommand(TENANT);
+        guard.requireFindingCommand(TENANT);
+        assertThat(operations).noneMatch(sql -> sql.contains("pg_advisory") || sql.contains("set_config"));
+        assertThat(TransactionSynchronizationManager.getSynchronizations()).hasSize(1);
+    }
+
     @Test void absentCommandGuardRefusesWithoutAcquiringLocks() {
         assertThatThrownBy(() -> guard.requireFindingCommand(TENANT))
                 .isInstanceOf(AuthorizationWriteGuardException.class);

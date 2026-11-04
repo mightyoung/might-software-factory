@@ -23,4 +23,8 @@ public interface MemberDirectoryReadRepository {
     }
 
     Set<UUID> findActiveOrganizations(UUID tenantId, Set<UUID> organizationIds);
+    /** Fixed-shape current organization lookup for an already owned caller transaction. */
+    default Set<UUID> findActiveOrganizationsInCaller(UUID tenantId, Set<UUID> organizationIds) {
+        throw new UnsupportedOperationException("Caller-owned organization lookup is required");
+    }
 }

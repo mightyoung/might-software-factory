@@ -28,7 +28,7 @@ import static com.mightyoung.softwarefactory.identity.IdentityLifecycleContracts
 
 /** Production servlet security/parser wiring with mocked domain port; not real session/PG acceptance. */
 @WebMvcTest(controllers={IdentityLifecycleController.class,AuthenticationSessionController.class})
-@Import({SecurityConfiguration.class,IdentityLifecycleExceptionHandler.class,IdentityLifecycleControllerHttpTest.Dependencies.class})
+@Import({SecurityConfiguration.class,SessionContextResolver.class,IdentityLifecycleExceptionHandler.class,IdentityLifecycleControllerHttpTest.Dependencies.class})
 class IdentityLifecycleControllerHttpTest {
     private static final String RESET="/api/v1/auth/password-resets/consume",REQUEST="/api/v1/auth/password-reset-requests",INVITATION="/api/v1/auth/invitations/consume";
     private static final UUID ID=UUID.fromString("10000000-0000-0000-0000-000000000001"),KEY=UUID.fromString("20000000-0000-0000-0000-000000000001");

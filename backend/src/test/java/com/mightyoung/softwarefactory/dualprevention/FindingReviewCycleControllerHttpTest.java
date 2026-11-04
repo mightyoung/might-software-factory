@@ -18,7 +18,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Actual session/CSRF filter chain, mocked command facade: HTTP mapping evidence only. */
 @WebMvcTest(controllers = FindingReviewCycleController.class)
-@Import({SecurityConfiguration.class, FindingApiExceptionHandler.class, FindingReviewCycleRequestParser.class,
+@Import({SecurityConfiguration.class, SessionContextResolver.class, FindingApiExceptionHandler.class, FindingReviewCycleRequestParser.class,
         FindingEvidenceSetInitializationControllerHttpTest.Dependencies.class})
 class FindingReviewCycleControllerHttpTest {
     static final UUID FINDING = UUID.fromString("40000000-0000-0000-0000-000000000001");

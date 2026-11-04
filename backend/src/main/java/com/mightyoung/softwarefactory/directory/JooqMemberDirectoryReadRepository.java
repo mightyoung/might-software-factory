@@ -2,7 +2,6 @@ package com.mightyoung.softwarefactory.directory;
 
 import org.jooq.DSLContext;
 import org.jooq.Field;
-import org.jooq.Table;
 import org.springframework.stereotype.Repository;
 
 import java.time.OffsetDateTime;
@@ -21,6 +20,7 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
 
     // A null value is used only by the retained legacy methods, which keep transaction time.
     private static final String EVALUATION_SQL = "with evaluation_time as (select coalesce(cast(? as timestamptz), current_timestamp) as evaluated_at)\n";
+    private static final String EVALUATION_AT_SQL = "with evaluation_time as (select cast(? as timestamptz) as evaluated_at)\n";
 
     private static final String ORGANIZATIONS_SQL = """
             select distinct mo.org_id
@@ -80,10 +80,16 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
             select id from department_tree
             """;
 
-    private static final Table<?> ORG_UNIT = table(name("public", "org_unit"));
     private static final Field<UUID> ORG_ID = field(name("id"), UUID.class);
-    private static final Field<UUID> TENANT_ID = field(name("tenant_id"), UUID.class);
-    private static final Field<Boolean> ACTIVE = field(name("active"), Boolean.class);
+    private static final String ACTIVE_ORGANIZATIONS_SQL = "select id from public.org_unit where tenant_id=cast(? as uuid) and active=true and id=any(cast(? as uuid[]))";
+    private static final String DEPARTMENT_TREE_AT_SQL = DEPARTMENT_TREE_SQL.replace(
+            "coalesce(cast(? as timestamptz), current_timestamp)","cast(? as timestamptz)");
+
+    /** Only explicit common-clock and fixed-array caller queries; legacy variable IN forms stay outside. */
+    public static java.util.Map<String,Integer> commandReadSql() {
+        return java.util.Map.of(EVALUATION_AT_SQL+ORGANIZATIONS_SQL,3,EVALUATION_AT_SQL+POSITIONS_SQL,3,
+                EVALUATION_AT_SQL+GROUPS_SQL,3,DEPARTMENT_TREE_AT_SQL,3,ACTIVE_ORGANIZATIONS_SQL,2);
+    }
 
     private final DSLContext dsl;
 
@@ -102,10 +108,11 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
     }
 
     private MemberDirectorySnapshot memberships(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
+        String evaluation=evaluatedAt==null?EVALUATION_SQL:EVALUATION_AT_SQL;
         return new MemberDirectorySnapshot(
-                fetchIds(EVALUATION_SQL + ORGANIZATIONS_SQL, evaluatedAt, tenantId, memberId),
-                fetchIds(EVALUATION_SQL + POSITIONS_SQL, evaluatedAt, tenantId, memberId),
-                fetchIds(EVALUATION_SQL + GROUPS_SQL, evaluatedAt, tenantId, memberId));
+                fetchIds(evaluation + ORGANIZATIONS_SQL, evaluatedAt, tenantId, memberId),
+                fetchIds(evaluation + POSITIONS_SQL, evaluatedAt, tenantId, memberId),
+                fetchIds(evaluation + GROUPS_SQL, evaluatedAt, tenantId, memberId));
     }
 
     @Override
@@ -115,7 +122,7 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
 
     @Override
     public Set<UUID> expandDepartmentTreeAt(UUID tenantId, UUID memberId, OffsetDateTime evaluatedAt) {
-        return fetchIds(DEPARTMENT_TREE_SQL,
+        return fetchIds(DEPARTMENT_TREE_AT_SQL,
                 Objects.requireNonNull(evaluatedAt, "Evaluation time is required"), tenantId, memberId);
     }
 
@@ -124,15 +131,22 @@ public final class JooqMemberDirectoryReadRepository implements MemberDirectoryR
         if (organizationIds.isEmpty()) {
             return Set.of();
         }
-        return Set.copyOf(dsl.select(ORG_ID)
-                .from(ORG_UNIT)
-                .where(TENANT_ID.eq(tenantId).and(ACTIVE.isTrue()).and(ORG_ID.in(organizationIds)))
-                .fetch(ORG_ID));
+        return Set.copyOf(dsl.select(ORG_ID).from(table(name("public","org_unit")))
+                .where(field(name("tenant_id"),UUID.class).eq(tenantId)
+                        .and(field(name("active"),Boolean.class).isTrue()).and(ORG_ID.in(organizationIds))).fetch(ORG_ID));
+    }
+
+    @Override public Set<UUID> findActiveOrganizationsInCaller(UUID tenantId, Set<UUID> organizationIds) {
+        if(organizationIds.isEmpty())return Set.of();
+        // A single fixed parameter shape; bind canonical UUID text, never create a driver Array.
+        String ids=organizationIds.stream().map(UUID::toString).sorted().collect(java.util.stream.Collectors.joining(",","{","}"));
+        return Set.copyOf(dsl.resultQuery(ACTIVE_ORGANIZATIONS_SQL,
+                tenantId,ids).coerce(ORG_ID).fetch(ORG_ID));
     }
 
     private Set<UUID> fetchIds(String sql, Object... bindings) {
         Set<UUID> ids = new LinkedHashSet<>();
-        dsl.fetch(sql, bindings).forEach(row -> ids.add(row.get(0, UUID.class)));
+        dsl.resultQuery(sql, bindings).coerce(field("id",UUID.class)).fetch().forEach(row -> ids.add(row.get(0, UUID.class)));
         return Set.copyOf(ids);
     }
 }

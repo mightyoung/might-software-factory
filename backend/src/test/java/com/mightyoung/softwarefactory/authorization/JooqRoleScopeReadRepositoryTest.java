@@ -105,6 +105,19 @@ class JooqRoleScopeReadRepositoryTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    @Test void explicitTimeRoleQueriesKeepOneShapeAcrossSubjectCardinalities() {
+        var sql=new ArrayList<String>();var bound=new ArrayList<List<Object>>();var values=DSL.using(SQLDialect.POSTGRES);
+        var repository=new JooqRoleScopeReadRepository(DSL.using(new MockConnection(context->{
+            sql.add(context.sql());bound.add(Arrays.asList(context.bindings()));return new MockResult[]{scopeRow(values)};
+        }),SQLDialect.POSTGRES));
+        var at=OffsetDateTime.parse("2026-11-04T00:00:00Z");
+        repository.findActiveActionScopesAt(TENANT_ID,MEMBER_ID,Set.of(),Set.of(),Set.of(),"workshop","create","workshop.create",at);
+        repository.findActiveActionScopesAt(TENANT_ID,MEMBER_ID,Set.of(ORG_ID,GROUP_ID),Set.of(POSITION_ID),Set.of(GROUP_ID),"workshop","create","workshop.create",at);
+        assertThat(sql).hasSize(2);assertThat(sql.get(0)).isEqualTo(sql.get(1)).contains("any(cast(? as uuid[]))");
+        assertThat(bound.get(0).subList(7,10)).containsExactly("{}","{}","{}");
+        assertThat(bound.get(1).get(7)).isEqualTo("{"+ORG_ID+","+GROUP_ID+"}");
+    }
+
     private static MockResult scopeRow(DSLContext dsl) {
         Field<UUID> ruleId = DSL.field("scope_rule_id", UUID.class);
         Field<String> kind = DSL.field("kind", String.class);

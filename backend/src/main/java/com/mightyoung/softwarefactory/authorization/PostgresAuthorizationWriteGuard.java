@@ -24,6 +24,27 @@ import java.util.UUID;
 public final class PostgresAuthorizationWriteGuard implements AuthorizationWriteGuard {
     static final int ROOT_NAMESPACE = 0x4D534647;
     static final int ROOT_KEY = 1;
+    private static final String ISOLATION_SQL = "select current_setting('transaction_isolation')";
+    private static final String READ_ONLY_SQL = "select current_setting('transaction_read_only')";
+    private static final String LOCK_TIMEOUT_SQL = "select current_setting('lock_timeout')";
+    private static final String EFFECTIVE_TIMEOUT_SQL = """
+                    select case when current_setting('lock_timeout')::interval = interval '0'
+                             or current_setting('lock_timeout')::interval > interval '5 seconds'
+                           then '5000ms' else current_setting('lock_timeout') end
+                    """;
+    private static final String SET_TIMEOUT_SQL = "select set_config('lock_timeout', ?, true)";
+    private static final String COMMAND_ROOT_LOCK_SQL = "select pg_advisory_xact_lock_shared(?, ?)";
+    private static final String COMMAND_TENANT_LOCK_SQL = "select pg_advisory_xact_lock_shared(?)";
+
+    /** Validation queries can run again inside the final borrowed authority callback. */
+    public static java.util.Map<String,Integer> commandReadSql() {
+        return java.util.Map.of(ISOLATION_SQL,0,READ_ONLY_SQL,0);
+    }
+    /** Only COMMAND acquisition; exclusive security-writer locks are deliberately absent. */
+    public static java.util.Map<String,Integer> commandStagingSql() {
+        return java.util.Map.of(LOCK_TIMEOUT_SQL,0,EFFECTIVE_TIMEOUT_SQL,0,SET_TIMEOUT_SQL,1,
+                COMMAND_ROOT_LOCK_SQL,2,COMMAND_TENANT_LOCK_SQL,1);
+    }
     private final DataSource dataSource;
 
     public PostgresAuthorizationWriteGuard(DataSource dataSource) {
@@ -34,11 +55,15 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
         if (dataSource != expected) throw new AuthorizationWriteGuardException("The security writer datasource does not match its guard");
     }
 
-    @Override public void forFindingCommand(UUID tenantId) {
+    @Override public void forFindingCommand(UUID tenantId) { forBusinessCommand(tenantId); }
+
+    @Override public void requireFindingCommand(UUID tenantId) { requireBusinessCommand(tenantId); }
+
+    @Override public void forBusinessCommand(UUID tenantId) {
         acquire(new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId))));
     }
 
-    @Override public void requireFindingCommand(UUID tenantId) {
+    @Override public void requireBusinessCommand(UUID tenantId) {
         requireScope(new Scope(Mode.COMMAND, tenantKeys(List.of(tenantId))));
     }
 
@@ -127,20 +152,16 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
                     return;
                 }
             }
-            String originalTimeout = scalar(connection, "select current_setting('lock_timeout')");
+            String originalTimeout = scalar(connection, LOCK_TIMEOUT_SQL);
             // PostgreSQL exposes the normalized duration as an interval; keep tighter caller limits.
-            String effectiveTimeout = scalar(connection, """
-                    select case when current_setting('lock_timeout')::interval = interval '0'
-                             or current_setting('lock_timeout')::interval > interval '5 seconds'
-                           then '5000ms' else current_setting('lock_timeout') end
-                    """);
+            String effectiveTimeout = scalar(connection, EFFECTIVE_TIMEOUT_SQL);
             setTimeout(connection, effectiveTimeout);
             advisory(connection, scope.mode == Mode.GLOBAL
-                    ? "select pg_advisory_xact_lock(?, ?)" : "select pg_advisory_xact_lock_shared(?, ?)",
+                    ? "select pg_advisory_xact_lock(?, ?)" : COMMAND_ROOT_LOCK_SQL,
                     ROOT_NAMESPACE, ROOT_KEY);
             for (long tenantKey : scope.keys) {
                 advisory(connection, scope.mode == Mode.COMMAND
-                        ? "select pg_advisory_xact_lock_shared(?)" : "select pg_advisory_xact_lock(?)", tenantKey);
+                        ? COMMAND_TENANT_LOCK_SQL : "select pg_advisory_xact_lock(?)", tenantKey);
             }
             setTimeout(connection, originalTimeout);
             TransactionSynchronizationManager.registerSynchronization(new GuardScope(this, connection, holder, scope));
@@ -168,8 +189,8 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
         if (connection.getAutoCommit() || connection.isReadOnly()
                 || connection.getTransactionIsolation() != Connection.TRANSACTION_READ_COMMITTED
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()
-                || !"read committed".equals(scalar(connection, "select current_setting('transaction_isolation')"))
-                || !"off".equals(scalar(connection, "select current_setting('transaction_read_only')"))) {
+                || !"read committed".equals(scalar(connection, ISOLATION_SQL))
+                || !"off".equals(scalar(connection, READ_ONLY_SQL))) {
             throw new AuthorizationWriteGuardException("Authorization guard requires an actual READ COMMITTED read-write transaction");
         }
     }
@@ -182,7 +203,7 @@ public final class PostgresAuthorizationWriteGuard implements AuthorizationWrite
     }
 
     private static void setTimeout(Connection connection, String timeout) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("select set_config('lock_timeout', ?, true)")) {
+        try (PreparedStatement statement = connection.prepareStatement(SET_TIMEOUT_SQL)) {
             statement.setString(1, timeout);
             statement.execute();
         }

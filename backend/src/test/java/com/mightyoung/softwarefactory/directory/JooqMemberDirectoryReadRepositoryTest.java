@@ -92,7 +92,7 @@ class JooqMemberDirectoryReadRepositoryTest {
         var values = DSL.using(SQLDialect.POSTGRES);
         var repository = new JooqMemberDirectoryReadRepository(DSL.using(new MockConnection(context -> {
             bindings.add(Arrays.stream(context.bindings()).map(JooqMemberDirectoryReadRepositoryTest::temporalBinding).toList());
-            assertThat(context.sql()).contains("cast(? as timestamptz)", "e.evaluated_at").doesNotContain("2026-11");
+            assertThat(context.sql()).contains("cast(? as timestamptz)", "e.evaluated_at").doesNotContain("2026-11", "current_timestamp");
             return new MockResult[] {ids(values, "id", ORG_ID)};
         }), SQLDialect.POSTGRES));
         repository.findCurrentMembershipsAt(TENANT_ID, MEMBER_ID, at);
@@ -116,6 +116,18 @@ class JooqMemberDirectoryReadRepositoryTest {
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> legacy.expandDepartmentTreeAt(TENANT_ID, MEMBER_ID, at))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test void callerOrganizationsUseFixedShapeAndCanonicalUuidArrayText() {
+        var statements=new ArrayList<String>();var bindings=new ArrayList<List<Object>>();var values=DSL.using(SQLDialect.POSTGRES);
+        var repository=new JooqMemberDirectoryReadRepository(DSL.using(new MockConnection(context->{
+            statements.add(context.sql());bindings.add(Arrays.asList(context.bindings()));return new MockResult[]{ids(values,"id",ORG_ID)};
+        }),SQLDialect.POSTGRES));
+        repository.findActiveOrganizationsInCaller(TENANT_ID,Set.of(ORG_ID));
+        repository.findActiveOrganizationsInCaller(TENANT_ID,Set.of(CHILD_ORG_ID,ORG_ID));
+        assertThat(statements).hasSize(2);assertThat(statements.get(0)).isEqualTo(statements.get(1)).contains("any(cast(? as uuid[]))");
+        assertThat(bindings.get(0)).containsExactly(TENANT_ID,"{"+ORG_ID+"}");
+        assertThat(bindings.get(1)).containsExactly(TENANT_ID,"{"+ORG_ID+","+CHILD_ORG_ID+"}");
     }
 
     private static MockResult ids(DSLContext dsl, String column, UUID... values) {

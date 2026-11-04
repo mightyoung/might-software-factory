@@ -153,6 +153,21 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    SessionSensitiveRequests sessionSensitiveRequests(SessionContextResolver contexts,
+            @Value("${software-factory.security.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        return new SessionSensitiveRequests(contexts,absoluteTimeout);
+    }
+
+    @Bean
+    SessionSensitiveKeyProvider sessionSensitiveKeyProvider(ObjectProvider<SessionSensitiveKeys> material) {
+        return () -> {
+            var available=material.stream().limit(2).toList();
+            if(available.size()!=1)throw SessionSensitiveException.unavailable();
+            return available.getFirst();
+        };
+    }
+
+    @Bean
     LoginAttemptLimiter loginAttemptLimiter(
             @Value("${software-factory.security.login-throttle.global-attempts:600}") int globalAttempts,
             @Value("${software-factory.security.login-throttle.source-attempts:60}") int sourceAttempts,

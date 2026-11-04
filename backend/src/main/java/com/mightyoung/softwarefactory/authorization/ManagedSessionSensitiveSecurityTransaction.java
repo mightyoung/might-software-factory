@@ -25,6 +25,9 @@ import java.util.function.Function;
 
 /** Source-only boundary: sensitive operations own a transaction; HUMAN assertions borrow one. */
 public final class ManagedSessionSensitiveSecurityTransaction implements SessionSensitiveSecurityTransaction,HumanSessionAuthorityTransaction,SessionAuthorityControlTransaction {
+    private static final String COMMAND_CLOCK_SQL="select statement_timestamp()";
+    /** The same statement clock is sampled afresh at each borrowed command boundary, including final validation. */
+    public static java.util.Map<String,Integer> commandReadSql(){return java.util.Map.of(COMMAND_CLOCK_SQL,0);}
     private final DataSource source;
     private final PostgresAuthorizationWriteGuard guard;
     private final TransactionTemplate writer,reader;
@@ -101,7 +104,7 @@ public final class ManagedSessionSensitiveSecurityTransaction implements Session
         }
         Marker marker=new Marker(scope,request,logout,holder,connection,physical(connection),tenant,readOnly,guardMode,tenants,!bindTenant);
         TransactionSynchronizationManager.registerSynchronization(marker);marker.validate();
-        String sql=readOnly?"select transaction_timestamp()":"select statement_timestamp()";
+        String sql=readOnly?"select transaction_timestamp()":COMMAND_CLOCK_SQL;
         try(var statement=connection.prepareStatement(sql);var rows=statement.executeQuery()){
             if(!rows.next())throw failure();marker.time=rows.getObject(1,OffsetDateTime.class).toInstant();
             if(rows.next())throw failure();
