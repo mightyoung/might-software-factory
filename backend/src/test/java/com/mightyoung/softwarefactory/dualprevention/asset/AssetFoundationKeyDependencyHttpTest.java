@@ -76,12 +76,14 @@ class AssetFoundationKeyDependencyHttpTest {
         var mvc=MockMvcBuilders.standaloneSetup(controller).build();
         var principal=VerifiedSessionPrincipalTestFixture.create(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID());
         SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(principal,"",List.of()));
-        var session=new MockHttpSession();VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(session);
+        var session=new MockHttpSession(null,"PRIVATE-SYNTHETIC-SESSION-"+UUID.randomUUID());VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(session);
         var response=mvc.perform(post("/api/v1/assets/workshops").session(session).header("Idempotency-Key",UUID.randomUUID())
                         .contentType("application/json").content("{\"code\":\"SYNTHETIC\",\"name\":\"Synthetic workshop\",\"organizationId\":\""+UUID.randomUUID()+"\"}"))
                 .andExpect(status().is(expected)).andExpect(header().string("Cache-Control","no-store"))
-                .andExpect(jsonPath("$.data").doesNotExist()).andExpect(jsonPath("$.meta.requestId").isString()).andReturn();
-        assertThat(response.getResponse().getContentAsString()).doesNotContain(session.getId(),"UNAVAILABLE","REJECTED","CONFLICT","java.");
+                .andExpect(jsonPath("$.data").doesNotExist()).andExpect(jsonPath("$.meta").doesNotExist())
+                .andExpect(jsonPath("$.traceId").isString()).andExpect(jsonPath("$.fieldErrors").isArray()).andReturn();
+        AssetFoundationHttpWireContractTest.validate("ErrorResponse",response.getResponse().getContentAsString());
+        assertThat(response.getResponse().getContentAsString()).doesNotContain(session.getId(),"NO_TRUSTED_LINEAGE","SessionSensitiveException","java.");
         verify(commands).createWorkshop(any(),any(),any(),any());verifyNoInteractions(reads);
         assertThat(capture.get()).isNotNull();assertThatThrownBy(capture.get()::requireCurrent).isInstanceOf(SessionSensitiveException.class);
     }
