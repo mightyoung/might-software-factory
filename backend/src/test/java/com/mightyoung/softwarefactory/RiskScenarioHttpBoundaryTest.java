@@ -78,7 +78,7 @@ class RiskScenarioHttpBoundaryTest {
     }
 
     @Test void assignsIdsBeforeAnEarlyIdentityErrorAndBuffersItUntilLateHeadersFinish() throws Exception {
-        String deletionCookie = "SESSION=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+        String deletionCookie = "SESSION=; Max-Age=0; Expires=Thu, 1 Jan 1970 00:00:00 GMT";
         var boundary = new RiskScenarioHttpBoundary(0); var request = request("GET", DETAIL); var target = new MockHttpServletResponse();
         var ids = new AtomicReference<IdentityRequestIds.Ids>();
         boundary.doFilter(request, target, (req, res) -> {
