@@ -7979,6 +7979,9 @@ components:
       - $ref: '#/components/schemas/WorkshopCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/WorkshopReadDefinition'
+          CREATE: '#/components/schemas/WorkshopCreateDefinition'
     WorkshopDefinitionResponse:
       type: object
       additionalProperties: false
@@ -8210,6 +8213,9 @@ components:
       - $ref: '#/components/schemas/ProductionLineCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/ProductionLineReadDefinition'
+          CREATE: '#/components/schemas/ProductionLineCreateDefinition'
     ProductionLineDefinitionResponse:
       type: object
       additionalProperties: false
@@ -8446,6 +8452,9 @@ components:
       - $ref: '#/components/schemas/ProcessStageCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/ProcessStageReadDefinition'
+          CREATE: '#/components/schemas/ProcessStageCreateDefinition'
     ProcessStageDefinitionResponse:
       type: object
       additionalProperties: false
@@ -8679,6 +8688,9 @@ components:
       - $ref: '#/components/schemas/EquipmentCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/EquipmentReadDefinition'
+          CREATE: '#/components/schemas/EquipmentCreateDefinition'
     EquipmentDefinitionResponse:
       type: object
       additionalProperties: false
@@ -8939,6 +8951,9 @@ components:
       - $ref: '#/components/schemas/WorkUnitCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/WorkUnitReadDefinition'
+          CREATE: '#/components/schemas/WorkUnitCreateDefinition'
     WorkUnitDefinitionResponse:
       type: object
       additionalProperties: false
@@ -9179,6 +9194,9 @@ components:
       - $ref: '#/components/schemas/HazardSourceCreateDefinition'
       discriminator:
         propertyName: use
+        mapping:
+          READ: '#/components/schemas/HazardSourceReadDefinition'
+          CREATE: '#/components/schemas/HazardSourceCreateDefinition'
     HazardSourceDefinitionResponse:
       type: object
       additionalProperties: false

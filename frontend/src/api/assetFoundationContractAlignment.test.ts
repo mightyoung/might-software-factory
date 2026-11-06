@@ -18,7 +18,30 @@ const requestsWithoutLimit: [
   {},
 ];
 
+type DefinitionName = "WorkshopDefinition" | "ProductionLineDefinition" | "ProcessStageDefinition"
+  | "EquipmentDefinition" | "WorkUnitDefinition" | "HazardSourceDefinition";
+type ExactWireUse<T> = [T] extends ["READ" | "CREATE"]
+  ? ["READ" | "CREATE"] extends [T] ? true : false : false;
+// Compile every generated union independently: component-name tags or widened strings fail tsc.
+const definitionUses: { [Name in DefinitionName]: {
+  read: Schemas[Name]["use"];
+  create: Schemas[Name]["use"];
+  exact: ExactWireUse<Schemas[Name]["use"]>;
+} } = {
+  WorkshopDefinition: { read: "READ", create: "CREATE", exact: true },
+  ProductionLineDefinition: { read: "READ", create: "CREATE", exact: true },
+  ProcessStageDefinition: { read: "READ", create: "CREATE", exact: true },
+  EquipmentDefinition: { read: "READ", create: "CREATE", exact: true },
+  WorkUnitDefinition: { read: "READ", create: "CREATE", exact: true },
+  HazardSourceDefinition: { read: "READ", create: "CREATE", exact: true },
+};
+
 describe("asset foundation generated transport contracts", () => {
+  it("uses the actual READ and CREATE discriminator tags for all six definitions", () => {
+    expect(Object.values(definitionUses)).toEqual(Array.from({ length: 6 }, () => ({
+      read: "READ", create: "CREATE", exact: true,
+    })));
+  });
   it("allows all four bounded request types to omit the server-defaulted limit", () => {
     expect(requestsWithoutLimit.map((request) => JSON.parse(JSON.stringify(request)))).toEqual([
       { query: "" },

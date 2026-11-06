@@ -22,6 +22,20 @@ class AssetFoundationOpenApiContractTest {
     private static final String UUID = "00112233-4455-6677-8899-aabbccddeeff";
 
     @Test
+    void everyDefinitionUsesItsExplicitWireTagMapping() throws Exception {
+        var schemas = map(map(contract().get("components")).get("schemas"));
+        for (String root : List.of("Workshop", "ProductionLine", "ProcessStage", "Equipment", "WorkUnit", "HazardSource")) {
+            var definition = map(schemas.get(root + "Definition"));
+            assertThat(map(definition.get("discriminator"))).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "propertyName", "use", "mapping", Map.of("READ", "#/components/schemas/" + root + "ReadDefinition",
+                            "CREATE", "#/components/schemas/" + root + "CreateDefinition")));
+            assertThat(definition.get("oneOf")).isEqualTo(List.of(
+                    Map.of("$ref", "#/components/schemas/" + root + "ReadDefinition"),
+                    Map.of("$ref", "#/components/schemas/" + root + "CreateDefinition")));
+        }
+    }
+
+    @Test
     void freezesAllLiteralActionsSelectorsAndTransportGuards() throws Exception {
         var contract = contract();
         assertThat(contract).containsEntry("openapi", "3.1.0")

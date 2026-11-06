@@ -2498,7 +2498,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "WorkshopReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2530,7 +2530,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "WorkshopCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2591,7 +2591,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "ProductionLineReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2624,7 +2624,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "ProductionLineCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2687,7 +2687,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "ProcessStageReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2721,7 +2721,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "ProcessStageCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2785,7 +2785,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "EquipmentReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2819,7 +2819,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "EquipmentCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2882,7 +2882,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "WorkUnitReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2919,7 +2919,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "WorkUnitCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -2989,7 +2989,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "HazardSourceReadDefinition";
+            use: "READ";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
@@ -3024,7 +3024,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            use: "HazardSourceCreateDefinition";
+            use: "CREATE";
             title: components["schemas"]["Name"];
             publicationChecksum: string;
             fields: {
