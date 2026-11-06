@@ -1,6 +1,6 @@
 package com.mightyoung.softwarefactory;
 
-import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioService;
+import com.mightyoung.softwarefactory.dualprevention.RiskScenarioSqlTemplates;
 import com.mightyoung.softwarefactory.support.G014SqlProfile;
 import com.mightyoung.softwarefactory.support.TransactionSqlSealGate.SqlTemplate;
 import java.util.LinkedHashMap;
@@ -24,14 +24,14 @@ class RiskScenarioSqlCatalogTest {
             verifyNoInteractions(source);
             assertThat(catalog).allSatisfy(t->assertThat(t.profile()).isEqualTo(G014SqlProfile.RISK_SCENARIO));
             assertThat(catalog).extracting(SqlTemplate::sql).doesNotHaveDuplicates();
-            assertThat(catalog).containsAll(RiskScenarioService.businessSqlTemplates())
-                    .contains(RiskScenarioService.auditSqlTemplate(),SqlTemplate.deferredConstraintsImmediate(G014SqlProfile.RISK_SCENARIO))
+            assertThat(catalog).containsAll(RiskScenarioSqlTemplates.commandTemplates())
+                    .contains(RiskScenarioSqlTemplates.auditTemplate(),SqlTemplate.deferredConstraintsImmediate(G014SqlProfile.RISK_SCENARIO))
                     .doesNotContain(SqlTemplate.deferredConstraintsImmediate());
             assertThat(catalog).filteredOn(t->t.effect()!=null).extracting(SqlTemplate::effect)
                     .containsExactlyInAnyOrder("risk_scenario.insert","risk_scenario.update","risk_scenario.revision",
                             "risk_hazard.new","risk_hazard.end","risk_hazard.revision","risk_scenario.snapshot",
                             "risk_scenario.receipt","risk.audit","risk.publication");
-            assertThat(catalog).filteredOn(t->RiskScenarioService.PUBLICATION_EFFECT.equals(t.effect())).singleElement()
+            assertThat(catalog).filteredOn(t->RiskScenarioSqlTemplates.publicationEffect().equals(t.effect())).singleElement()
                     .satisfies(t->{assertThat(t.parameterCount()).isEqualTo(5);assertThat(t.finalRead()).isFalse();
                         assertThat(t.sql()).startsWith("INSERT INTO EVENT_PUBLICATION ");});
             assertThat(catalog).filteredOn(t->t.sql().equals("select pg_advisory_xact_lock_shared(?)")).singleElement()
@@ -52,7 +52,7 @@ class RiskScenarioSqlCatalogTest {
     @Test void admitsOnlyFixedPublicPublicationQualification() throws Exception {
         AssetFoundationSqlCatalogTest.fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=public").run(context->{
             var catalog=RiskScenarioSqlCatalog.commandTemplates(DSL.using(SQLDialect.POSTGRES),context.getBean(EventPublicationRepository.class),context.getBean(JdbcRepositorySettings.class));
-            assertThat(catalog).filteredOn(t->RiskScenarioService.PUBLICATION_EFFECT.equals(t.effect())).singleElement()
+            assertThat(catalog).filteredOn(t->RiskScenarioSqlTemplates.publicationEffect().equals(t.effect())).singleElement()
                     .satisfies(t->assertThat(t.sql()).startsWith("INSERT INTO public.EVENT_PUBLICATION "));
         });
         AssetFoundationSqlCatalogTest.fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=other").run(context->

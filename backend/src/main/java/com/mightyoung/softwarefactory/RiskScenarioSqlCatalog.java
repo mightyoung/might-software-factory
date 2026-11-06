@@ -5,7 +5,7 @@ import com.mightyoung.softwarefactory.authorization.ManagedSessionSensitiveSecur
 import com.mightyoung.softwarefactory.authorization.PostgresAuthorizationWriteGuard;
 import com.mightyoung.softwarefactory.directory.JooqDirectoryReferenceReadRepository;
 import com.mightyoung.softwarefactory.directory.JooqMemberDirectoryReadRepository;
-import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioService;
+import com.mightyoung.softwarefactory.dualprevention.RiskScenarioSqlTemplates;
 import com.mightyoung.softwarefactory.support.G014SqlProfile;
 import com.mightyoung.softwarefactory.identity.JooqAccountStatusReadRepository;
 import com.mightyoung.softwarefactory.identity.JooqPrincipalStatusReadRepository;
@@ -45,10 +45,10 @@ public final class RiskScenarioSqlCatalog {
         addReads(catalog,JooqMemberDirectoryReadRepository.commandReadSql());
         addReads(catalog,JooqRoleScopeReadRepository.commandReadSql());
         addReads(catalog,JooqDirectoryReferenceReadRepository.commandReadSql());
-        merge(catalog,List.of(RiskScenarioService.auditSqlTemplate(),
+        merge(catalog,List.of(RiskScenarioSqlTemplates.auditTemplate(),
                 new SqlTemplate(legacy.sql(),legacy.parameterCount(),false,
-                        RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO)));
-        merge(catalog,RiskScenarioService.businessSqlTemplates());
+                        RiskScenarioSqlTemplates.publicationEffect(),null,G014SqlProfile.RISK_SCENARIO)));
+        merge(catalog,RiskScenarioSqlTemplates.commandTemplates());
         return List.copyOf(catalog.values());
     }
     private static void addReads(Map<String,SqlTemplate> catalog,Map<String,Integer> sql) { add(catalog,sql,true); }
