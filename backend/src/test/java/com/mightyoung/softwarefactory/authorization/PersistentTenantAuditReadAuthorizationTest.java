@@ -30,6 +30,7 @@ import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -197,6 +198,14 @@ class PersistentTenantAuditReadAuthorizationTest {
         assertThat(f.statements).noneMatch(sql->sql.startsWith("select state,version,")||sql.contains("from public.spring_session stored"));
     }
 
+    @Test void anIncorrectStoredDigestIsVerifiedByTheRealKeyAdapterBeforeCapabilityReads() {
+        var f=new Fixture();f.storedDigest="0".repeat(64);
+        assertUnavailable(()->f.read(boundary->f.authorization.requireRead(f.request,boundary)));
+        assertThat(f.statements.stream().filter(sql->sql.contains("from public.spring_session stored"))).hasSize(1);
+        verify(f.keyProvider).requireRetainedKeys();assertThat(f.capabilityBindings).isEmpty();
+        verifyNoInteractions(f.accounts,f.principals,f.members,f.applications);
+    }
+
     private static void assertUnavailable(org.assertj.core.api.ThrowableAssert.ThrowingCallable action){
         assertThatThrownBy(action).isInstanceOf(SessionSensitiveException.class)
                 .satisfies(error->assertThat(((SessionSensitiveException)error).reason()).isEqualTo(SessionSensitiveException.Reason.UNAVAILABLE));
@@ -221,10 +230,13 @@ class PersistentTenantAuditReadAuthorizationTest {
         final TenantApplicationReadRepository applications=mock(TenantApplicationReadRepository.class);
         final DataSourceTransactionManager manager;final ManagedSessionSensitiveSecurityTransaction callers;
         final JooqCurrentHumanSessionAuthority human;final PersistentTenantAuditReadAuthorization authorization;
+        // Independently precomputed synthetic HMAC-SHA256: zero32 test-key, session-binding domain, fixed session id.
+        String storedDigest="12c447a7b9a9a51e1b9a3e8fa99df9bbeff57098fc44399ba936fbc00c531393";
         Object grant=true;String resultFault="",control="ENFORCING";
         Fixture(){
             var principal=VerifiedSessionPrincipalTestFixture.create(actor,account,tenant,member,2,3,4);
             SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(principal,"",List.of()));
+            http.setSession(new MockHttpSession(http.getServletContext(),"audit-fixture-session"));
             VerifiedSessionPrincipalTestFixture.markAuthenticatedSession(http.getSession(),authenticatedAt);
             request=new SessionSensitiveRequests(new SessionContextResolver(),Duration.ofHours(12)).capture(http);
             connection=spy(new MockConnection(this::execute));physical.set(connection);
@@ -269,7 +281,7 @@ class PersistentTenantAuditReadAuthorizationTest {
                 return row(values,control.equals("MISSING_CONTROL")?0:1);
             }
             if(sql.contains("from public.spring_session stored"))return row(Map.of("primary_id",new UUID(9,9).toString(),"session_key_id","test-key",
-                    "session_digest",keys.sessionDigest("test-key",http.getSession().getId()),"authenticated_at",authenticatedAt.atOffset(ZoneOffset.UTC),
+                    "session_digest",storedDigest,"authenticated_at",authenticatedAt.atOffset(ZoneOffset.UTC),
                     "absolute_expires_at",authenticatedAt.plus(Duration.ofHours(12)).atOffset(ZoneOffset.UTC)),1);
             if(sql.equals(PersistentTenantAuditReadAuthorization.CAPABILITY_SQL.stripLeading())){
                 capabilityBindings.add(execution.bindings().clone());if(resultFault.equals("SQL_FAILURE"))throw new SQLException("synthetic grant failure");
