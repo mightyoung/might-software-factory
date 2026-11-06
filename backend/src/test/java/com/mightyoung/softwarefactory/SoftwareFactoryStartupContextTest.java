@@ -155,6 +155,43 @@ class SoftwareFactoryStartupContextTest {
         assertThat(csrfResponse.statusCode()).isEqualTo(HttpStatus.NO_CONTENT.value());
     }
 
+    /** Real application/filter/container proof for anonymous access only; no HUMAN or PostgreSQL claim. */
+    @Test
+    void riskReadRoutesUseTheRealBoundaryAndRejectAnonymousRequests() throws Exception {
+        var controllerTypes = java.util.Set.of(
+                com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioReadController.class,
+                com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioMetadataController.class);
+        var mappings = applicationContext.getBean("requestMappingHandlerMapping",
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class);
+        assertThat(mappings.getHandlerMethods().values().stream()
+                .filter(handler -> controllerTypes.contains(handler.getBeanType())).count()).isEqualTo(7);
+        assertThat(applicationContext.getBean(com.mightyoung.softwarefactory.dualprevention.RiskScenarioHttpTransport.class))
+                .isInstanceOf(RiskScenarioHttpBoundary.class);
+        assertThat(applicationContext.getBeansOfType(
+                com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioService.class)).isEmpty();
+        var client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        var uri = URI.create("http://127.0.0.1:" + port + "/api/v1/entities/risk_scenario/schema");
+        String suppliedTrace = UUID.randomUUID().toString();
+        var response = client.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(10))
+                .header("X-Trace-Id", suppliedTrace).header("If-None-Match", "*").GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.headers().firstValueAsLong("Content-Length")).hasValue(response.body().length);
+        assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(value -> assertThat(value).contains("application/json"));
+        assertThat(response.headers().firstValue("X-Content-Type-Options")).contains("nosniff");
+        assertThat(response.headers().allValues("Set-Cookie")).anySatisfy(cookie ->
+                assertThat(cookie).startsWith("XSRF-TOKEN=").contains("Secure", "SameSite=Lax"));
+        var body = applicationContext.getBean(tools.jackson.databind.ObjectMapper.class).readTree(response.body());
+        assertThat(body.get("code").stringValue()).isEqualTo("AUTH_REQUIRED");
+        assertThat(UUID.fromString(body.get("traceId").stringValue()).toString()).isNotEqualTo(suppliedTrace);
+        assertThat(body.get("retryable").booleanValue()).isFalse();
+        var head = client.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(10))
+                .method("HEAD", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofByteArray());
+        assertThat(head.statusCode()).isEqualTo(401);
+        assertThat(head.body()).isEmpty();
+        assertThat(head.headers().firstValueAsLong("Content-Length")).hasValue(response.body().length);
+    }
+
     @Test
     void modulithListenerPublishesAndCompletesThroughTheJdbcRegistry() throws InterruptedException {
         int completedBefore = eventPublicationRepository.findCompletedPublications().size();
