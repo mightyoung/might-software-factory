@@ -36,33 +36,45 @@ public final class RiskScenarioReadService {
         transaction=new TransactionTemplate(Objects.requireNonNull(readManager));transaction.setReadOnly(true);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);transaction.setTimeout(10);
     }
-    /** Bytes are owned by this response; callers receive a copy and must send without JSON reserialization. */
+    /** Final JSON output. Production HTTP writes it directly; body() is a compatibility/testing copy. */
     public static final class EncodedResponse {
-        private final byte[] body;private final int length;
-        private EncodedResponse(byte[] owned){this(owned,owned.length);}
-        private EncodedResponse(byte[] owned,int length){body=Objects.requireNonNull(owned);if(length<0||length>owned.length)throw new IllegalArgumentException();this.length=length;}
-        public byte[] body(){return Arrays.copyOf(body,length);}
+        private final EncodedOutput encoded;
+        private final byte[] page;
+        private final int length;
+        private EncodedResponse(EncodedOutput encoded){this.encoded=Objects.requireNonNull(encoded);page=null;length=encoded.size();}
+        private EncodedResponse(byte[] owned,int length){encoded=null;page=Objects.requireNonNull(owned);if(length<0||length>owned.length)throw new IllegalArgumentException();this.length=length;}
+        public byte[] body(){byte[] copy=new byte[length];if(encoded!=null)encoded.appendTo(copy,0);else System.arraycopy(page,0,copy,0,length);return copy;}
         public int size(){return length;}
-        /** Writes the owned range exactly once per call, without a defensive full-body copy or stream ownership transfer. */
-        public void writeTo(java.io.OutputStream output)throws java.io.IOException{Objects.requireNonNull(output).write(body,0,length);}
+        /** No private array reaches a caller-controlled stream; neither flushes nor closes it. */
+        public void writeTo(java.io.OutputStream output)throws java.io.IOException{
+            Objects.requireNonNull(output);if(encoded!=null){encoded.writeTo(output);return;}
+            byte[] scratch=new byte[Math.min(8192,length)];
+            for(int offset=0;offset<length;){int amount=Math.min(scratch.length,length-offset);System.arraycopy(page,offset,scratch,0,amount);output.write(scratch,0,amount);offset+=amount;}
+        }
     }
-    public EncodedResponse detail(CapturedHumanRequest request,UUID id,UUID trace) {
+    public EncodedResponse detail(CapturedHumanRequest request,UUID id,UUID trace) {return detail(request,id,trace,trace);}
+    public EncodedResponse detail(CapturedHumanRequest request,UUID id,UUID requestId,UUID trace) {
+        var meta=metadata(requestId,trace);
         return inReadSnapshot(request,snapshot->{var scope=snapshot.authorize(RISK_SCENARIO_READ);var root=parent(snapshot,scope,id);
             Hazards hazards=hazards(snapshot,scope,id,root.version());
-            return response(new Detail(root.id(),root.organizationId(),root.version(),root.code(),root.description(),root.triggeringConditions(),root.exposureDescription(),root.consequence(),root.createdAt(),root.updatedAt(),AssessmentStatus.UNASSESSED,null,null,null,hazards),trace,ResponseBudget.DETAIL);
+            return response(new Detail(root.id(),root.organizationId(),root.version(),root.code(),root.description(),root.triggeringConditions(),root.exposureDescription(),root.consequence(),root.createdAt(),root.updatedAt(),AssessmentStatus.UNASSESSED,null,null,null,hazards),meta,ResponseBudget.DETAIL);
         });
     }
-    public EncodedResponse historicalSnapshot(CapturedHumanRequest request,UUID id,long version,UUID hazard,UUID trace) {
+    public EncodedResponse historicalSnapshot(CapturedHumanRequest request,UUID id,long version,UUID hazard,UUID trace) {return historicalSnapshot(request,id,version,hazard,trace,trace);}
+    public EncodedResponse historicalSnapshot(CapturedHumanRequest request,UUID id,long version,UUID hazard,UUID requestId,UUID trace) {
+        var meta=metadata(requestId,trace);
         RiskScenarioContracts.version(version);Objects.requireNonNull(hazard);
         return inReadSnapshot(request,snapshot->{var scope=snapshot.authorize(RISK_SCENARIO_READ);parent(snapshot,scope,id);
             if(!repository.revisionExists(snapshot,scope,id,version))throw new Failure(404);
             var keys=keys(snapshot,scope,id,version);
             if(keys.stream().noneMatch(k->k.hazardId().equals(hazard))||!allTargets(snapshot,scope,keys))throw new Failure(404);
             var found=repository.historicalSnapshot(snapshot,scope,id,version,hazard).orElseThrow(()->new Failure(503));
-            return response(Map.of("hazardSnapshot",found),trace,ResponseBudget.HISTORICAL_SNAPSHOT);
+            return response(Map.of("hazardSnapshot",found),meta,ResponseBudget.HISTORICAL_SNAPSHOT);
         });
     }
-    public EncodedResponse history(CapturedHumanRequest request,UUID id,HistoryRequest input,UUID trace) {
+    public EncodedResponse history(CapturedHumanRequest request,UUID id,HistoryRequest input,UUID trace) {return history(request,id,input,trace,trace);}
+    public EncodedResponse history(CapturedHumanRequest request,UUID id,HistoryRequest input,UUID requestId,UUID trace) {
+        var meta=metadata(requestId,trace);
         Objects.requireNonNull(input);
         return inReadSnapshot(request,snapshot->{var scope=snapshot.authorize(RISK_SCENARIO_READ);parent(snapshot,scope,id);
             if(!repository.historyAnchor(snapshot,scope,id,input.after()))throw invalid();
@@ -72,14 +84,16 @@ public final class RiskScenarioReadService {
                 var key=candidates.get(i);var hazards=hazards(snapshot,scope,id,key.version());
                 var row=repository.revision(snapshot,scope,id,key.version(),hazards).orElseThrow(()->new Failure(503));
                 if(!key.commandId().equals(row.commandId())||!key.occurredAt().equals(row.occurredAt()))throw new Failure(503);
-                var cursor=new HistoryCursor(row.occurredAt(),row.commandId());byte[] item=encodeResponse(row,ResponseBudget.ITEM);
-                if(!sink.add(item,historyTail(true,cursor,trace)))break;
+                var cursor=new HistoryCursor(row.occurredAt(),row.commandId());var item=encodeOwnedResponse(row,ResponseBudget.ITEM);
+                if(!sink.add(item,historyTail(true,cursor,meta)))break;
                 last=cursor;accepted++;
             }
-            boolean more=accepted<candidates.size();return sink.finish(historyTail(more,more?last:null,trace));
+            boolean more=accepted<candidates.size();return sink.finish(historyTail(more,more?last:null,meta));
         });
     }
-    public EncodedResponse eligibleHazards(CapturedHumanRequest request,SelectorRequest input,UUID trace) {
+    public EncodedResponse eligibleHazards(CapturedHumanRequest request,SelectorRequest input,UUID trace) {return eligibleHazards(request,input,trace,trace);}
+    public EncodedResponse eligibleHazards(CapturedHumanRequest request,SelectorRequest input,UUID requestId,UUID trace) {
+        var meta=metadata(requestId,trace);
         Objects.requireNonNull(input);
         return inReadSnapshot(request,snapshot->{var owner=snapshot.authorize(input.use()==SelectorUse.CREATE?RISK_SCENARIO_CREATE:RISK_SCENARIO_UPDATE);
             UUID organization=input.use()==SelectorUse.CREATE?input.organizationId():parent(snapshot,owner,input.scenarioId()).organizationId();
@@ -90,13 +104,15 @@ public final class RiskScenarioReadService {
             for(int i=0;i<Math.min(input.limit(),candidates.size());i++) {
                 UUID id=candidates.get(i);var item=repository.candidate(snapshot,target,id).orElseThrow(()->new Failure(503));
                 if(!id.equals(item.id())||!target.organizationIds().contains(item.organizationId()))throw new Failure(503);
-                if(!sink.add(encodeResponse(item,ResponseBudget.ITEM),selectorTail(true,id,trace)))break;
+                if(!sink.add(encodeOwnedResponse(item,ResponseBudget.ITEM),selectorTail(true,id,meta)))break;
                 last=id;accepted++;
             }
-            boolean more=accepted<candidates.size();return sink.finish(selectorTail(more,more?last:null,trace));
+            boolean more=accepted<candidates.size();return sink.finish(selectorTail(more,more?last:null,meta));
         });
     }
-    public EncodedResponse query(CapturedHumanRequest request,QueryRequest input,UUID trace) {
+    public EncodedResponse query(CapturedHumanRequest request,QueryRequest input,UUID trace) {return query(request,input,trace,trace);}
+    public EncodedResponse query(CapturedHumanRequest request,QueryRequest input,UUID requestId,UUID trace) {
+        var meta=metadata(requestId,trace);
         RiskScenarioReadRepository.validate(input);
         return inReadSnapshot(request,snapshot->{var scope=snapshot.authorize(RISK_SCENARIO_READ);
             byte[] fingerprint=RiskScenarioReadCursorCodec.fingerprint(scope,snapshot.applicationVersion(scope),input);
@@ -107,10 +123,10 @@ public final class RiskScenarioReadService {
             for(int i=0;i<Math.min(input.size(),candidates.size());i++) {
                 var key=candidates.get(i);var value=repository.projection(snapshot,scope,input,key);
                 String cursor=RiskScenarioReadCursorCodec.encode(fingerprint,new RiskScenarioReadCursorCodec.Anchor(key.id(),key.version()));
-                if(!sink.add(encodeResponse(value,ResponseBudget.ITEM),queryTail(input,total,true,cursor,trace)))break;
+                if(!sink.add(encodeOwnedResponse(value,ResponseBudget.ITEM),queryTail(input,total,true,cursor,meta)))break;
                 last=cursor;accepted++;
             }
-            boolean more=accepted<candidates.size();return sink.finish(queryTail(input,total,more,more?last:null,trace));
+            boolean more=accepted<candidates.size();return sink.finish(queryTail(input,total,more,more?last:null,meta));
         });
     }
     private RiskScenarioReadRepository.Root parent(ReadSnapshot snapshot,ActionScope scope,UUID id){Objects.requireNonNull(id);return repository.parent(snapshot,scope,id).orElseThrow(()->new Failure(404));}
@@ -158,18 +174,18 @@ public final class RiskScenarioReadService {
         Connection connection(ActionScope scope){requireActive();if(!issued.contains(scope))throw invalidate();actions.requireCurrent(scope);actions.requireSqlConnection(scope,source,connection);requireActive();return connection;}
         long applicationVersion(ActionScope scope){connection(scope);var app=applications.findCurrentInCaller(request.context().tenantId(),"safety").filter(value->value.enabled()).orElseThrow(this::invalidate);connection(scope);return app.version();}
     }
-    private static Metadata metadata(UUID trace){Objects.requireNonNull(trace);return new Metadata(trace.toString(),trace.toString(),SCHEMA_VERSION);}
-    private static EncodedResponse response(Object data,UUID trace,ResponseBudget budget){return new EncodedResponse(encodeResponse(new Response<>(data,metadata(trace)),budget));}
+    private static Metadata metadata(UUID requestId,UUID trace){Objects.requireNonNull(requestId);Objects.requireNonNull(trace);return new Metadata(requestId.toString(),trace.toString(),SCHEMA_VERSION);}
+    private static EncodedResponse response(Object data,Metadata meta,ResponseBudget budget){return new EncodedResponse(encodeOwnedResponse(new Response<>(data,meta),budget));}
     private static String json(Object value){return new String(encodeResponse(value,ResponseBudget.COMMAND),StandardCharsets.UTF_8);}
-    private static String historyTail(boolean more,HistoryCursor cursor,UUID trace){if(more&&cursor==null)throw Failure.responseBudgetExceeded();return "],\"hasMore\":"+more+(more?",\"nextCursor\":"+json(cursor):"")+"},\"meta\":"+json(metadata(trace))+"}";}
-    private static String selectorTail(boolean more,UUID after,UUID trace){if(more&&after==null)throw Failure.responseBudgetExceeded();return "],\"hasMore\":"+more+(more?",\"nextAfter\":\""+after+"\"":"")+"},\"meta\":"+json(metadata(trace))+"}";}
-    private static String queryTail(QueryRequest input,long total,boolean more,String cursor,UUID trace){if(more&&cursor==null)throw Failure.responseBudgetExceeded();return "],\"page\":"+json(new QueryPageInfo(input.size(),input.number(),more,cursor,total))+"},\"meta\":"+json(metadata(trace))+"}";}
+    private static String historyTail(boolean more,HistoryCursor cursor,Metadata meta){if(more&&cursor==null)throw Failure.responseBudgetExceeded();return "],\"hasMore\":"+more+(more?",\"nextCursor\":"+json(cursor):"")+"},\"meta\":"+json(meta)+"}";}
+    private static String selectorTail(boolean more,UUID after,Metadata meta){if(more&&after==null)throw Failure.responseBudgetExceeded();return "],\"hasMore\":"+more+(more?",\"nextAfter\":\""+after+"\"":"")+"},\"meta\":"+json(meta)+"}";}
+    private static String queryTail(QueryRequest input,long total,boolean more,String cursor,Metadata meta){if(more&&cursor==null)throw Failure.responseBudgetExceeded();return "],\"page\":"+json(new QueryPageInfo(input.size(),input.number(),more,cursor,total))+"},\"meta\":"+json(meta)+"}";}
     /** Only selected encoded bytes are retained; no page-sized collection of large DTOs. */
     private static final class PageSink {
         private final byte[] buffer;private int position,items;
         PageSink(ResponseBudget budget,String prefix){buffer=new byte[budget.bytes()];append(("{\"data\":"+prefix).getBytes(StandardCharsets.UTF_8));}
-        boolean add(byte[] item,String provisionalTail){byte[] tail=provisionalTail.getBytes(StandardCharsets.UTF_8);if((long)position+(items==0?0:1)+item.length+tail.length>buffer.length){if(items==0)throw Failure.responseBudgetExceeded();return false;}
-            if(items>0)buffer[position++]=',';append(item);items++;return true;}
+        boolean add(EncodedOutput item,String provisionalTail){byte[] tail=provisionalTail.getBytes(StandardCharsets.UTF_8);if((long)position+(items==0?0:1)+item.size()+tail.length>buffer.length){if(items==0)throw Failure.responseBudgetExceeded();return false;}
+            if(items>0)buffer[position++]=',';position=item.appendTo(buffer,position);items++;return true;}
         EncodedResponse finish(String tail){append(tail.getBytes(StandardCharsets.UTF_8));return new EncodedResponse(buffer,position);}
         private void append(byte[] bytes){if((long)position+bytes.length>buffer.length)throw Failure.responseBudgetExceeded();System.arraycopy(bytes,0,buffer,position,bytes.length);position+=bytes.length;}
     }

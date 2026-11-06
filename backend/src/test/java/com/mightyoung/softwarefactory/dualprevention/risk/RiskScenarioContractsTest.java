@@ -106,6 +106,53 @@ class RiskScenarioContractsTest {
         var wire = JSON.readTree(encodeResponse(result, ResponseBudget.COMMAND));
         assertEquals("2026-11-07T00:00:00.123456Z", wire.get("data").get("occurredAt").stringValue());
     }
+    @Test void ownedEncodingMatchesLegacyUtf8EscapingAndAppendsWithoutExposingItsBuffer()throws Exception {
+        Object value=Map.of("value","𠀀\"\\\n");byte[] expected=encodeResponse(value,ResponseBudget.COMMAND);
+        var owned=encodeOwnedResponse(value,ResponseBudget.COMMAND);assertEquals(expected.length,owned.size());
+        byte[] target=new byte[expected.length+4];java.util.Arrays.fill(target,(byte)7);
+        assertEquals(expected.length+2,owned.appendTo(target,2));assertArrayEquals(expected,java.util.Arrays.copyOfRange(target,2,target.length-2));assertEquals(7,target[0]);assertEquals(7,target[target.length-1]);
+        target[2]=0;byte[] second=new byte[owned.size()];owned.appendTo(second,0);assertArrayEquals(expected,second);
+        var output=new java.io.ByteArrayOutputStream();owned.writeTo(output);assertArrayEquals(expected,output.toByteArray());
+    }
+    @Test void ownedEncoderAcceptsExactBudgetRejectsOverflowAndPreservesLegacyFailures()throws Exception {
+        int max=ResponseBudget.COMMAND.bytes();assertEquals(max,encodeOwnedResponse("a".repeat(max-2),ResponseBudget.COMMAND).size());
+        var failure=assertThrows(Failure.class,()->encodeOwnedResponse("a".repeat(max-1),ResponseBudget.COMMAND));assertEquals(503,failure.status());assertEquals("RESPONSE_BUDGET_EXCEEDED",failure.code());
+        var fresh=encodeOwnedResponse("ok",ResponseBudget.COMMAND);byte[] bytes=new byte[fresh.size()];fresh.appendTo(bytes,0);assertEquals("\"ok\"",new String(bytes,StandardCharsets.UTF_8));
+        assertThrows(NullPointerException.class,()->encodeOwnedResponse(null,ResponseBudget.COMMAND));assertThrows(NullPointerException.class,()->encodeOwnedResponse("ok",null));
+    }
+    @Test void ownedAppendBoundsFailBeforeMutatingDestination() {
+        var owned=encodeOwnedResponse("ok",ResponseBudget.COMMAND);byte[] destination={1,2,3,4,5};byte[] before=destination.clone();
+        assertThrows(IndexOutOfBoundsException.class,()->owned.appendTo(destination,-1));assertArrayEquals(before,destination);
+        assertThrows(IndexOutOfBoundsException.class,()->owned.appendTo(destination,2));assertArrayEquals(before,destination);
+        assertThrows(NullPointerException.class,()->owned.appendTo(null,0));
+    }
+    @Test void ownedWriteUsesBoundedScratchAndHostileStreamCannotMutatePrivateOutput()throws Exception {
+        var value="𠀀".repeat(10_000);byte[] expected=encodeResponse(value,ResponseBudget.ITEM);var owned=encodeOwnedResponse(value,ResponseBudget.ITEM);
+        var calls=new java.util.concurrent.atomic.AtomicInteger();var maximum=new java.util.concurrent.atomic.AtomicInteger();var flushed=new java.util.concurrent.atomic.AtomicBoolean();var closed=new java.util.concurrent.atomic.AtomicBoolean();
+        owned.writeTo(new java.io.OutputStream(){
+            @Override public void write(int value){fail("expected bounded bulk chunks");}
+            @Override public void write(byte[] bytes,int offset,int length){calls.incrementAndGet();maximum.accumulateAndGet(length,Math::max);java.util.Arrays.fill(bytes,(byte)0);}
+            @Override public void flush(){flushed.set(true);}@Override public void close(){closed.set(true);}
+        });
+        assertTrue(calls.get()>1);assertTrue(maximum.get()<=8192);assertFalse(flushed.get());assertFalse(closed.get());
+        byte[] after=new byte[owned.size()];owned.appendTo(after,0);assertArrayEquals(expected,after);
+    }
+    @Test void ownedStreamIOExceptionIsPropagatedWithoutCorruptingReusableEncoding()throws Exception {
+        var owned=encodeOwnedResponse("ok",ResponseBudget.COMMAND);var refused=new java.io.IOException("synthetic output failure");
+        var stream=new java.io.OutputStream(){@Override public void write(int value)throws java.io.IOException{throw refused;}@Override public void write(byte[] bytes,int offset,int length)throws java.io.IOException{throw refused;}};
+        assertSame(refused,assertThrows(java.io.IOException.class,()->owned.writeTo(stream)));
+        var good=new java.io.ByteArrayOutputStream();owned.writeTo(good);assertArrayEquals(encodeResponse("ok",ResponseBudget.COMMAND),good.toByteArray());
+    }
+    @Test void ownedAndLegacyKeepNonBudgetSerializationFailuresRedacted503() {
+        var value=new BrokenEncoding();
+        var owned=assertThrows(Failure.class,()->encodeOwnedResponse(value,ResponseBudget.COMMAND));
+        var legacy=assertThrows(Failure.class,()->encodeResponse(value,ResponseBudget.COMMAND));
+        assertEquals(503,owned.status());assertEquals("UNAVAILABLE",owned.code());assertEquals(legacy.status(),owned.status());assertEquals(legacy.code(),owned.code());
+        assertFalse(owned.getMessage().contains("private serializer fixture"));
+    }
+    public static final class BrokenEncoding {
+        @com.fasterxml.jackson.annotation.JsonProperty("value") public String value(){throw new IllegalStateException("private serializer fixture");}
+    }
     private static HistoricalHazardSnapshot snapshot(int number) {
         return new HistoricalHazardSnapshot(new UUID(0, number), new UUID(1, number), 1, "H" + number,
                 "𠀀".repeat(20_000), ExistenceState.UNKNOWN, 3, 4);

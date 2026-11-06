@@ -160,6 +160,61 @@ class RiskScenarioReadServiceTest {
             assertEquals(503,assertThrows(Failure.class,()->f.service.eligibleHazards(f.request,input,TRACE)).status());
         }
     }
+    @Test void detailPreservesDistinctRequestAndTraceIdsInFinalWrittenBytes()throws Exception {
+        var f=new Fixture();assertMetadata(f.service.detail(f.request,ID,new UUID(5,6),TRACE),new UUID(5,6),TRACE);
+    }
+    @Test void historicalSnapshotPreservesDistinctRequestAndTraceIdsInFinalWrittenBytes()throws Exception {
+        var f=new Fixture();when(f.repository.historicalSnapshot(any(),eq(f.read),eq(ID),eq(1L),eq(HAZARD))).thenReturn(Optional.of(new HistoricalHazardSnapshot(HAZARD,HAZARD,1,"H","frozen",ExistenceState.UNKNOWN,2,3)));
+        assertMetadata(f.service.historicalSnapshot(f.request,ID,1,HAZARD,new UUID(5,6),TRACE),new UUID(5,6),TRACE);
+    }
+    @Test void historyPreservesDistinctRequestAndTraceIdsInFinalWrittenBytes()throws Exception {
+        var f=new Fixture();when(f.repository.revisionKeys(any(),eq(f.read),eq(ID),any())).thenReturn(List.of(new RiskScenarioReadRepository.RevisionKey(1,CUT,ID)));
+        when(f.repository.revision(any(),eq(f.read),eq(ID),eq(1L),any())).thenAnswer(call->Optional.of(new HistoryEntry(1,ID,CUT,ID,"R","d","t","e","c",AssessmentStatus.UNASSESSED,null,call.getArgument(4))));
+        assertMetadata(f.service.history(f.request,ID,new HistoryRequest(null,20),new UUID(5,6),TRACE),new UUID(5,6),TRACE);
+    }
+    @Test void selectorPreservesDistinctRequestAndTraceIdsInFinalWrittenBytes()throws Exception {
+        var f=new Fixture();when(f.repository.eligibleKeys(any(),any(),any())).thenReturn(List.of());
+        assertMetadata(f.service.eligibleHazards(f.request,new SelectorRequest(SelectorUse.CREATE,ID,null,"",null,20),new UUID(5,6),TRACE),new UUID(5,6),TRACE);
+    }
+    @Test void queryPreservesDistinctRequestAndTraceIdsInFinalWrittenBytes()throws Exception {
+        var f=new Fixture();when(f.repository.queryKeys(any(),any(),any(),nullable(RiskScenarioReadRepository.QueryKey.class))).thenReturn(List.of());when(f.repository.count(any(),any(),any())).thenReturn(0L);
+        assertMetadata(f.service.query(f.request,new QueryRequest(List.of(),List.of(),List.of("id"),20,1,null),new UUID(5,6),TRACE),new UUID(5,6),TRACE);
+    }
+    @Test void ownedAndPageResponsesNeverExposePrivateArraysToHostileStreams()throws Exception {
+        var f=new Fixture();String text="𠀀".repeat(3000);when(f.repository.parent(any(),any(),eq(ID))).thenReturn(Optional.of(new RiskScenarioReadRepository.Root(ID,ID,"R",1,text,"t","e","c",CUT,CUT)));
+        var key=new RiskScenarioReadRepository.QueryKey(ID,1,List.of(ID));when(f.repository.queryKeys(any(),any(),any(),nullable(RiskScenarioReadRepository.QueryKey.class))).thenReturn(List.of(key));when(f.repository.count(any(),any(),any())).thenReturn(1L);when(f.repository.projection(any(),any(),any(),any())).thenReturn(Map.of("description",text));
+        var direct=f.service.detail(f.request,ID,new UUID(5,6),TRACE);var page=f.service.query(f.request,new QueryRequest(List.of(),List.of(),List.of("description"),20,1,null),new UUID(5,6),TRACE);
+        for(var response:List.of(direct,page)){
+            byte[] expected=response.body();var calls=new java.util.concurrent.atomic.AtomicInteger();var maximum=new java.util.concurrent.atomic.AtomicInteger();var flushed=new java.util.concurrent.atomic.AtomicBoolean();var closed=new java.util.concurrent.atomic.AtomicBoolean();var captured=new AtomicReference<byte[]>();
+            response.writeTo(new java.io.OutputStream(){@Override public void write(int value){fail("expected bounded chunks");}@Override public void write(byte[] bytes,int offset,int length){calls.incrementAndGet();maximum.accumulateAndGet(length,Math::max);captured.set(bytes);java.util.Arrays.fill(bytes,(byte)0);}@Override public void flush(){flushed.set(true);}@Override public void close(){closed.set(true);}});
+            assertTrue(calls.get()>1);assertTrue(maximum.get()<=8192);assertFalse(flushed.get());assertFalse(closed.get());java.util.Arrays.fill(captured.get(),(byte)88);assertArrayEquals(expected,response.body());
+        }
+    }
+    @Test void exactPageBudgetIncludesBothIdsAndRejectedCandidateIsNeverAppendedOrCopiedThroughLegacyApi()throws Exception {
+        var f=new Fixture();UUID requestId=new UUID(5,6);var fields=List.of("id","description","triggeringConditions","exposureDescription","consequence");
+        var query=new QueryRequest(List.of(),List.of(new Sort("id",Direction.ASC)),fields,20,1,null);
+        var keys=java.util.stream.IntStream.rangeClosed(1,5).mapToObj(i->new RiskScenarioReadRepository.QueryKey(new UUID(6,i),i,List.of(new UUID(6,i)))).toList();
+        var rows=new ArrayList<Map<String,Object>>();for(int i=0;i<3;i++)rows.add(budgetProjection(keys.get(i).id(),"𠀀".repeat(20_000)));var fourth=budgetProjection(keys.get(3).id(),"d");rows.add(fourth);
+        String cursor=RiskScenarioReadCursorCodec.encode(RiskScenarioReadCursorCodec.fingerprint(f.read,7,query),new RiskScenarioReadCursorCodec.Anchor(keys.get(3).id(),keys.get(3).version()));
+        var meta=new com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.Metadata(requestId.toString(),TRACE.toString(),"1");
+        int remaining=ResponseBudget.QUERY.bytes()-encodeResponse(new Response<>(new QueryPage(rows,new QueryPageInfo(20,1,true,cursor,5L)),meta),ResponseBudget.QUERY).length;
+        assertTrue(remaining>0);for(String field:fields.subList(1,fields.size())){int delta=Math.min(remaining,79_980);int bytes=1+delta;String value="𠀀".repeat(bytes/4)+"a".repeat(bytes%4);assertTrue(value.codePointCount(0,value.length())<=20_000);fourth.put(field,value);remaining-=delta;}
+        assertEquals(0,remaining);byte[] expected=encodeResponse(new Response<>(new QueryPage(rows,new QueryPageInfo(20,1,true,cursor,5L)),meta),ResponseBudget.QUERY);assertEquals(ResponseBudget.QUERY.bytes(),expected.length);
+        var projections=new HashMap<UUID,Map<String,Object>>();for(int i=0;i<4;i++)projections.put(keys.get(i).id(),rows.get(i));projections.put(keys.get(4).id(),budgetProjection(keys.get(4).id(),"d"));
+        when(f.repository.queryKeys(any(),any(),any(),nullable(RiskScenarioReadRepository.QueryKey.class))).thenReturn(keys);when(f.repository.count(any(),any(),any())).thenReturn(5L);
+        when(f.repository.projection(any(),any(),any(),any())).thenAnswer(call->projections.get(((RiskScenarioReadRepository.QueryKey)call.getArgument(3)).id()));
+        var ownedCandidates=new ArrayList<EncodedOutput>();
+        try(var encoding=mockStatic(RiskScenarioContracts.class,invocation->{Object result=invocation.callRealMethod();if(invocation.getMethod().getName().equals("encodeOwnedResponse")&&invocation.getArgument(1)==ResponseBudget.ITEM){var tracked=spy((EncodedOutput)result);ownedCandidates.add(tracked);return tracked;}return result;})){
+            var response=f.service.query(f.request,query,requestId,TRACE);assertEquals(ResponseBudget.QUERY.bytes(),response.size());assertArrayEquals(expected,response.body());assertMetadata(response,requestId,TRACE);
+            assertEquals(5,ownedCandidates.size());for(int i=0;i<4;i++)verify(ownedCandidates.get(i)).appendTo(any(byte[].class),anyInt());verify(ownedCandidates.get(4),never()).appendTo(any(byte[].class),anyInt());
+            encoding.verify(()->RiskScenarioContracts.encodeResponse(any(),eq(ResponseBudget.ITEM)),never());
+        }
+    }
+    private static LinkedHashMap<String,Object> budgetProjection(UUID id,String value){var row=new LinkedHashMap<String,Object>();row.put("id",id);for(String field:List.of("description","triggeringConditions","exposureDescription","consequence"))row.put(field,value);return row;}
+    private static void assertMetadata(RiskScenarioReadService.EncodedResponse response,UUID requestId,UUID trace)throws Exception {
+        assertNotEquals(requestId,trace);var stream=new java.io.ByteArrayOutputStream();response.writeTo(stream);byte[] bytes=stream.toByteArray();assertEquals(response.size(),bytes.length);
+        var meta=JSON.readTree(bytes).get("meta");assertEquals(requestId.toString(),meta.get("requestId").stringValue());assertEquals(trace.toString(),meta.get("traceId").stringValue());assertEquals("1",meta.get("schemaVersion").stringValue());assertArrayEquals(bytes,response.body());
+    }
     private static final class Fixture {
         final RiskScenarioReadRepository repository=mock(RiskScenarioReadRepository.class);final HumanSessionAuthorityTransaction authority=mock(HumanSessionAuthorityTransaction.class);final EntityActionAuthorization actions=mock(EntityActionAuthorization.class);
         final CapturedHumanRequest request=mock(CapturedHumanRequest.class);final CurrentTenantContext context=new CurrentTenantContext(ID,ID,ID,ID,1,1,1);final HumanSessionAuthorityTransaction.ReadBoundary boundary=mock(HumanSessionAuthorityTransaction.ReadBoundary.class);

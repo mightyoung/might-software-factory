@@ -100,6 +100,21 @@ class RiskScenarioServiceTest {
         assertThatThrownBy(()->f.service.create(f.request,KEY,REQUEST,TRACE,input(List.of(id(20))))).isInstanceOf(RuntimeException.class);
         assertThat(f.publicationWrites.get()).isEqualTo(2);assertThat(f.commits.get()).isZero();assertThat(f.rollbacks.get()).isOne();
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"duplicateVersion","unknownField","floatVersion","stringVersion","wrongResourceId"})
+    void actualPublicationWithTamperedJsonCannotSealOrCommit(String variant)throws Exception {
+        var f=new Fixture();f.publicationJsonTransform=wire->switch(variant){
+            case "duplicateVersion"->wire.replace("\"version\":1","\"version\":1,\"version\":1");
+            case "unknownField"->wire.substring(0,wire.length()-1)+",\"unexpected\":\"x\"}";
+            case "floatVersion"->wire.replace("\"version\":1","\"version\":1.0");
+            case "stringVersion"->wire.replace("\"version\":1","\"version\":\"1\"");
+            case "wrongResourceId"->wire.replace("\"resourceId\":\""+f.root.id()+"\"","\"resourceId\":\""+id(999)+"\"");
+            default->throw new AssertionError("Unknown synthetic mutation");
+        };
+        assertThatThrownBy(()->f.service.create(f.request,KEY,REQUEST,TRACE,input(List.of(id(20))))).isInstanceOf(RuntimeException.class);
+        assertThat(f.auditWrites.get()).isOne();assertThat(f.publicationWrites.get()).isOne();assertThat(f.flushes.get()).isOne();
+        assertThat(f.commits.get()).isZero();assertThat(f.rollbacks.get()).isOne();
+    }
     static final class Fixture {
         final DataSource pool=mock(DataSource.class);final Connection driver=mock(Connection.class);
         final CurrentTenantContext context=new CurrentTenantContext(ACTOR,ACCOUNT,TENANT,MEMBER,0,0,1);
@@ -117,6 +132,7 @@ class RiskScenarioServiceTest {
         final G014JdbcTransactionManager manager;final RiskScenarioRepository repository;final RiskScenarioService service;
         RiskScenarioRepository.Root root;RiskScenarioRepository.Receipt receipt;RiskScenarioLockPlan lockPlan;
         Consumer<RiskScenarioDraftChangedEvent> publicationHook;Runnable finalHook;boolean duplicatePublication;
+        Function<String,String> publicationJsonTransform=Function.identity();
         Fixture()throws Exception {
             var templates=new ArrayList<>(RiskScenarioService.businessSqlTemplates());templates.add(RiskScenarioService.auditSqlTemplate());
             templates.add(new TransactionSqlSealGate.SqlTemplate(PUB_SQL,5,false,RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO));
@@ -175,7 +191,7 @@ class RiskScenarioServiceTest {
         void jdbc(String sql,List<?> values)throws Exception {try(var query=boundConnection().prepareStatement(sql)){for(int i=0;i<values.size();i++)query.setObject(i+1,values.get(i));query.executeUpdate();}}
         void publish(RiskScenarioDraftChangedEvent event){try(var query=boundConnection().prepareStatement(PUB_SQL)){
             query.setObject(1,UUID.randomUUID());query.setString(2,RiskScenarioDraftChangedEvent.class.getName());query.setString(3,RiskScenarioService.REQUIRED_LISTENER_ID);
-            query.setTimestamp(4,Timestamp.from(CUT));query.setString(5,json.writeValueAsString(event));query.executeUpdate();
+            query.setTimestamp(4,Timestamp.from(CUT));query.setString(5,publicationJsonTransform.apply(json.writeValueAsString(event)));query.executeUpdate();
         }catch(Exception failure){throw new IllegalStateException(failure);}}
         void existing(){root=new RiskScenarioRepository.Root(TENANT,SCENARIO,ORG,"R-1",2,"old d","old t","old e","old c",ACTOR,MEMBER,CUT.minusSeconds(120),ACTOR,MEMBER,CUT.minusSeconds(30),id(10));
             for(long h=20;h<=21;h++)links.add(new ActiveLink(TENANT,id(h+10),SCENARIO,id(h),1,1,CUT.minusSeconds(60),ACTOR,MEMBER,1,id(11),ACTOR,MEMBER,CUT.minusSeconds(60)));}

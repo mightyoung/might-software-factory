@@ -47,16 +47,14 @@ class RiskScenarioCommandValidatorTest {
         var target=new RiskScenarioCommandValidator.Intent(RISK_SCENARIO_UPDATE,id(99),null,new Update(1,"d","t","e","c",List.of(id(20))));
         assertThat(RiskScenarioCommandValidator.fingerprint(c,first)).isNotEqualTo(RiskScenarioCommandValidator.fingerprint(c,version)).isNotEqualTo(RiskScenarioCommandValidator.fingerprint(c,target));
     }
-    @Test void pinnedPublicationJsonRepresentationReportsOnlyBoundedSyntheticNodeFacts()throws Exception {
+    @Test void pinnedJacksonLongAndIntegerNodesRequireWireNormalization()throws Exception {
         var mapper=JsonMapper.builder().disable(tools.jackson.databind.cfg.DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS).build();
         var event=new RiskScenarioDraftChangedEvent(TENANT,id(11),ENTITY_KEY,SCENARIO,RISK_SCENARIO_CREATE.permissionCode(),1,CUT,TRACE,"CREATE");
-        var expected=mapper.valueToTree(event);String serialized=mapper.writeValueAsString(event);var decoded=mapper.readTree(serialized);
-        boolean typedRoundTrip=event.equals(mapper.readValue(serialized,RiskScenarioDraftChangedEvent.class));
-        System.out.printf("RISK_PUBLICATION_JSON_DIAG expectedVersionNode=%s decodedVersionNode=%s treeEquals=%s versionEquals=%s typedRoundTrip=%s%n",
-                expected.get("version").getClass().getSimpleName(),decoded.get("version").getClass().getSimpleName(),expected.equals(decoded),
-                expected.get("version").equals(decoded.get("version")),typedRoundTrip);
-        assertThat(expected.get("version").longValue()).isEqualTo(decoded.get("version").longValue());
-        assertThat(typedRoundTrip).isTrue();
+        var rawExpected=mapper.valueToTree(event);String serialized=mapper.writeValueAsString(event);var decoded=mapper.readTree(serialized);
+        assertThat(rawExpected.get("version").longValue()).isEqualTo(decoded.get("version").longValue());
+        assertThat(rawExpected).as("Pinned Jackson keeps LongNode in valueToTree and IntNode in parsed JSON").isNotEqualTo(decoded);
+        assertThat(mapper.readTree(mapper.writeValueAsString(event))).isEqualTo(decoded);
+        assertThat(mapper.readValue(serialized,RiskScenarioDraftChangedEvent.class)).isEqualTo(event);
     }
     @Test void aListenerAliasIsRejectedBeforeAnyConnectionBorrowing()throws Exception {
         var f=new Fixture();

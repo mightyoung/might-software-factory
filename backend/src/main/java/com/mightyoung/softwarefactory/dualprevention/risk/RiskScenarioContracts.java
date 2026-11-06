@@ -253,31 +253,59 @@ public final class RiskScenarioContracts {
         return value;
     }
 
-    /** Stops the actual UTF-8 serializer before its owned output buffer can exceed this endpoint budget.
-     * Page selection and the separate late framework-header budget remain the HTTP/read owner's responsibility. */
+    /** Compatibility API: returns an independent exact-length copy of the bounded encoded output. */
     public static byte[] encodeResponse(Object value, ResponseBudget budget) {
+        return encodeOwnedResponse(value, budget).copyBytes();
+    }
+    /** Serializes once into one fixed budget-sized buffer and transfers its private ownership without a payload copy.
+     * Page selection and the separate late framework-header budget remain the HTTP/read owner's responsibility. */
+    public static EncodedOutput encodeOwnedResponse(Object value, ResponseBudget budget) {
         Objects.requireNonNull(value); Objects.requireNonNull(budget);
         var output = new LimitedOutput(budget.bytes());
-        try { WIRE_JSON.writeValue(output, value); return output.bytes(); }
+        try { WIRE_JSON.writeValue(output, value); return output.seal(); }
         catch (tools.jackson.core.JacksonException failure) {
             for (Throwable cause = failure; cause != null; cause = cause.getCause())
                 if (cause instanceof BudgetExceeded) throw Failure.responseBudgetExceeded();
             throw new Failure(503);
         }
     }
+    /** Immutable handle to a privately owned encoded range. No method exposes its mutable backing array. */
+    public static final class EncodedOutput {
+        private final byte[] buffer;
+        private final int length;
+        private EncodedOutput(byte[] owned, int length) { this.buffer = owned; this.length = length; }
+        public int size() { return length; }
+        /** Copies directly into the caller-owned page, with all bounds checked before any mutation. */
+        public int appendTo(byte[] destination, int offset) {
+            Objects.requireNonNull(destination); Objects.checkFromIndexSize(offset, length, destination.length);
+            System.arraycopy(buffer, 0, destination, offset, length); return offset + length;
+        }
+        /** Does not flush or close the caller's stream. At most 8KiB scratch prevents a hostile stream from
+         * retaining or mutating the private buffer passed to the serializer; there is no full-payload output copy. */
+        public void writeTo(OutputStream destination) throws IOException {
+            Objects.requireNonNull(destination); byte[] scratch = new byte[Math.min(8192, length)];
+            for (int offset = 0; offset < length;) {
+                int amount = Math.min(scratch.length, length - offset);
+                System.arraycopy(buffer, offset, scratch, 0, amount); destination.write(scratch, 0, amount); offset += amount;
+            }
+        }
+        private byte[] copyBytes() { return java.util.Arrays.copyOf(buffer, length); }
+    }
     private static final class LimitedOutput extends OutputStream {
         private final int maximum;
         private final byte[] output;
         private int count;
+        private boolean sealed;
         LimitedOutput(int maximum) { this.maximum = maximum; this.output = new byte[maximum]; }
         @Override public void write(int value) throws IOException {
-            if (count == maximum) throw new BudgetExceeded(); output[count++] = (byte) value;
+            requireWritable(); if (count == maximum) throw new BudgetExceeded(); output[count++] = (byte) value;
         }
         @Override public void write(byte[] bytes, int offset, int length) throws IOException {
-            if (length > maximum - count) throw new BudgetExceeded();
+            requireWritable(); if (length > maximum - count) throw new BudgetExceeded();
             System.arraycopy(bytes, offset, output, count, length); count += length;
         }
-        byte[] bytes() { return java.util.Arrays.copyOf(output, count); }
+        private void requireWritable() throws IOException { if (sealed) throw new IOException("Risk output is sealed"); }
+        EncodedOutput seal() { if (sealed) throw new IllegalStateException("Risk output is sealed"); sealed = true; return new EncodedOutput(output, count); }
     }
     private static final class BudgetExceeded extends IOException { }
     public static final class Failure extends RuntimeException {

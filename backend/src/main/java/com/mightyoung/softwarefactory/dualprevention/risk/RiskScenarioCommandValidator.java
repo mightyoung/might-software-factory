@@ -275,8 +275,10 @@ final class RiskScenarioCommandValidator implements TransactionSqlSealGate.Profi
                 String name=parser.currentName();var token=parser.nextToken();
                 if(name.equals("version")?token!=JsonToken.VALUE_NUMBER_INT:token!=JsonToken.VALUE_STRING)throw new Failure(503);
             }
+            // Jackson valueToTree retains Java LongNode while parsed small JSON integers use IntNode.
+            // Compare the same JSON wire model on both sides, retaining strict tokens and typed event equality.
             if(parser.nextToken()!=null||!fields.equals(Set.of("tenantId","commandId","resourceType","resourceId","actionCode","version","occurredAt","traceId","changeKind"))
-                    ||!json.valueToTree(p.event).equals(json.readTree(serialized))||!p.event.equals(json.readValue(serialized,RiskScenarioDraftChangedEvent.class)))throw new Failure(503);
+                    ||!json.readTree(json.writeValueAsString(p.event)).equals(json.readTree(serialized))||!p.event.equals(json.readValue(serialized,RiskScenarioDraftChangedEvent.class)))throw new Failure(503);
         }catch(Exception invalid){throw new Failure(503);}
     }
 }
