@@ -2,6 +2,7 @@ package com.mightyoung.softwarefactory.dualprevention;
 
 import com.mightyoung.softwarefactory.AssetFoundationSqlCatalog;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationReadService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationDefinitionProvider;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationService;
 import com.mightyoung.softwarefactory.identity.SessionSensitiveKeyProvider;
 import java.sql.Connection;
@@ -69,12 +70,17 @@ class AssetFoundationConfigurationTest {
     @Test void truthfulH2SettingsRejectUseBeforeAnyPoolBorrowButCanComposeRealServices()throws Exception {
         var fixture=new Fixture("H2");
         fixture.context().withUserConfiguration(AssetFoundationConfiguration.class,DescriptorFixture.class)
+                .withBean(AssetFoundationDefinitionProvider.class,AssetFoundationDefinitionProvider::new)
                 .withBean(ObjectMapper.class,()->JsonMapper.builder().build())
                 .withBean(SessionSensitiveKeyProvider.class,()->()->{throw new AssertionError("Graph composition must not require keys");})
                 .run(context->{
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(AssetFoundationService.class)).isNotNull();
                     assertThat(context.getBean(AssetFoundationReadService.class)).isNotNull();
+                    assertThat(context.getBean(com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationQueryService.class)).isNotNull();
+                    assertThat(context.getBean(com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationHistoryService.class)).isNotNull();
+                    assertThat(context.getBean(com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationDefinitionService.class)).isNotNull();
+                    assertThat(context.getBean(com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationSelectorService.class)).isNotNull();
                     assertThat(context.getBeansOfType(DataSource.class)).hasSize(1);
                     assertThat(context.getBeansOfType(org.springframework.transaction.PlatformTransactionManager.class)).isEmpty();
                     assertThat(context.getBeansOfType(org.jooq.DSLContext.class)).isEmpty();

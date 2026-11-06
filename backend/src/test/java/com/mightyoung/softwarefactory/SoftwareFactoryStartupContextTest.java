@@ -6,6 +6,14 @@ import com.mightyoung.softwarefactory.dualprevention.FindingWorkflowEventListene
 import com.mightyoung.softwarefactory.dualprevention.AssetFoundationCapabilityUnavailable;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationService;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationReadService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationQueryService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationHistoryService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationDefinitionService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationSelectorService;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationQueryController;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationHistoryController;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationDefinitionController;
+import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationSelectorController;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationRequestParser;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationEventListener;
 import com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationChangedEvent;
@@ -109,6 +117,21 @@ class SoftwareFactoryStartupContextTest {
         assertThat(assetCommands).isNotNull();
         assertThat(assetReads).isNotNull();
         assertThat(assetParser).isNotNull();
+        for(Class<?> service:java.util.List.of(AssetFoundationQueryService.class,AssetFoundationHistoryService.class,
+                AssetFoundationDefinitionService.class,AssetFoundationSelectorService.class)) {
+            assertThat(applicationContext.getBeansOfType(service)).hasSize(1);
+        }
+        var readControllers=java.util.Set.of(AssetFoundationQueryController.class,AssetFoundationHistoryController.class,
+                AssetFoundationDefinitionController.class,AssetFoundationSelectorController.class);
+        var mappings=applicationContext.getBean("requestMappingHandlerMapping",
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class);
+        long remainingReadMappings=mappings.getHandlerMethods().values().stream()
+                .filter(handler->readControllers.contains(handler.getBeanType())).count();
+        assertThat(remainingReadMappings).isEqualTo(38);
+        long allAssetMappings=mappings.getHandlerMethods().values().stream()
+                .filter(handler->readControllers.contains(handler.getBeanType())
+                        ||handler.getBeanType()==com.mightyoung.softwarefactory.dualprevention.asset.AssetFoundationController.class).count();
+        assertThat(allAssetMappings).isEqualTo(67);
         assertThat(AopUtils.isCglibProxy(assetListener)).isTrue();
         assertThat(applicationContext.getBeansOfType(PlatformTransactionManager.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(javax.sql.DataSource.class)).hasSize(1);
