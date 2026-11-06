@@ -342,4 +342,38 @@ class RiskScenarioHttpBoundaryTest {
     }
 
     private static MockHttpServletRequest request(String method, String path) { return new MockHttpServletRequest(method, path); }
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void replaysRealSecurityHeaderWriterAfterTheInnerChainReturns(boolean staged) throws Exception {
+        var boundary = new RiskScenarioHttpBoundary(0);
+        var target = new MockHttpServletResponse();
+        var securityHeaders = new org.springframework.security.web.header.HeaderWriterFilter(List.of(
+                new org.springframework.security.web.header.writers.XContentTypeOptionsHeaderWriter()));
+        String errorBody = "{\"code\":\"AUTH_REQUIRED\"}";
+        byte[] expected = staged ? new byte[]{1, 2, 3} : errorBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        boundary.doFilter(request("GET", DETAIL), target, (req, res) -> {
+            securityHeaders.doFilter(req, res, (innerRequest, innerResponse) -> {
+                var response = (HttpServletResponse) innerResponse;
+                if (staged) {
+                    boundary.stage((HttpServletRequest) innerRequest, response, 200, JSON, expected.length,
+                            output -> output.write(expected));
+                } else {
+                    response.setStatus(401);
+                    response.setContentType("application/json");
+                    response.setCharacterEncoding("UTF-8");
+                    response.getWriter().write(errorBody);
+                }
+                assertThat(response.getHeader("X-Content-Type-Options")).isNull();
+                assertThat(target.getContentAsByteArray()).isEmpty();
+            });
+            assertThat(((HttpServletResponse) res).getHeaders("X-Content-Type-Options")).containsExactly("nosniff");
+            assertThat(target.getHeader("X-Content-Type-Options")).isNull();
+            assertThat(target.getContentAsByteArray()).isEmpty();
+        });
+        assertThat(target.getStatus()).isEqualTo(staged ? 200 : 401);
+        assertThat(target.getHeaders("X-Content-Type-Options")).containsExactly("nosniff");
+        assertThat(target.getContentAsByteArray()).containsExactly(expected);
+        assertThat(target.getHeader("Content-Length")).isEqualTo(Integer.toString(expected.length));
+    }
+
 }

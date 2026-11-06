@@ -178,7 +178,15 @@ class SoftwareFactoryStartupContextTest {
         assertThat(response.statusCode()).isEqualTo(401);
         assertThat(response.headers().firstValueAsLong("Content-Length")).hasValue(response.body().length);
         assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(value -> assertThat(value).contains("application/json"));
-        assertThat(response.headers().firstValue("X-Content-Type-Options")).contains("nosniff");
+        var filterClassNames = applicationContext.getBean(
+                "springSecurityFilterChain", org.springframework.security.web.FilterChainProxy.class)
+                .getFilterChains().stream()
+                .map(chain -> chain.getFilters().stream().map(filter -> filter.getClass().getName()).toList())
+                .toList();
+        assertThat(response.headers().firstValue("X-Content-Type-Options"))
+                .as("response header names: %s; security filter classes: %s",
+                        response.headers().map().keySet(), filterClassNames)
+                .contains("nosniff");
         assertThat(response.headers().allValues("Set-Cookie")).anySatisfy(cookie ->
                 assertThat(cookie).startsWith("XSRF-TOKEN=").contains("Secure", "SameSite=Lax"));
         var body = applicationContext.getBean(tools.jackson.databind.ObjectMapper.class).readTree(response.body());
