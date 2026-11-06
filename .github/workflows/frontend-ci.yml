@@ -35,8 +35,17 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Contract types are up to date
+        id: contracts
         working-directory: frontend
         run: npm run check:api
+
+      - name: Generated contract diagnostics
+        if: failure() && steps.contracts.outcome == 'failure'
+        working-directory: frontend
+        run: |
+          node tools/api-types/print-generated-diagnostics.mjs --preflight
+          node tools/api-types/generate.mjs
+          node tools/api-types/print-generated-diagnostics.mjs
 
       - name: Typecheck
         working-directory: frontend

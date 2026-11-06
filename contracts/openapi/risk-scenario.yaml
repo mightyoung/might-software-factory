@@ -1,0 +1,3238 @@
+# Risk scenario draft contract. Runtime integration remains a separate acceptance gate.
+"openapi": "3.1.0"
+"info":
+  "title": "Risk scenario draft and hazard association — finite G014 contract"
+  "version": "1.0.0"
+  "description": "Source contract for nine fixed routes. No implemented HTTP, database, UI or complete G014/P0-P2 acceptance is claimed. A draft without an assessment remains UNASSESSED/currentAssessment=null; existence is an observation, never a risk score. Strict parser gates supplement JSON Schema integer mathematics and Unicode validation."
+"x-implementation-status": "contract-only"
+"x-native-plan":
+  "revision": "R3"
+  "planSha256": "cd8a56e467613a43aaedd46dead250a8304f457790e7496a63ce265cf836d6c5"
+  "testSpecSha256": "f2ab18ecb1a6b2e8adb29d584ce75055988535fefb127a373ce479a05a323db3"
+"x-action-catalog":
+  -
+    "code": "risk_scenario.read"
+    "resource_type": "risk_scenario"
+    "action": "read"
+  -
+    "code": "risk_scenario.create"
+    "resource_type": "risk_scenario"
+    "action": "create"
+  -
+    "code": "risk_scenario.update"
+    "resource_type": "risk_scenario"
+    "action": "update"
+"x-response-budget-policy":
+  "encodedUtf8JsonBytesInclude":
+    - "data"
+    - "meta"
+    - "string escaping"
+    - "array delimiters"
+    - "cursor"
+    - "error body"
+  "compressionDoesNotIncreaseBudget": true
+  "headerAggregateBytes": 16384
+  "hazardSummaryPreviewCodePoints": 200
+  "fullImmutableDescriptionRetained": true
+  "noPartialCompleteSet": true
+  "singleItemOverflow":
+    "status": 503
+    "code": "RESPONSE_BUDGET_EXCEEDED"
+  "capacityClaim": "Engineering limits only. No 200-active-user capacity result."
+"tags":
+  -
+    "name": "RiskScenarioDraft"
+"paths":
+  "/api/v1/risk-scenarios":
+    "post":
+      "operationId": "createRiskScenarioDraft"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.create"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 16384
+      "parameters":
+        -
+          "$ref": "#/components/parameters/CsrfToken"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "responses":
+        "200":
+          "description": "Currently authorized exact replay; no new business, audit or publication effect"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CommandResponse"
+        "201":
+          "description": "One new unassessed draft and complete immutable command facts"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CommandResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "409":
+          "$ref": "#/components/responses/Error409"
+        "413":
+          "$ref": "#/components/responses/Error413"
+        "415":
+          "$ref": "#/components/responses/Error415"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/Create"
+      "x-body-max-bytes": 131072
+      "x-max-json-depth": 8
+      "x-strict-utf8-and-duplicate-field-rejection": true
+      "x-mutation-result":
+        "resourceType": "risk_scenario"
+        "action": "risk_scenario.create"
+      "x-replay-authority": "Current parent CREATE action/organization before stored receipt; do not repeat NEW reference qualification on exact authorized replay."
+      "x-professional-assessment-inputs": false
+  "/api/v1/risk-scenarios/{id}/update":
+    "post":
+      "operationId": "updateRiskScenarioDraft"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.update"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 16384
+      "parameters":
+        -
+          "$ref": "#/components/parameters/ScenarioId"
+        -
+          "$ref": "#/components/parameters/CsrfToken"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "responses":
+        "200":
+          "description": "One new draft revision or exact currently authorized replay"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CommandResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "409":
+          "$ref": "#/components/responses/Error409"
+        "413":
+          "$ref": "#/components/responses/Error413"
+        "415":
+          "$ref": "#/components/responses/Error415"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/Update"
+      "x-body-max-bytes": 131072
+      "x-max-json-depth": 8
+      "x-strict-utf8-and-duplicate-field-rejection": true
+      "x-mutation-result":
+        "resourceType": "risk_scenario"
+        "action": "risk_scenario.update"
+      "x-new-reference-authority": "Server stable discovery, complete ordered locks and t0/t1 READ on old UNION submitted hazards, including removed hazards. Client completeness flags are not authority."
+      "x-replay-authority": "Current parent UPDATE action/organization before stored receipt; old references and stale NEW eligibility do not block exact authorized replay."
+  "/api/v1/entities/risk_scenario/{id}":
+    "get":
+      "operationId": "readRiskScenarioDraft"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.read"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 1048576
+      "parameters":
+        -
+          "$ref": "#/components/parameters/ScenarioId"
+      "responses":
+        "200":
+          "description": "Current root plus whole authorized frozen hazard summaries, or the closed RESTRICTED branch"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DetailResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "x-reject-request-body": true
+      "x-hazard-disclosure": "Current parent READ, then every linked target current READ in the same snapshot; all COMPLETE or membership-free RESTRICTED, dependency failure remains 503."
+  "/api/v1/entities/risk_scenario/query":
+    "post":
+      "operationId": "queryRiskScenarioDrafts"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.read"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 1048576
+      "parameters":
+        -
+          "$ref": "#/components/parameters/CsrfToken"
+      "responses":
+        "200":
+          "description": "Bounded root-only sparse projection page; requested size is a row maximum"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/QueryResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "413":
+          "$ref": "#/components/responses/Error413"
+        "415":
+          "$ref": "#/components/responses/Error415"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/QueryRequest"
+      "x-body-max-bytes": 32768
+      "x-max-json-depth": 8
+      "x-strict-utf8-and-duplicate-field-rejection": true
+      "x-max-encoded-item-bytes": 786432
+      "x-byte-bounded-page": "Fetch only candidate keys first; materialize and encode one DTO at a time. Stop before an item that does not fit, never skip it; cursor is last actually returned. No nonadvancing empty success page."
+      "x-root-query-fields":
+        - "id"
+        - "organizationId"
+        - "code"
+        - "version"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "createdAt"
+        - "updatedAt"
+        - "assessmentStatus"
+      "x-hidden-reference-querying": false
+  "/api/v1/risk-scenarios/{id}/history":
+    "get":
+      "operationId": "readRiskScenarioDraftHistory"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.read"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 1048576
+      "parameters":
+        -
+          "$ref": "#/components/parameters/ScenarioId"
+        -
+          "$ref": "#/components/parameters/HistoryPageSize"
+        -
+          "$ref": "#/components/parameters/HistoryAfterTime"
+        -
+          "$ref": "#/components/parameters/HistoryAfterCommand"
+      "responses":
+        "200":
+          "description": "Root revisions in occurredAt/commandId order with bounded summaries and consistent current disclosure"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/HistoryResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "x-reject-request-body": true
+      "x-max-encoded-item-bytes": 786432
+      "x-cursor-order":
+        - "occurredAt ASC"
+        - "commandId unsigned UUID ASC"
+      "x-current-disclosure": "Each revision uses whole-set COMPLETE/RESTRICTED under current parent and every historical target READ. Historical IDs cannot bypass current detail restrictions."
+      "x-byte-bounded-page": "May return fewer than pageSize; nextCursor identifies the last actual returned revision, not the next inspected candidate."
+  "/api/v1/risk-scenarios/{id}/history/{version}/hazards/{hazardId}":
+    "get":
+      "operationId": "readRiskScenarioHistoricalHazardSnapshot"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.read"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 262144
+      "parameters":
+        -
+          "$ref": "#/components/parameters/ScenarioId"
+        -
+          "$ref": "#/components/parameters/ScenarioVersion"
+        -
+          "$ref": "#/components/parameters/HazardId"
+      "responses":
+        "200":
+          "description": "One full immutable description with both hazard-version anchors and the recorded link identity"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/HistoricalSnapshotResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "x-reject-request-body": true
+      "x-current-disclosure": "Parent READ plus current READ of the entire requested revision target set. Any hidden/missing reference is uniform 404; unknown dependency 503. No membership count or root narratives."
+      "x-current-hazard-detail-substitute": false
+  "/api/v1/risk-scenarios/eligible-hazards":
+    "post":
+      "operationId": "queryEligibleRiskScenarioHazards"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.CREATE_OR_UPDATE"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 131072
+      "parameters":
+        -
+          "$ref": "#/components/parameters/CsrfToken"
+      "responses":
+        "200":
+          "description": "Current independently authorized targets in unsigned UUID order, bounded by count and encoded bytes"
+          "headers":
+            "Cache-Control":
+              "schema":
+                "const": "no-store"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/SelectorResponse"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "404":
+          "$ref": "#/components/responses/Error404"
+        "413":
+          "$ref": "#/components/responses/Error413"
+        "415":
+          "$ref": "#/components/responses/Error415"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/SelectorRequest"
+      "x-body-max-bytes": 2048
+      "x-max-json-depth": 8
+      "x-strict-utf8-and-duplicate-field-rejection": true
+      "x-selector":
+        "ownerActions":
+          "CREATE": "risk_scenario.create"
+          "UPDATE": "risk_scenario.update"
+        "targetReadAction": "hazard_source.read"
+        "clientPermissionInput": false
+        "anchorByUse":
+          "CREATE": "organizationId"
+          "UPDATE": "scenarioId"
+        "currentAuthorizationBeforePaging": true
+      "x-byte-bounded-page": "No skipped candidate. nextAfter is the last actually returned target UUID; no empty nonadvancing success cursor."
+  "/api/v1/entities/risk_scenario/schema":
+    "get":
+      "operationId": "readRiskScenarioEntitySchema"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.read"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 262144
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IfNoneMatch"
+      "responses":
+        "200":
+          "description": "Fixed root-only schema after current READ authorization"
+          "headers":
+            "ETag":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+            "Cache-Control":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+              "description": "Private current-context metadata validator; authorization always precedes 304."
+            "Vary":
+              "schema":
+                "const": "Cookie"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/SchemaResponse"
+        "304":
+          "description": "Authorized contextual metadata unchanged; no response body"
+          "headers":
+            "ETag":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+            "Cache-Control":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+              "description": "Private current-context metadata validator; authorization always precedes 304."
+            "Vary":
+              "schema":
+                "const": "Cookie"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "x-reject-request-body": true
+      "x-authorize-before-conditional-etag": true
+  "/api/v1/entities/risk_scenario/definition":
+    "get":
+      "operationId": "readRiskScenarioDefinition"
+      "tags":
+        - "RiskScenarioDraft"
+      "security":
+        -
+          "sessionCookieAuth": []
+      "x-action": "risk_scenario.READ_OR_CREATE"
+      "x-reject-unknown-query-parameters": true
+      "x-response-headers-max-bytes": 16384
+      "x-response-json-max-bytes": 262144
+      "parameters":
+        -
+          "$ref": "#/components/parameters/DefinitionUse"
+        -
+          "$ref": "#/components/parameters/IfNoneMatch"
+      "responses":
+        "200":
+          "description": "Independent immutable definition with separate commandInputs and root query schema"
+          "headers":
+            "ETag":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+            "Cache-Control":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+              "description": "Private current-context metadata validator; authorization always precedes 304."
+            "Vary":
+              "schema":
+                "const": "Cookie"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DefinitionResponse"
+        "304":
+          "description": "Authorized contextual metadata unchanged; no response body"
+          "headers":
+            "ETag":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+            "Cache-Control":
+              "schema":
+                "type": "string"
+                "maxLength": 256
+              "description": "Private current-context metadata validator; authorization always precedes 304."
+            "Vary":
+              "schema":
+                "const": "Cookie"
+        "400":
+          "$ref": "#/components/responses/Error400"
+        "401":
+          "$ref": "#/components/responses/Error401"
+        "403":
+          "$ref": "#/components/responses/Error403"
+        "503":
+          "$ref": "#/components/responses/Error503"
+      "x-reject-request-body": true
+      "x-authorize-before-conditional-etag": true
+      "x-definition-permissions":
+        "READ": "risk_scenario.read"
+        "CREATE": "risk_scenario.create"
+      "x-shared-catalog-wiring": "Not yet integrated. The risk-specific definition deliberately keeps hazardIds outside querySchema; no implicit shared EntityDefinitionProvider registration."
+"components":
+  "securitySchemes":
+    "sessionCookieAuth":
+      "type": "apiKey"
+      "in": "cookie"
+      "name": "SESSION"
+  "parameters":
+    "IdempotencyKey":
+      "name": "Idempotency-Key"
+      "in": "header"
+      "required": true
+      "schema":
+        "$ref": "#/components/schemas/CanonicalUuid"
+      "x-exactly-one-header": true
+    "CsrfToken":
+      "name": "X-XSRF-TOKEN"
+      "in": "header"
+      "required": true
+      "schema":
+        "type": "string"
+        "minLength": 1
+        "maxLength": 4096
+      "description": "Actual authenticated session and CSRF cookie/header required; no injected subject."
+    "ScenarioId":
+      "name": "id"
+      "in": "path"
+      "required": true
+      "schema":
+        "$ref": "#/components/schemas/CanonicalUuid"
+    "ScenarioVersion":
+      "name": "version"
+      "in": "path"
+      "required": true
+      "schema":
+        "$ref": "#/components/schemas/Version"
+      "x-canonical-decimal-path-token": true
+    "HazardId":
+      "name": "hazardId"
+      "in": "path"
+      "required": true
+      "schema":
+        "$ref": "#/components/schemas/CanonicalUuid"
+    "DefinitionUse":
+      "name": "use"
+      "in": "query"
+      "required": true
+      "schema":
+        "type": "string"
+        "enum":
+          - "READ"
+          - "CREATE"
+    "IfNoneMatch":
+      "name": "If-None-Match"
+      "in": "header"
+      "required": false
+      "schema":
+        "type": "string"
+        "maxLength": 8192
+      "description": "Only after current owner authorization and contextual projection; weak/list/sole wildcard validators do not grant authority."
+    "HistoryPageSize":
+      "name": "pageSize"
+      "in": "query"
+      "required": false
+      "schema":
+        "type": "integer"
+        "minimum": 1
+        "maximum": 50
+        "default": 20
+      "x-canonical-integer-token": true
+    "HistoryAfterTime":
+      "name": "afterOccurredAt"
+      "in": "query"
+      "required": false
+      "schema":
+        "$ref": "#/components/schemas/TimestampInput"
+      "x-requires-query-parameter": "afterCommandId"
+    "HistoryAfterCommand":
+      "name": "afterCommandId"
+      "in": "query"
+      "required": false
+      "schema":
+        "$ref": "#/components/schemas/CanonicalUuid"
+      "x-requires-query-parameter": "afterOccurredAt"
+  "responses":
+    "Error400":
+      "description": "Strict input rejected"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error401":
+      "description": "Authentication required"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error403":
+      "description": "Current action or CSRF denied"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error404":
+      "description": "Missing or hidden resource"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error409":
+      "description": "Version or idempotency conflict"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error413":
+      "description": "Raw request-body byte budget exceeded"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error415":
+      "description": "Only application/json UTF-8 accepted"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+    "Error503":
+      "description": "Dependency/encoding unavailable; no fabricated OFF/readiness"
+      "headers":
+        "Cache-Control":
+          "schema":
+            "const": "no-store"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+      "x-json-body-max-bytes": 8192
+  "schemas":
+    "CanonicalUuid":
+      "type": "string"
+      "format": "uuid"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    "Version":
+      "type": "integer"
+      "minimum": 1
+      "maximum": 9007199254740991
+      "x-json-integer-token-only": true
+    "TimestampInput":
+      "type": "string"
+      "format": "date-time"
+      "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?(?:Z|[+-](?:0[0-9]|1[0-8]):[0-5][0-9])$"
+      "x-microsecond-precision": true
+    "Timestamp":
+      "type": "string"
+      "format": "date-time"
+      "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?Z$"
+      "x-microsecond-precision": true
+    "StableCode":
+      "type": "string"
+      "minLength": 1
+      "maxLength": 64
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    "Narrative":
+      "type": "string"
+      "minLength": 1
+      "maxLength": 20000
+      "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]+$"
+      "x-length-unit": "UNICODE_CODE_POINTS"
+      "x-reject-unpaired-surrogates": true
+      "x-no-trim-or-normalization": true
+    "DescriptionPreview":
+      "type": "string"
+      "minLength": 1
+      "maxLength": 200
+      "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]+$"
+      "x-length-unit": "UNICODE_CODE_POINTS"
+      "x-reject-unpaired-surrogates": true
+      "x-no-trim-or-normalization": true
+      "description": "Exact first min(200, full description code points); no appended ellipsis. Full immutable text remains available via the authorized historical point read."
+    "HazardIds":
+      "type": "array"
+      "items":
+        "$ref": "#/components/schemas/CanonicalUuid"
+      "minItems": 1
+      "maxItems": 100
+      "uniqueItems": true
+      "x-canonicalize-as-unsigned-uuid-set": true
+    "Create":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "description":
+          "$ref": "#/components/schemas/Narrative"
+        "triggeringConditions":
+          "$ref": "#/components/schemas/Narrative"
+        "exposureDescription":
+          "$ref": "#/components/schemas/Narrative"
+        "consequence":
+          "$ref": "#/components/schemas/Narrative"
+        "hazardIds":
+          "$ref": "#/components/schemas/HazardIds"
+      "required":
+        - "code"
+        - "organizationId"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "hazardIds"
+    "Update":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "expectedVersion":
+          "$ref": "#/components/schemas/Version"
+        "description":
+          "$ref": "#/components/schemas/Narrative"
+        "triggeringConditions":
+          "$ref": "#/components/schemas/Narrative"
+        "exposureDescription":
+          "$ref": "#/components/schemas/Narrative"
+        "consequence":
+          "$ref": "#/components/schemas/Narrative"
+        "hazardIds":
+          "$ref": "#/components/schemas/HazardIds"
+      "required":
+        - "expectedVersion"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "hazardIds"
+    "CommandResult":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "resourceType":
+          "const": "risk_scenario"
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "version":
+          "$ref": "#/components/schemas/Version"
+        "occurredAt":
+          "$ref": "#/components/schemas/Timestamp"
+      "required":
+        - "resourceType"
+        - "id"
+        - "code"
+        - "version"
+        - "occurredAt"
+    "HazardSummary":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "linkId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "linkVersion":
+          "$ref": "#/components/schemas/Version"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "existence":
+          "type": "string"
+          "enum":
+            - "UNKNOWN"
+            - "PRESENT"
+            - "NOT_PRESENT"
+        "hazardVersionAtLink":
+          "$ref": "#/components/schemas/Version"
+        "hazardVersionAtScenarioRevision":
+          "$ref": "#/components/schemas/Version"
+        "descriptionPreview":
+          "$ref": "#/components/schemas/DescriptionPreview"
+        "descriptionTruncated":
+          "type": "boolean"
+      "required":
+        - "id"
+        - "linkId"
+        - "linkVersion"
+        - "code"
+        - "existence"
+        - "hazardVersionAtLink"
+        - "hazardVersionAtScenarioRevision"
+        - "descriptionPreview"
+        - "descriptionTruncated"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "descriptionTruncated":
+                "const": true
+            "required":
+              - "descriptionTruncated"
+          "then":
+            "properties":
+              "descriptionPreview":
+                "minLength": 200
+                "maxLength": 200
+    "HistoricalHazardSnapshot":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "linkId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "linkVersion":
+          "$ref": "#/components/schemas/Version"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "existence":
+          "type": "string"
+          "enum":
+            - "UNKNOWN"
+            - "PRESENT"
+            - "NOT_PRESENT"
+        "hazardVersionAtLink":
+          "$ref": "#/components/schemas/Version"
+        "hazardVersionAtScenarioRevision":
+          "$ref": "#/components/schemas/Version"
+        "fullDescription":
+          "$ref": "#/components/schemas/Narrative"
+      "required":
+        - "id"
+        - "linkId"
+        - "linkVersion"
+        - "code"
+        - "existence"
+        - "hazardVersionAtLink"
+        - "hazardVersionAtScenarioRevision"
+        - "fullDescription"
+    "CompleteHazards":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "visibility":
+          "const": "COMPLETE"
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/HazardSummary"
+          "minItems": 1
+          "maxItems": 100
+      "required":
+        - "visibility"
+        - "items"
+      "x-unique-item-hazard-and-link-ids": true
+      "x-whole-authorized-set-required": true
+    "RestrictedHazards":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "visibility":
+          "const": "RESTRICTED"
+      "required":
+        - "visibility"
+    "Hazards":
+      "oneOf":
+        -
+          "$ref": "#/components/schemas/CompleteHazards"
+        -
+          "$ref": "#/components/schemas/RestrictedHazards"
+      "discriminator":
+        "propertyName": "visibility"
+        "mapping":
+          "COMPLETE": "#/components/schemas/CompleteHazards"
+          "RESTRICTED": "#/components/schemas/RestrictedHazards"
+    "Detail":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "version":
+          "$ref": "#/components/schemas/Version"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "description":
+          "$ref": "#/components/schemas/Narrative"
+        "triggeringConditions":
+          "$ref": "#/components/schemas/Narrative"
+        "exposureDescription":
+          "$ref": "#/components/schemas/Narrative"
+        "consequence":
+          "$ref": "#/components/schemas/Narrative"
+        "createdAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "updatedAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "assessmentStatus":
+          "const": "UNASSESSED"
+        "currentAssessment":
+          "type": "null"
+        "accidentCodeRef":
+          "type": "null"
+        "accidentVersion":
+          "type": "null"
+        "hazards":
+          "$ref": "#/components/schemas/Hazards"
+      "required":
+        - "id"
+        - "organizationId"
+        - "version"
+        - "code"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "createdAt"
+        - "updatedAt"
+        - "assessmentStatus"
+        - "currentAssessment"
+        - "accidentCodeRef"
+        - "accidentVersion"
+        - "hazards"
+    "HistoryEntry":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "version":
+          "$ref": "#/components/schemas/Version"
+        "commandId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "occurredAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "description":
+          "$ref": "#/components/schemas/Narrative"
+        "triggeringConditions":
+          "$ref": "#/components/schemas/Narrative"
+        "exposureDescription":
+          "$ref": "#/components/schemas/Narrative"
+        "consequence":
+          "$ref": "#/components/schemas/Narrative"
+        "assessmentStatus":
+          "const": "UNASSESSED"
+        "currentAssessment":
+          "type": "null"
+        "hazards":
+          "$ref": "#/components/schemas/Hazards"
+      "required":
+        - "version"
+        - "commandId"
+        - "occurredAt"
+        - "organizationId"
+        - "code"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "assessmentStatus"
+        - "currentAssessment"
+        - "hazards"
+    "HistoryCursor":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "occurredAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "commandId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+      "required":
+        - "occurredAt"
+        - "commandId"
+    "HistoryPage":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "scenarioId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/HistoryEntry"
+          "minItems": 0
+          "maxItems": 50
+        "hasMore":
+          "type": "boolean"
+        "nextCursor":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/HistoryCursor"
+            -
+              "type": "null"
+      "required":
+        - "scenarioId"
+        - "items"
+        - "hasMore"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "hasMore":
+                "const": true
+            "required":
+              - "hasMore"
+          "then":
+            "required":
+              - "nextCursor"
+            "properties":
+              "nextCursor":
+                "$ref": "#/components/schemas/HistoryCursor"
+              "items":
+                "minItems": 1
+          "else":
+            "properties":
+              "nextCursor":
+                "type": "null"
+    "SelectorCreate":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "use":
+          "const": "CREATE"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "query":
+          "type": "string"
+          "maxLength": 100
+          "x-length-unit": "UNICODE_CODE_POINTS"
+          "x-empty-string-allowed": true
+          "x-reject-unpaired-surrogates-and-nul": true
+        "afterId":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/CanonicalUuid"
+            -
+              "type": "null"
+        "limit":
+          "type": "integer"
+          "minimum": 1
+          "maximum": 50
+          "default": 20
+          "x-json-integer-token-only": true
+      "required":
+        - "use"
+        - "organizationId"
+        - "query"
+    "SelectorUpdate":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "use":
+          "const": "UPDATE"
+        "query":
+          "type": "string"
+          "maxLength": 100
+          "x-length-unit": "UNICODE_CODE_POINTS"
+          "x-empty-string-allowed": true
+          "x-reject-unpaired-surrogates-and-nul": true
+        "afterId":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/CanonicalUuid"
+            -
+              "type": "null"
+        "limit":
+          "type": "integer"
+          "minimum": 1
+          "maximum": 50
+          "default": 20
+          "x-json-integer-token-only": true
+        "scenarioId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+      "required":
+        - "use"
+        - "scenarioId"
+        - "query"
+    "SelectorRequest":
+      "oneOf":
+        -
+          "$ref": "#/components/schemas/SelectorCreate"
+        -
+          "$ref": "#/components/schemas/SelectorUpdate"
+      "discriminator":
+        "propertyName": "use"
+        "mapping":
+          "CREATE": "#/components/schemas/SelectorCreate"
+          "UPDATE": "#/components/schemas/SelectorUpdate"
+    "HazardCandidate":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "version":
+          "$ref": "#/components/schemas/Version"
+        "descriptionPreview":
+          "$ref": "#/components/schemas/DescriptionPreview"
+        "descriptionTruncated":
+          "type": "boolean"
+        "existence":
+          "type": "string"
+          "enum":
+            - "UNKNOWN"
+            - "PRESENT"
+            - "NOT_PRESENT"
+      "required":
+        - "id"
+        - "organizationId"
+        - "code"
+        - "version"
+        - "descriptionPreview"
+        - "descriptionTruncated"
+        - "existence"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "descriptionTruncated":
+                "const": true
+            "required":
+              - "descriptionTruncated"
+          "then":
+            "properties":
+              "descriptionPreview":
+                "minLength": 200
+                "maxLength": 200
+    "SelectorPage":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/HazardCandidate"
+          "minItems": 0
+          "maxItems": 50
+        "hasMore":
+          "type": "boolean"
+        "nextAfter":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/CanonicalUuid"
+            -
+              "type": "null"
+      "required":
+        - "items"
+        - "hasMore"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "hasMore":
+                "const": true
+            "required":
+              - "hasMore"
+          "then":
+            "required":
+              - "nextAfter"
+            "properties":
+              "nextAfter":
+                "$ref": "#/components/schemas/CanonicalUuid"
+              "items":
+                "minItems": 1
+          "else":
+            "properties":
+              "nextAfter":
+                "type": "null"
+    "ListItem":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "organizationId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "code":
+          "$ref": "#/components/schemas/StableCode"
+        "version":
+          "$ref": "#/components/schemas/Version"
+        "description":
+          "$ref": "#/components/schemas/Narrative"
+        "triggeringConditions":
+          "$ref": "#/components/schemas/Narrative"
+        "exposureDescription":
+          "$ref": "#/components/schemas/Narrative"
+        "consequence":
+          "$ref": "#/components/schemas/Narrative"
+        "createdAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "updatedAt":
+          "$ref": "#/components/schemas/Timestamp"
+        "assessmentStatus":
+          "const": "UNASSESSED"
+      "required": []
+    "Sort":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "field":
+          "type": "string"
+          "enum":
+            - "code"
+            - "version"
+            - "createdAt"
+            - "updatedAt"
+            - "organizationId"
+        "direction":
+          "type": "string"
+          "enum":
+            - "ASC"
+            - "DESC"
+      "required":
+        - "field"
+        - "direction"
+    "PageNumber":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "number":
+          "type": "integer"
+          "minimum": 1
+          "maximum": 501
+          "x-json-integer-token-only": true
+        "cursor":
+          "type": "null"
+      "required":
+        - "number"
+    "PageCursor":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "cursor":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 2048
+          "x-nonblank": true
+        "number":
+          "type": "null"
+      "required":
+        - "cursor"
+    "PageRequest":
+      "oneOf":
+        -
+          "$ref": "#/components/schemas/PageNumber"
+        -
+          "$ref": "#/components/schemas/PageCursor"
+    "FilterCondition":
+      "oneOf":
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "id"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+            "value":
+              "$ref": "#/components/schemas/CanonicalUuid"
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "id"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IN"
+            "value":
+              "type": "array"
+              "items":
+                "$ref": "#/components/schemas/CanonicalUuid"
+              "minItems": 1
+              "maxItems": 100
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "organizationId"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+            "value":
+              "$ref": "#/components/schemas/CanonicalUuid"
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "organizationId"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IN"
+            "value":
+              "type": "array"
+              "items":
+                "$ref": "#/components/schemas/CanonicalUuid"
+              "minItems": 1
+              "maxItems": 100
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "code"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "CONTAINS"
+            "value":
+              "type": "string"
+              "maxLength": 64
+              "x-length-unit": "UNICODE_CODE_POINTS"
+              "x-reject-unpaired-surrogates-and-nul": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "code"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IS_EMPTY"
+                - "IS_NOT_EMPTY"
+          "required":
+            - "field"
+            - "operator"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "version"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "GT"
+                - "GTE"
+                - "LT"
+                - "LTE"
+            "value":
+              "type": "number"
+              "minimum": -9007199254740991
+              "maximum": 9007199254740991
+              "x-exact-bounded-decimal": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "version"
+            "operator":
+              "type": "string"
+              "enum":
+                - "BETWEEN"
+            "value":
+              "type": "array"
+              "items":
+                "type": "number"
+                "minimum": -9007199254740991
+                "maximum": 9007199254740991
+                "x-exact-bounded-decimal": true
+              "minItems": 2
+              "maxItems": 2
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "description"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "CONTAINS"
+            "value":
+              "type": "string"
+              "maxLength": 20000
+              "x-length-unit": "UNICODE_CODE_POINTS"
+              "x-reject-unpaired-surrogates-and-nul": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "description"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IS_EMPTY"
+                - "IS_NOT_EMPTY"
+          "required":
+            - "field"
+            - "operator"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "triggeringConditions"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "CONTAINS"
+            "value":
+              "type": "string"
+              "maxLength": 20000
+              "x-length-unit": "UNICODE_CODE_POINTS"
+              "x-reject-unpaired-surrogates-and-nul": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "triggeringConditions"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IS_EMPTY"
+                - "IS_NOT_EMPTY"
+          "required":
+            - "field"
+            - "operator"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "exposureDescription"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "CONTAINS"
+            "value":
+              "type": "string"
+              "maxLength": 20000
+              "x-length-unit": "UNICODE_CODE_POINTS"
+              "x-reject-unpaired-surrogates-and-nul": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "exposureDescription"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IS_EMPTY"
+                - "IS_NOT_EMPTY"
+          "required":
+            - "field"
+            - "operator"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "consequence"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "CONTAINS"
+            "value":
+              "type": "string"
+              "maxLength": 20000
+              "x-length-unit": "UNICODE_CODE_POINTS"
+              "x-reject-unpaired-surrogates-and-nul": true
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "consequence"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IS_EMPTY"
+                - "IS_NOT_EMPTY"
+          "required":
+            - "field"
+            - "operator"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "createdAt"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "GT"
+                - "GTE"
+                - "LT"
+                - "LTE"
+            "value":
+              "$ref": "#/components/schemas/TimestampInput"
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "createdAt"
+            "operator":
+              "type": "string"
+              "enum":
+                - "BETWEEN"
+            "value":
+              "type": "array"
+              "items":
+                "$ref": "#/components/schemas/TimestampInput"
+              "minItems": 2
+              "maxItems": 2
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "updatedAt"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+                - "GT"
+                - "GTE"
+                - "LT"
+                - "LTE"
+            "value":
+              "$ref": "#/components/schemas/TimestampInput"
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "updatedAt"
+            "operator":
+              "type": "string"
+              "enum":
+                - "BETWEEN"
+            "value":
+              "type": "array"
+              "items":
+                "$ref": "#/components/schemas/TimestampInput"
+              "minItems": 2
+              "maxItems": 2
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "assessmentStatus"
+            "operator":
+              "type": "string"
+              "enum":
+                - "EQ"
+            "value":
+              "const": "UNASSESSED"
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+        -
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "field":
+              "const": "assessmentStatus"
+            "operator":
+              "type": "string"
+              "enum":
+                - "IN"
+            "value":
+              "type": "array"
+              "items":
+                "const": "UNASSESSED"
+              "minItems": 1
+              "maxItems": 100
+          "required":
+            - "field"
+            - "operator"
+            - "value"
+    "FilterGroup":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "operator":
+          "const": "AND"
+        "conditions":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/FilterCondition"
+          "minItems": 0
+          "maxItems": 50
+      "required":
+        - "operator"
+        - "conditions"
+    "QueryRequest":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "filterAST":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/FilterGroup"
+            -
+              "type": "null"
+        "sort":
+          "oneOf":
+            -
+              "type": "array"
+              "items":
+                "$ref": "#/components/schemas/Sort"
+              "minItems": 0
+              "maxItems": 3
+              "x-unique-by": "field"
+            -
+              "type": "null"
+        "page":
+          "$ref": "#/components/schemas/PageRequest"
+        "size":
+          "type": "integer"
+          "enum":
+            - 20
+            - 50
+            - 100
+          "x-json-integer-token-only": true
+        "fields":
+          "oneOf":
+            -
+              "type": "array"
+              "items":
+                "type": "string"
+                "enum":
+                  - "id"
+                  - "organizationId"
+                  - "code"
+                  - "version"
+                  - "description"
+                  - "triggeringConditions"
+                  - "exposureDescription"
+                  - "consequence"
+                  - "createdAt"
+                  - "updatedAt"
+                  - "assessmentStatus"
+              "minItems": 0
+              "maxItems": 50
+              "uniqueItems": true
+            -
+              "type": "null"
+      "required":
+        - "page"
+        - "size"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "size":
+                "const": 50
+            "required":
+              - "size"
+          "then":
+            "properties":
+              "page":
+                "properties":
+                  "number":
+                    "maximum": 201
+        -
+          "if":
+            "properties":
+              "size":
+                "const": 100
+            "required":
+              - "size"
+          "then":
+            "properties":
+              "page":
+                "properties":
+                  "number":
+                    "maximum": 101
+      "x-offset-maximum": 10000
+      "x-implicit-sort-tail":
+        "field": "id"
+        "direction": "ASC"
+      "x-no-relationship-filter-sort-or-projection": true
+    "QueryPageInfo":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "size":
+          "type": "integer"
+          "enum":
+            - 20
+            - 50
+            - 100
+        "number":
+          "type":
+            - "integer"
+            - "null"
+          "minimum": 1
+        "hasMore":
+          "type": "boolean"
+        "nextCursor":
+          "type":
+            - "string"
+            - "null"
+          "minLength": 1
+          "maxLength": 2048
+        "total":
+          "type":
+            - "integer"
+            - "null"
+          "minimum": 0
+      "required":
+        - "size"
+        - "hasMore"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "hasMore":
+                "const": true
+            "required":
+              - "hasMore"
+          "then":
+            "required":
+              - "nextCursor"
+            "properties":
+              "nextCursor":
+                "type": "string"
+                "minLength": 1
+                "maxLength": 2048
+          "else":
+            "properties":
+              "nextCursor":
+                "type": "null"
+    "QueryPage":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/ListItem"
+          "minItems": 0
+          "maxItems": 100
+        "page":
+          "$ref": "#/components/schemas/QueryPageInfo"
+      "required":
+        - "items"
+        - "page"
+      "allOf":
+        -
+          "if":
+            "properties":
+              "page":
+                "properties":
+                  "hasMore":
+                    "const": true
+                "required":
+                  - "hasMore"
+            "required":
+              - "page"
+          "then":
+            "properties":
+              "items":
+                "minItems": 1
+    "EntitySchema":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "key":
+          "const": "risk_scenario"
+        "schemaVersion":
+          "const": "1"
+        "idField":
+          "const": "id"
+        "defaultFields":
+          "const":
+            - "id"
+        "fields":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "id":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "UUID"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "IN"
+                  "minItems": 2
+                  "maxItems": 2
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "organizationId":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "UUID"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": true
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "IN"
+                  "minItems": 2
+                  "maxItems": 2
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "code":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "TEXT"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": true
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "CONTAINS"
+                      - "IS_EMPTY"
+                      - "IS_NOT_EMPTY"
+                  "minItems": 4
+                  "maxItems": 4
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 64
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "version":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "NUMBER"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": true
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "GT"
+                      - "GTE"
+                      - "LT"
+                      - "LTE"
+                      - "BETWEEN"
+                  "minItems": 6
+                  "maxItems": 6
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "description":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "TEXT"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "CONTAINS"
+                      - "IS_EMPTY"
+                      - "IS_NOT_EMPTY"
+                  "minItems": 4
+                  "maxItems": 4
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 20000
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "triggeringConditions":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "TEXT"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "CONTAINS"
+                      - "IS_EMPTY"
+                      - "IS_NOT_EMPTY"
+                  "minItems": 4
+                  "maxItems": 4
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 20000
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "exposureDescription":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "TEXT"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "CONTAINS"
+                      - "IS_EMPTY"
+                      - "IS_NOT_EMPTY"
+                  "minItems": 4
+                  "maxItems": 4
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 20000
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "consequence":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "TEXT"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "CONTAINS"
+                      - "IS_EMPTY"
+                      - "IS_NOT_EMPTY"
+                  "minItems": 4
+                  "maxItems": 4
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 20000
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "createdAt":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "DATETIME"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": true
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "GT"
+                      - "GTE"
+                      - "LT"
+                      - "LTE"
+                      - "BETWEEN"
+                  "minItems": 6
+                  "maxItems": 6
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "updatedAt":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "DATETIME"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": true
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "GT"
+                      - "GTE"
+                      - "LT"
+                      - "LTE"
+                      - "BETWEEN"
+                  "minItems": 6
+                  "maxItems": 6
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const": []
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+            "assessmentStatus":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "type":
+                  "const": "ENUM"
+                "nullable":
+                  "const": false
+                "selectable":
+                  "const": true
+                "sortable":
+                  "const": false
+                "operators":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                    "enum":
+                      - "EQ"
+                      - "IN"
+                  "minItems": 2
+                  "maxItems": 2
+                  "uniqueItems": true
+                "maxLength":
+                  "const": 0
+                "enumValues":
+                  "const":
+                    - "UNASSESSED"
+              "required":
+                - "type"
+                - "nullable"
+                - "selectable"
+                - "sortable"
+                - "operators"
+                - "maxLength"
+                - "enumValues"
+          "required":
+            - "id"
+            - "organizationId"
+            - "code"
+            - "version"
+            - "description"
+            - "triggeringConditions"
+            - "exposureDescription"
+            - "consequence"
+            - "createdAt"
+            - "updatedAt"
+            - "assessmentStatus"
+      "required":
+        - "key"
+        - "schemaVersion"
+        - "idField"
+        - "defaultFields"
+        - "fields"
+    "DefinitionFields":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "organizationId":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "code":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "version":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "NUMBER"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "description":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "MULTILINE_TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "triggeringConditions":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "MULTILINE_TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "exposureDescription":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "MULTILINE_TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "consequence":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "MULTILINE_TEXT"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "createdAt":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "DATE_TIME"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "updatedAt":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "DATE_TIME"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const": {}
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+        "assessmentStatus":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "uiKind":
+              "const": "STATUS"
+            "history":
+              "const": "CURRENT"
+            "valueLabels":
+              "const":
+                "UNASSESSED": "待评估"
+          "required":
+            - "label"
+            - "uiKind"
+            - "history"
+            - "valueLabels"
+      "required":
+        - "id"
+        - "organizationId"
+        - "code"
+        - "version"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "createdAt"
+        - "updatedAt"
+        - "assessmentStatus"
+    "CommandInputs":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "code":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "TEXT"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 64
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "organizationId":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "UUID"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 0
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "description":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "TEXT"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 20000
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "triggeringConditions":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "TEXT"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 20000
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "exposureDescription":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "TEXT"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 20000
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "consequence":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "TEXT"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 20000
+            "minItems":
+              "const": null
+            "maxItems":
+              "const": null
+            "uniqueItems":
+              "const": false
+            "referenceKey":
+              "const": null
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+        "hazardIds":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "type":
+              "const": "UUID_ARRAY"
+            "label":
+              "type": "string"
+              "minLength": 1
+              "maxLength": 200
+            "required":
+              "const": true
+            "maxLength":
+              "const": 0
+            "minItems":
+              "const": 1
+            "maxItems":
+              "const": 100
+            "uniqueItems":
+              "const": true
+            "referenceKey":
+              "const": "eligible-hazards"
+          "required":
+            - "type"
+            - "label"
+            - "required"
+            - "maxLength"
+            - "minItems"
+            - "maxItems"
+            - "uniqueItems"
+            - "referenceKey"
+      "required":
+        - "code"
+        - "organizationId"
+        - "description"
+        - "triggeringConditions"
+        - "exposureDescription"
+        - "consequence"
+        - "hazardIds"
+    "CreateAction":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "label":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 200
+        "position":
+          "const": "CREATE"
+        "binding":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "method":
+              "const": "POST"
+            "permission":
+              "const": "risk_scenario.create"
+            "path":
+              "const": "/api/v1/risk-scenarios"
+          "required":
+            - "method"
+            - "permission"
+            - "path"
+        "expectedVersionRequired":
+          "const": false
+        "idempotencyKeyRequired":
+          "const": true
+        "inputFields":
+          "const":
+            - "code"
+            - "organizationId"
+            - "description"
+            - "triggeringConditions"
+            - "exposureDescription"
+            - "consequence"
+            - "hazardIds"
+      "required":
+        - "label"
+        - "position"
+        - "binding"
+        - "expectedVersionRequired"
+        - "idempotencyKeyRequired"
+        - "inputFields"
+    "HazardReference":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "entityKey":
+          "const": "hazard_source"
+        "method":
+          "const": "POST"
+        "path":
+          "const": "/api/v1/risk-scenarios/eligible-hazards"
+        "use":
+          "const": "CREATE"
+        "anchorInput":
+          "const": "organizationId"
+        "ownerPermission":
+          "const": "risk_scenario.create"
+        "targetReadPermission":
+          "const": "hazard_source.read"
+      "required":
+        - "entityKey"
+        - "method"
+        - "path"
+        - "use"
+        - "anchorInput"
+        - "ownerPermission"
+        - "targetReadPermission"
+    "ReadDefinition":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "appKey":
+          "const": "safety"
+        "entityKey":
+          "const": "risk_scenario"
+        "definitionVersion":
+          "const": "1"
+        "schemaVersion":
+          "const": "1"
+        "title":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 200
+        "querySchema":
+          "$ref": "#/components/schemas/EntitySchema"
+        "fields":
+          "$ref": "#/components/schemas/DefinitionFields"
+        "use":
+          "const": "READ"
+        "commandInputs":
+          "const": {}
+        "layout":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "list":
+              "type": "array"
+              "items":
+                "type": "string"
+                "enum":
+                  - "id"
+                  - "organizationId"
+                  - "code"
+                  - "version"
+                  - "description"
+                  - "triggeringConditions"
+                  - "exposureDescription"
+                  - "consequence"
+                  - "createdAt"
+                  - "updatedAt"
+                  - "assessmentStatus"
+              "minItems": 0
+              "maxItems": 11
+              "uniqueItems": true
+            "detail":
+              "type": "array"
+              "items":
+                "type": "string"
+                "enum":
+                  - "id"
+                  - "organizationId"
+                  - "code"
+                  - "version"
+                  - "description"
+                  - "triggeringConditions"
+                  - "exposureDescription"
+                  - "consequence"
+                  - "createdAt"
+                  - "updatedAt"
+                  - "assessmentStatus"
+              "minItems": 0
+              "maxItems": 11
+              "uniqueItems": true
+            "create":
+              "const": []
+            "query":
+              "type": "array"
+              "items":
+                "type": "string"
+                "enum":
+                  - "id"
+                  - "organizationId"
+                  - "code"
+                  - "version"
+                  - "description"
+                  - "triggeringConditions"
+                  - "exposureDescription"
+                  - "consequence"
+                  - "createdAt"
+                  - "updatedAt"
+                  - "assessmentStatus"
+              "minItems": 0
+              "maxItems": 11
+              "uniqueItems": true
+          "required":
+            - "list"
+            - "detail"
+            - "create"
+            - "query"
+        "actions":
+          "const": {}
+        "references":
+          "const": {}
+      "required":
+        - "appKey"
+        - "entityKey"
+        - "definitionVersion"
+        - "schemaVersion"
+        - "title"
+        - "querySchema"
+        - "fields"
+        - "use"
+        - "commandInputs"
+        - "layout"
+        - "actions"
+        - "references"
+    "CreateDefinition":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "appKey":
+          "const": "safety"
+        "entityKey":
+          "const": "risk_scenario"
+        "definitionVersion":
+          "const": "1"
+        "schemaVersion":
+          "const": "1"
+        "title":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 200
+        "querySchema":
+          "$ref": "#/components/schemas/EntitySchema"
+        "fields":
+          "$ref": "#/components/schemas/DefinitionFields"
+        "use":
+          "const": "CREATE"
+        "commandInputs":
+          "$ref": "#/components/schemas/CommandInputs"
+        "layout":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "list":
+              "const": []
+            "detail":
+              "const": []
+            "create":
+              "const":
+                - "code"
+                - "organizationId"
+                - "description"
+                - "triggeringConditions"
+                - "exposureDescription"
+                - "consequence"
+                - "hazardIds"
+            "query":
+              "const": []
+          "required":
+            - "list"
+            - "detail"
+            - "create"
+            - "query"
+        "actions":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "create":
+              "$ref": "#/components/schemas/CreateAction"
+          "required":
+            - "create"
+        "references":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "eligible-hazards":
+              "$ref": "#/components/schemas/HazardReference"
+          "required":
+            - "eligible-hazards"
+      "required":
+        - "appKey"
+        - "entityKey"
+        - "definitionVersion"
+        - "schemaVersion"
+        - "title"
+        - "querySchema"
+        - "fields"
+        - "use"
+        - "commandInputs"
+        - "layout"
+        - "actions"
+        - "references"
+    "Definition":
+      "oneOf":
+        -
+          "$ref": "#/components/schemas/ReadDefinition"
+        -
+          "$ref": "#/components/schemas/CreateDefinition"
+      "discriminator":
+        "propertyName": "use"
+        "mapping":
+          "READ": "#/components/schemas/ReadDefinition"
+          "CREATE": "#/components/schemas/CreateDefinition"
+    "Metadata":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "requestId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "traceId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "schemaVersion":
+          "const": "1"
+      "required":
+        - "requestId"
+        - "traceId"
+        - "schemaVersion"
+    "Error":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "code":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 64
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        "message":
+          "type": "string"
+          "maxLength": 256
+        "traceId":
+          "$ref": "#/components/schemas/CanonicalUuid"
+        "retryable":
+          "type": "boolean"
+        "fieldErrors":
+          "type": "array"
+          "items":
+            "type": "object"
+            "additionalProperties": false
+            "properties":
+              "field":
+                "type": "string"
+                "maxLength": 64
+              "reason":
+                "type": "string"
+                "maxLength": 64
+            "required":
+              - "field"
+              - "reason"
+          "minItems": 0
+          "maxItems": 50
+        "currentVersion":
+          "oneOf":
+            -
+              "$ref": "#/components/schemas/Version"
+            -
+              "type": "null"
+      "required":
+        - "code"
+        - "message"
+        - "traceId"
+        - "retryable"
+        - "fieldErrors"
+    "CommandResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/CommandResult"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "DetailResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/Detail"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "QueryResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/QueryPage"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "HistoryResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/HistoryPage"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "SelectorResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/SelectorPage"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "SchemaResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/EntitySchema"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "DefinitionResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "$ref": "#/components/schemas/Definition"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"
+    "HistoricalSnapshotResponse":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "data":
+          "type": "object"
+          "additionalProperties": false
+          "properties":
+            "hazardSnapshot":
+              "$ref": "#/components/schemas/HistoricalHazardSnapshot"
+          "required":
+            - "hazardSnapshot"
+        "meta":
+          "$ref": "#/components/schemas/Metadata"
+      "required":
+        - "data"
+        - "meta"

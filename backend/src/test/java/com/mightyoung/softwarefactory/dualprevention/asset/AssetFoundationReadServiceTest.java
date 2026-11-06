@@ -45,6 +45,18 @@ class AssetFoundationReadServiceTest {
         verify(f.authority).withRead(eq(f.request),any());verify(f.source).getConnection();
         verify(f.applications,never()).findCurrent(any(),any());
     }
+    @Test void snapshotUsesTheCanonicalSafetyApplicationEnabledByAuthorization()throws Exception {
+        var f=new Fixture();
+        when(f.applications.findCurrentInCaller(f.context.tenantId(),"safety"))
+                .thenReturn(Optional.of(new TenantApplicationState(true,11)));
+        long version=assertDoesNotThrow(()->f.service.inReadSnapshot(f.request,snapshot->{
+            var scope=snapshot.authorize(RegisteredEntityAction.WORKSHOP_READ);
+            return snapshot.applicationVersion(scope);
+        }),"The same enabled safety application used by authorization must permit the read snapshot");
+        assertEquals(11,version);
+        verify(f.applications).findCurrentInCaller(f.context.tenantId(),"safety");
+        verify(f.applications,never()).findCurrentInCaller(any(),eq("dual-prevention"));
+    }
     @Test void rejectsAmbientTransactionBeforeRequestOrSql()throws Exception {
         var f=new Fixture();TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertEquals(503,assertThrows(AssetFoundationFailure.class,()->f.service.workshop(f.request,UUID.randomUUID())).status()); }
