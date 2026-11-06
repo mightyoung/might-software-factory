@@ -21,7 +21,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.boot.session.autoconfigure.DefaultCookieSerializerCustomizer;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import tools.jackson.databind.ObjectMapper;
@@ -43,7 +43,7 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            CookieCsrfTokenRepository csrfTokenRepository,
+            CsrfTokenRepository csrfTokenRepository,
             SecurityContextRepository securityContextRepository,
             LocalPasswordAuthenticationFilter loginFilter,
             SessionLifetimePolicy sessionLifetime,
@@ -187,7 +187,7 @@ public class SecurityConfiguration {
             @Qualifier("localPasswordAuthenticationProvider") AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
-            CookieCsrfTokenRepository csrfTokenRepository,
+            CsrfTokenRepository csrfTokenRepository,
             SessionLifetimePolicy sessionLifetime,
             LoginAttemptLimiter attempts) {
         return new LocalPasswordAuthenticationFilter(provider, converter, securityContextRepository,
@@ -203,11 +203,8 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    CookieCsrfTokenRepository csrfTokenRepository() {
-        CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
-        repository.setCookiePath("/");
-        repository.setCookieCustomizer(cookie -> cookie.secure(true).sameSite("Lax"));
-        return repository;
+    CsrfTokenRepository csrfTokenRepository() {
+        return new ExplicitHeaderCsrfTokenRepository();
     }
 
     /** Suppresses Spring Boot's generated in-memory development user. */

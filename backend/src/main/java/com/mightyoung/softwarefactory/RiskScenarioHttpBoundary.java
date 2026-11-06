@@ -85,13 +85,8 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
             lifetime.response = new CapturedResponse(lifetime, response);
             lifetime.request = new SynchronousRequest(lifetime, request);
             chain.doFilter(lifetime.request, lifetime.response);
-            System.err.println("RISK_HEADER_DIAGNOSTIC captured=" + lifetime.response.getHeaderNames()
-                    + "; native=" + response.getHeaderNames()
-                    + "; csrf=" + (request.getAttribute("org.springframework.security.web.csrf.CsrfToken") != null)
-                    + "; deferredCsrf=" + (request.getAttribute("org.springframework.security.web.csrf.DeferredCsrfToken") != null));
             lifetime.check();
             lifetime.response.release();
-            System.err.println("RISK_HEADER_DIAGNOSTIC released=" + response.getHeaderNames());
         } catch (IOException | ServletException failure) {
             lifetime.invalid = true;
             throw failure;
