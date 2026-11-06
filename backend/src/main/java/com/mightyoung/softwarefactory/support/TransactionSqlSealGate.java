@@ -52,16 +52,38 @@ public final class TransactionSqlSealGate {
             g014_stage_equipment_stage_label_revision_fk,
             g014_stage_equipment_equipment_label_revision_fk immediate
         """;
+    private static final String RISK_DEFERRED_CONSTRAINTS_SQL="""
+        set constraints g014r_scenario_last_command_fk,
+            g014r_scenario_current_revision_fk,
+            g014r_revision_receipt_fk,
+            g014r_receipt_result_fk,
+            g014r_link_last_command_fk,
+            g014r_link_current_revision_fk,
+            g014r_link_revision_receipt_fk,
+            g014r_link_revision_scenario_fk,
+            g014r_link_hazard_bind_fk,
+            g014r_snapshot_scenario_fk,
+            g014r_snapshot_link_fk,
+            g014r_snapshot_hazard_bind_fk,
+            g014r_snapshot_hazard_observed_fk,
+            g014r_scenario_history_complete,
+            g014r_link_history_complete,
+            g014r_receipt_complete immediate
+        """;
     /** Constructed once by reviewed source configuration, never registered from a request. */
     public record SqlTemplate(String sql,int parameterCount,boolean finalRead,String effect,
-            CommandAcknowledgment commandAcknowledgment) {
+            CommandAcknowledgment commandAcknowledgment,G014SqlProfile profile) {
         public SqlTemplate(String sql,int parameterCount,boolean finalRead,String effect){
-            this(sql,parameterCount,finalRead,effect,null);
+            this(sql,parameterCount,finalRead,effect,null,G014SqlProfile.ASSET_FOUNDATION);
+        }
+        public SqlTemplate(String sql,int parameterCount,boolean finalRead,String effect,CommandAcknowledgment acknowledgment){
+            this(sql,parameterCount,finalRead,effect,acknowledgment,G014SqlProfile.ASSET_FOUNDATION);
         }
         public SqlTemplate {
+            Objects.requireNonNull(profile);
             Objects.requireNonNull(sql);
             if(sql.isBlank() || parameterCount<0 || (finalRead&&effect!=null))throw new IllegalArgumentException("Invalid finite SQL template");
-            if(commandAcknowledgment!=null && (!sql.equals(DEFERRED_CONSTRAINTS_SQL)
+            if(commandAcknowledgment!=null && (!sql.equals(constraintSql(profile))
                     || parameterCount!=0 || finalRead || effect!=null))
                 throw new IllegalArgumentException("Only the fixed named constraint flush can be acknowledged");
             if(commandAcknowledgment==null && sql.stripLeading().toLowerCase(Locale.ROOT).matches("(?s)set\\s+constraints\\b.*"))
@@ -69,8 +91,18 @@ public final class TransactionSqlSealGate {
         }
         /** Exact V21 40-name catalog; no ALL, reset, DEFERRED or caller-provided SQL. */
         public static SqlTemplate deferredConstraintsImmediate(){
-            return new SqlTemplate(DEFERRED_CONSTRAINTS_SQL,0,false,null,CommandAcknowledgment.DEFERRED_CONSTRAINTS_IMMEDIATE);
+            return deferredConstraintsImmediate(G014SqlProfile.ASSET_FOUNDATION);
         }
+        /** One fixed sixteen-name risk catalog, never caller-supplied constraint text. */
+        public static SqlTemplate deferredConstraintsImmediate(G014SqlProfile profile){
+            return new SqlTemplate(constraintSql(Objects.requireNonNull(profile)),0,false,null,CommandAcknowledgment.DEFERRED_CONSTRAINTS_IMMEDIATE,profile);
+        }
+    }
+    private static String constraintSql(G014SqlProfile profile){
+        return switch(profile){
+            case ASSET_FOUNDATION -> DEFERRED_CONSTRAINTS_SQL;
+            case RISK_SCENARIO -> RISK_DEFERRED_CONSTRAINTS_SQL;
+        };
     }
     /** Actual successful JDBC observation; construction is private to this package's execution guard. */
     public static final class SqlExecution {
@@ -110,25 +142,46 @@ public final class TransactionSqlSealGate {
         /** Called only inside the last real authority callback; use scopes.observedAt() for every time predicate. */
         void requireFinal(CommandPlan plan,EntityActionAuthorization.FinalActionScopes scopes);
     }
+    /** Risk validators must explicitly claim the same construction-time profile identity. */
+    public interface ProfiledCommandValidator extends RegisteredCommandValidator {
+        G014SqlProfile profile();
+    }
+    private final G014SqlProfile profile;
     private final G014JdbcTransactionManager manager;
     private final HumanSessionAuthorityTransaction authority;
     private final EntityActionAuthorization actions;
     private final Map<RegisteredEntityAction,RegisteredCommandValidator> validators;
     public TransactionSqlSealGate(G014JdbcTransactionManager manager,HumanSessionAuthorityTransaction authority,
             EntityActionAuthorization actions,Map<RegisteredEntityAction,RegisteredCommandValidator> validators){
+        this(G014SqlProfile.ASSET_FOUNDATION,manager,authority,actions,validators);
+    }
+    public TransactionSqlSealGate(G014SqlProfile profile,G014JdbcTransactionManager manager,HumanSessionAuthorityTransaction authority,
+            EntityActionAuthorization actions,Map<RegisteredEntityAction,RegisteredCommandValidator> validators){
+        this.profile=Objects.requireNonNull(profile);
         this.manager=Objects.requireNonNull(manager);this.authority=Objects.requireNonNull(authority);this.actions=Objects.requireNonNull(actions);
+        if(manager.profile()!=profile)throw new IllegalArgumentException("Mixed G014 gate/manager profiles");
         this.validators=Map.copyOf(validators);
-        if(this.validators.isEmpty() || this.validators.keySet().stream().anyMatch(RegisteredEntityAction::isRead))
+        if(this.validators.isEmpty() || this.validators.keySet().stream().anyMatch(action->!profile.permits(action))
+                || this.validators.values().stream().anyMatch(validator->validatorProfile(validator)!=profile))
             throw new IllegalArgumentException("Only fixed command validators may be registered");
         manager.registerGate(this);
+    }
+    G014SqlProfile profile(){return profile;}
+    private static G014SqlProfile validatorProfile(RegisteredCommandValidator validator){
+        return validator instanceof ProfiledCommandValidator profiled?Objects.requireNonNull(profiled.profile()):G014SqlProfile.ASSET_FOUNDATION;
+    }
+    private void requireProfile(G014JdbcTransactionManager.Frame frame){
+        if(frame.profile!=profile || frame.manager!=manager || frame.jdbc.profile()!=profile || manager.profile()!=profile
+                || (frame.validator!=null && validatorProfile(frame.validator)!=profile))throw frame.jdbc.reject();
     }
     /** Bind once before any business effect; cannot transfer this plan to another holder/transaction. */
     public void bindCommand(CommandPlan plan,HumanSessionAuthorityTransaction.WriteScope scope){
         Objects.requireNonNull(plan);Objects.requireNonNull(scope);
         var frame=manager.currentFrame();
         try {
+            requireProfile(frame);
             var validator=validators.get(plan.action());
-            if(validator==null || frame.plan!=null || !frame.jdbc.executions().isEmpty()
+            if(validator==null || validatorProfile(validator)!=profile || frame.plan!=null || !frame.jdbc.executions().isEmpty()
                     || scope.guard()!=HumanSessionAuthorityTransaction.Guard.FINDING_COMMAND)throw frame.jdbc.reject();
             Objects.requireNonNull(plan.commandId());Objects.requireNonNull(plan.targetId());
             validator.requireOwnedPlan(plan);
@@ -140,6 +193,7 @@ public final class TransactionSqlSealGate {
     public void finalizeCommand(){
         var frame=manager.currentFrame();
         try {
+            requireProfile(frame);
             if(frame.plan==null || frame.validator!=validators.get(frame.action))throw frame.jdbc.reject();
             requirePlan(frame);
             // The staging authority callback has returned normally, including its SQL postvalidation.
@@ -172,6 +226,7 @@ public final class TransactionSqlSealGate {
     }
     /** Memory-only check; never invokes a plan, validator, authority callback or driver getter. */
     void requireSeal(G014JdbcTransactionManager.Frame frame){
+        requireProfile(frame);
         if(!(frame.finalSeal instanceof FinalSeal seal) || seal.owner!=this || seal.frame!=frame
                 || seal.plan!=frame.plan || seal.scope!=frame.scope)throw frame.jdbc.reject();
     }

@@ -14,6 +14,7 @@ import org.springframework.transaction.support.*;
 
 /** Explicit G014 graph only: never replace the application's existing transaction manager. */
 public final class G014JdbcTransactionManager extends JdbcTransactionManager {
+    private final G014SqlProfile profile;
     private final LeaseSource source;
     private final ThreadLocal<Frame> active=new ThreadLocal<>();
     // Deliberately retain ambiguous leases. No pool-specific eviction has been proven by this implementation.
@@ -21,17 +22,23 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
     private final Map<Object,Frame> transactions=Collections.synchronizedMap(new IdentityHashMap<>());
     private TransactionSqlSealGate registeredGate;
     public G014JdbcTransactionManager(DataSource existingPool,Collection<TransactionSqlSealGate.SqlTemplate> templates){
+        this(G014SqlProfile.ASSET_FOUNDATION,existingPool,templates);
+    }
+    public G014JdbcTransactionManager(G014SqlProfile profile,DataSource existingPool,Collection<TransactionSqlSealGate.SqlTemplate> templates){
+        this.profile=Objects.requireNonNull(profile);
         source=new LeaseSource(Objects.requireNonNull(existingPool),List.copyOf(templates));
         super.setDataSource(source);setNestedTransactionAllowed(false);setValidateExistingTransaction(true);
         setRollbackOnCommitFailure(false);
     }
+    G014SqlProfile profile(){return profile;}
     /** Every G014 collaborator (including guard, G008 and jOOQ) must receive this exact source. */
     public DataSource commandDataSource(){return source;}
     @Override public void setDataSource(DataSource ignored){throw new IllegalStateException("The G014 datasource is fixed at construction");}
     public int retainedUnusableLeaseCount(){return retained.size();}
     synchronized void registerGate(TransactionSqlSealGate gate){
         if(registeredGate!=null || active.get()!=null)throw new IllegalStateException("G014 gate is already fixed");
-        registeredGate=Objects.requireNonNull(gate);
+        if(Objects.requireNonNull(gate).profile()!=profile)throw new IllegalArgumentException("Mixed G014 gate/manager profiles");
+        registeredGate=gate;
     }
     @Override protected Object doGetTransaction(){
         Frame existing=active.get();if(existing!=null)throw existing.jdbc.reject();
@@ -43,7 +50,8 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
     }
     Frame currentFrame(){
         Frame frame=active.get();
-        if(frame==null || frame.manager!=this || frame.thread!=Thread.currentThread())throw new IllegalStateException("G014 transaction is unavailable");
+        if(frame==null)throw new IllegalStateException("G014 transaction is unavailable");
+        if(frame.manager!=this || frame.thread!=Thread.currentThread() || frame.profile!=profile || frame.jdbc.profile()!=profile)throw frame.jdbc.reject();
         frame.jdbc.executions();return frame;
     }
     @Override protected void doBegin(Object transaction,TransactionDefinition definition){
@@ -51,6 +59,8 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
                 || TransactionSynchronizationManager.isSynchronizationActive()
                 || definition.isReadOnly() || definition.getIsolationLevel()!=TransactionDefinition.ISOLATION_READ_COMMITTED)
             throw new IllegalTransactionStateException("G014 requires a new READ COMMITTED command transaction");
+        if(profile==G014SqlProfile.RISK_SCENARIO && registeredGate==null)
+            throw new IllegalTransactionStateException("Risk scenario requires its fixed gate before borrowing");
         source.acquiring.set(true);
         try {
             super.doBegin(transaction,definition);
@@ -147,6 +157,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
     }
     static final class Frame {
         final G014JdbcTransactionManager manager;
+        final G014SqlProfile profile;
         final Thread thread=Thread.currentThread();
         final G014JdbcGuard jdbc;
         ConnectionHolder holder;
@@ -157,7 +168,8 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         UUID commandId,targetId;
         RegisteredEntityAction action;
         Object finalSeal;
-        Frame(G014JdbcTransactionManager manager,G014JdbcGuard jdbc){this.manager=manager;this.jdbc=jdbc;}
+        Frame(G014JdbcTransactionManager manager,G014JdbcGuard jdbc){this.manager=manager;this.profile=manager.profile;this.jdbc=jdbc;
+            if(jdbc.profile()!=profile)throw jdbc.reject();}
     }
     private final class LeaseSource extends AbstractDataSource {
         private final DataSource pool;
@@ -165,6 +177,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         private final ThreadLocal<Boolean> acquiring=new ThreadLocal<>();
         LeaseSource(DataSource pool,List<TransactionSqlSealGate.SqlTemplate> templates){
             this.pool=pool;this.templates=templates;
+            profile.requireCatalog(templates);
             if(templates.stream().map(TransactionSqlSealGate.SqlTemplate::sql).distinct().count()!=templates.size())
                 throw new IllegalArgumentException("Duplicate SQL template");
         }
@@ -173,7 +186,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
                 Frame frame=active.get();if(frame!=null)throw frame.jdbc.reject();
                 throw new SQLException("Only the G014 manager may acquire a command lease");
             }
-            var guard=new G014JdbcGuard(pool.getConnection(),templates);
+            var guard=new G014JdbcGuard(profile,pool.getConnection(),templates);
             active.set(new Frame(G014JdbcTransactionManager.this,guard));return guard.connection;
         }
         @Override public Connection getConnection(String username,String password)throws SQLException {throw new SQLException("Alternate credentials are unsupported");}

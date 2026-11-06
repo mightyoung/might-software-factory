@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** One physical lease; deliberately implements no raw-target or vendor interface. */
 final class G014JdbcGuard implements InvocationHandler {
     enum Phase { SETUP, STAGING, FINAL_VALIDATING, SEALED, COMMIT_SENT, COMMITTED, ROLLBACK_PENDING, ROLLED_BACK, UNKNOWN }
+    private final G014SqlProfile profile;
     private final Connection delegate;
     private final Thread owner=Thread.currentThread();
     private final AtomicBoolean poisoned=new AtomicBoolean();
@@ -30,6 +31,11 @@ final class G014JdbcGuard implements InvocationHandler {
     private long validationGeneration,autoGeneration=-1,readGeneration=-1,isolationGeneration=-1;
 
     G014JdbcGuard(Connection delegate,Collection<TransactionSqlSealGate.SqlTemplate> templates) {
+        this(G014SqlProfile.ASSET_FOUNDATION,delegate,templates);
+    }
+    G014JdbcGuard(G014SqlProfile profile,Connection delegate,Collection<TransactionSqlSealGate.SqlTemplate> templates) {
+        this.profile=Objects.requireNonNull(profile);
+        profile.requireCatalog(templates);
         this.delegate=Objects.requireNonNull(delegate);
         var selected=new HashMap<String,TransactionSqlSealGate.SqlTemplate>();
         for(var template:templates) if(selected.put(template.sql(),template)!=null) throw new IllegalArgumentException("Duplicate SQL template");
@@ -40,6 +46,7 @@ final class G014JdbcGuard implements InvocationHandler {
         if(phase!=Phase.SETUP || this.holder!=null || holder.getConnection()!=connection) throw reject();
         this.source=source;this.holder=holder;phase=Phase.STAGING;
     }
+    G014SqlProfile profile(){return profile;}
     Phase phase(){return phase;}
     boolean poisoned(){return poisoned.get();}
     List<TransactionSqlSealGate.SqlExecution> executions(){requireBound();return List.copyOf(executions);}
@@ -47,10 +54,10 @@ final class G014JdbcGuard implements InvocationHandler {
     void flushDeferredConstraintsIfRegistered() {
         requireBound();
         if(phase!=Phase.STAGING || !children.isEmpty())throw reject();
-        var fixed=TransactionSqlSealGate.SqlTemplate.deferredConstraintsImmediate();
+        var fixed=TransactionSqlSealGate.SqlTemplate.deferredConstraintsImmediate(profile);
         var registered=templates.get(fixed.sql());
         // Old construction-time catalogs without deferred constraints retain their existing contract.
-        if(registered==null)return;
+        if(registered==null){if(profile==G014SqlProfile.RISK_SCENARIO)throw reject();return;}
         if(!fixed.equals(registered))throw reject();
         if(constraintsAcknowledged)return;
         // Use only this lease's guarded control path; never reopen an expired business boundary.
