@@ -63,10 +63,10 @@ public class SecurityConfiguration {
                         .anyRequest().authenticated())
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) -> IdentityHttpResponses.writeError(
-                                response, HttpServletResponse.SC_UNAUTHORIZED, "AUTH_REQUIRED",
+                                request, response, HttpServletResponse.SC_UNAUTHORIZED, "AUTH_REQUIRED",
                                 "A verified session is required", false))
                         .accessDeniedHandler((request, response, exception) -> IdentityHttpResponses.writeError(
-                                response, HttpServletResponse.SC_FORBIDDEN, "ACTION_DENIED",
+                                request, response, HttpServletResponse.SC_FORBIDDEN, "ACTION_DENIED",
                                 "The request is not allowed", false)))
                 .requestCache(cache -> cache.disable())
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))

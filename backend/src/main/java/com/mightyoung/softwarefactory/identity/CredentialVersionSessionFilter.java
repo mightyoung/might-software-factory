@@ -26,20 +26,20 @@ final class CredentialVersionSessionFilter extends OncePerRequestFilter {
         catch(RuntimeException unavailable) {
             if(!capability)throw unavailable;
             SecurityContextHolder.clearContext();
-            IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+            IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
         }
         if(authentication!=null&&authentication.isAuthenticated()&&authentication.getPrincipal() instanceof VerifiedSessionPrincipal principal) {
             AccountSecurityState state;
             try { state=accounts.findState(principal.accountId()).orElse(null); }
             catch(RuntimeException unavailable) {
-                IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
             }
             if(state==null||!"ACTIVE".equals(state.status())||state.credentialVersion()!=principal.credentialVersion()) {
                 SecurityContextHolder.clearContext();
                 try { var session=request.getSession(false);if(session!=null)session.invalidate(); }
                 catch(RuntimeException unavailable) {
                     if(capability) {
-                        IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                        IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
                     }
                     /* A stale generation must fail even if cleanup is unavailable. */
                 }
@@ -50,7 +50,7 @@ final class CredentialVersionSessionFilter extends OncePerRequestFilter {
                     chain.doFilter(request,response);return;
                 }
                 IdentityHttpResponses.clearSessionCookies(response);
-                IdentityHttpResponses.writeError(response,401,"AUTH_REQUIRED","A current verified session is required",false);return;
+                IdentityHttpResponses.writeError(request,response,401,"AUTH_REQUIRED","A current verified session is required",false);return;
             }
         }
         chain.doFilter(request,response);

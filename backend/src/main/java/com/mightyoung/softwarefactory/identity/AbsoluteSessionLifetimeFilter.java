@@ -30,7 +30,7 @@ final class AbsoluteSessionLifetimeFilter extends OncePerRequestFilter {
         catch(RuntimeException unavailable) {
             if(!capability)throw unavailable;
             SecurityContextHolder.clearContext();
-            IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+            IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
         }
         if (authentication != null && authentication.isAuthenticated()
                 && authentication.getPrincipal() instanceof VerifiedSessionPrincipal) {
@@ -40,7 +40,7 @@ final class AbsoluteSessionLifetimeFilter extends OncePerRequestFilter {
             catch(RuntimeException unavailable) {
                 if(!capability)throw unavailable;
                 SecurityContextHolder.clearContext();
-                IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
             }
             if (expired) {
                 try {
@@ -48,7 +48,7 @@ final class AbsoluteSessionLifetimeFilter extends OncePerRequestFilter {
                 } catch (RuntimeException unavailable) {
                     if(capability) {
                         SecurityContextHolder.clearContext();
-                        IdentityHttpResponses.writeError(response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                        IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
                     }
                     if(!(unavailable instanceof IllegalStateException))throw unavailable;
                     // Concurrent invalidation still requires this request to lose its authentication.
