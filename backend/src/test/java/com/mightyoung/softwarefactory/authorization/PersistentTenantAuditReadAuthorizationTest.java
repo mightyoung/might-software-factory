@@ -115,9 +115,9 @@ class PersistentTenantAuditReadAuthorizationTest {
 
     @ParameterizedTest @ValueSource(strings={"ISSUER","SOURCE","CONNECTION"})
     void wrongOwnershipPermanentlyPoisonsTheOriginalScopeDespiteRollbackReset(String fault) throws Exception {
-        var f=new Fixture();
+        var f=new Fixture();var reached=new AtomicBoolean();
         assertUnavailable(()->f.read(boundary->{
-            var scope=f.authorization.requireRead(f.request,boundary);
+            var scope=f.authorization.requireRead(f.request,boundary);reached.set(true);
             assertUnavailable(()->{
                 if(fault.equals("ISSUER"))f.newAuthorization().requireCurrent(scope);
                 else f.authorization.requireSqlConnection(scope,fault.equals("SOURCE")?mock(DataSource.class):f.source,
@@ -126,28 +126,29 @@ class PersistentTenantAuditReadAuthorizationTest {
             f.holder().resetRollbackOnly();assertUnavailable(()->f.authorization.requireCurrent(scope));
             f.holder().resetRollbackOnly();return null;
         }));
-        verify(f.connection).rollback();verify(f.connection,never()).commit();
+        assertThat(reached.get()).isTrue();verify(f.connection).rollback();verify(f.connection,never()).commit();
     }
 
     @Test void crossThreadMisuseInvalidatesTheOriginalThreadAndCannotBeResetForCommit() throws Exception {
-        var f=new Fixture();var failure=new AtomicReference<Throwable>();
+        var f=new Fixture();var failure=new AtomicReference<Throwable>();var reached=new AtomicBoolean();
         assertUnavailable(()->f.read(boundary->{
-            var scope=f.authorization.requireRead(f.request,boundary);
+            var scope=f.authorization.requireRead(f.request,boundary);reached.set(true);
             var thread=new Thread(()->{try{scope.observedAt();}catch(Throwable rejected){failure.set(rejected);}});thread.start();
             try{thread.join();}catch(InterruptedException interrupted){throw new IllegalStateException(interrupted);}
             assertThat(failure.get()).isInstanceOf(SessionSensitiveException.class);f.holder().resetRollbackOnly();
             assertUnavailable(scope::tenantId);f.holder().resetRollbackOnly();return null;
         }));
-        verify(f.connection).rollback();verify(f.connection,never()).commit();
+        assertThat(reached.get()).isTrue();verify(f.connection).rollback();verify(f.connection,never()).commit();
     }
 
     @Test void aChangedPhysicalConnectionCannotBeRestoredToReviveTheScope() {
-        var f=new Fixture();
+        var f=new Fixture();var reached=new AtomicBoolean();
         assertUnavailable(()->f.read(boundary->{
-            var scope=f.authorization.requireRead(f.request,boundary);f.physical.set(mock(Connection.class));
+            var scope=f.authorization.requireRead(f.request,boundary);reached.set(true);f.physical.set(mock(Connection.class));
             assertUnavailable(()->f.authorization.requireCurrent(scope));f.physical.set(f.connection);f.holder().resetRollbackOnly();
             assertUnavailable(()->f.authorization.requireCurrent(scope));f.holder().resetRollbackOnly();return null;
         }));
+        assertThat(reached.get()).isTrue();
     }
 
     @Test void aRealCapturedRequestFailureRetainsItsExistingRejectedClassification() {
@@ -181,14 +182,15 @@ class PersistentTenantAuditReadAuthorizationTest {
     }
 
     @Test void replacingTheHolderPoisonsOnlyTheOriginalScopeAndCannotBeRestoredForCommit() {
-        var f=new Fixture();
+        var f=new Fixture();var reached=new AtomicBoolean();
         assertUnavailable(()->f.read(boundary->{
-            var scope=f.authorization.requireRead(f.request,boundary);var original=f.holder();var replacement=new ConnectionHolder(f.connection);
+            var scope=f.authorization.requireRead(f.request,boundary);reached.set(true);var original=f.holder();var replacement=new ConnectionHolder(f.connection);
             TransactionSynchronizationManager.unbindResource(f.source);TransactionSynchronizationManager.bindResource(f.source,replacement);
             try { assertUnavailable(()->f.authorization.requireCurrent(scope));assertThat(original.isRollbackOnly()).isTrue();assertThat(replacement.isRollbackOnly()).isFalse(); }
             finally { TransactionSynchronizationManager.unbindResource(f.source);TransactionSynchronizationManager.bindResource(f.source,original); }
             original.resetRollbackOnly();assertUnavailable(scope::tenantId);original.resetRollbackOnly();return null;
         }));
+        assertThat(reached.get()).isTrue();
     }
 
     @Test void aForgedBoundaryIsRejectedBeforeCheckedHumanAndCapabilitySql() {
@@ -280,9 +282,14 @@ class PersistentTenantAuditReadAuthorizationTest {
                 values.put("activation_event_id",enforcing?new UUID(1,1):null);values.put("activation_evidence_sha256",enforcing?"a".repeat(64):null);
                 return row(values,control.equals("MISSING_CONTROL")?0:1);
             }
-            if(sql.contains("from public.spring_session stored"))return row(Map.of("primary_id",new UUID(9,9).toString(),"session_key_id","test-key",
-                    "session_digest",storedDigest,"authenticated_at",authenticatedAt.atOffset(ZoneOffset.UTC),
-                    "absolute_expires_at",authenticatedAt.plus(Duration.ofHours(12)).atOffset(ZoneOffset.UTC)),1);
+            if(sql.contains("from public.spring_session stored")){
+                var values=new LinkedHashMap<String,Object>();
+                values.put("primary_id",new UUID(9,9).toString());values.put("session_key_id","test-key");values.put("session_digest",storedDigest);
+                values.put("authenticated_at",authenticatedAt.atOffset(ZoneOffset.UTC));
+                values.put("absolute_expires_at",authenticatedAt.plus(Duration.ofHours(12)).atOffset(ZoneOffset.UTC));
+                assertThat(values.keySet()).containsExactly("primary_id","session_key_id","session_digest","authenticated_at","absolute_expires_at");
+                return row(values,1);
+            }
             if(sql.equals(PersistentTenantAuditReadAuthorization.CAPABILITY_SQL.stripLeading())){
                 capabilityBindings.add(execution.bindings().clone());if(resultFault.equals("SQL_FAILURE"))throw new SQLException("synthetic grant failure");
                 var values=new LinkedHashMap<String,Object>();values.put("authorized",resultFault.equals("NULL")?null:resultFault.equals("STRING")?"true":grant);
