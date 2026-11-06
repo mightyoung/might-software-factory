@@ -39,11 +39,11 @@ class RiskScenarioMetadataServiceTest {
     }
     @Test void deniedReadCannotPublishSchemaOrDefinitionEvenAfterEarlierMatchingValidator()throws Exception {
         var f=new Fixture();String prior=f.service.definition(f.request,Use.READ,REQUEST,TRACE).etag();assertTrue(prior.startsWith("W/\""));clearInvocations(f.applications,f.provider);
-        when(f.actions.requireRead(f.request,f.boundary,RISK_SCENARIO_READ)).thenThrow(new AccessDeniedException("revoked"));
+        doAnswer(call->{assertReadOwner(f);throw new AccessDeniedException("revoked");}).when(f.actions).requireRead(f.request,f.boundary,RISK_SCENARIO_READ);
         assertThrows(AccessDeniedException.class,()->f.service.schema(f.request,REQUEST,TRACE));assertThrows(AccessDeniedException.class,()->f.service.definition(f.request,Use.READ,REQUEST,TRACE));verifyNoInteractions(f.applications,f.provider);
     }
     @Test void deniedCreateNeverFallsBackToReadDefinitionOrProvider()throws Exception {
-        var f=new Fixture();when(f.actions.requireRead(f.request,f.boundary,RISK_SCENARIO_CREATE)).thenThrow(new AccessDeniedException("create denied"));
+        var f=new Fixture();doAnswer(call->{assertReadOwner(f);throw new AccessDeniedException("create denied");}).when(f.actions).requireRead(f.request,f.boundary,RISK_SCENARIO_CREATE);
         assertThrows(AccessDeniedException.class,()->f.service.definition(f.request,Use.CREATE,REQUEST,TRACE));verify(f.actions,never()).requireRead(f.request,f.boundary,RISK_SCENARIO_READ);verifyNoInteractions(f.applications,f.provider);
     }
     @Test void everyIdentityAndAuthorizationEpochChangesBothContextualValidators()throws Exception {
