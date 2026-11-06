@@ -73,14 +73,24 @@ class RiskScenarioParserTest {
         assertEquals(415, assertThrows(Failure.class, () -> parser.create(request)).status());
     }
     @Test void contentTypeAndIdempotencyHeaderMultiplicityAndQueryAreStrict() {
-        var command = request(createBody("d")); command.addHeader("Content-Type", "application/json");
+        var command = new jakarta.servlet.http.HttpServletRequestWrapper(request(createBody("d"))) {
+            @Override public java.util.Enumeration<String> getHeaders(String name) {
+                return "Content-Type".equalsIgnoreCase(name)
+                        ? Collections.enumeration(List.of("application/json", "application/json")) : super.getHeaders(name);
+            }
+        };
+        assertEquals(2, Collections.list(command.getHeaders("Content-Type")).size(), "fixture must expose actual duplicate media headers");
         assertEquals(415, assertThrows(Failure.class, () -> parser.create(command)).status());
         var request = request("{}"); request.addHeader("Idempotency-Key", ID);
+        assertEquals(1, Collections.list(request.getHeaders("Idempotency-Key")).size());
         assertEquals(UUID.fromString(ID), parser.idempotencyKey(request)); request.addHeader("Idempotency-Key", ID);
+        assertEquals(2, Collections.list(request.getHeaders("Idempotency-Key")).size());
         assertThrows(Failure.class, () -> parser.idempotencyKey(request));
+        assertNotEquals(ID, ID.toUpperCase(), "uppercase UUID fixture must contain alphabetic hex characters");
         assertThrows(Failure.class, () -> RiskScenarioParser.uuid(ID.toUpperCase()));
         var query = request(createBody("d")); query.setQueryString("x=1"); assertThrows(Failure.class, () -> parser.create(query));
     }
+
     @Test void queryPublishesIdDefaultAndPreservesExactDecimalThresholds() {
         var plain = parser.query(request("{\"page\":{\"number\":1},\"size\":20}"));
         assertEquals(List.of("id"), plain.fields()); assertEquals(List.of(new Sort("id", Direction.ASC)), plain.sort());
