@@ -35,9 +35,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -62,6 +65,7 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
     private final IngestionProofCodec codec;
     private final Clock clock;
     private final ThreadPoolExecutor io;
+    private final Semaphore ioSlots;
     private final ThreadPoolExecutor streamClosers;
     private final AtomicBoolean closed=new AtomicBoolean();
     private volatile Resources resources;
@@ -73,7 +77,8 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
         this.properties=Objects.requireNonNull(properties);this.codec=Objects.requireNonNull(codec);this.clock=Objects.requireNonNull(clock);
         if(!properties.enabled())throw new IllegalArgumentException("Private ingestion is not configured");
         int concurrency=properties.limits().concurrency();
-        io=new ThreadPoolExecutor(concurrency,concurrency,0,TimeUnit.MILLISECONDS,new SynchronousQueue<>(),
+        ioSlots=new Semaphore(concurrency);
+        io=new ThreadPoolExecutor(concurrency,concurrency,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(concurrency),
                 Thread.ofPlatform().daemon().name("file-private-io-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
         streamClosers=new ThreadPoolExecutor(concurrency,concurrency,0,TimeUnit.MILLISECONDS,new SynchronousQueue<>(),
                 Thread.ofPlatform().daemon().name("file-upload-close-",0).factory(),new ThreadPoolExecutor.AbortPolicy());
@@ -316,11 +321,22 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
         if(allocation.eventNo()!=0||allocation.baseline()!=null||!allocation.request().rootGeneration().equals(properties.storage().rootGeneration()))throw unavailable();
     }
     private <T>T external(Callable<T> work,Deadline deadline,InputStream input) {
-        if(closed.get())throw unavailable();deadline.remainingNanos();Future<T> future;
-        try{future=io.submit(work);}catch(RuntimeException refused){throw unavailable();}
+        if(closed.get())throw unavailable();deadline.remainingNanos();
+        if(!ioSlots.tryAcquire())throw unavailable();
+        var future=new IoTask<>(work,deadline);
+        try {
+            if(closed.get())throw unavailable();
+            io.execute(future);
+        } catch(RuntimeException refused) {
+            future.cancel(false);
+            // A known rejected submission never owns a worker; a defensive started task retains its slot.
+            if(!future.started.get())future.releaseSlot();
+            throw unavailable();
+        }
         try{return future.get(deadline.remainingNanos(),TimeUnit.NANOSECONDS);}
         catch(InterruptedException interrupted){Thread.currentThread().interrupt();future.cancel(true);closeInputLater(input);throw unavailable();}
         catch(TimeoutException|FileEvidenceTrustUnavailableException timedOut){future.cancel(true);closeInputLater(input);throw unavailable();}
+        catch(CancellationException cancelled){closeInputLater(input);throw unavailable();}
         catch(ExecutionException failure){
             Throwable cause=failure.getCause();if(cause instanceof ContentRejected rejected)throw rejected;
             if(cause instanceof QuarantineNotReusable unusable)throw unusable;
@@ -328,12 +344,44 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
             if(cause instanceof Error error)throw error;throw unavailable();
         }
     }
+    /** Admission follows unfinished work, not Future's cancellation/completion notification. */
+    private final class IoTask<T> extends FutureTask<T> {
+        private final AtomicBoolean started=new AtomicBoolean();
+        private final AtomicBoolean released=new AtomicBoolean();
+        IoTask(Callable<T> work,Deadline deadline) {
+            super(()->{
+                // Work starts here; a dequeued task is no longer covered by shutdownNow's drain.
+                if(closed.get())throw unavailable();
+                deadline.remainingNanos();return work.call();
+            });
+        }
+        void releaseSlot(){if(released.compareAndSet(false,true))ioSlots.release();}
+        @Override protected void set(T result){releaseSlot();super.set(result);}
+        @Override protected void setException(Throwable failure){releaseSlot();super.setException(failure);}
+        @Override public boolean cancel(boolean interrupt) {
+            boolean cancelled=super.cancel(interrupt);
+            // A successful removal proves this work cannot still run. Dequeued/running work releases on exit.
+            if(cancelled&&io.remove(this))releaseSlot();
+            return cancelled;
+        }
+        @Override public void run() {
+            if(!started.compareAndSet(false,true))return;
+            try{super.run();}finally{releaseSlot();}
+        }
+    }
     private void closeInputLater(InputStream input){if(input!=null)try{streamClosers.execute(()->{try{input.close();}catch(IOException ignored){}});}catch(java.util.concurrent.RejectedExecutionException held){ /* Existing blocked closers stay bounded; unknown readers retain their I/O slots. */ }}
     static void noTransaction() {
         if(TransactionSynchronizationManager.isActualTransactionActive()||TransactionSynchronizationManager.isSynchronizationActive()
                 ||TransactionSynchronizationManager.getResourceMap().entrySet().stream().anyMatch(entry->entry.getKey() instanceof javax.sql.DataSource||entry.getValue() instanceof ConnectionHolder))throw unavailable();
     }
-    @Override public synchronized void close(){if(closed.compareAndSet(false,true)){io.shutdownNow();streamClosers.shutdownNow();Resources old=resources;resources=null;if(old!=null)old.close();}}
+    @Override public synchronized void close(){
+        if(closed.compareAndSet(false,true)){
+            for(var pending:io.shutdownNow())if(pending instanceof LocalPrivateUploadProducer.IoTask<?> task){
+                task.cancel(false);task.releaseSlot();
+            }
+            streamClosers.shutdownNow();Resources old=resources;resources=null;if(old!=null)old.close();
+        }
+    }
     private Instant now(){return clock.instant().truncatedTo(ChronoUnit.MICROS);}
     private static Instant min(Instant left,Instant right){return left.isBefore(right)?left:right;}
     private static byte[] receiptBytes(IngestionContentReceiptV2 receipt)throws IOException {
