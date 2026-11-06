@@ -122,8 +122,9 @@ class RiskScenarioOpenApiContractTest {
         return new String(encodeResponse(value, ResponseBudget.METADATA), StandardCharsets.UTF_8);
     }
     private static void accepts(String name, String json, boolean expected) throws Exception {
+        var contractText = Files.readString(path());
         var schema = SchemaRegistry.withDefaultDialect(Dialects.getOpenApi31(),
-                builder -> builder.schemas(Map.of(URI, Files.readString(path()))))
+                builder -> builder.schemas(Map.of(URI, contractText)))
                 .getSchema(SchemaLocation.of(URI + "#/components/schemas/" + name));
         var errors = schema.validate(json, InputFormat.JSON);
         assertEquals(expected, errors.isEmpty(), () -> name + ": " + errors);
