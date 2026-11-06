@@ -42,6 +42,8 @@ class RiskScenarioHttpConfigurationTest {
             var boundary=c.getBean(RiskScenarioHttpBoundary.class);var registration=c.getBean("riskScenarioHttpBoundaryRegistration",FilterRegistrationBean.class);assertSame(boundary,c.getBean(RiskScenarioHttpTransport.class));assertSame(boundary,registration.getFilter());
             assertEquals(SessionRepositoryFilter.DEFAULT_ORDER-3,registration.getOrder());assertEquals(Set.of("/api/v1/entities/risk_scenario/*","/api/v1/risk-scenarios/*"),new HashSet<>(registration.getUrlPatterns()));
             assertEquals(DelegatingFilterProxyRegistrationBean.class,c.getBean("sessionRepositoryFilterRegistration").getClass());assertEquals(DelegatingFilterProxyRegistrationBean.class,c.getBean("securityFilterChainRegistration").getClass());
+            assertEquals(EnumSet.of(DispatcherType.REQUEST,DispatcherType.ASYNC,DispatcherType.ERROR),c.getBean("sessionRepositoryFilterRegistration",DelegatingFilterProxyRegistrationBean.class).determineDispatcherTypes());
+            assertEquals(EnumSet.allOf(DispatcherType.class),c.getBean("securityFilterChainRegistration",DelegatingFilterProxyRegistrationBean.class).determineDispatcherTypes());
             assertThrows(IllegalStateException.class,c.getBean(RiskScenarioTomcatProfile.class)::getAsInt);
         });
     }
@@ -63,7 +65,7 @@ class RiskScenarioHttpConfigurationTest {
         for(int value:new int[]{Integer.MIN_VALUE,Integer.MIN_VALUE+1,Integer.MIN_VALUE+2})context().withPropertyValues("spring.session.servlet.filter-order="+value).run(c->assertThat(c).hasFailed());
     }
     @Test void targetNameSpoofWrongContextDisabledOrNarrowMappingsCannotPassAsActualChain(){
-        for(String fault:List.of("spoof-target","wrong-context","disabled-session","narrow-security","wrong-dispatch"))context().withPropertyValues("risk.test.fault="+fault).run(c->assertThat(c).hasFailed());
+        for(String fault:List.of("spoof-target","wrong-context","disabled-session","narrow-security","wrong-dispatch","security-missing-forward","session-extra-dispatch","session-missing-request"))context().withPropertyValues("risk.test.fault="+fault).run(c->assertThat(c).hasFailed());
     }
     @Test void secondTransportOrDuplicateFilterRegistrationCannotHideBehindPreferredBeans(){
         context().withBean("unexpectedTransport",RiskScenarioHttpTransport.class,()->(request,response,status,headers,length,body)->{throw new java.io.IOException("unexpected test transport");}).run(c->assertThat(c).hasFailed());
@@ -134,9 +136,9 @@ class RiskScenarioHttpConfigurationTest {
             if(name.equals("securityFilterChainRegistration")&&bean instanceof DelegatingFilterProxyRegistrationBean security){
                 if(mode.equals("spoof-target")){var wrong=new DelegatingFilterProxyRegistrationBean("decoyTarget");wrong.setName("springSecurityFilterChain");wrong.setApplicationContext(context);wrong.setOrder(security.getOrder());return wrong;}
                 if(mode.equals("wrong-context"))security.setApplicationContext(new StaticWebApplicationContext());
-                if(mode.equals("security-order"))security.setOrder(Integer.MIN_VALUE);if(mode.equals("narrow-security"))security.setUrlPatterns(List.of("/elsewhere/*"));if(mode.equals("wrong-dispatch"))security.setDispatcherTypes(DispatcherType.ERROR);
+                if(mode.equals("security-order"))security.setOrder(Integer.MIN_VALUE);if(mode.equals("narrow-security"))security.setUrlPatterns(List.of("/elsewhere/*"));if(mode.equals("wrong-dispatch"))security.setDispatcherTypes(DispatcherType.ERROR);if(mode.equals("security-missing-forward"))security.setDispatcherTypes(DispatcherType.REQUEST,DispatcherType.ASYNC,DispatcherType.ERROR,DispatcherType.INCLUDE);
             }
-            if(name.equals("sessionRepositoryFilterRegistration")&&bean instanceof DelegatingFilterProxyRegistrationBean session){if(mode.equals("session-order"))session.setOrder(0);if(mode.equals("disabled-session"))session.setEnabled(false);}
+            if(name.equals("sessionRepositoryFilterRegistration")&&bean instanceof DelegatingFilterProxyRegistrationBean session){if(mode.equals("session-order"))session.setOrder(0);if(mode.equals("disabled-session"))session.setEnabled(false);if(mode.equals("session-extra-dispatch"))session.setDispatcherTypes(EnumSet.allOf(DispatcherType.class));if(mode.equals("session-missing-request"))session.setDispatcherTypes(DispatcherType.ASYNC,DispatcherType.ERROR);}
             if(name.equals("loginAuditBoundary")&&bean instanceof FilterRegistrationBean<?> audit&&mode.equals("audit-order"))audit.setOrder(Integer.MIN_VALUE);
             if(name.equals("riskScenarioHttpBoundaryRegistration")&&bean instanceof FilterRegistrationBean<?> root){
                 switch(mode){case "root-mapping"->root.setUrlPatterns(List.of("/not-risk/*"));case "root-dispatch"->root.setDispatcherTypes(DispatcherType.ERROR);case "root-name"->root.setName("wrong");case "root-match-after"->root.setMatchAfter(true);case "root-async"->root.setAsyncSupported(false);case "root-disabled"->root.setEnabled(false);default->{}}

@@ -84,7 +84,9 @@ class RiskScenarioHttpConfiguration {
                     if(!targetName.equals(sessionName)&&!targetName.equals("springSecurityFilterChain"))throw fail();
                     if(targets.put(targetName,delegated)!=null||!registration.isEnabled())throw fail();
                     target=context.getBean(targetName);if(targetName.equals(sessionName)?target!=session:target!=security)throw fail();
-                    global(registration);if(!registration.determineDispatcherTypes().equals(EnumSet.of(DispatcherType.REQUEST,DispatcherType.ASYNC,DispatcherType.ERROR)))throw fail();
+                    // Boot4.1.2: Session defaults to REQUEST/ASYNC/ERROR; Security deliberately defaults to all five dispatchers.
+                    global(registration);var expectedDispatchers=targetName.equals(sessionName)?EnumSet.of(DispatcherType.REQUEST,DispatcherType.ASYNC,DispatcherType.ERROR):EnumSet.allOf(DispatcherType.class);
+                    if(!registration.determineDispatcherTypes().equals(expectedDispatchers))throw fail();
                 }else target=registration.getFilter();
                 if(target==null)throw fail();consumed.add(target);
                 states.add(new State(entry.getKey(),registration,target,targetName,registration.getOrder(),registration.isEnabled(),registration.getFilterName(),
