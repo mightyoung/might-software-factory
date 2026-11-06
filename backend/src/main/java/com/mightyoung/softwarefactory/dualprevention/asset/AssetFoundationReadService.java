@@ -121,7 +121,7 @@ public final class AssetFoundationReadService {
             requireActive();
             if(!issued.contains(scope))throw invalidate();
             actions.requireCurrent(scope);repository.require(scope);
-            var application=applications.findCurrentInCaller(request.context().tenantId(),"dual-prevention")
+            var application=applications.findCurrentInCaller(request.context().tenantId(),"safety")
                     .filter(value->value.enabled()).orElseThrow(this::invalidate);
             requireActive();actions.requireCurrent(scope);
             return application.version();

@@ -32,7 +32,7 @@ class AssetFoundationReadServiceTest {
     }
     @Test void snapshotUsesOneBoundaryHolderAndCallerApplicationVersionAndClosesAtReturn()throws Exception {
         var f=new Fixture();var captured=new AtomicReference<AssetFoundationReadService.ReadSnapshot>();
-        when(f.applications.findCurrentInCaller(f.context.tenantId(),"dual-prevention")).thenReturn(Optional.of(new TenantApplicationState(true,7)));
+        when(f.applications.findCurrentInCaller(f.context.tenantId(),"safety")).thenReturn(Optional.of(new TenantApplicationState(true,7)));
         long version=f.service.inReadSnapshot(f.request,snapshot->{
             captured.set(snapshot);
             assertSame(f.connection,((ConnectionHolder)TransactionSynchronizationManager.getResource(f.source)).getConnection());
