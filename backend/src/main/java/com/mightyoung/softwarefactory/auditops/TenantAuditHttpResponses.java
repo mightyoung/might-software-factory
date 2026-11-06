@@ -35,7 +35,7 @@ final class TenantAuditHttpResponses {
         else {status=503;code="UNAVAILABLE";}
         var output=new TenantAuditQueryEncoder.LimitedOutput(TenantAuditQueryContracts.ERROR_BYTES);
         try { JSON.writeValue(output,new ErrorResponse(code,"请求未完成",IdentityRequestIds.get(request).traceId().toString(),false,List.of(),null)); }
-        catch(IOException | tools.jackson.core.JacksonException encodingFailure){throw new TenantAuditQueryEncoder.EncodingFailure();}
+        catch(tools.jackson.core.JacksonException encodingFailure){throw new TenantAuditQueryEncoder.EncodingFailure();}
         var encoded=output.seal();
         transport.stage(request,response,status,HEADERS,encoded.size(),encoded::writeTo);
     }
