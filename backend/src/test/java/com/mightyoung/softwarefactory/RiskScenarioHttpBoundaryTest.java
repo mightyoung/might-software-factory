@@ -78,17 +78,18 @@ class RiskScenarioHttpBoundaryTest {
     }
 
     @Test void assignsIdsBeforeAnEarlyIdentityErrorAndBuffersItUntilLateHeadersFinish() throws Exception {
+        String deletionCookie = "SESSION=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
         var boundary = new RiskScenarioHttpBoundary(0); var request = request("GET", DETAIL); var target = new MockHttpServletResponse();
         var ids = new AtomicReference<IdentityRequestIds.Ids>();
         boundary.doFilter(request, target, (req, res) -> {
             ids.set(IdentityRequestIds.existing((HttpServletRequest) req).orElseThrow());
             var response = (HttpServletResponse) res; response.setStatus(401); response.setContentType("application/json"); response.setCharacterEncoding("UTF-8");
             response.getWriter().write("{\"traceId\":\"" + ids.get().traceId() + "\"}");
-            assertThat(target.getContentAsByteArray()).isEmpty(); response.addHeader("Set-Cookie", "SESSION=; Max-Age=0");
+            assertThat(target.getContentAsByteArray()).isEmpty(); response.addHeader("Set-Cookie", deletionCookie);
         });
         assertThat(IdentityRequestIds.get(request)).isSameAs(ids.get()); assertThat(target.getStatus()).isEqualTo(401);
         assertThat(target.getContentAsString()).contains(ids.get().traceId().toString());
-        assertThat(target.getHeaders("Set-Cookie")).containsExactly("SESSION=; Max-Age=0");
+        assertThat(target.getHeaders("Set-Cookie")).containsExactly(deletionCookie);
     }
 
     @Test void repeatedStageCannotBeRecoveredEvenWhenItsExceptionIsSwallowed() {
