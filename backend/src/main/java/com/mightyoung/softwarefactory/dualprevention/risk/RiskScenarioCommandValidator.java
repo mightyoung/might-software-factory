@@ -268,7 +268,7 @@ final class RiskScenarioCommandValidator implements TransactionSqlSealGate.Profi
         if(!PUBLICATION_EFFECT.equals(actual.effect())||actual.commandAcknowledgment()!=null||actual.affectedRows()!=1||values.size()!=5
                 ||!(values.get(1) instanceof UUID)||!RiskScenarioDraftChangedEvent.class.getName().equals(values.get(2))||!listenerId.equals(values.get(3))
                 ||!(values.get(4) instanceof Instant)||!(values.get(5) instanceof String serialized)||serialized.getBytes(StandardCharsets.UTF_8).length>8192)throw new Failure(503);
-        try(var parser=json.getFactory().createParser(serialized)){
+        try(var parser=json.createParser(serialized)){
             if(parser.nextToken()!=JsonToken.START_OBJECT)throw new Failure(503);var fields=new HashSet<String>();
             while(parser.nextToken()!=JsonToken.END_OBJECT){
                 if(parser.currentToken()!=JsonToken.PROPERTY_NAME||!fields.add(parser.currentName()))throw new Failure(503);
