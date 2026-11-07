@@ -1,6 +1,8 @@
 package com.mightyoung.softwarefactory;
 
 import com.mightyoung.softwarefactory.dualprevention.RiskScenarioHttpTransport;
+import com.mightyoung.softwarefactory.auditops.TenantAuditHttpTransport;
+import com.mightyoung.softwarefactory.auditops.TenantAuditQueryContracts;
 import com.mightyoung.softwarefactory.identity.IdentityRequestIds;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
@@ -25,11 +27,20 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
             "org.apache.tomcat.sendfile.start", "org.apache.tomcat.sendfile.end");
     private static final Set<String> FIXED_HEADERS = Set.of("content-type", "cache-control", "etag", "vary");
     private static final DateTimeFormatter HTTP_DATE = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US).withZone(ZoneOffset.UTC);
+    private enum Surface { RISK, AUDIT }
+    private static final Set<Integer> AUDIT_ERRORS = Set.of(400,401,403,409,413,415,503);
+    private static final Map<String,List<String>> AUDIT_HEADERS = Map.of(
+            "content-type",List.of("application/json;charset=UTF-8"),"cache-control",List.of("no-store"));
+    private final boolean auditEnabled;
     private final IntSupplier containerReserve;
     private final ThreadLocal<Lifetime> current = new ThreadLocal<>();
 
     RiskScenarioHttpBoundary(int containerReserveBytes) { this(constantReserve(containerReserveBytes)); }
-    RiskScenarioHttpBoundary(IntSupplier containerReserve) { this.containerReserve = Objects.requireNonNull(containerReserve); }
+    RiskScenarioHttpBoundary(IntSupplier containerReserve) { this(containerReserve,false); }
+    RiskScenarioHttpBoundary(int containerReserveBytes,boolean auditEnabled) { this(constantReserve(containerReserveBytes),auditEnabled); }
+    RiskScenarioHttpBoundary(IntSupplier containerReserve,boolean auditEnabled) {
+        this.containerReserve = Objects.requireNonNull(containerReserve);this.auditEnabled = auditEnabled;
+    }
     private static IntSupplier constantReserve(int reserve) {
         if (reserve < 0 || reserve > RiskScenarioHeaderBudget.MAX_BYTES) throw new IllegalArgumentException(FAILURE);
         return () -> reserve;
@@ -43,7 +54,7 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
     }
 
     @Override protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
-        if (!matches(request)) return true;
+        if (surface(request) == null) return true;
         Object previous = request.getAttribute(ATTRIBUTE);
         if (previous != null) {
             if (previous instanceof Lifetime lifetime) lifetime.invalid = true;
@@ -54,7 +65,14 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
     @Override protected boolean shouldNotFilterAsyncDispatch() { return false; }
     @Override protected boolean shouldNotFilterErrorDispatch() { return false; }
 
-    private static boolean matches(HttpServletRequest request) {
+    private Surface surface(HttpServletRequest request) {
+        String uri=request.getRequestURI();String context=request.getContextPath();
+        if(auditEnabled && "POST".equals(request.getMethod()) && uri.startsWith(context)
+                && uri.substring(context.length()).equals("/api/v1/audit-events/query"))return Surface.AUDIT;
+        return matchesRisk(request)?Surface.RISK:null;
+    }
+
+    private static boolean matchesRisk(HttpServletRequest request) {
         String uri = request.getRequestURI();
         String context = request.getContextPath();
         if (!uri.startsWith(context)) return false;
@@ -77,7 +95,9 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
             Lifetime active = current.get(); if (active != null) active.invalid = true;
             throw new ServletException(FAILURE);
         }
-        Lifetime lifetime = new Lifetime(request, response, reserve());
+        Surface selected=surface(request);
+        if(selected==null)throw new ServletException(FAILURE);
+        Lifetime lifetime = new Lifetime(request, response, reserve(),selected);
         request.setAttribute(ATTRIBUTE, lifetime);
         current.set(lifetime);
         try {
@@ -101,12 +121,23 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
 
     @Override public void stage(HttpServletRequest request, HttpServletResponse response, int status,
             Map<String, List<String>> headers, int bodyLength, BodyWriter body) throws IOException {
+        stageFor(Surface.RISK,request,response,status,headers,bodyLength,body);
+    }
+
+    void stageAudit(HttpServletRequest request,HttpServletResponse response,int status,
+            Map<String,List<String>> headers,int bodyLength,TenantAuditHttpTransport.BodyWriter body) throws IOException {
+        stageFor(Surface.AUDIT,request,response,status,headers,bodyLength,body==null?null:body::writeTo);
+    }
+
+    private void stageFor(Surface expected,HttpServletRequest request,HttpServletResponse response,int status,
+            Map<String,List<String>> headers,int bodyLength,BodyWriter body) throws IOException {
         Lifetime candidate = null;
         try {
             Object attribute = request == null ? null : request.getAttribute(ATTRIBUTE);
             if (attribute instanceof Lifetime found && found.owner() == this) candidate = found;
             if (candidate == null || current.get() != candidate) throw new IllegalStateException(FAILURE);
             candidate.check();
+            if(candidate.surface!=expected)throw new IllegalStateException(FAILURE);
             if (!containsRequest(request, candidate.request) || !containsResponse(response, candidate.response)
                     || candidate.staged || candidate.response.bodySize != 0 || candidate.response.writer != null
                     || candidate.response.stream != null || bodyLength < 0 || bodyLength > MAX_BODY_BYTES
@@ -124,6 +155,9 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
                 for (String value : entry.getValue()) { selected.add(value); RiskScenarioHeaderBudget.bytes(status, fixed); }
             }
             RiskScenarioHeaderBudget.bytes(status, fixed);
+            if(expected==Surface.AUDIT && (!(status==200||AUDIT_ERRORS.contains(status))
+                    || bodyLength>(status==200?TenantAuditQueryContracts.RESPONSE_BYTES:TenantAuditQueryContracts.ERROR_BYTES)
+                    || !fixed.equals(AUDIT_HEADERS)))throw new IllegalStateException(FAILURE);
             candidate.staged = true;
             candidate.status = status;
             candidate.bodyLength = bodyLength;
@@ -159,6 +193,7 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
         final HttpServletRequest original;
         final HttpServletResponse target;
         final int admittedReserve;
+        final Surface surface;
         volatile boolean invalid;
         volatile boolean closed;
         boolean staged;
@@ -168,7 +203,7 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
         BodyWriter body;
         SynchronousRequest request;
         CapturedResponse response;
-        Lifetime(HttpServletRequest original, HttpServletResponse target, int reserve) { this.original = original; this.target = target; this.admittedReserve = reserve; }
+        Lifetime(HttpServletRequest original, HttpServletResponse target, int reserve,Surface surface) { this.original = original; this.target = target; this.admittedReserve = reserve; this.surface=surface; }
         RiskScenarioHttpBoundary owner() { return RiskScenarioHttpBoundary.this; }
         void check() {
             if (invalid || closed || thread != Thread.currentThread() || original.getAttribute(ATTRIBUTE) != this
@@ -320,6 +355,12 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
         void release() throws IOException {
             open(); if (writer != null) writer.flush();
             if (!lifetime.staged && status < 400) lifetime.fail();
+            if(lifetime.surface==Surface.AUDIT){
+                if(lifetime.staged){
+                    for(var fixed:AUDIT_HEADERS.entrySet())if(!fixed.getValue().equals(headers.get(fixed.getKey())))lifetime.fail();
+                    if(headers.containsKey("etag")||headers.containsKey("vary"))lifetime.fail();
+                }else if(status!=401&&status!=403&&status!=503)lifetime.fail();
+            }
             int length = lifetime.staged ? lifetime.bodyLength : bodySize;
             if (status == 304) {
                 if (length != 0 || headers.containsKey("content-length")) lifetime.fail();
@@ -338,7 +379,7 @@ final class RiskScenarioHttpBoundary extends OncePerRequestFilter implements Ris
             HttpServletResponse target = lifetime.target;
             target.reset(); target.setStatus(status);
             headers.forEach((name, values) -> { target.setHeader(name, values.getFirst()); for (int i = 1; i < values.size(); i++) target.addHeader(name, values.get(i)); });
-            if (status != 304 && !"HEAD".equals(lifetime.original.getMethod())) {
+            if (status != 304 && (lifetime.surface==Surface.AUDIT || !"HEAD".equals(lifetime.original.getMethod()))) {
                 if (lifetime.staged) {
                     ExactOutput output = new ExactOutput(lifetime, target.getOutputStream(), length);
                     lifetime.body.writeTo(output); output.finish();
