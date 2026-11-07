@@ -1142,7 +1142,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Dependency/encoding unavailable; no fabricated OFF/readiness */
+        /** @description Dependency/encoding unavailable; no fabricated OFF/readiness. An actual command outcome UNKNOWN uses COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body for explicit reconciliation and do not infer rollback from an absent receipt. */
         Error503: {
             headers: {
                 "Cache-Control"?: "no-store";
