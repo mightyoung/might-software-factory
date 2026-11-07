@@ -419,7 +419,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                 execute(connection, "insert into public.\"role\"(tenant_id,id,code,name,active) values(?,?,?,'CI source role',true)", identity.tenant(), role, "ci-" + role);
                 execute(connection, "insert into public.scope_rule(tenant_id,id,kind,version_no,definition) values(?,?,'EXPLICIT',1,'{}'::jsonb)", identity.tenant(), scope);
                 execute(connection, "insert into public.scope_org(tenant_id,scope_rule_id,org_id) values(?,?,?)", identity.tenant(), scope, identity.organization());
-                for (String action : List.of("risk_scenario.create", "risk_scenario.update"))
+                for (String action : List.of("risk_scenario.create", "risk_scenario.update", "hazard_source.read"))
                     execute(connection, "insert into public.role_permission(tenant_id,role_id,permission_id,scope_rule_id) select ?,?,id,? from public.permission where code=?", identity.tenant(), role, scope, action);
                 execute(connection, "insert into public.role_grant(tenant_id,id,role_id,subject_kind,member_id,source_type,source_id,granted_by_member_id,valid_from) values(?,?,?,'MEMBER',?,'CI_SOURCE_ACCEPTANCE',?,?,current_timestamp - interval '1 day')", identity.tenant(), UUID.randomUUID(), role, identity.member(), UUID.randomUUID(), identity.member());
                 UUID event = UUID.randomUUID();
