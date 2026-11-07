@@ -247,7 +247,7 @@ class TenantAuditHttpContainerTest {
         Fixture(Path directory,Boolean enabled)throws IOException {
             Files.createDirectories(directory);scenario=new Scenario(directory);if(enabled!=null)properties.put("msf.audit-query.http.enabled",enabled.toString());
             properties.put("server.port","0");context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("audit-container-fixture",properties));
-            context.getBeanFactory().setConversionService(ApplicationConversionService.getSharedInstance());
+            context.getBeanFactory().setConversionService(new ApplicationConversionService());
             context.registerBean(Scenario.class,()->scenario);new AnnotatedBeanDefinitionReader(context).register(Application.class);
             try{context.refresh();assertThat(context.getWebServer().getPort()).isPositive();assertThat(scenario.borrowAttempts.get()).isZero();}
             catch(RuntimeException|Error failure){try{context.close();}catch(RuntimeException|Error cleanup){if(cleanup!=failure)failure.addSuppressed(cleanup);}throw failure;}
