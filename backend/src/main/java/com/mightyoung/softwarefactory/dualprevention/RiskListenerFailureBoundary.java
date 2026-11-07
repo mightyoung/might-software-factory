@@ -1,4 +1,4 @@
-package com.mightyoung.softwarefactory;
+package com.mightyoung.softwarefactory.dualprevention;
 
 import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChangedEvent;
 import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChangedListener;

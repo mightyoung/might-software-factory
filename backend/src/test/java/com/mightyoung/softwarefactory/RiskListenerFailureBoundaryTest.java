@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.read.ListAppender;
 import ch.qos.logback.core.Appender;
+import com.mightyoung.softwarefactory.dualprevention.RiskListenerFailureBoundary;
 import com.mightyoung.softwarefactory.dualprevention.risk.RiskChangeCaptureService;
 import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChangedEvent;
 import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChangedListener;
