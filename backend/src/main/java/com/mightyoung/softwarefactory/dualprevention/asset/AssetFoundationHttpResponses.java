@@ -17,6 +17,11 @@ final class AssetFoundationHttpResponses {
         UUID trace = UUID.randomUUID(); request.setAttribute(TRACE, trace); return trace;
     }
     static Metadata metadata(UUID trace) { return new Metadata(trace.toString(), trace.toString(), "1"); }
+    static ResponseEntity<ErrorResponse> unknown(
+            com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure, UUID trace) {
+        return ResponseEntity.status(503).cacheControl(CacheControl.noStore()).body(
+                com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.unknown(failure, trace));
+    }
     static ResponseEntity<ErrorResponse> error(int status, UUID trace) {
         String code = switch (status) {
             case 401 -> "UNAUTHENTICATED";

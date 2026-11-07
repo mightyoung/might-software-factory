@@ -3947,8 +3947,9 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Error503:
-      description: Dependency unavailable or transaction outcome UNKNOWN; preserve original key/body for explicit
-        reconciliation, never fabricate success/failure.
+      description: Dependency unavailable or transaction outcome UNKNOWN. An actual command outcome UNKNOWN uses
+        COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body
+        for explicit reconciliation and never infer rollback from an absent receipt or fabricate success/failure.
       content:
         application/json:
           schema:

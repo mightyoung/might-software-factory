@@ -170,6 +170,13 @@ public final class FindingApiExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, "INVALID_QUERY", "The finding request is invalid", false, List.of());
     }
 
+    @ExceptionHandler(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException.class)
+    ResponseEntity<ErrorResponse> commandOutcomeUnknown(
+            com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(G014LifecycleHttpResponses.unknown(failure, UUID.randomUUID()));
+    }
+
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
             org.springframework.transaction.TransactionTimedOutException.class,
             org.springframework.transaction.CannotCreateTransactionException.class,

@@ -185,6 +185,11 @@ public final class AssetFoundationController {
         };
         return AssetFoundationHttpResponses.error(status,AssetFoundationHttpResponses.trace(request));
     }
+    @ExceptionHandler(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException.class)
+    ResponseEntity<ErrorResponse> commandOutcomeUnknown(
+            com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException error,HttpServletRequest request) {
+        return AssetFoundationHttpResponses.unknown(error,AssetFoundationHttpResponses.trace(request));
+    }
     @ExceptionHandler(AssetFoundationFailure.class)
     ResponseEntity<ErrorResponse> failure(AssetFoundationFailure error,HttpServletRequest request) { return AssetFoundationHttpResponses.error(error.status(),AssetFoundationHttpResponses.trace(request)); }
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)

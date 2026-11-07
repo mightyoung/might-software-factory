@@ -4,6 +4,8 @@ import java.sql.*;
 import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.*;
 import static org.assertj.core.api.Assertions.*;
@@ -84,13 +86,13 @@ class G014JdbcTransactionManagerTest {
     }
     @Test void failedRollbackRetainsLeaseWithoutAutoCommitResetOrClose()throws Exception {
         var f=fixture();doThrow(new SQLException("acknowledgment lost")).when(f.driver).rollback();
-        assertThatThrownBy(()->f.transaction.execute(status->null)).isInstanceOf(UnexpectedRollbackException.class);
+        assertUnknown(catchThrowable(()->f.transaction.execute(status->null)),G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);
         verify(f.driver,never()).commit();verify(f.driver,never()).setAutoCommit(true);verify(f.driver,never()).close();
         assertThat(f.manager.retainedUnusableLeaseCount()).isEqualTo(1);
     }
     @Test void failedCommitRetainsUnknownWithoutCompensatingRollbackOrPoolReturn()throws Exception {
         var f=fixture();doThrow(new SQLException("acknowledgment lost")).when(f.driver).commit();
-        assertThatThrownBy(()->f.transaction.execute(status->{sealFixture(f);return null;})).isInstanceOf(TransactionSystemException.class);
+        assertUnknown(catchThrowable(()->f.transaction.execute(status->{sealFixture(f);return null;})),G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN);
         verify(f.driver,never()).rollback();verify(f.driver,never()).setAutoCommit(true);verify(f.driver,never()).close();
         assertThat(f.manager.retainedUnusableLeaseCount()).isEqualTo(1);
     }
@@ -191,6 +193,94 @@ class G014JdbcTransactionManagerTest {
         });
         assertThat(forwarded.get()).isNotNull();verify(statement).setObject(eq(1),same(forwarded.get()));
         verify(statement,never()).setTimestamp(anyInt(),any());verify(f.driver).commit();
+    }
+
+    private enum FailureKind { SQL, RUNTIME, ERROR }
+    private static final String UNKNOWN_SECRET="PRIVATE_G014_UNKNOWN_SENTINEL";
+    private Throwable driverFailure(FailureKind kind){
+        var sql=new SQLException(UNKNOWN_SECRET,"40001",77,new IllegalStateException(UNKNOWN_SECRET+" cause"));
+        sql.setNextException(new SQLException(UNKNOWN_SECRET+" next","XX000"));
+        Throwable failure=switch(kind){
+            case SQL->sql;
+            case RUNTIME->new IllegalStateException(UNKNOWN_SECRET,sql);
+            case ERROR->new AssertionError(UNKNOWN_SECRET,sql);
+        };
+        failure.addSuppressed(new IllegalArgumentException(UNKNOWN_SECRET+" suppressed"));return failure;
+    }
+    private void assertUnknown(Throwable failure,G014JdbcTransactionManager.LifecycleOutcome outcome){
+        assertThat(failure).isExactlyInstanceOf(G014JdbcTransactionManager.LifecycleException.class)
+                .hasMessage("G014 transaction outcome is unknown").hasNoCause();
+        assertThat(failure).isNotInstanceOf(TransactionSystemException.class);
+        assertThat(((G014JdbcTransactionManager.LifecycleException)failure).outcome()).isEqualTo(outcome);
+        assertThat(failure.getSuppressed()).isEmpty();
+        assertThat(G014JdbcTransactionManager.LifecycleException.class.getDeclaredConstructors())
+                .allSatisfy(constructor->assertThat(java.lang.reflect.Modifier.isPrivate(constructor.getModifiers())).isTrue());
+    }
+    private void assertUnknownRetainedAndUnbound(Fixture f)throws SQLException {
+        verify(f.driver,never()).setAutoCommit(true);verify(f.driver,never()).close();
+        assertThat(f.manager.retainedUnusableLeaseCount()).isEqualTo(1);
+        assertThat(TransactionSynchronizationManager.hasResource(f.manager.commandDataSource())).isFalse();
+        assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+        assertThat(TransactionSynchronizationManager.isSynchronizationActive()).isFalse();
+        assertThatThrownBy(f.manager::currentFrame).isInstanceOf(IllegalStateException.class);
+    }
+    @ParameterizedTest @EnumSource(FailureKind.class)
+    void actualCommitUnknownIsTypedForSqlRuntimeAndErrorWithoutCompensation(FailureKind kind)throws Exception {
+        var f=fixture();Throwable original=driverFailure(kind);
+        doAnswer(invocation->{throw original;}).when(f.driver).commit();
+        Throwable failure=catchThrowable(()->f.transaction.execute(status->{sealFixture(f);return null;}));
+        assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN);
+        assertThat(failure).isNotSameAs(original);
+        verify(f.driver,times(1)).commit();verify(f.driver,never()).rollback();
+        assertUnknownRetainedAndUnbound(f);
+    }
+    @ParameterizedTest @EnumSource(FailureKind.class)
+    void callbackRollbackUnknownCannotCarryRawApplicationException(FailureKind kind)throws Exception {
+        var f=fixture();Throwable original=driverFailure(kind);
+        var callback=new IllegalArgumentException("RAW_CALLBACK_SENTINEL",original);
+        doAnswer(invocation->{throw original;}).when(f.driver).rollback();
+        Throwable failure=catchThrowable(()->f.transaction.execute(status->{
+            if(kind==FailureKind.ERROR)throw new AssertionError("RAW_CALLBACK_SENTINEL",callback);
+            throw callback;
+        }));
+        assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);
+        assertThat(failure).isNotSameAs(original).isNotSameAs(callback);
+        verify(f.driver,times(1)).rollback();verify(f.driver,never()).commit();
+        assertUnknownRetainedAndUnbound(f);
+    }
+    @ParameterizedTest @EnumSource(FailureKind.class)
+    void unsealedRefusalRollbackUnknownIsNeverDefiniteUnexpectedRollback(FailureKind kind)throws Exception {
+        var f=fixture();Throwable original=driverFailure(kind);
+        doAnswer(invocation->{throw original;}).when(f.driver).rollback();
+        Throwable failure=catchThrowable(()->f.transaction.execute(status->null));
+        assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);
+        assertThat(failure).isNotInstanceOf(UnexpectedRollbackException.class);
+        verify(f.driver,times(1)).rollback();verify(f.driver,never()).commit();
+        assertUnknownRetainedAndUnbound(f);
+    }
+    @ParameterizedTest @EnumSource(FailureKind.class)
+    void beginFailureHelperRollbackUnknownUnbindsBeforePropagatingTypedReason(FailureKind kind)throws Exception {
+        var f=fixture();Throwable original=driverFailure(kind);
+        when(f.driver.getAutoCommit()).thenThrow(new SQLException(UNKNOWN_SECRET+" setup"));
+        doAnswer(invocation->{throw original;}).when(f.driver).rollback();
+        Throwable failure=catchThrowable(()->f.transaction.execute(status->{throw new AssertionError("body must not run");}));
+        assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);
+        verify(f.driver,times(1)).rollback();verify(f.driver,never()).commit();
+        assertUnknownRetainedAndUnbound(f);
+    }
+    @ParameterizedTest @EnumSource(FailureKind.class)
+    void cleanupHelperFirstRollbackUnknownIsTypedAfterFinallyUnbind(FailureKind kind)throws Exception {
+        var f=fixture();Throwable original=driverFailure(kind);
+        doAnswer(invocation->{throw original;}).when(f.driver).rollback();
+        Throwable failure=catchThrowable(()->f.transaction.execute(status->{
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
+                @Override public void beforeCommit(boolean readOnly){throw new TransactionSystemException(UNKNOWN_SECRET+" beforeCommit");}
+            });
+            sealFixture(f);return null;
+        }));
+        assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);
+        verify(f.driver,times(1)).rollback();verify(f.driver,never()).commit();
+        assertUnknownRetainedAndUnbound(f);
     }
 
 }

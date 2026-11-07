@@ -14,6 +14,15 @@ import org.springframework.transaction.support.*;
 
 /** Explicit G014 graph only: never replace the application's existing transaction manager. */
 public final class G014JdbcTransactionManager extends JdbcTransactionManager {
+    public enum LifecycleOutcome { COMMIT_UNKNOWN, ROLLBACK_UNKNOWN }
+    /** Owner-issued unknown fact only: no original failure, command data or application exception. */
+    public static final class LifecycleException extends TransactionException {
+        private final LifecycleOutcome outcome;
+        private LifecycleException(LifecycleOutcome outcome){
+            super("G014 transaction outcome is unknown");this.outcome=Objects.requireNonNull(outcome);
+        }
+        public LifecycleOutcome outcome(){return outcome;}
+    }
     private final G014SqlProfile profile;
     private final LeaseSource source;
     private final ThreadLocal<Frame> active=new ThreadLocal<>();
@@ -68,13 +77,16 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
             if(!(TransactionSynchronizationManager.getResource(source) instanceof ConnectionHolder holder))throw frame.jdbc.reject();
             frame.holder=holder;frame.jdbc.bind(source,holder);transactions.put(transaction,frame);
         }catch(RuntimeException|Error failure){
+            LifecycleException unknown=null;
             Frame frame=active.get();if(frame!=null){
-                frame.jdbc.poison();rollbackAndRetainOnFailure(frame);
-                if(frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK){
-                    try{frame.jdbc.cleanup();}catch(SQLException|RuntimeException|Error cleanupFailure){retained.add(frame);}
-                }
-                unbind(frame);
+                try {
+                    frame.jdbc.poison();unknown=rollbackAndRetainOnFailure(frame);
+                    if(frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK){
+                        try{frame.jdbc.cleanup();}catch(SQLException|RuntimeException|Error cleanupFailure){retained.add(frame);}
+                    }
+                }finally{unbind(frame);}
             }
+            if(unknown!=null)throw unknown;
             throw failure;
         }finally{source.acquiring.remove();}
     }
@@ -121,35 +133,60 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
             registeredGate.requireSeal(frame);
             frame.jdbc.checkCommit();
         }catch(RuntimeException|Error refusal){
-            frame.jdbc.poison();rollbackAndRetainOnFailure(frame);
+            frame.jdbc.poison();LifecycleException unknown=rollbackAndRetainOnFailure(frame);
+            if(unknown!=null)throw unknown;
             throw new UnexpectedRollbackException("G014 commit was refused",refusal);
         }
         try{frame.jdbc.commit();}
-        catch(SQLException failure){retained.add(frame);throw new TransactionSystemException("G014 commit outcome is unknown",failure);}
-        catch(RuntimeException|Error failure){retained.add(frame);throw failure;}
+        catch(SQLException failure){throw unknown(frame,LifecycleOutcome.COMMIT_UNKNOWN);}
+        catch(RuntimeException|Error failure){
+            retained.add(frame);
+            if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN || frame.jdbc.phase()==G014JdbcGuard.Phase.COMMIT_SENT)
+                throw unknown(frame,LifecycleOutcome.COMMIT_UNKNOWN);
+            throw failure;
+        }
     }
     @Override protected void doRollback(DefaultTransactionStatus status){
         Frame frame=transactions.get(status.getTransaction());
         if(frame==null)throw new TransactionSystemException("Missing G014 rollback frame");
-        try{frame.jdbc.rollback();if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN)retained.add(frame);}
-        catch(SQLException failure){retained.add(frame);throw new TransactionSystemException("G014 rollback outcome is unknown",failure);}
-        catch(RuntimeException|Error failure){retained.add(frame);throw failure;}
+        if(frame.unknownOutcome!=null)throw unknown(frame,frame.unknownOutcome);
+        try{frame.jdbc.rollback();}
+        catch(SQLException failure){throw unknown(frame,LifecycleOutcome.ROLLBACK_UNKNOWN);}
+        catch(RuntimeException|Error failure){
+            retained.add(frame);
+            if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN || frame.jdbc.phase()==G014JdbcGuard.Phase.COMMIT_SENT)
+                throw unknown(frame,LifecycleOutcome.ROLLBACK_UNKNOWN);
+            throw failure;
+        }
+        if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN || frame.jdbc.phase()==G014JdbcGuard.Phase.COMMIT_SENT)
+            throw unknown(frame,LifecycleOutcome.ROLLBACK_UNKNOWN);
     }
     @Override protected void doCleanupAfterCompletion(Object transaction){
         Frame frame=transactions.remove(transaction);
         if(frame==null)return;
+        LifecycleException helperUnknown=null;
         try {
-            if(frame.jdbc.phase()!=G014JdbcGuard.Phase.COMMITTED && frame.jdbc.phase()!=G014JdbcGuard.Phase.ROLLED_BACK)
-                rollbackAndRetainOnFailure(frame);
-            if(frame.jdbc.phase()==G014JdbcGuard.Phase.COMMITTED || frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK){
+            // An already emitted unknown keeps its original reason; cleanup never compensates or replaces it.
+            if(frame.unknownOutcome!=null)retained.add(frame);
+            else if(frame.jdbc.phase()!=G014JdbcGuard.Phase.COMMITTED && frame.jdbc.phase()!=G014JdbcGuard.Phase.ROLLED_BACK)
+                helperUnknown=rollbackAndRetainOnFailure(frame);
+            if(frame.unknownOutcome==null && (frame.jdbc.phase()==G014JdbcGuard.Phase.COMMITTED || frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK)){
                 try{frame.jdbc.cleanup();}catch(SQLException|RuntimeException|Error failure){retained.add(frame);}
             }else retained.add(frame);
         }finally{unbind(frame);}
+        if(helperUnknown!=null)throw helperUnknown;
         // Never call superclass cleanup: it resets autoCommit before proving rollback acknowledgment.
     }
-    private void rollbackAndRetainOnFailure(Frame frame){
+    private LifecycleException rollbackAndRetainOnFailure(Frame frame){
+        if(frame.unknownOutcome!=null)return unknown(frame,frame.unknownOutcome);
         try{frame.jdbc.rollback();}catch(SQLException|RuntimeException|Error failure){retained.add(frame);}
-        if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN)retained.add(frame);
+        if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN || frame.jdbc.phase()==G014JdbcGuard.Phase.COMMIT_SENT)
+            return unknown(frame,LifecycleOutcome.ROLLBACK_UNKNOWN);
+        return null;
+    }
+    private LifecycleException unknown(Frame frame,LifecycleOutcome outcome){
+        if(frame.unknownOutcome==null)frame.unknownOutcome=outcome;
+        retained.add(frame);return new LifecycleException(frame.unknownOutcome);
     }
     private void unbind(Frame frame){
         if(TransactionSynchronizationManager.getResource(source)==frame.holder)TransactionSynchronizationManager.unbindResourceIfPossible(source);
@@ -161,6 +198,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         final Thread thread=Thread.currentThread();
         final G014JdbcGuard jdbc;
         ConnectionHolder holder;
+        LifecycleOutcome unknownOutcome;
         TransactionSynchronization suspensionVeto;
         TransactionSqlSealGate.CommandPlan plan;
         TransactionSqlSealGate.RegisteredCommandValidator validator;

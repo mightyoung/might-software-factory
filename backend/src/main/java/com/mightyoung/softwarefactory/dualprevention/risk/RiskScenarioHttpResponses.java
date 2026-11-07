@@ -29,6 +29,12 @@ final class RiskScenarioHttpResponses {
         transport.stage(request,response,unchanged?304:200,Collections.unmodifiableMap(headers),unchanged?0:result.size(),unchanged?output->{}:result::writeTo);
     }
     static void error(HttpServletRequest request,HttpServletResponse response,RiskScenarioHttpTransport transport,Exception error)throws IOException{
+        if(error instanceof com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure){
+            var body=com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.unknown(failure,IdentityRequestIds.get(request).traceId());
+            var encoded=encodeOwnedResponse(body,ResponseBudget.ERROR);
+            transport.stage(request,response,503,jsonHeaders("no-store"),encoded.size(),encoded::writeTo);
+            return;
+        }
         int status;String code;boolean retryable=false;
         if(error instanceof Failure failure){status=failure.status();code=failure.code();retryable=status==503&&!"RESPONSE_BUDGET_EXCEEDED".equals(code);}
         else if(error instanceof SessionSensitiveException failure){status=switch(failure.reason()){case UNAVAILABLE->503;case CONFLICT->409;case REJECTED,NO_TRUSTED_LINEAGE->403;};code=status==503?"UNAVAILABLE":status==409?"CONFLICT":"FORBIDDEN";}
