@@ -38,6 +38,7 @@ final class CiPg18RiskCaptureFixture implements AutoCloseable {
 
     static CiPg18RiskCaptureFixture open(CiPg18CaptureTarget target) {
         var fixture=new CiPg18RiskCaptureFixture(target);
+        String phase="open";
         try {
             // This is deliberately before Flyway, CREATE ROLE, grants and all fixture DML.
             try(var connection=fixture.connect(true)) { fixture.requireEmpty(connection); }
@@ -45,17 +46,22 @@ final class CiPg18RiskCaptureFixture implements AutoCloseable {
                     .locations("classpath:db/migration").table(HISTORY)
                     .baselineOnMigrate(false).outOfOrder(false).cleanDisabled(true)
                     .validateMigrationNaming(true).load();
+            phase="migrate";
             if(fixture.flyway.migrate().migrationsExecuted!=VERSIONS.size()) throw failed("migrate",null);
             fixture.flyway.validate();
+            phase="runtime-role";
             fixture.provisionRuntime();
+            phase="seed-tenant";
             fixture.seedIdentities();
+            phase="schema";
             fixture.assertMigrationsAndCauseSchema();
+            phase="runtime-rights";
             fixture.verifyRuntimeRights();
             fixture.writeEvidence();
             return fixture;
         } catch (SQLException | IOException | RuntimeException failure) {
             fixture.closed=true;
-            throw failed("open",failure);
+            throw failed(phase,failure);
         }
     }
 

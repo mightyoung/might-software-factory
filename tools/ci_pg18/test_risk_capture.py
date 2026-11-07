@@ -358,5 +358,12 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(command.call_count, 1)
                 self.assertTrue((state / "resources.json").exists())
 
+    def test_private_migration_log_retains_only_known_version_and_numeric_positions(self):
+        path = self.root / "private.log"
+        path.write_text('PRIVATE PASSWORD\nMigrating schema "public" to version "21 - asset hazard foundation"\nPosition : 123\nLine : 456\nPRIVATE SQL\n')
+        result = subject.migration_diagnostics(path)
+        self.assertEqual(result, {"lastMigrationVersion": "21", "errorPositions": [123, 456]})
+        self.assertNotIn("PRIVATE", json.dumps(subject.public_diagnostics({"migrationDiagnostics": result})))
+
 if __name__ == "__main__":
     unittest.main()

@@ -537,6 +537,22 @@ def write_result(repo, result):
     path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 
 
+def migration_diagnostics(path):
+    """Keep only known migration numbers and numeric SQL positions from private logs."""
+    try:
+        data = bounded_bytes(path, 8 * 1024 * 1024, "MIGRATION_LOG").decode("utf-8", errors="replace")
+    except Rejected:
+        return {}
+    versions = re.findall(r'Migrating schema [^\r\n]*? to version "([0-9]+)(?: -|")', data)
+    positions = re.findall(r"(?m)^\s*(?:Position|Line)\s*:\s*([0-9]{1,7})\s*$", data)
+    output = {}
+    if versions and versions[-1] in VERSIONS:
+        output["lastMigrationVersion"] = versions[-1]
+    if positions:
+        output["errorPositions"] = [int(value) for value in positions[-4:]]
+    return output
+
+
 def public_diagnostics(result):
     """Render only known test outcomes and validated database evidence."""
     output = {"status": "PASS" if result.get("status") == "PASS" else "FAILED",
@@ -558,6 +574,14 @@ def public_diagnostics(result):
         digest = result.get("imageDigest")
         if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest)
+    migration = result.get("migrationDiagnostics", {})
+    if isinstance(migration, dict):
+        version = migration.get("lastMigrationVersion")
+        if version in VERSIONS:
+            output["lastMigrationVersion"] = version
+        positions = migration.get("errorPositions")
+        if isinstance(positions, list) and len(positions) <= 4 and all(type(value) is int and 0 <= value < 10000000 for value in positions):
+            output["errorPositions"] = positions
     return output
 
 
@@ -591,6 +615,7 @@ def run_acceptance(repo, environment):
         maven_exit = run_maven(repo, state, child)
         result["mavenExit"] = maven_exit
         if maven_exit:
+            result["migrationDiagnostics"] = migration_diagnostics(state / "maven.log")
             result["reportDiagnostics"] = report_diagnostics(repo)
             failure = repo / "backend" / "target" / "ci-pg18-safe-failure.json"
             if failure.exists():
