@@ -59,7 +59,7 @@ class RiskPublicationJdbcTemplateTest {
             verify(f.statement()).setObject(1, values[0]);
             verify(f.statement()).setString(2, (String) values[1]);
             verify(f.statement()).setString(3, (String) values[2]);
-            verify(f.statement()).setTimestamp(4, (Timestamp) values[3]);
+            verify(f.statement()).setObject(4, values[3]);
             verify(f.statement()).setString(5, (String) values[4]);
             verify(f.connection(), never()).close();
             verify(f.connection(), never()).commit();
