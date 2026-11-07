@@ -1,4 +1,5 @@
 import type { LedgerColumn } from "../domain/ledger";
+import { useAppMode } from "../mode";
 
 interface LedgerTableProps<T> {
   columns: readonly LedgerColumn<T>[];
@@ -22,6 +23,7 @@ export function LedgerTable<T>({
   onTogglePage,
   onOpen,
 }: LedgerTableProps<T>) {
+  const demo = useAppMode() === "synthetic";
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.has(getKey(row)));
 
   return (
@@ -85,7 +87,7 @@ export function LedgerTable<T>({
           {rows.length === 0 && (
             <tr>
               <td colSpan={columns.length + 2} className="empty-cell">
-                当前筛选条件下没有演示记录。
+                当前筛选条件下没有{demo ? "演示" : ""}记录。
               </td>
             </tr>
           )}

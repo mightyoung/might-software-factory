@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { syntheticSessionAdapter, type SessionAdapter } from "../../adapters/sessionAdapter";
+import { beginExpiry, clearAllDrafts, draftOwnerKey, onSignedIn } from "./draftStash";
 import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap } from "../../domain/session";
 
 export type SessionState =
   | { status: "restoring" }
-  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" }
+  | { status: "signedOut"; notice: "none" | "signedOut" | "expired" | "unavailable" | "forbidden" | "passwordChanged" }
   | { status: "signedIn"; session: SessionBootstrap };
 
 export interface SessionContextValue {
@@ -14,6 +15,10 @@ export interface SessionContextValue {
   /** 当前适配器登录是否需要租户码。 */
   requiresTenantCode: boolean;
   logout(): Promise<void>;
+  /** 当前适配器是否支持自助改密。 */
+  canChangePassword: boolean;
+  /** 成功后本地登录态清除并回到登录页（服务端已使所有旧会话失效）；失败抛 SessionError。 */
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
   /** 服务端返回 401（会话失效或被撤销）时调用：清除本地登录态并回到登录页。 */
   expire(): void;
   loadMenu(applicationId: ApplicationId, signal?: AbortSignal): Promise<AppMenu>;
@@ -47,7 +52,9 @@ export function SessionProvider({
       })
       .catch((error: unknown) => {
         if (isAbortError(error) || mine !== generation.current) return;
-        setState({ status: "signedOut", notice: "unavailable" });
+        // 账号 / 租户已停用（403）不是暂时故障，不能让用户一直“稍后重试”。
+        const denied = error instanceof SessionError && error.kind === "forbidden";
+        setState({ status: "signedOut", notice: denied ? "forbidden" : "unavailable" });
       });
     return () => controller.abort();
   }, [adapter]);
@@ -56,6 +63,7 @@ export function SessionProvider({
     async (username: string, password: string, tenantCode?: string) => {
       const session = await adapter.login({ username, password, tenantCode });
       generation.current += 1;
+      onSignedIn(draftOwnerKey(session.tenant.id, session.actor.id));
       setState({ status: "signedIn", session });
       return session;
     },
@@ -64,6 +72,7 @@ export function SessionProvider({
 
   const logout = useCallback(async () => {
     generation.current += 1;
+    clearAllDrafts(); // 主动退出：不在内存里留下上一个人的草稿
     try {
       await adapter.logout();
     } catch {
@@ -74,8 +83,26 @@ export function SessionProvider({
 
   const expire = useCallback(() => {
     generation.current += 1;
+    beginExpiry(); // 被动失效：未提交的上报草稿在重新登录后恢复
     setState({ status: "signedOut", notice: "expired" });
   }, []);
+
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      if (!adapter.changePassword) throw new SessionError("unavailable", false);
+      try {
+        await adapter.changePassword(currentPassword, newPassword);
+      } catch (error) {
+        // 会话已失效：回到登录页，而不是停在对话框里报错。
+        if (error instanceof SessionError && error.kind === "unauthenticated") expire();
+        throw error;
+      }
+      generation.current += 1;
+      clearAllDrafts();
+      setState({ status: "signedOut", notice: "passwordChanged" });
+    },
+    [adapter, expire],
+  );
 
   const loadMenu = useCallback(
     async (applicationId: ApplicationId, signal?: AbortSignal) => {
@@ -91,9 +118,10 @@ export function SessionProvider({
   );
 
   const requiresTenantCode = adapter.requiresTenantCode === true;
+  const canChangePassword = adapter.changePassword !== undefined;
   const value = useMemo(
-    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode }),
-    [state, login, logout, expire, loadMenu, requiresTenantCode],
+    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword }),
+    [state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

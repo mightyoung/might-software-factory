@@ -58,3 +58,37 @@ jobs:
       - name: Production build
         working-directory: frontend
         run: npm run build
+
+      - name: Bundle size budget
+        working-directory: frontend
+        run: npm run check:bundle
+
+  e2e:
+    # 浏览器端到端：对着契约模拟服务（不是后端）。使用 runner 自带的 Google Chrome，不下载浏览器。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Chrome is available
+        run: google-chrome --version
+
+      - name: End-to-end tests
+        working-directory: frontend
+        run: npm run e2e
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 7

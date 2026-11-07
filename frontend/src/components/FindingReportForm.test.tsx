@@ -7,7 +7,8 @@ import {
   type FindingSubmitContext,
   type FindingSubmitResult,
 } from "../adapters/findingSubmit";
-import type { FindingDraft } from "../domain/findingDraft";
+import { createEmptyDraft, type FindingDraft } from "../domain/findingDraft";
+import { stashDraft, clearAllDrafts } from "../features/session/draftStash";
 
 import { findingDefinitionFixture } from "../adapters/findingDefinition.fixtures";
 
@@ -57,7 +58,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-afterEach(cleanup);
+afterEach(()=>{cleanup();clearAllDrafts();});
 
 describe("新建上报表单", () => {
   it("提供必要字段，等级只读为“待判定”，没有上报人或租户输入", () => {
@@ -421,6 +422,38 @@ describe("所属组织选择", () => {
     expect(vi.mocked(adapter.submit).mock.calls[0]![1]).toMatchObject({ organizationId: "o2" });
   });
 
+  it("缺组织时焦点落到该字段并用 aria-describedby 关联错误；选择后错误消失", async () => {
+    withOrgs(async () => orgs);
+    await screen.findByRole("option", { name: "二车间" });
+    fillValid();
+    fireEvent.click(submitButton());
+    const select = field(/所属组织/);
+    await waitFor(() => expect(document.activeElement).toBe(select));
+    const error = screen.getByText("请选择所属组织");
+    expect(select).toHaveAttribute("aria-describedby", error.id);
+    expect(select).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(select, { target: { value: "o1" } });
+    await waitFor(() => expect(screen.queryByText("请选择所属组织")).not.toBeInTheDocument());
+  });
+
+  it("用户亲自选了组织就算有未提交内容：Esc 先确认；自动选中的单个组织不算", async () => {
+    const adapter: FindingSubmitAdapter = { submit: vi.fn(async () => RESULT), listOrganizations: async () => orgs };
+    const onClose = vi.fn();
+    const { unmount } = render(<FindingReportForm adapter={adapter} onClose={onClose} onSubmitted={vi.fn()} onOpenSubmitted={vi.fn()} now={() => NOW} />);
+    await screen.findByRole("option", { name: "二车间" });
+    fireEvent.change(field(/所属组织/), { target: { value: "o2" } });
+    fireEvent.keyDown(screen.getByRole("complementary"), { key: "Escape" });
+    expect(await screen.findByText("放弃已填写的内容？")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    unmount();
+
+    const single: FindingSubmitAdapter = { submit: vi.fn(async () => RESULT), listOrganizations: async () => [orgs[0]!] };
+    render(<FindingReportForm adapter={single} onClose={onClose} onSubmitted={vi.fn()} onOpenSubmitted={vi.fn()} now={() => NOW} />);
+    await waitFor(() => expect(field(/所属组织/)).toHaveValue("o1"));
+    fireEvent.keyDown(screen.getByRole("complementary"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("只有一个组织时自动选中", async () => {
     const adapter = withOrgs(async () => [orgs[0]!]);
     await waitFor(() => expect(field(/所属组织/)).toHaveValue("o1"));
@@ -447,6 +480,24 @@ describe("所属组织选择", () => {
 describe("published create form and bounded organization search", () => {
   const orgA = { id: "00000000-0000-4000-8000-000000000101", code: "A", name: "甲车间" };
   const orgB = { id: "00000000-0000-4000-8000-000000000102", code: "B", name: "乙车间" };
+
+  it.each([false,true])("revalidates restored organization before submission (current page includes old ID: %s)",async includesOld=>{
+    const draftKey=`restore-org-${includesOld}`;
+    stashDraft(draftKey,{draft:{...createEmptyDraft(NOW),location:"恢复的位置",description:"恢复的隐患描述"},organizationId:orgA.id});
+    const pending=deferred<{items:typeof orgA[]}>();
+    const adapter:FindingSubmitAdapter={loadDefinition:async()=>findingDefinitionFixture("CREATE"),queryOrganizations:vi.fn(()=>pending.promise),submit:vi.fn(async()=>RESULT)};
+    setup(undefined,{adapter,draftKey});
+    const org=await screen.findByLabelText(/所属组织/);
+    await waitFor(()=>expect(adapter.queryOrganizations).toHaveBeenCalledOnce());
+    expect(org).toHaveValue("");expect(submitButton()).toBeDisabled();
+    fireEvent.submit(submitButton().closest("form")!);expect(adapter.submit).not.toHaveBeenCalled();
+    await act(async()=>pending.resolve({items:[includesOld?orgA:orgB]}));
+    await waitFor(()=>expect(org).toBeEnabled());
+    expect(org).toHaveValue(includesOld?orgA.id:"");
+    fireEvent.submit(submitButton().closest("form")!);
+    if(includesOld){await waitFor(()=>expect(adapter.submit).toHaveBeenCalledOnce());expect((adapter.submit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toMatchObject({organizationId:orgA.id});}
+    else{expect(adapter.submit).not.toHaveBeenCalled();expect(screen.getByText("请选择所属组织")).toBeInTheDocument();}
+  });
 
   it("uses published labels/order and never auto-selects a one-item page", async () => {
     const definition = findingDefinitionFixture("CREATE"); definition.fields.description!.presentation.label = "现场描述";

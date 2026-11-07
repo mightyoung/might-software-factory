@@ -43,6 +43,8 @@ export function createMockServer(options = {}) {
   const navigation = () => options.navigation?.() ?? { enabled: true, permissions: ["finding.read", "finding.create"] };
   const cycleFixture = options.reviewCycles === true ? createReviewCycleFixture() : null;
   const sessions = new Map();
+  let demoPassword = "demo"; // 改密后变化；重启恢复为 demo
+  let passwordFailures = 0; // 连续 5 次当前密码错误后 429，仅用于覆盖限流提示
   const findings = [];
   const reviewEntries = new Map();
   const receipts = new Map(); // Idempotency-Key -> { body, response }
@@ -128,7 +130,7 @@ export function createMockServer(options = {}) {
       if (!b || typeof b.loginKey !== "string" || typeof b.password !== "string" || typeof b.tenantCode !== "string" || !b.loginKey || !b.password || !b.tenantCode)
         return err(res, 400, "INVALID_REQUEST", "Malformed login");
       const fixtureIdentity = cycleFixture?.login(b.loginKey);
-      if ((!fixtureIdentity && b.loginKey !== "demo") || b.password !== "demo" || b.tenantCode !== "demo") return err(res, 401, "AUTH_REQUIRED", "Invalid credentials");
+      if ((!fixtureIdentity && b.loginKey !== "demo") || b.password !== (fixtureIdentity ? "demo" : demoPassword) || b.tenantCode !== "demo") return err(res, 401, "AUTH_REQUIRED", "Invalid credentials");
       const id = randomUUID();
       sessions.set(id, fixtureIdentity ?? { actorId: randomUUID(), accountId: randomUUID(), tenantId: randomUUID(), memberId: randomUUID() });
       return send(res, 204, undefined, { "Set-Cookie": [`SESSION=${id}; Path=/; HttpOnly; SameSite=Lax`, newCsrf()] });
@@ -159,6 +161,22 @@ export function createMockServer(options = {}) {
       if (path !== "/api/v1/applications/safety/menu" || !enabled) return err(res, 403, "ACTION_DENIED", "Application unavailable");
       return send(res, 200, { data: { schemaVersion: 1, applicationId: "safety", title: "生产安全",
         nodes: [{ id: "findings", label: "隐患管理", path: "safety/findings", permission: "finding.read" }], permissions, authorization } });
+    }
+    if (req.method === "POST" && path === "/api/v1/account/password") {
+      const b = await readJson(req);
+      const bytes = (s) => Buffer.byteLength(s, "utf8");
+      const known = b && typeof b === "object" && Object.keys(b).every((k) => k === "currentPassword" || k === "newPassword");
+      if (!known || typeof b.currentPassword !== "string" || typeof b.newPassword !== "string" || !b.currentPassword || bytes(b.currentPassword) > 72 || cp(b.newPassword) < 15 || bytes(b.newPassword) > 72)
+        return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors: [{ field: "newPassword", reason: "Size" }] });
+      if (passwordFailures >= 5) return err(res, 429, "RATE_LIMITED", "Too many attempts", { retryable: true }, { "Retry-After": "2" });
+      if (b.currentPassword !== demoPassword) {
+        passwordFailures += 1;
+        return err(res, 401, "AUTH_REQUIRED", "Reauthentication failed"); // 与“会话失效”同码，前端需要自行区分
+      }
+      passwordFailures = 0;
+      demoPassword = b.newPassword;
+      sessions.clear(); // 凭据代数前进：所有旧会话作废
+      return send(res, 204, undefined, { "X-Trace-Id": randomUUID(), "Set-Cookie": ["SESSION=; Path=/; Max-Age=0", "XSRF-TOKEN=; Path=/; Max-Age=0"] });
     }
     if (req.method === "GET" && path === "/api/v1/session/current")
       return send(res, 200, { data: { ...identity, tenantCode: "demo", tenantName: "演示租户（模拟服务）", displayName } });

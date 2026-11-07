@@ -155,21 +155,52 @@ describe("上报流程", () => {
 });
 
 describe("真实后端会话（非合成）", () => {
-  it("不显示合成演示标识，台账与上报使用注入的适配器", async () => {
+  const live = { id: "00000000-0000-4000-8000-0000000000aa", code: "YH-20261102-0001", description: "护栏松动", location: "A 工房", state: "PERSON_CONFIRM_PENDING" as const,
+    reportedAt: "2026-11-02T09:00:00+08:00", reporter: "—", responsible: "—", riskLabel: "待专业评估", round: 1, version: 1, history: [] };
+
+  it("任何界面文字都不再称真实数据为演示/合成；台账、详情、上报使用注入的适配器", async () => {
     window.history.replaceState(null, "", "/safety/findings");
     const base = createSyntheticSessionAdapter({ signedInAs: "demo.safety" });
-    const ledger = { list: vi.fn(async () => ({ items: [], page: { index: 1, size: 20 }, total: 0, pageCount: 0 })), get: vi.fn(async () => null) };
-    const submit = { submit: vi.fn(), listOrganizations: vi.fn(async () => [{ id: "o1", code: "A", name: "一车间" }]) };
-    render(<App sessionAdapter={{ ...base, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit })} />);
+    const ledger = {
+      list: vi.fn(async () => ({ items: [live], page: { index: 1, size: 20 }, total: 1, pageCount: 1 })),
+      get: vi.fn(async () => live),
+    };
+    const submit = { submit: vi.fn(), urgencies: ["NORMAL", "IMMEDIATE"] as const, listOrganizations: vi.fn(async () => [{ id: "o1", code: "A", name: "一车间" }]) };
+    // 演示适配器的账号显示名本身带“演示”，换成中性名字，只检查产品文案。
+    const restore: typeof base.restore = async () => ({ ...(await base.restore())!, actor: { id: "u1", displayName: "张三" } });
+    render(<App mode="http" sessionAdapter={{ ...base, restore, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit, commands: { run: vi.fn() } })} />);
     await screen.findByRole("heading", { name: "隐患台账" });
     expect(screen.queryByText("合成演示")).not.toBeInTheDocument();
     expect(screen.queryByText("前端合成数据")).not.toBeInTheDocument();
     expect(screen.queryByText(/合成演示数据/)).not.toBeInTheDocument();
     await waitFor(() => expect(ledger.list).toHaveBeenCalled());
-    expect(await screen.findByText("共 0 条记录")).toBeInTheDocument();
+
+    await screen.findByText("共 1 条记录");
+    const noDemoWording = () => {
+      const text = document.body.textContent ?? "";
+      expect(text).not.toMatch(/演示|合成|示例对象/);
+    };
+    noDemoWording();
+
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    await screen.findByText("处理轨迹");
+    noDemoWording();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭详情" }));
     fireEvent.click(screen.getByRole("button", { name: /新建上报/ }));
     expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
     expect(screen.queryByText("后端暂未接入")).not.toBeInTheDocument();
+    // 适配器声明的紧急程度：没有后端不接受的“紧急”档
+    expect(screen.queryByLabelText("紧急")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("需立即处置")).toBeInTheDocument();
+    noDemoWording();
+  });
+
+  it("演示模式仍标注演示", async () => {
+    window.history.replaceState(null, "", "/safety/findings");
+    render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} />);
+    await screen.findByText(/共 \d+ 条演示记录/);
+    expect(screen.getByText("合成演示")).toBeInTheDocument();
   });
 });
 
@@ -192,7 +223,7 @@ describe("READ and CREATE route projections", () => {
       },
     } as unknown as import("./api/httpClient").HttpClient;
     setPath(`${T}/safety/findings${permissions.includes("safety.finding.read") ? "" : "?caseId=previous-record"}`);
-    render(<App sessionAdapter={{ ...base, requiresTenantCode: true, restore: async () => ({ ...session, permissions }) }} findingStore={{ ledger: createHttpFindingLedger(client), submit: createHttpFindingSubmit(client) }} />);
+    render(<App mode="http" sessionAdapter={{ ...base, requiresTenantCode: true, restore: async () => ({ ...session, permissions }) }} findingStore={{ ledger: createHttpFindingLedger(client), submit: createHttpFindingSubmit(client) }} />);
     return { gets, posts, orgId };
   }
 
@@ -226,5 +257,108 @@ describe("READ and CREATE route projections", () => {
     await screen.findByRole("heading", { name: "无权访问" });
     expect(gets).toEqual([]); expect(posts).toEqual([]);
     expect(screen.queryByRole("complementary", { name: "新建上报面板" })).not.toBeInTheDocument();
+  });
+});
+
+describe("未提交草稿的离开保护", () => {
+  async function openDirtyDraft() {
+    renderAs("demo.manager");
+    await screen.findByRole("heading", { name: "隐患台账" });
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    fireEvent.change(await screen.findByLabelText(/隐患描述/), { target: { value: "通道护栏连接件松动" } });
+  }
+
+  it("点应用内链接离开先确认：取消则留在原页并保留草稿", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await openDirtyDraft();
+    fireEvent.click(await screen.findByRole("link", { name: "待确认" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("还没有提交"));
+    expect(window.location.pathname).toBe(`${T}/safety/findings`);
+    expect(screen.getByLabelText(/隐患描述/)).toHaveValue("通道护栏连接件松动");
+    confirm.mockRestore();
+  });
+
+  it("确认后离开", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await openDirtyDraft();
+    fireEvent.click(await screen.findByRole("link", { name: "待确认" }));
+    await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/inbox`));
+    confirm.mockRestore();
+  });
+
+  it("没有改动、已提交成功或已关闭面板时不询问", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderAs("demo.manager");
+    await screen.findByRole("heading", { name: "隐患台账" });
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    await screen.findByLabelText(/隐患描述/);
+    fireEvent.click(await screen.findByRole("link", { name: "待确认" }));
+    await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/inbox`));
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("提交成功后不再询问", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderAs("demo.safety");
+    await screen.findByRole("heading", { name: "隐患台账" });
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    await fillAndSubmit();
+    await screen.findByText("已提交上报");
+    fireEvent.click(await screen.findByRole("link", { name: "隐患台账" }));
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+});
+
+describe("会话被动失效后的草稿恢复", () => {
+  function expiringStore(): SyntheticFindingStore {
+    const base = createSyntheticFindingStore();
+    return { ...base, submit: { submit: vi.fn(async () => { throw new FindingSubmitError("unauthenticated"); }) } };
+  }
+  async function fillAndExpire(user: string) {
+    renderAs(user, `${T}/safety/findings`, expiringStore());
+    await screen.findByRole("heading", { name: "隐患台账" });
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    fireEvent.change(await screen.findByLabelText(/所在位置/), { target: { value: "北侧通道" } });
+    fireEvent.change(screen.getByLabelText(/隐患描述/), { target: { value: "护栏连接件松动" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交上报" }));
+    await screen.findByText("登录已失效，请重新登录。");
+  }
+  async function signInAs(user: string) {
+    fireEvent.change(screen.getByLabelText("账号"), { target: { value: user } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await screen.findByRole("heading", { name: "隐患台账" });
+  }
+
+  it("同一个人重新登录后，上报表单恢复未提交的内容并提示", async () => {
+    await fillAndExpire("demo.manager");
+    await signInAs("demo.manager");
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("护栏连接件松动");
+    expect(screen.getByLabelText(/所在位置/)).toHaveValue("北侧通道");
+    expect(screen.getByText(/已恢复登录失效前还没提交的内容/)).toBeInTheDocument();
+  });
+
+  it("换成另一个账号登录，看不到上一个人的草稿", async () => {
+    await fillAndExpire("demo.manager");
+    await signInAs("demo.admin");
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("");
+    expect(screen.queryByText(/已恢复登录失效前/)).not.toBeInTheDocument();
+  });
+
+  it("主动退出不保留草稿，再登录也不恢复", async () => {
+    renderAs("demo.manager");
+    await screen.findByRole("heading", { name: "隐患台账" });
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    fireEvent.change(await screen.findByLabelText(/隐患描述/), { target: { value: "护栏连接件松动" } });
+    fireEvent.click(screen.getByRole("button", { name: /演示部门负责人/ }));
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    await screen.findByRole("heading", { name: "登录" });
+    await signInAs("demo.manager");
+    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("");
   });
 });

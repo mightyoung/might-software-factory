@@ -1,4 +1,4 @@
-import type { FindingState } from "../domain/finding";
+import type { FindingState, FindingUrgency } from "../domain/finding";
 import type { FindingDraft, FindingDraftErrors } from "../domain/findingDraft";
 import type { FindingDefinition } from "./findingDefinition";
 
@@ -8,7 +8,7 @@ export interface FindingSubmitContext {
    * 同键异参应被拒绝（conflict）。
    */
   idempotencyKey: string;
-  /** 所属组织：仅当适配器提供 listOrganizations 时必填，来自当前会话有权上报的组织。 */
+  /** 所属组织：仅当适配器提供组织引用查询或 listOrganizations 时必填，来自当前会话有权上报的组织。 */
   organizationId?: string;
   signal?: AbortSignal;
 }
@@ -46,7 +46,9 @@ export interface FindingSubmitAdapter {
   loadDefinition?(signal?: AbortSignal): Promise<FindingDefinition>;
   queryOrganizations?(request: ReportableOrganizationQuery, signal?: AbortSignal): Promise<ReportableOrganizationPage>;
   submit(draft: FindingDraft, context: FindingSubmitContext): Promise<FindingSubmitResult>;
-  /** 有此方法时表单要求先选择组织；列表为空表示当前没有可上报的组织。失败抛 FindingSubmitError。 */
+  /** 服务端接受的紧急程度；缺省为全部。表单只提供这些选项，避免用户选了必然被拒的档位。 */
+  readonly urgencies?: readonly FindingUrgency[];
+  /** 合成或兼容端口；有此方法时表单要求选择组织，空列表表示无可上报组织。 */
   listOrganizations?(signal?: AbortSignal): Promise<readonly ReportableOrganization[]>;
 }
 

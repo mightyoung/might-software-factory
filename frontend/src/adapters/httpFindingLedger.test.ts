@@ -84,6 +84,18 @@ describe("createHttpFindingLedger", () => {
     expect((await ledger.get(created.id))?.urgency).toBe(urgency);
   });
 
+  it("uses the current published grade label while retaining required-field validation", async () => {
+    const response = definitionResponse();
+    const grade = response.data.fields.grade!;
+    const current = { ...response, data: { ...response.data, fields: { ...response.data.fields,
+      grade: { ...grade, presentation: { ...grade.presentation, valueLabels: { ...grade.presentation.valueLabels, UNKNOWN: "当前发布的待评估标签" } } },
+    } } };
+    const client = { get: async () => current, post: async () => listBody } as unknown as HttpClient;
+    const result = await createHttpFindingLedger(client).list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    expect(result.items[0]?.riskLabel).toBe("当前发布的待评估标签");
+    expect(result.items[0]?.round).toBe(2);
+  });
+
   it("a cancelled first call does not poison the next definition request for the next call (StrictMode)", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);
@@ -117,6 +129,14 @@ describe("createHttpFindingLedger", () => {
     const f = fake({ get: (p) => { paths.push(p); return new ApiError(404, "RESOURCE_NOT_VISIBLE", null, false); } });
     expect(await createHttpFindingLedger(f.client).get("a/b")).toBeNull();
     expect(paths).toEqual(["/api/v1/entities/finding/a%2Fb"]);
+  });
+
+  it.each(["state", "grade", "roundNo"] as const)("fails the read when required %s is missing instead of inventing it", async (missing) => {
+    const incomplete = Object.fromEntries(Object.entries(item).filter(([field]) => field !== missing));
+    const f = fake({ post: () => ({ data: { items: [incomplete], page: { number: 1, size: 20, total: 1, pageCount: 1 } }, meta: {} }) });
+    const call = createHttpFindingLedger(f.client).list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    await expect(call).rejects.toMatchObject({ name: "MalformedFindingResponseError" });
+    await expect(call).rejects.not.toMatchObject({ name: "FindingLedgerAccessError" }); // 通用失败，不是未登录/无权
   });
 });
 

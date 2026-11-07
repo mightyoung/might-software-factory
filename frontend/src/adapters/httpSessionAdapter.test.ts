@@ -106,4 +106,30 @@ describe("createHttpSessionAdapter", () => {
     await expect(adapter.restore()).rejects.toMatchObject({ kind: "unavailable" });
     await expect(adapter.loadMenu("safety")).rejects.toMatchObject({ kind: "unavailable" });
   });
+
+  describe("changePassword", () => {
+    const P = "/api/v1/account/password";
+    const run = (handlers: Record<string, () => unknown>) => createHttpSessionAdapter(fake(handlers).client).changePassword!("old", "n".repeat(15));
+
+    it("sends the credentials once and resolves on 204", async () => {
+      const f = fake({ [P]: () => undefined });
+      await createHttpSessionAdapter(f.client).changePassword!("old", "n".repeat(15));
+      expect(f.calls).toEqual([P]);
+    });
+
+    it("maps 400, 409 and 429", async () => {
+      await expect(run({ [P]: () => new ApiError(400, "INVALID_REQUEST", null, false) })).rejects.toMatchObject({ kind: "invalid_request" });
+      await expect(run({ [P]: () => new ApiError(409, "X", null, false) })).rejects.toMatchObject({ kind: "stale_attempt", retryable: true });
+      await expect(run({ [P]: () => new ApiError(429, "RATE_LIMITED", null, true, [], 12) })).rejects.toMatchObject({ kind: "rate_limited", retryAfterSeconds: 12 });
+    });
+
+    it("tells a wrong current password from a dead session by re-reading the session on 401", async () => {
+      const alive = fake({ [P]: () => new ApiError(401, "AUTH_REQUIRED", null, false), "/api/v1/session/bootstrap": () => bootstrap });
+      await expect(createHttpSessionAdapter(alive.client).changePassword!("old", "n".repeat(15))).rejects.toMatchObject({ kind: "invalid_credentials" });
+      const dead = fake({ [P]: () => new ApiError(401, "AUTH_REQUIRED", null, false), "/api/v1/session/bootstrap": () => new ApiError(401, "AUTH_REQUIRED", null, false) });
+      await expect(createHttpSessionAdapter(dead.client).changePassword!("old", "n".repeat(15))).rejects.toMatchObject({ kind: "unauthenticated" });
+      const down = fake({ [P]: () => new ApiError(401, "AUTH_REQUIRED", null, false), "/api/v1/session/bootstrap": () => new ApiError(503, "X", null, true) });
+      await expect(createHttpSessionAdapter(down.client).changePassword!("old", "n".repeat(15))).rejects.toMatchObject({ kind: "unavailable" });
+    });
+  });
 });

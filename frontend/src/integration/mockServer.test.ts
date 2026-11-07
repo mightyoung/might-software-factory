@@ -231,4 +231,24 @@ describe("HTTP adapters × 契约模拟服务", () => {
     const failed = await commands.run(pending.id, pending.version!, { kind: "verify", decision: "FAIL", reason: "未整改到位" }, { idempotencyKey: KEY() });
     expect(failed).toMatchObject({ state: "RECTIFYING", roundNo: pending.round + 1 });
   });
+
+  // 本用例改变共享模拟服务的密码，必须放在本文件最后。
+  it("改密：当前密码错 → invalid_credentials；成功后旧会话作废、旧密码不能登录、新密码可登录；限流", async () => {
+    const adapter = () => createHttpSessionAdapter(client());
+    const session = adapter();
+    await session.login({ username: "demo", password: "demo", tenantCode: "demo" });
+    await expect(session.changePassword!("not-it", "n".repeat(15))).rejects.toMatchObject({ kind: "invalid_credentials" });
+    await expect(session.changePassword!("demo", "short")).rejects.toMatchObject({ kind: "invalid_request" });
+
+    const next = "a-new-long-password";
+    await session.changePassword!("demo", next);
+    expect(await session.restore()).toBeNull(); // 旧会话作废
+    await expect(adapter().login({ username: "demo", password: "demo", tenantCode: "demo" })).rejects.toMatchObject({ kind: "invalid_credentials" });
+    const again = adapter();
+    await again.login({ username: "demo", password: next, tenantCode: "demo" });
+
+    // 连续 5 次当前密码错误后进入限流（模拟服务的固定规则）
+    for (let i = 0; i < 5; i += 1) await expect(again.changePassword!("wrong", "n".repeat(15))).rejects.toMatchObject({ kind: "invalid_credentials" });
+    await expect(again.changePassword!("wrong", "n".repeat(15))).rejects.toMatchObject({ kind: "rate_limited", retryAfterSeconds: 2 });
+  });
 });
