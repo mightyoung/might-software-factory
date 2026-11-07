@@ -75,8 +75,8 @@ class RiskScenarioDraftChangedListenerTest {
         assertThat(Modifier.isPublic(method.getModifiers())).isTrue();
         assertThat(method.getReturnType()).isEqualTo(void.class);
         assertThat(type.getDeclaredAnnotations()).isEmpty();
-        assertThat(method.getDeclaredAnnotations()).extracting(annotation -> annotation.annotationType())
-                .containsExactlyInAnyOrder(Async.class, TransactionalEventListener.class);
+        assertThat(method.getDeclaredAnnotations()).extracting(annotation -> annotation.annotationType().getName())
+                .containsExactlyInAnyOrder(Async.class.getName(), TransactionalEventListener.class.getName());
         var listener = method.getDeclaredAnnotation(TransactionalEventListener.class);
         assertThat(listener.id()).isEqualTo("risk-scenario-draft-change");
         assertThat(listener.phase()).isEqualTo(TransactionPhase.AFTER_COMMIT);
