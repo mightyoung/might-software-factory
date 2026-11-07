@@ -131,7 +131,8 @@ class LoginThrottleFilterTest {
                 calls.incrementAndGet();
                 captured.set((LocalPasswordAuthenticationToken) authentication);
                 return switch (outcome) {
-                    case SUCCESS -> UsernamePasswordAuthenticationToken.authenticated("synthetic-principal", null, List.of());
+                    case SUCCESS -> UsernamePasswordAuthenticationToken.authenticated(
+                            VerifiedSessionPrincipalTestFixture.create(java.util.UUID.randomUUID(), java.util.UUID.randomUUID(), java.util.UUID.randomUUID()), null, List.of());
                     case BAD_CREDENTIALS -> throw new BadCredentialsException("synthetic internal failure");
                     case SERVICE_FAILURE -> throw new AuthenticationServiceException("synthetic dependency failure");
                     case RUNTIME_FAILURE -> throw new IllegalStateException("synthetic unexpected failure");
