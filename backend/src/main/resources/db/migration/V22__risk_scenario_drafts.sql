@@ -468,7 +468,7 @@ begin
     if s.id is null or r.entity_id is null or s.version is distinct from p_version or s.last_command_id is distinct from p_command
         or r.command_id is distinct from p_command or r.actor_id is distinct from s.updated_by_actor_id
         or r.member_id is distinct from s.updated_by_member_id or r.occurred_at is distinct from s.updated_at
-        or r.change_kind is distinct from case when p_version=1 then 'CREATE' else 'UPDATE' end
+        or r.change_kind is distinct from (case when p_version=1 then 'CREATE' else 'UPDATE' end)
         or (to_jsonb(r)-array['entity_id','command_id','actor_id','member_id','occurred_at','change_kind']::text[])
             is distinct from (to_jsonb(s)-array['id','last_command_id']::text[]) then
         raise exception 'risk complete root revision mismatch' using errcode='23514';
@@ -484,7 +484,7 @@ begin
     select * into s from public.risk_scenario where tenant_id=p_receipt.tenant_id and id=p_receipt.result_scenario_id;
     if s.id is null or row(s.version,s.last_command_id,s.code,s.updated_by_actor_id,s.updated_by_member_id,s.updated_at)
         is distinct from row(p_receipt.result_version,p_receipt.command_id,p_receipt.result_code,p_receipt.actor_id,p_receipt.member_id,p_receipt.occurred_at)
-        or p_receipt.action_code is distinct from case when s.version=1 then 'risk_scenario.create' else 'risk_scenario.update' end
+        or p_receipt.action_code is distinct from (case when s.version=1 then 'risk_scenario.create' else 'risk_scenario.update' end)
         or not exists(select 1 from public.principal p join public.tenant_member m on m.account_id=p.account_id
             where p.id=p_receipt.actor_id and p.kind='HUMAN' and p.account_id=p_receipt.account_id
             and m.tenant_id=p_receipt.tenant_id and m.id=p_receipt.member_id) then
@@ -602,7 +602,7 @@ begin
     s:=public.g014r_open_command(new.tenant_id,new.entity_id,new.version,new.command_id,new.actor_id,new.member_id,new.occurred_at);
     if (to_jsonb(new)-array['entity_id','command_id','actor_id','member_id','occurred_at','change_kind']::text[])
         is distinct from (to_jsonb(s)-array['id','last_command_id']::text[])
-        or new.change_kind is distinct from case when s.version=1 then 'CREATE' else 'UPDATE' end then
+        or new.change_kind is distinct from (case when s.version=1 then 'CREATE' else 'UPDATE' end) then
         raise exception 'risk inserted complete root revision mismatch' using errcode='23514';
     end if;
     return new;
