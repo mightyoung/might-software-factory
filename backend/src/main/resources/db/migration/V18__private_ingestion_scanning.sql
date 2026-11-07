@@ -410,9 +410,9 @@ begin
        or new.writer_quiescent is distinct from (new.writer_quiescence_observed_at is not null)
        or new.writer_quiescence_observed_at>new.observed_at or new.observed_sha256 is not null or new.observed_media_type is not null
        or new.child_reaped or new.child_reap_evidence_sha256 is not null or new.finalized_file_id is not null
-       or new.observation_kind is distinct from case when a.kind='SCANNER_SCRATCH' then 'SCRATCH' else 'UNTRUSTED_PARTIAL' end
+       or new.observation_kind is distinct from (case when a.kind='SCANNER_SCRATCH' then 'SCRATCH' else 'UNTRUSTED_PARTIAL' end)
        or new.object_absent is distinct from (new.recovery_presence='ABSENT')
-       or new.absence_durable_at is distinct from case when new.recovery_presence='ABSENT' then new.observed_at else null end then
+       or new.absence_durable_at is distinct from (case when new.recovery_presence='ABSENT' then new.observed_at else null end) then
         raise exception 'File ingestion recovery projection is invalid' using errcode='23514';
     end if;
     if (new.recovery_presence in ('ABSENT','UNKNOWN') and
