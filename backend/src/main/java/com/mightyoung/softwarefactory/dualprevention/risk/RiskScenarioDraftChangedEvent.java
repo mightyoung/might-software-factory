@@ -24,4 +24,9 @@ public record RiskScenarioDraftChangedEvent(UUID tenantId, UUID commandId, Strin
         boolean update = "risk_scenario.update".equals(actionCode) && "UPDATE".equals(changeKind) && version > 1;
         if (!create && !update) throw new IllegalArgumentException("Invalid risk draft event");
     }
+
+    /** Framework publication diagnostics must not render the original event tuple. */
+    @Override public String toString() {
+        return "RiskScenarioDraftChangedEvent[redacted]";
+    }
 }

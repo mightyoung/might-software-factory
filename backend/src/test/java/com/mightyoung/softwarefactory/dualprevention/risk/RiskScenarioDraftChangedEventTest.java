@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.modulith.events.core.PublicationTargetIdentifier;
+import org.springframework.modulith.events.core.TargetEventPublication;
 import static org.assertj.core.api.Assertions.*;
 
 class RiskScenarioDraftChangedEventTest {
@@ -24,6 +26,21 @@ class RiskScenarioDraftChangedEventTest {
                 "actionCode", "version", "occurredAt", "traceId", "changeKind"));
         assertThat(mapper.readValue(encoded, RiskScenarioDraftChangedEvent.class)).isEqualTo(event);
         assertThat(encoded.length).isLessThan(1024);
+    }
+
+    @Test void frameworkPublicationTextDoesNotExposeTheEventTuple() throws Exception {
+        var event = event("risk_scenario", "risk_scenario.create", 1, "CREATE");
+        assertThat(event.toString()).isEqualTo("RiskScenarioDraftChangedEvent[redacted]");
+        var publication = TargetEventPublication.of(event,
+                PublicationTargetIdentifier.of("risk-scenario-draft-change"), TIME.plusSeconds(3600));
+        assertThat(publication.toString()).contains(event.toString())
+                .doesNotContain(TENANT.toString(), COMMAND.toString(), RESOURCE.toString(), TRACE.toString(),
+                        TIME.toString(), "risk_scenario.create", "changeKind=");
+        var mapper = JsonMapper.builder().build();
+        var encoded = mapper.writeValueAsBytes(event);
+        assertThat(mapper.readValue(encoded, RiskScenarioDraftChangedEvent.class)).isEqualTo(event);
+        assertThat(mapper.readTree(encoded).get("tenantId").asText()).isEqualTo(TENANT.toString());
+        assertThat(mapper.readTree(encoded).get("traceId").asText()).isEqualTo(TRACE.toString());
     }
 
     @Test void updateReferencesItsNewRevisionWithoutClaimingAnAssessment() {
