@@ -148,16 +148,27 @@ public class RiskScenarioServiceTest {
         private final String publicationSql;
         public Fixture()throws Exception { this(true,true); }
         public Fixture(boolean configureBridge)throws Exception { this(configureBridge,true); }
-        public Fixture(boolean configureBridge,boolean qualified)throws Exception {
+        public Fixture(boolean configureBridge,boolean qualified)throws Exception {this(configureBridge,qualified,null);}
+        /** Only publication SQL is durable in this optional database lane; business/auth/audit remain synthetic. */
+        public Fixture(boolean configureBridge,boolean qualified,Connection publicationPhysical)throws Exception {
             publicationSql=qualified?PUB_SQL:PUB_SQL.replace("public.EVENT_PUBLICATION","EVENT_PUBLICATION");
             var templates=new ArrayList<>(RiskScenarioService.businessSqlTemplates());templates.add(RiskScenarioService.auditSqlTemplate());
             templates.add(new TransactionSqlSealGate.SqlTemplate(publicationSql,5,false,RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO));
             manager=new G014JdbcTransactionManager(G014SqlProfile.RISK_SCENARIO,pool,templates);
             when(pool.getConnection()).thenReturn(driver);var auto=new AtomicBoolean(true);when(driver.getAutoCommit()).thenAnswer(i->auto.get());
-            doAnswer(i->{auto.set(i.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+            doAnswer(i->{auto.set(i.getArgument(0));if(publicationPhysical!=null)publicationPhysical.setAutoCommit(i.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
             when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
-            doAnswer(i->{commits.incrementAndGet();return null;}).when(driver).commit();doAnswer(i->{rollbacks.incrementAndGet();return null;}).when(driver).rollback();
+            doAnswer(i->{commits.incrementAndGet();if(publicationPhysical!=null)publicationPhysical.commit();return null;}).when(driver).commit();doAnswer(i->{rollbacks.incrementAndGet();if(publicationPhysical!=null)publicationPhysical.rollback();return null;}).when(driver).rollback();
+            if(publicationPhysical!=null)doAnswer(i->{publicationPhysical.close();return null;}).when(driver).close();
             when(driver.prepareStatement(anyString())).thenAnswer(invocation->{String sql=invocation.getArgument(0);var statement=mock(PreparedStatement.class);
+                if(publicationPhysical!=null&&sql.equals(publicationSql)){
+                    PreparedStatement physicalStatement=publicationPhysical.prepareStatement(sql);
+                    return mock(PreparedStatement.class,call->{
+                        if(call.getMethod().getName().equals("executeUpdate"))publicationWrites.incrementAndGet();
+                        try{return call.getMethod().invoke(physicalStatement,call.getArguments());}
+                        catch(InvocationTargetException failure){throw failure.getCause();}
+                    });
+                }
                 when(statement.executeUpdate()).thenAnswer(i->{if(sql.equals(JooqBusinessAuditAppend.commandInsertSql()))auditWrites.incrementAndGet();if(sql.equals(publicationSql))publicationWrites.incrementAndGet();return 1;});
                 when(statement.getWarnings()).thenAnswer(i->{
                     if(!sql.equals(publicationSql))return null;

@@ -104,6 +104,11 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         if(witness.binding.alias!=expectedAlias || witness.event!=event)throw witness.reject();
         return witness;
     }
+    /** A rejected native route must invalidate its source even before it has issued a child frame. */
+    void rejectRiskPublicationIfActive(){
+        RiskPublicationWitness witness=riskPublication.get();
+        if(witness!=null)throw witness.reject();
+    }
     private static IllegalStateException publicationUnavailable(){return new IllegalStateException("G014 publication boundary is unavailable");}
     /** Package-private observation capability; only this manager constructs it inside the real issuer window. */
     static final class RiskPublicationWitness {

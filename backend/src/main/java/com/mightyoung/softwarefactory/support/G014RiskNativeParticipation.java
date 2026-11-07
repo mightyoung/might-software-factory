@@ -28,6 +28,7 @@ final class G014RiskNativeParticipation {
     boolean hasSourceWitness(Object event) {
         return manager.currentRiskPublicationWitness(publicationAlias, event) != null;
     }
+    void rejectIfSourceActive() { manager.rejectRiskPublicationIfActive(); }
     <T> T store(Object event, Supplier<T> nativeStore) {
         var witness = manager.currentRiskPublicationWitness(publicationAlias, event);
         if (witness == null) throw unavailable();

@@ -94,8 +94,14 @@ public final class RiskNativePublicationTransactions {
         var transactions = new RiskNativePublicationTransactions(canonical, original, registry, repository, settings, environment,
                 inventory.eventTypes(), context.getClassLoader());
         transactions.shared = new SharedNativePublicationRouting(canonical, original, ordinary, inventory,
-                new RiskPublicationSqlCatalog(settings, environment), transactions.registryClass, transactions.repositoryClass, transactions.publicationTypes);
+                new RiskPublicationSqlCatalog(settings, environment), transactions.registryClass, transactions.repositoryClass, transactions.publicationTypes,
+                transactions.owner, transactions.template, context);
         return transactions;
+    }
+    /** Bind after the actual repository and source service/gate exist, before this context refreshes. */
+    public void configureRiskSource(G014JdbcTransactionManager manager) {
+        if (shared == null) throw unavailable();
+        shared.configureRiskSource(manager);
     }
     public RiskPublicationJdbcTemplate template() { if (shared != null) throw unavailable(); return template; }
     /** Bind only to the unique actual native repository constructor argument zero. Raw use has no route. */
@@ -228,6 +234,7 @@ public final class RiskNativePublicationTransactions {
     }
     private record Validation(Object event, java.util.UUID completionId) {}
     private boolean allowedCompletion(java.util.UUID id) {
+        if (shared != null) return shared.allowedCompletion(id);
         Invocation invocation = current.get();
         return invocation != null && invocation.thread == Thread.currentThread() && invocation.validation != null
                 && id.equals(invocation.validation.completionId());

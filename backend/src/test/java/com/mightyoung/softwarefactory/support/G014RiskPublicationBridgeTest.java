@@ -15,6 +15,33 @@ import static org.mockito.Mockito.*;
 
 /** Actual RiskScenarioService validator/gate/manager issuer. Recording JDBC is not native/PG acceptance. */
 class G014RiskPublicationBridgeTest {
+    @Test void nativeRouteRefusalPoisonsSourceBeforeAnyChildStatusEvenWhenSwallowed() throws Exception {
+        Fixture fixture=new Fixture();
+        var participation=new G014RiskNativeParticipation(fixture.manager(),fixture.publicationAlias(),catalog(true),
+                java.util.Set.of(RiskScenarioDraftChangedEvent.class),getClass().getClassLoader());
+        participation.rejectIfSourceActive();
+        fixture.onPublication(event->{
+            assertThatThrownBy(participation::rejectIfSourceActive).hasMessage("G014 publication boundary is unavailable");
+            ((ConnectionHolder)TransactionSynchronizationManager.getResource(fixture.manager().commandDataSource())).resetRollbackOnly();
+        });
+        assertThatThrownBy(fixture::executeCreate).isInstanceOf(RuntimeException.class);
+        assertThat(fixture.publicationWrites()).isZero();
+        assertThat(fixture.commits()).isZero();
+        assertThat(fixture.rollbacks()).isEqualTo(1);
+        participation.rejectIfSourceActive();
+        assertThat(TransactionSynchronizationManager.getResourceMap()).isEmpty();
+    }
+
+    @Test void inactiveForeignManagerRouteRefusalCannotPoisonAnotherSource() throws Exception {
+        Fixture fixture=new Fixture(),other=new Fixture();
+        var participation=new G014RiskNativeParticipation(other.manager(),other.publicationAlias(),catalog(true),
+                java.util.Set.of(RiskScenarioDraftChangedEvent.class),getClass().getClassLoader());
+        fixture.onPublication(event->participation.rejectIfSourceActive());
+        fixture.executeCreate();
+        assertThat(fixture.commits()).isEqualTo(1);
+        assertThat(fixture.publicationWrites()).isEqualTo(1);
+        assertThat(other.commits()).isZero();
+    }
     @Test void actualPrivateIssuerWindowBindsBothAliasesAndExpiresBeforeCommandCompletes() throws Exception {
         Fixture fixture=new Fixture();var escaped=new AtomicReference<G014JdbcTransactionManager.RiskPublicationWitness>();
         DataSource templateAlias=mock(DataSource.class);

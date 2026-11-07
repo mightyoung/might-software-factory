@@ -24,8 +24,14 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 
 /** Private invocation routes for one native graph. No caller can issue a route or readiness assertion. */
 final class SharedNativePublicationRouting {
-    private enum Route { LEGACY_SOURCE, LEGACY_REGISTRY, MIXED_READ }
+    private enum Route { LEGACY_SOURCE, LEGACY_REGISTRY, RISK_SOURCE, RISK_REGISTRY, MIXED_READ }
     private final DataSource canonical;
+    private final org.springframework.context.support.AbstractApplicationContext context;
+    private final RiskJdbcTransactionOwner owned;
+    private final RiskPublicationJdbcTemplate ownedTemplate;
+    private volatile G014RiskNativeParticipation riskSource;
+    private volatile boolean configurationClosed;
+    private boolean configurationAttempted;
     private final NativePublicationInventory inventory;
     private final Supplier<PlatformTransactionManager> original;
     private final JdbcTemplate ordinary;
@@ -39,9 +45,13 @@ final class SharedNativePublicationRouting {
 
     SharedNativePublicationRouting(DataSource canonical, Supplier<PlatformTransactionManager> original, JdbcTemplate ordinary,
             NativePublicationInventory inventory, RiskPublicationSqlCatalog catalog, Class<?> registryClass, Class<?> repositoryClass,
-            Set<Class<?>> publications) {
+            Set<Class<?>> publications, RiskJdbcTransactionOwner owned, RiskPublicationJdbcTemplate ownedTemplate,
+            org.springframework.context.support.AbstractApplicationContext context) {
         if (ordinary == null || ordinary.getDataSource() != canonical) throw unavailable();
         this.canonical = canonical;
+        this.context = java.util.Objects.requireNonNull(context);
+        this.owned = java.util.Objects.requireNonNull(owned);
+        this.ownedTemplate = java.util.Objects.requireNonNull(ownedTemplate);
         this.original = original; this.ordinary = ordinary; this.inventory = inventory; this.catalog = catalog;
         this.registryClass = registryClass; this.repositoryClass = repositoryClass; this.publications = publications;
         reads = new NativePublicationReadJdbc(canonical, ordinary, inventory, this::requireFrame);
@@ -57,7 +67,34 @@ final class SharedNativePublicationRouting {
                     catch (Throwable failure) { rejectCurrent(); throw unavailable(); }
                 });
         dispatcher = new NativePublicationDispatchTemplate(closed, this::rejectCurrent);
+        context.addApplicationListener((org.springframework.context.ApplicationListener<org.springframework.context.event.ApplicationContextEvent>) event -> {
+            if (event.getApplicationContext() == context && (event instanceof org.springframework.context.event.ContextRefreshedEvent
+                    || event instanceof org.springframework.context.event.ContextClosedEvent)) closeConfiguration();
+        });
     }
+
+    /** Construction-time only; failed attempts cannot switch manager or retry partially configured state. */
+    synchronized void configureRiskSource(G014JdbcTransactionManager manager) {
+        if (configurationClosed || configurationAttempted || riskSource != null) throw unavailable();
+        configurationAttempted = true;
+        try {
+            if (manager == null || !context.isActive() || current.get() != null || manager.commandDataSource() == canonical
+                    || org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()
+                    || org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()
+                    || org.springframework.transaction.support.TransactionSynchronizationManager.hasResource(canonical)) throw unavailable();
+            Object actualRegistry = context.getBean(org.springframework.modulith.events.core.EventPublicationRegistry.class);
+            Object actualRepository = context.getBean(org.springframework.modulith.events.core.EventPublicationRepository.class);
+            if (AopUtils.getTargetClass(actualRegistry) != registryClass || AopUtils.getTargetClass(actualRepository) != repositoryClass)
+                throw unavailable();
+            Class<?> riskType = inventory.eventTypes().stream().filter(type -> type.getName().equals(
+                    "com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChangedEvent")).findFirst().orElseThrow(SharedNativePublicationRouting::unavailable);
+            var prepared = new G014RiskNativeParticipation(manager, canonical, catalog, Set.of(riskType), context.getClassLoader());
+            // The only side-effecting bind is last: alias and publisher come from this fixed graph, never the caller.
+            manager.configureRiskPublication(canonical, context);
+            riskSource = prepared;
+        } catch (Throwable failure) { configurationClosed = true; throw unavailable(); }
+    }
+    private synchronized void closeConfiguration() { configurationClosed = true; }
 
     JdbcTemplate jdbcOperations() { return dispatcher; }
     boolean active() { return current.get() != null; }
@@ -78,12 +115,32 @@ final class SharedNativePublicationRouting {
         Frame parent = current.get();
         Frame frame = classify(call.getThis(), method, call.getArguments(), attribute, parent);
         current.set(frame);
+        RiskStatus manual = null;
         try {
-            Object result = call.proceed();
+            Object result;
+            if (frame.route == Route.RISK_SOURCE && frame.target.getClass() == registryClass) {
+                result = riskSource.store(frame.event, () -> {
+                    try { return call.proceed(); }
+                    catch (Throwable failure) { throw reject(frame); }
+                });
+            } else {
+                if (frame.route == Route.RISK_REGISTRY && attribute == null && !owned.hasOwnedTransaction()) {
+                    var definition = new org.springframework.transaction.support.DefaultTransactionDefinition();
+                    definition.setName(frame.target.getClass().getName() + "." + method.getName());
+                    definition.setReadOnly(method.getName().startsWith("find"));
+                    frame.beginIssued = true;
+                    manual = newRiskStatus(frame, owned.beginNative(definition));
+                }
+                result = call.proceed();
+                if (manual != null) completeRisk(manual, true);
+            }
             if (frame.rejected) throw unavailable();
             return result;
-        } catch (Throwable failure) { reject(frame); throw failure; }
-        finally {
+        } catch (Throwable failure) {
+            reject(frame);
+            if (manual != null && !manual.completionSent) completeRisk(manual, false);
+            throw failure;
+        } finally {
             frame.live = false;
             if (parent == null) current.remove(); else current.set(parent);
         }
@@ -99,6 +156,12 @@ final class SharedNativePublicationRouting {
                 || expected.isReadOnly() != definition.isReadOnly() || expected.getTimeout() != definition.getTimeout()) throw reject(frame);
         if (frame.beginIssued) throw reject(frame);
         frame.beginIssued = true;
+        if (frame.route == Route.RISK_SOURCE) {
+            if (frame.target.getClass() != repositoryClass || !frame.method.getName().equals("create")
+                    || frame.parent == null || frame.parent.route != Route.RISK_SOURCE) throw reject(frame);
+            return newRiskStatus(frame, riskSource.beginCreate(definition));
+        }
+        if (frame.route == Route.RISK_REGISTRY) return newRiskStatus(frame, owned.beginNative(definition));
         PlatformTransactionManager manager = original.get();
         if (manager == null) throw reject(frame);
         try {
@@ -108,8 +171,13 @@ final class SharedNativePublicationRouting {
         } catch (RuntimeException | Error failure) { throw reject(frame); }
     }
     boolean complete(TransactionStatus status, boolean commit) {
+        if (status instanceof SharedNativePublicationRouting.RiskStatus risk) {
+            if (risk.issuer != this) { risk.refuse(); rejectCurrent(); throw unavailable(); }
+            completeRisk(risk, commit);
+            return true;
+        }
         if (!(status instanceof SharedNativePublicationRouting.OriginalStatus value)) return false;
-        if (value.issuer != this) { rejectCurrent(); throw unavailable(); }
+        if (value.issuer != this) { value.issuer.reject(value.frame); rejectCurrent(); throw unavailable(); }
         value.require(false);
         if (commit && !value.frame.bodyReturned) throw reject(value.frame);
         value.completionSent = true;
@@ -125,6 +193,7 @@ final class SharedNativePublicationRouting {
         boolean registry = target.getClass() == registryClass;
         String name = method.getName();
         if (mixed(method, registry)) {
+            rejectSourceIfActive();
             if (parent != null && (parent.route != Route.MIXED_READ || parent.target.getClass() != registryClass
                     || !mixedChild(parent.method.getName(), name))) throw unavailable();
             return new Frame(target, method, attribute, Route.MIXED_READ, null, null, null, parent);
@@ -146,7 +215,7 @@ final class SharedNativePublicationRouting {
             if (!(args[0] instanceof TargetEventPublication publication) || !publications.contains(publication.getClass())) throw unavailable();
             event = publication.getEvent(); listener = publication.getTargetIdentifier();
             inventory.requirePair(event, listener, true);
-            if (parent == null || parent.target.getClass() != registryClass || parent.event != event && !parent.event.equals(event)
+            if (parent == null || parent.target.getClass() != registryClass || (parent.route == Route.RISK_SOURCE ? parent.event != event : parent.event != event && !parent.event.equals(event))
                     || !parent.listener.equals(listener)) throw unavailable();
             if (name.equals("create")) {
                 if (!parent.method.getName().equals("store")) throw unavailable();
@@ -170,9 +239,25 @@ final class SharedNativePublicationRouting {
             // V1 defaults are true no-ops. This route grants no SQL or UUID completion authority.
             event = parent.event; listener = parent.listener;
         } else throw unavailable();
-        // Source authority is not installed by this slice. A registered risk listener does not supply that authority.
-        if (inventory.risk(event)) throw unavailable();
-        Route route = registry && name.equals("store") || !registry && name.equals("create") ? Route.LEGACY_SOURCE : Route.LEGACY_REGISTRY;
+        boolean sourceCall = registry && name.equals("store") || !registry && name.equals("create");
+        Route route;
+        if (inventory.risk(event)) {
+            G014RiskNativeParticipation source = riskSource;
+            if (source == null) throw unavailable();
+            if (sourceCall) {
+                if (!source.hasSourceWitness(event) || !registry && (parent == null || parent.route != Route.RISK_SOURCE
+                        || parent.event != event) || registry && attribute != null) throw unavailable();
+                route = Route.RISK_SOURCE;
+            } else {
+                // REQUIRES_NEW acknowledgement never borrows or suspends the active source window.
+                source.rejectIfSourceActive();
+                if (parent != null && parent.route != Route.RISK_REGISTRY) throw unavailable();
+                route = Route.RISK_REGISTRY;
+            }
+        } else {
+            rejectSourceIfActive();
+            route = sourceCall ? Route.LEGACY_SOURCE : Route.LEGACY_REGISTRY;
+        }
         return new Frame(target, method, attribute, route, event, listener, completion, parent);
     }
 
@@ -223,6 +308,15 @@ final class SharedNativePublicationRouting {
         if ((allowed.equals("event-target") || allowed.equals("complete-event-target")) && !frame.listener.getValue().equals(values[1])) throw unavailable();
         if (allowed.equals("complete-id") && !frame.completion.equals(values[1])) throw unavailable();
         frame.sqlUsed = true;
+        if (frame.route == Route.RISK_SOURCE) {
+            if (!allowed.equals("insert") || !riskSource.hasSourceWitness(frame.event)) throw reject(frame);
+            try { return method.invoke(riskSource.template(), args); }
+            catch (InvocationTargetException failure) { throw failure.getCause(); }
+        }
+        if (frame.route == Route.RISK_REGISTRY) {
+            try { return method.invoke(ownedTemplate, args); }
+            catch (InvocationTargetException failure) { throw failure.getCause(); }
+        }
         if (kind != RiskPublicationSqlCatalog.Kind.UPDATE) return reads.query(operation, values,
                 (org.springframework.jdbc.core.ResultSetExtractor<?>) args[1]);
         try { return method.invoke(ordinary, args); }
@@ -235,13 +329,35 @@ final class SharedNativePublicationRouting {
         if (frame == null || !frame.live || frame.rejected || frame.thread != Thread.currentThread()) throw unavailable();
         if (frame.holder != null && org.springframework.transaction.support.TransactionSynchronizationManager.getResource(canonical) != frame.holder)
             throw reject(frame);
+        if (frame.route == Route.RISK_SOURCE && (riskSource == null || !riskSource.hasSourceWitness(frame.event))) throw reject(frame);
         return frame;
     }
-    void rejectCurrent() { Frame frame = current.get(); if (frame != null) reject(frame); }
+    boolean allowedCompletion(UUID id) {
+        Frame frame = requireFrame();
+        return frame.route == Route.RISK_REGISTRY && frame.completion != null && frame.completion.equals(id);
+    }
+    private void rejectSourceIfActive() { G014RiskNativeParticipation source = riskSource; if (source != null) source.rejectIfSourceActive(); }
+    void rejectCurrent() {
+        Frame frame = current.get();
+        if (frame != null) reject(frame);
+        else { owned.poisonIfActive(); rejectSourceIfActive(); }
+    }
     private IllegalStateException reject(Frame frame) {
+        rejectCaptured(frame);
+        Frame active = current.get();
+        for (Frame value = active; value != null; value = value.parent) {
+            if (value == frame) {
+                // Only the invocation actually being rejected may poison the current writer authority.
+                owned.poisonIfActive();
+                try { rejectSourceIfActive(); } catch (RuntimeException | Error ignored) { }
+                break;
+            }
+        }
+        return unavailable();
+    }
+    private IllegalStateException rejectCaptured(Frame frame) {
         for (Frame value = frame; value != null; value = value.parent) {
             value.rejected = true;
-            // Never mark an unrelated replacement holder. The captured original is the only legitimate owner.
             if (value.holder instanceof org.springframework.jdbc.datasource.ConnectionHolder holder) holder.setRollbackOnly();
         }
         return unavailable();
@@ -257,6 +373,7 @@ final class SharedNativePublicationRouting {
         final Thread thread = Thread.currentThread();
         final Frame parent;
         Object holder;
+        RiskStatus riskStatus;
         volatile boolean rejected;
         boolean live = true, sqlUsed, beginIssued, bodyReturned;
         Frame(Object target, Method method, TransactionAttribute attribute, Route route, Object event, PublicationTargetIdentifier listener, UUID completion, Frame parent) {
@@ -264,6 +381,55 @@ final class SharedNativePublicationRouting {
             this.event = event; this.listener = listener; this.completion = completion; this.parent = parent;
             this.holder = org.springframework.transaction.support.TransactionSynchronizationManager.getResource(canonical);
         }
+    }
+    private RiskStatus newRiskStatus(Frame frame, TransactionStatus delegate) {
+        if (frame.riskStatus != null || delegate == null) throw reject(frame);
+        var status = new RiskStatus(frame, delegate);
+        frame.holder = org.springframework.transaction.support.TransactionSynchronizationManager.getResource(canonical);
+        frame.riskStatus = status;
+        return status;
+    }
+    private void completeRisk(RiskStatus status, boolean commit) {
+        status.require(false);
+        if (commit && !status.frame.bodyReturned) throw reject(status.frame);
+        status.completionSent = true;
+        if (status.frame.route == Route.RISK_SOURCE) {
+            if (commit && !status.frame.rejected) riskSource.commit(status.delegate); else riskSource.rollback(status.delegate);
+        } else {
+            owned.finishNative(status.delegate, commit && !status.frame.rejected);
+        }
+        if (commit && status.frame.rejected) throw unavailable();
+    }
+    private final class RiskStatus implements TransactionStatus {
+        final SharedNativePublicationRouting issuer = SharedNativePublicationRouting.this;
+        final Frame frame;
+        final TransactionStatus delegate;
+        final Thread thread = Thread.currentThread();
+        boolean completionSent;
+        RiskStatus(Frame frame, TransactionStatus delegate) { this.frame = frame; this.delegate = delegate; }
+        void require(boolean clean) {
+            if (issuer != SharedNativePublicationRouting.this || thread != Thread.currentThread() || current.get() != frame
+                    || !frame.live || frame.riskStatus != this || completionSent || clean && frame.rejected
+                    || frame.holder != null && org.springframework.transaction.support.TransactionSynchronizationManager.getResource(canonical) != frame.holder)
+                throw refuse();
+        }
+        private IllegalStateException refuse() {
+            try { delegate.setRollbackOnly(); } catch (Throwable ignored) { }
+            return rejectCaptured(frame);
+        }
+        public String getTransactionName() { require(true); return delegate.getTransactionName(); }
+        public boolean hasTransaction() { require(true); return delegate.hasTransaction(); }
+        public boolean isNewTransaction() { require(true); return delegate.isNewTransaction(); }
+        public boolean isNested() { require(true); return delegate.isNested(); }
+        public boolean isReadOnly() { require(true); return delegate.isReadOnly(); }
+        public void setRollbackOnly() { require(true); delegate.setRollbackOnly(); }
+        public boolean isRollbackOnly() { require(true); return delegate.isRollbackOnly(); }
+        public boolean isCompleted() { require(true); return delegate.isCompleted(); }
+        public boolean hasSavepoint() { require(true); return delegate.hasSavepoint(); }
+        public void flush() { require(true); delegate.flush(); }
+        public Object createSavepoint() { throw refuse(); }
+        public void rollbackToSavepoint(Object point) { throw refuse(); }
+        public void releaseSavepoint(Object point) { throw refuse(); }
     }
     private final class OriginalStatus implements TransactionStatus {
         final SharedNativePublicationRouting issuer = SharedNativePublicationRouting.this;
@@ -277,9 +443,9 @@ final class SharedNativePublicationRouting {
         }
         void require(boolean clean) {
             if (issuer != SharedNativePublicationRouting.this || thread != Thread.currentThread() || !frame.live
-                    || current.get() != frame || completionSent || clean && frame.rejected) throw reject(frame);
+                    || current.get() != frame || completionSent || clean && frame.rejected) throw rejectCaptured(frame);
             if (frame.holder != null && org.springframework.transaction.support.TransactionSynchronizationManager.getResource(canonical) != frame.holder)
-                throw reject(frame);
+                throw rejectCaptured(frame);
         }
 
         public String getTransactionName() { require(true); return delegate.getTransactionName(); }
@@ -292,9 +458,9 @@ final class SharedNativePublicationRouting {
         public boolean isCompleted() { require(true); return delegate.isCompleted(); }
         public boolean hasSavepoint() { require(true); return delegate.hasSavepoint(); }
         public void flush() { require(true); delegate.flush(); }
-        public Object createSavepoint() { require(true); throw reject(frame); }
-        public void rollbackToSavepoint(Object point) { require(true); throw reject(frame); }
-        public void releaseSavepoint(Object point) { require(true); throw reject(frame); }
+        public Object createSavepoint() { require(true); throw rejectCaptured(frame); }
+        public void rollbackToSavepoint(Object point) { require(true); throw rejectCaptured(frame); }
+        public void releaseSavepoint(Object point) { require(true); throw rejectCaptured(frame); }
     }
     private static IllegalStateException unavailable() { return new IllegalStateException("Shared native publication unavailable"); }
 }

@@ -208,6 +208,51 @@ class SharedNativePublicationTransactionsTest {
         });
     }
 
+    @Test void foreignRouterRejectsAndPoisonsTheOriginalActiveNativeStatusWithoutSendingItsControls() throws Exception {
+        graph(receiver -> {
+            try {
+                graph(owner -> {
+                    owner.source.onPrepare = () -> {
+                        var issued = owner.context.getBean(StatusCapture.class).statuses.getFirst();
+                        var controls = List.copyOf(owner.source.controls);
+                        assertThatThrownBy(() -> ((PlatformTransactionManager) receiver.transactions.transactionConfigurer()
+                                .annotationDrivenTransactionManager()).commit(issued)).isInstanceOf(IllegalStateException.class);
+                        assertThat(owner.source.controls).isEqualTo(controls);
+                        assertThat(receiver.source.controls).isEmpty();
+                    };
+                    String id = "com.mightyoung.softwarefactory.dualprevention.FindingWorkflowEventListener.record(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowChangedEvent)";
+                    assertThatThrownBy(() -> owner.registry.store(events().getFirst(), Stream.of(PublicationTargetIdentifier.of(id))))
+                            .isInstanceOf(IllegalStateException.class);
+                    assertThat(owner.source.controls).containsExactly("rollback", "close");
+                    assertThat(owner.observer.queryForObject("select count(*) from EVENT_PUBLICATION", Integer.class)).isZero();
+                });
+            } catch (Exception failure) { throw new IllegalStateException(failure); }
+        });
+    }
+
+    @Test void refreshClosesRiskConfigurationWithoutTouchingTheProposedManagerOrLegacyRoute() throws Exception {
+        graph(graph -> {
+            var proposed = org.mockito.Mockito.mock(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.class);
+            assertThatThrownBy(() -> graph.transactions.configureRiskSource(proposed)).isInstanceOf(IllegalStateException.class);
+            org.mockito.Mockito.verifyNoInteractions(proposed);
+            String id = "com.mightyoung.softwarefactory.dualprevention.FindingWorkflowEventListener.record(com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowChangedEvent)";
+            assertThat(graph.registry.store(events().getFirst(), Stream.of(PublicationTargetIdentifier.of(id)))).hasSize(1);
+            assertThat(graph.observer.queryForObject("select count(*) from EVENT_PUBLICATION", Integer.class)).isEqualTo(1);
+        });
+    }
+
+    @Test void failedPreRefreshConfigurationCannotRetryWithAnotherManager() throws Exception {
+        var proposed = org.mockito.Mockito.mock(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.class);
+        graph(graph -> {
+            org.mockito.Mockito.verifyNoInteractions(proposed);
+            assertThatThrownBy(() -> graph.transactions.configureRiskSource(proposed)).isInstanceOf(IllegalStateException.class);
+            org.mockito.Mockito.verifyNoInteractions(proposed);
+        }, transactions -> {
+            assertThatThrownBy(() -> transactions.configureRiskSource(null)).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> transactions.configureRiskSource(proposed)).isInstanceOf(IllegalStateException.class);
+        });
+    }
+
     private static List<Object> events() {
         UUID command = UUID.fromString("00000000-0000-0000-0000-000000000002");
         UUID resource = UUID.fromString("00000000-0000-0000-0000-000000000003");
@@ -233,7 +278,8 @@ class SharedNativePublicationTransactionsTest {
     }
     private record Graph(ObservedSource source, JdbcTemplate observer, EventPublicationRegistry registry, EventPublicationRepository repository,
             RiskNativePublicationTransactions transactions, PlatformTransactionManager boot, EventSerializer serializer, ApplicationContext context, Runnable close) {}
-    private static void graph(Consumer<Graph> assertions) throws Exception {
+    private static void graph(Consumer<Graph> assertions) throws Exception { graph(assertions, transactions -> { }); }
+    private static void graph(Consumer<Graph> assertions, Consumer<RiskNativePublicationTransactions> beforeRefresh) throws Exception {
         EmbeddedDatabase database = new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
         try {
             JdbcTemplate observer = new JdbcTemplate(database);
@@ -247,6 +293,7 @@ class SharedNativePublicationTransactionsTest {
                 .withUserConfiguration(SharedConfiguration.class)
                 .withPropertyValues("spring.modulith.events.jdbc.schema-initialization.enabled=false", "spring.modulith.events.jdbc.use-legacy-structure=true",
                         "spring.modulith.events.completion-mode=UPDATE", "spring.modulith.events.republish-outstanding-events-on-restart=false")
+                .withBean(ConfigurationProbe.class, () -> new ConfigurationProbe(beforeRefresh))
                 .withBean(DataSource.class, () -> source)
                 .withBean("ordinaryJdbc", JdbcTemplate.class, () -> new JdbcTemplate(source), definition -> definition.setPrimary(true))
                 .run(context -> {
@@ -278,6 +325,10 @@ class SharedNativePublicationTransactionsTest {
         @Bean JdbcOperations sharedPublicationJdbc(RiskNativePublicationTransactions transactions) { return transactions.jdbcOperations(); }
         @Bean @Role(BeanDefinition.ROLE_INFRASTRUCTURE) Advisor nativeOuter(RiskNativePublicationTransactions transactions) { return transactions.outerAdvisor(); }
         @Bean @Role(BeanDefinition.ROLE_INFRASTRUCTURE) Advisor nativeInner(RiskNativePublicationTransactions transactions) { return transactions.sanitizingAdvisor(); }
+        @Bean org.springframework.beans.factory.SmartInitializingSingleton configurationProbe(ConfigurationProbe probe,
+                ObjectProvider<RiskNativePublicationTransactions> transactions) {
+            return () -> probe.action.accept(transactions.getObject());
+        }
         @Bean StatusCapture statusCapture() { return new StatusCapture(); }
         @Bean TransactionManagementConfigurer nativeConfigurer(ObjectProvider<RiskNativePublicationTransactions> transactions, StatusCapture capture) {
             return () -> new PlatformTransactionManager() {
@@ -308,6 +359,7 @@ class SharedNativePublicationTransactionsTest {
             };
         }
     }
+    record ConfigurationProbe(Consumer<RiskNativePublicationTransactions> action) {}
     static final class StatusCapture { final List<org.springframework.transaction.TransactionStatus> statuses = new ArrayList<>(); }
     private static final class ObservedSource extends AbstractDataSource {
         final DataSource delegate;
