@@ -25,7 +25,7 @@ class JdbcTenantLifecycleReadRepositoryTest {
     @Test void borrowsNoLeaseAndReadsOnlyTheTenantOnTheExistingWritableReadCommittedConnection()throws Exception {
         var f=new Fixture();var value=f.run(()->{
             var state=f.reader.findCurrentInCaller(TENANT);assertThat(state).contains(new TenantLifecycleState(TENANT,"ACTIVE",0));
-            verify(f.connection,never()).commit();verify(f.connection,never()).close();return state;
+            assertThatCode(()->{verify(f.connection,never()).commit();verify(f.connection,never()).close();}).doesNotThrowAnyException();return state;
         });
         assertThat(value).isPresent();verify(f.source,times(1)).getConnection();verify(f.connection).commit();verify(f.connection).close();verify(f.connection,never()).rollback();
         assertThat(f.sql).containsExactly(JdbcTenantLifecycleReadRepository.TENANT_CONTEXT_SQL,JdbcTenantLifecycleReadRepository.TENANT_SQL,JdbcTenantLifecycleReadRepository.TENANT_CONTEXT_SQL);
@@ -41,7 +41,7 @@ class JdbcTenantLifecycleReadRepositoryTest {
     }
     @Test void missingForeignAndUnmanagedHoldersRejectBeforeAnyReaderSqlOrBorrow()throws Exception {
         var f=new Fixture();refused(()->f.reader.findCurrentInCaller(TENANT));verify(f.source,never()).getConnection();assertThat(f.sql).isEmpty();
-        var foreign=mock(DataSource.class);f.run(()->{refused(()->new JdbcTenantLifecycleReadRepository(foreign).findCurrentInCaller(TENANT));verify(foreign,never()).getConnection();return null;});
+        var foreign=mock(DataSource.class);f.run(()->{refused(()->new JdbcTenantLifecycleReadRepository(foreign).findCurrentInCaller(TENANT));assertThatCode(()->verify(foreign,never()).getConnection()).doesNotThrowAnyException();return null;});
         var g=new Fixture();var unmanaged=new ConnectionHolder(g.connection);TransactionSynchronizationManager.bindResource(g.source,unmanaged);
         try{refused(()->g.reader.findCurrentInCaller(TENANT));assertThat(unmanaged.isRollbackOnly()).isTrue();assertThat(g.sql).isEmpty();verify(g.source,never()).getConnection();verify(g.connection,never()).close();}
         finally{TransactionSynchronizationManager.unbindResource(g.source);}
