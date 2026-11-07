@@ -19,6 +19,8 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Verify dependency evidence tool
+        run: python3 -B -m unittest discover -s tools/p0 -p 'test_*.py' -v
       - name: Verify backend
         run: ./mvnw --batch-mode --no-transfer-progress -Dsoftware-factory.test.require-secure-storage=true clean verify
       - name: Verify LAN profile compilation and offline guards

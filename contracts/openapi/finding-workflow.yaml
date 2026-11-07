@@ -5,7 +5,8 @@ info:
   description: >-
     Session-authenticated commands for finding creation, the required person and safety
     confirmations, safety dispatch, remediation submission, safety acceptance, and authorized reads
-    of submitted evidence content. The command service is the only writer of the finding workflow projection.
+    of submitted evidence content and scoped dispatch candidates. The command service is the only
+    writer of the finding workflow projection.
 x-implementation-status: local-command-service-flowable-facade-and-opt-in-pinned-evidence-reader
 x-tenant-context: >-
   Tenant, actor, account, and member are resolved from the verified server session. Request bodies
@@ -14,10 +15,21 @@ x-tenant-context: >-
 x-workflow-order:
   - PERSON_CONFIRM_PENDING
   - SAFETY_CONFIRM_PENDING
+  - NOT_ESTABLISHED
   - SAFETY_DISPATCH_PENDING
   - RECTIFYING
   - ACCEPTANCE_PENDING
   - CLOSED
+x-confirmation-terminal-outcomes:
+  NOT_ESTABLISHED: >-
+    Either confirmation stage may end its review branch as not established with a required opinion.
+    This is distinct from CLOSED, which remains the successful remediation acceptance outcome.
+x-confirmation-idempotency-compatibility: >-
+  Existing confirmation receipts remain immutable. Ordinary APPROVE requests retain Java
+  String.strip() canonicalization and the published confirmation-payload-v2 fingerprint;
+  the same original body and key, including NBSP boundaries, replay the original result.
+  A changed canonical payload conflicts. Unicode White_Space-only opinions are rejected.
+  The new not-established command has its own Unicode trimming and fingerprint namespace.
 x-remediation-loop: >-
   A failed safety verification requires a reason, retains the failed round, and routes through a
   safety re-dispatch before the new remediation notice is issued. Only a passing safety verification
@@ -31,13 +43,18 @@ paths:
       summary: Create a finding and start its required confirmation workflow
       description: >-
         Starts at PERSON_CONFIRM_PENDING. The server resolves one effective member for each
-        confirmation/dispatch stage. Missing or ambiguous route configuration fails closed.
+        confirmation/dispatch stage. PERSON and SAFETY confirmers must be distinct from one another
+        and from the reporter; missing or ambiguous route configuration fails closed.
         The server allocates code as YH-YYYYMMDD-NNNN using a tenant-local Asia/Shanghai submission
         day sequence. A completed idempotent replay returns the original finding ID and code.
         The server calculates backfill as true only when discoveredAt is more than 24 hours before
         its submission time; exactly 24 hours and future timestamps produce false. This uses the
         compared instants, independent of the submitted offsets. No new future-time restriction is
-        introduced. The server owns backfill and rejects it in create requests.
+        introduced. The server owns backfill and rejects it in create requests. An optional
+        relatedFindingId links new evidence to a same-tenant parent in NOT_ESTABLISHED; the caller
+        needs finding.create for the new record and finding.read for the parent. A missing,
+        cross-tenant, or unreadable parent has the same 404 response. A visible parent in another
+        state returns 422 WORKFLOW_RULE. Creating the related record never updates or reopens its parent.
       security:
         - sessionCookieAuth: []
       parameters:
@@ -173,6 +190,108 @@ paths:
           $ref: '#/components/responses/CommandConflict'
         '422':
           $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /api/v1/findings/{id}/close-not-established:
+    post:
+      operationId: closeFindingAsNotEstablished
+      summary: Close a finding as not established at the current confirmation stage
+      description: >-
+        The stage must match the current pending confirmation state. PERSON requires
+        finding.confirm.person and SAFETY requires finding.confirm.safety; neither confirmer may be
+        the reporter, and the SAFETY confirmer must differ from the recorded PERSON confirmer. This
+        command does not accept a grade; the finding's existing grade is preserved. Normal SAFETY
+        approval still requires a GENERAL or MAJOR grade. The required opinion is retained in the
+        confirmation, transition, and audit record. Stage, opinion, expectedVersion, and the
+        authenticated actor participate in idempotency. Existing findingRemediationV1 instances are
+        not migrated automatically; this command returns 409 COMMAND_CONFLICT for them before writing
+        a receipt. Continue the existing V1 approval path or use a separately reviewed instance
+        migration; do not retry the close with a new key.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotEstablishedRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/CommandSucceeded'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /api/v1/findings/{id}/dispatch-candidates:
+    get:
+      operationId: findFindingDispatchCandidates
+      summary: Search current eligible remediation members for a finding awaiting dispatch
+      description: >-
+        The server derives tenant and organization from the verified session and finding. Requires
+        current finding.dispatch action scope and an enabled safety application. Eligibility is
+        identical to the assignment check used by the dispatch command, including active human
+        identity, direct current organization membership and finding.remediate action scope.
+        Only SAFETY_DISPATCH_PENDING or an unassigned rework round is eligible; otherwise409.
+        Results are read-only snapshot hints, not task ownership or permission to execute dispatch.
+        Dispatch checks current permission, version, target eligibility and task assignment again.
+        Eligibility and literal name prefix filtering precede the bounded UUID-ordered lookahead.
+        Pagination is live per request; it is not a stable snapshot across requests. No total count,
+        account/principal identifiers or ineligible cursor identifiers are returned.
+        Unknown or repeated query parameters are rejected. No caller identity or organization input.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - name: q
+          in: query
+          description: >-
+            Optional case-sensitive literal display-name prefix, at most100 Unicode code points before
+            edge whitespace trimming. Percent, underscore and backslash are literal; controls and
+            malformed surrogate input are rejected.
+          schema: { type: string, maxLength: 100 }
+        - name: limit
+          in: query
+          description: Canonical positive decimal integer without leading zeros.
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: afterMemberId
+          in: query
+          description: Canonical UUID of the last returned eligible member; uppercase hex is accepted.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Bounded candidate hint; current permissions and data are reevaluated for every request.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DispatchCandidatesResponse' }
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
 
@@ -387,8 +506,10 @@ components:
     InvalidRequest:
       description: >-
         Bean Validation failures return INVALID_REQUEST with fieldErrors. Malformed JSON or JSON-to-request
-        binding failures return INVALID_QUERY with an empty fieldErrors array. Unsupported create fields also
-        return INVALID_QUERY; lifecycle command DTOs currently ignore unknown properties for compatibility.
+        binding failures return INVALID_QUERY with an empty fieldErrors array. Opinion-only Unicode
+        White_Space returns INVALID_REQUEST with reason OpinionNotBlank. Unsupported create, person
+        confirmation, safety confirmation, and not-established close fields return INVALID_QUERY;
+        other lifecycle command DTOs currently ignore unknown properties for compatibility.
       content:
         application/json:
           schema:
@@ -523,12 +644,38 @@ components:
                 retryable: true
                 fieldErrors: []
   schemas:
+    DispatchCandidate:
+      type: object
+      additionalProperties: false
+      required: [memberId, displayName]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: string, maxLength: 200 }
+    DispatchCandidatesResponse:
+      type: object
+      additionalProperties: false
+      required: [data, findingVersion, roundNo, state, hasMore, nextAfterMemberId]
+      properties:
+        data:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/DispatchCandidate' }
+        findingVersion: { type: integer, minimum: 1 }
+        roundNo: { type: integer, minimum: 1 }
+        state: { type: string, enum: [SAFETY_DISPATCH_PENDING, RECTIFYING] }
+        hasMore: { type: boolean }
+        nextAfterMemberId:
+          type: [string, 'null']
+          format: uuid
+          description: Last returned eligible member when hasMore is true; otherwise null.
     CreateFindingRequest:
       type: object
       additionalProperties: false
       description: >-
         The create endpoint rejects unknown properties at runtime; the server assigns the business code
         and the backfill flag. Source and urgency are reporter choices and do not set the professional grade.
+        relatedFindingId is optional and only accepts a same-tenant NOT_ESTABLISHED parent; the parent
+        is not reopened or changed.
       required: [organizationId, description, discoveredAt, grade, sourceCategory, urgency, location]
       properties:
         organizationId: { type: string, format: uuid }
@@ -563,6 +710,10 @@ components:
           type: string
           maxLength: 2000
           description: Optional temporary measure using a maximum of 2000 Unicode code points.
+        relatedFindingId:
+          type: string
+          format: uuid
+          description: Optional same-tenant NOT_ESTABLISHED parent to associate with new evidence.
     VersionedCommandRequest:
       type: object
       additionalProperties: false
@@ -583,7 +734,10 @@ components:
           type: string
           minLength: 1
           maxLength: 4000
-          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java
+            String.strip() canonicalization and confirmation-payload-v2 receipt compatibility.
+            Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged.
     SafetyConfirmationRequest:
       type: object
       additionalProperties: false
@@ -594,11 +748,33 @@ components:
           type: string
           minLength: 1
           maxLength: 4000
-          description: Raw input is limited to 4000 characters before stripping; the stripped opinion must be non-blank.
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units. Ordinary approval preserves Java
+            String.strip() canonicalization and confirmation-payload-v2 receipt compatibility.
+            Unicode White_Space-only input is rejected; NBSP boundaries in nonblank input remain unchanged.
         grade:
           type: string
           enum: [GENERAL, MAJOR]
           description: Professional grade assigned by the safety confirmer.
+    NotEstablishedRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        The stage must match the pending confirmation. This action does not accept or assign a grade;
+        the finding's existing grade is preserved. The reason is recorded in the confirmation,
+        transition, and audit event.
+      required: [expectedVersion, stage, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        stage: { type: string, enum: [PERSON, SAFETY] }
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: >-
+            Raw input is limited to 4000 Java UTF-16 code units before trimming. Trimming uses Unicode
+            White_Space (U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
+            U+2029, U+202F, U+205F, U+3000); at least one other code point is required.
     DispatchRequest:
       type: object
       additionalProperties: false

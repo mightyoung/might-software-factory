@@ -77,6 +77,9 @@ class ReportableOrganizationServiceTest {
                 return Optional.of(snapshot(Set.of(REPORTABLE), 17L, 22L));
             }
             @Override
+            public java.util.List<com.mightyoung.softwarefactory.authorization.AssignableFindingMember> findAssignableMembers(
+                    UUID tenantId, UUID organizationId, String permissionCode, String prefix, UUID afterMemberId, int limit) { return java.util.List.of(); }
+            @Override
             public boolean isAssignableMemberAuthorizedForAction(
                     UUID tenantId, UUID memberId, UUID organizationId, String permissionCode) { return false; }
         };
@@ -120,6 +123,9 @@ class ReportableOrganizationServiceTest {
                 assertThat(action).isEqualTo("create");
                 return Optional.of(snapshot(organizationIds, 17L, 23L));
             }
+            @Override
+            public java.util.List<com.mightyoung.softwarefactory.authorization.AssignableFindingMember> findAssignableMembers(
+                    UUID tenantId, UUID organizationId, String permissionCode, String prefix, UUID afterMemberId, int limit) { return java.util.List.of(); }
             @Override
             public boolean isAssignableMemberAuthorizedForAction(
                     UUID tenantId, UUID memberId, UUID organizationId, String permissionCode) { return false; }

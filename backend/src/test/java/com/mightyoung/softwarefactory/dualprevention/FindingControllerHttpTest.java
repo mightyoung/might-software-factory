@@ -155,12 +155,13 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.items[0].location").value("North loading dock"))
                 .andExpect(jsonPath("$.data.items[0].interimMeasure").value("Temporary barrier installed"))
                 .andExpect(jsonPath("$.data.items[0].backfill").value(false))
+                .andExpect(jsonPath("$.data.items[0].relatedFindingId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.items[0].sourceEventId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.items[0].riskId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.items[0].createdAt").exists())
                 .andExpect(jsonPath("$.data.page.total").value(11))
                 .andExpect(jsonPath("$.data.page.pageCount").value(1))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("3"));
+                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
 
         assertThat(repository.lastScope.tenantId()).isEqualTo(TENANT_A);
         assertThat(repository.lastScope.organizationIds()).containsExactly(ORG_A);
@@ -170,7 +171,7 @@ class FindingControllerHttpTest {
                 .containsExactly(Direction.DESC, Direction.ASC);
         assertThat(repository.lastQuery.fields()).contains("id", "code", "organizationId", "organizationName",
                 "description", "sourceEventId", "riskId", "discoveredAt", "sourceCategory", "urgency",
-                "location", "interimMeasure", "backfill", "createdAt");
+                "location", "interimMeasure", "backfill", "relatedFindingId", "createdAt");
     }
 
     @Test
@@ -188,7 +189,8 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.sourceEventId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.riskId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.grade").value(synthetic.grade()))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("3"));
+                .andExpect(jsonPath("$.data.relatedFindingId").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
     }
 
     @Test
@@ -237,9 +239,10 @@ class FindingControllerHttpTest {
         mvc.perform(get(SCHEMA_PATH).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.key").value("finding"))
-                .andExpect(jsonPath("$.data.schemaVersion").value("3"))
+                .andExpect(jsonPath("$.data.schemaVersion").value("4"))
                 .andExpect(jsonPath("$.data.fields.organization_id").doesNotExist())
                 .andExpect(jsonPath("$.data.fields.organizationId.type").value("UUID"))
+                .andExpect(jsonPath("$.data.fields.relatedFindingId.type").value("UUID"))
                 .andExpect(jsonPath("$.data.fields.organizationName.type").value("TEXT"))
                 .andExpect(jsonPath("$.data.defaultFields").value(org.hamcrest.Matchers.hasItems(
                         "organizationId", "organizationName", "description", "sourceEventId", "riskId", "createdAt")))
@@ -290,6 +293,11 @@ class FindingControllerHttpTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class TestDependencies {
+        @org.springframework.context.annotation.Bean
+        com.mightyoung.softwarefactory.identity.AuthenticationEvents authenticationEvents() {
+            return event -> { }; // Web-slice observation stub; real append acceptance runs against PostgreSQL.
+        }
+
         // This HTTP slice supplies identity state explicitly; persisted revocation is tested separately.
         @Bean
         com.mightyoung.softwarefactory.identity.AccountStatusReadRepository accountSecurityStates() {

@@ -63,6 +63,7 @@ public final class JooqFindingRepository implements FindingRepository {
             field(name("finding", "discovered_at"), OffsetDateTime.class);
     private static final Field<UUID> SOURCE_EVENT_ID = field(name("finding", "source_event_id"), UUID.class);
     private static final Field<UUID> RISK_ID = field(name("finding", "risk_id"), UUID.class);
+    private static final Field<UUID> RELATED_FINDING_ID = field(name("finding", "related_finding_id"), UUID.class);
     private static final Field<String> SOURCE_CATEGORY = field(name("finding", "source_category"), String.class);
     private static final Field<String> URGENCY = field(name("finding", "urgency"), String.class);
     private static final Field<String> LOCATION = field(name("finding", "location"), String.class);
@@ -218,7 +219,7 @@ public final class JooqFindingRepository implements FindingRepository {
 
     private static FieldType fieldType(String key) {
         return switch (key) {
-            case "id", "organizationId", "sourceEventId", "riskId" -> FieldType.UUID;
+            case "id", "organizationId", "sourceEventId", "riskId", "relatedFindingId" -> FieldType.UUID;
             case "code", "description", "organizationName" -> FieldType.TEXT;
             case "grade", "state", "sourceCategory", "urgency" -> FieldType.ENUM;
             case "location", "interimMeasure" -> FieldType.TEXT;
@@ -237,7 +238,8 @@ public final class JooqFindingRepository implements FindingRepository {
                 selectedValue(row, VERSION), selectedValue(row, CREATED_AT), selectedValue(row, UPDATED_AT),
                 selectedValue(row, ORGANIZATION_ID), selectedValue(row, ORGANIZATION_NAME),
                 selectedValue(row, SOURCE_CATEGORY), selectedValue(row, URGENCY), selectedValue(row, LOCATION),
-                selectedValue(row, INTERIM_MEASURE), selectedValue(row, BACKFILL));
+                selectedValue(row, INTERIM_MEASURE), selectedValue(row, BACKFILL),
+                selectedValue(row, RELATED_FINDING_ID));
     }
 
     private static <T> T selectedValue(Record row, Field<T> field) {
@@ -263,6 +265,7 @@ public final class JooqFindingRepository implements FindingRepository {
         fields.put("discoveredAt", DISCOVERED_AT);
         fields.put("sourceEventId", SOURCE_EVENT_ID);
         fields.put("riskId", RISK_ID);
+        fields.put("relatedFindingId", RELATED_FINDING_ID);
         fields.put("sourceCategory", SOURCE_CATEGORY);
         fields.put("urgency", URGENCY);
         fields.put("location", LOCATION);

@@ -75,7 +75,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     select tenant_id, id, organization_id, code, description, discovered_at,
                            source_event_id, risk_id, grade, state, round_no, version,
                            created_by_member_id, updated_by_member_id,
-                           source_category, urgency, location, interim_measure, backfill
+                           source_category, urgency, location, interim_measure, backfill, related_finding_id
                       from public.finding
                      where tenant_id = cast(? as uuid) and id = cast(? as uuid)
                      for update
@@ -93,17 +93,17 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         (tenant_id, id, organization_id, code, description, discovered_at,
                          source_event_id, risk_id, grade, state, round_no, version,
                          created_at, updated_at, created_by_member_id, updated_by_member_id,
-                         source_category, urgency, location, interim_measure, backfill)
+                         source_category, urgency, location, interim_measure, backfill, related_finding_id)
                     values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as timestamptz),
                             cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, current_timestamp,
-                            current_timestamp, cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, ?)
+                            current_timestamp, cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, ?, cast(? as uuid))
                     """, finding.tenantId(), finding.id(), finding.organizationId(), finding.code(),
                     finding.description(), finding.discoveredAt(), finding.sourceEventId(), finding.riskId(),
                     finding.grade(), finding.state().name(), finding.roundNo(), finding.version(),
                     finding.createdByMemberId(), finding.updatedByMemberId(),
                     finding.sourceCategory() == null ? null : finding.sourceCategory().name(),
                     finding.urgency() == null ? null : finding.urgency().name(), finding.location(),
-                    finding.interimMeasure(), finding.backfill());
+                    finding.interimMeasure(), finding.backfill(), finding.relatedFindingId());
             if (inserted != 1) throw new IllegalStateException("Finding create did not insert one row");
         }
 
@@ -461,7 +461,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                 enumValue(row.get("source_category", String.class), FindingSourceCategory.class),
                 enumValue(row.get("urgency", String.class), FindingUrgency.class),
                 row.get("location", String.class), row.get("interim_measure", String.class),
-                row.get("backfill", Boolean.class));
+                row.get("backfill", Boolean.class), row.get("related_finding_id", UUID.class));
     }
 
     private static <T extends Enum<T>> T enumValue(String value, Class<T> type) {

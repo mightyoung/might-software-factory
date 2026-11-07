@@ -23,6 +23,7 @@ describe("前端领域类型与后端契约对齐", () => {
       "SAFETY_DISPATCH_PENDING",
       "RECTIFYING",
       "ACCEPTANCE_PENDING",
+      "NOT_ESTABLISHED",
       "CLOSED",
     ];
     expect([...findingStates].sort()).toEqual([...contractStates].sort());

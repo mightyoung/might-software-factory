@@ -26,7 +26,8 @@ public record FindingWorkflowCase(
         FindingUrgency urgency,
         String location,
         String interimMeasure,
-        Boolean backfill) {
+        Boolean backfill,
+        UUID relatedFindingId) {
 
     public FindingWorkflowCase {
         Objects.requireNonNull(tenantId, "tenantId");
@@ -44,6 +45,9 @@ public record FindingWorkflowCase(
         }
         Objects.requireNonNull(createdByMemberId, "createdByMemberId");
         Objects.requireNonNull(updatedByMemberId, "updatedByMemberId");
+        if (id.equals(relatedFindingId)) {
+            throw new IllegalArgumentException("A finding cannot be related to itself");
+        }
         boolean legacyMetadata = sourceCategory == null && urgency == null && location == null
                 && interimMeasure == null && backfill == null;
         boolean completeMetadata = sourceCategory != null && urgency != null
@@ -57,6 +61,24 @@ public record FindingWorkflowCase(
         if (interimMeasure != null && codePointLength(interimMeasure) > 2000) {
             throw new IllegalArgumentException("Finding interim measure exceeds 2000 Unicode code points");
         }
+    }
+
+    public FindingWorkflowCase(UUID tenantId, UUID id, UUID organizationId, String code, String description,
+                               OffsetDateTime discoveredAt, UUID sourceEventId, UUID riskId, String grade,
+                               FindingWorkflowState state, int roundNo, long version, UUID createdByMemberId,
+                               UUID updatedByMemberId, FindingSourceCategory sourceCategory,
+                               FindingUrgency urgency, String location, String interimMeasure, Boolean backfill) {
+        this(tenantId, id, organizationId, code, description, discoveredAt, sourceEventId, riskId, grade,
+                state, roundNo, version, createdByMemberId, updatedByMemberId, sourceCategory, urgency,
+                location, interimMeasure, backfill, null);
+    }
+
+    public FindingWorkflowCase(UUID tenantId, UUID id, UUID organizationId, String code, String description,
+                               OffsetDateTime discoveredAt, UUID sourceEventId, UUID riskId, String grade,
+                               FindingWorkflowState state, int roundNo, long version, UUID createdByMemberId,
+                               UUID updatedByMemberId) {
+        this(tenantId, id, organizationId, code, description, discoveredAt, sourceEventId, riskId, grade,
+                state, roundNo, version, createdByMemberId, updatedByMemberId, null, null, null, null, null, null);
     }
 
     public static FindingWorkflowCase create(
@@ -75,9 +97,31 @@ public record FindingWorkflowCase(
             String location,
             String interimMeasure,
             boolean backfill) {
+        return create(tenantId, id, organizationId, code, description, discoveredAt, sourceEventId, riskId,
+                grade, createdByMemberId, sourceCategory, urgency, location, interimMeasure, backfill, null);
+    }
+
+    public static FindingWorkflowCase create(
+            UUID tenantId,
+            UUID id,
+            UUID organizationId,
+            String code,
+            String description,
+            OffsetDateTime discoveredAt,
+            UUID sourceEventId,
+            UUID riskId,
+            String grade,
+            UUID createdByMemberId,
+            FindingSourceCategory sourceCategory,
+            FindingUrgency urgency,
+            String location,
+            String interimMeasure,
+            boolean backfill,
+            UUID relatedFindingId) {
         return new FindingWorkflowCase(tenantId, id, organizationId, code, description, discoveredAt,
                 sourceEventId, riskId, grade, FindingWorkflowState.PERSON_CONFIRM_PENDING, 1, 1,
-                createdByMemberId, createdByMemberId, sourceCategory, urgency, location, interimMeasure, backfill);
+                createdByMemberId, createdByMemberId, sourceCategory, urgency, location, interimMeasure,
+                backfill, relatedFindingId);
     }
 
     /** Explicitly adopts one legacy DISCOVERED row into the person-confirmation workflow. */
@@ -97,6 +141,15 @@ public record FindingWorkflowCase(
         }
         return advance(memberId, expectedVersion, FindingWorkflowState.SAFETY_CONFIRM_PENDING,
                 FindingWorkflowState.SAFETY_DISPATCH_PENDING, roundNo, confirmedGrade);
+    }
+
+    public FindingWorkflowCase closeNotEstablished(UUID memberId, long expectedVersion, String stage) {
+        FindingWorkflowState required = switch (stage) {
+            case "PERSON" -> FindingWorkflowState.PERSON_CONFIRM_PENDING;
+            case "SAFETY" -> FindingWorkflowState.SAFETY_CONFIRM_PENDING;
+            default -> throw new FindingWorkflowRuleException("A valid confirmation stage is required");
+        };
+        return advance(memberId, expectedVersion, required, FindingWorkflowState.NOT_ESTABLISHED, roundNo);
     }
 
     public FindingWorkflowCase dispatch(UUID memberId, long expectedVersion) {
@@ -150,7 +203,8 @@ public record FindingWorkflowCase(
         }
         return new FindingWorkflowCase(tenantId, id, organizationId, code, description, discoveredAt,
                 sourceEventId, riskId, nextGrade, next, nextRound, Math.addExact(version, 1),
-                createdByMemberId, memberId, sourceCategory, urgency, location, interimMeasure, backfill);
+                createdByMemberId, memberId, sourceCategory, urgency, location, interimMeasure, backfill,
+                relatedFindingId);
     }
 
     private static int codePointLength(String value) {

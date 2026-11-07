@@ -34,7 +34,7 @@ export interface paths {
         put?: never;
         /**
          * Start a session using local credentials and a tenant code
-         * @description Login attempts are limited before password verification. Source/account failure cooling is shared across tenant selections and equivalent normalized login keys. A rate-limited request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not disclose which limit was reached. This protection is local to one running instance.
+         * @description Login attempts are limited before password verification. Source/account failure cooling is shared across tenant selections and equivalent normalized login keys. A rate-limited request returns RATE_LIMITED with retryable=true and Retry-After seconds; it does not disclose which limit was reached. This protection is local to one running instance. Admitted credential attempts append one compact authentication observation after Session persistence finishes. Login status, headers, cookies and the bounded body are withheld until that independent event transaction is acknowledged. An unavailable or uncertain append returns generic 503 without a usable authentication cookie; it does not prove Session rollback. Malformed input, CSRF denial and rate rejection do not enroll an authentication event. There is no automatic append retry or browser-delivery guarantee.
          */
         post: operations["login"];
         delete?: never;

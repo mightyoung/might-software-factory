@@ -51,7 +51,8 @@ class FindingRemediationPostgresIT {
         p.add("flowable.check-process-definitions",()->false);p.add("flowable.database-schema-update",()->false);p.add("flowable.async-executor-activate",()->false);p.add("flowable.async-history-executor-activate",()->false);p.add("spring.flyway.enabled",()->false);p.add("spring.session.jdbc.initialize-schema",()->"never");p.add("spring.modulith.events.jdbc.schema-initialization.enabled",()->false);
         p.add("software-factory.files.local.root",()->storage.root.toString());p.add("software-factory.files.local.receipt-hmac-key-base64",()->Base64.getEncoder().encodeToString(storage.key));p.add("software-factory.files.local.receipt-key-id",()->"b4-local-key-1");p.add("software-factory.files.local.verifier-id",()->"b4-local-verifier");p.add("software-factory.files.local.policy-version",()->"b4-fixture-v1");p.add("software-factory.files.local.max-bytes",()->1048576);
     }
-    @BeforeEach void seedAndDeploy(){fault.command.set(null);fault.proof.set(null);fixture=new FindingRemediationPostgresFixture(passwords,storage,fileVerifier);deployments.createDeployment().name(fixture.business.run+"-remediation").tenantId(fixture.business.tenantId.toString()).addClasspathResource("processes/finding-remediation-v1.bpmn20.xml").deploy();}
+    @BeforeEach void seedAndDeploy(){fault.command.set(null);fault.proof.set(null);fixture=new FindingRemediationPostgresFixture(passwords,storage,fileVerifier);deployments.createDeployment().name(fixture.business.run+"-remediation").tenantId(fixture.business.tenantId.toString()).addClasspathResource("processes/finding-remediation-v1.bpmn20.xml")
+                .addClasspathResource("processes/finding-remediation-v2.bpmn20.xml").deploy();}
     @AfterEach void closeSessions(){try{loggedIn.values().forEach(IdentityAcceptanceHttps.Browser::close);}finally{loggedIn.clear();if(fixture!=null)fixture.close();}}
     @AfterAll static void closeTls()throws Exception{if(https!=null)https.close(); /* Storage, receipts, HMAC key and manifests intentionally retained. */}
 
@@ -62,8 +63,20 @@ class FindingRemediationPostgresIT {
         assertResult(submitted,"ACCEPTANCE_PENDING",1,5);assertTask(finding,"safetyVerification",fixture.safety().memberId());assertSealed(first);
         var rejected=command(fixture.safety(),finding,"verifications",Map.of("expectedVersion",5,"decision","FAIL","reason","Synthetic gap remains"));
         assertResult(rejected,"RECTIFYING",2,6);assertTask(finding,"safetyDispatch",fixture.safety().memberId());
+        State beforeCandidateRead=state(finding);
+        var candidates=login(fixture.safety()).get("/api/v1/findings/"+finding+"/dispatch-candidates");
+        expect(candidates,200);var hint=json.readTree(candidates.body());
+        assertThat(hint.path("findingVersion").asLong()).isEqualTo(6);
+        assertThat(hint.path("roundNo").asInt()).isEqualTo(2);
+        assertThat(hint.path("state").asString()).isEqualTo("RECTIFYING");
+        var eligible=new HashSet<String>();hint.path("data").forEach(member->eligible.add(member.path("memberId").asString()));
+        assertThat(eligible).contains(fixture.replacement.memberId().toString());
+        assertThat(state(finding)).isEqualTo(beforeCandidateRead);
         var redispatched=command(fixture.safety(),finding,"dispatch",Map.of("expectedVersion",6,"assigneeMemberId",fixture.replacement.memberId(),"dueAt",OffsetDateTime.now().plusDays(2).toString(),"requirements","Reassigned second remediation"));
         assertResult(redispatched,"RECTIFYING",2,7);assertTask(finding,"remediation",fixture.replacement.memberId());
+        State assignedRound=state(finding);
+        expect(login(fixture.safety()).get("/api/v1/findings/"+finding+"/dispatch-candidates"),409);
+        assertThat(state(finding)).isEqualTo(assignedRound);
         var second=fixture.evidence(finding,2,fixture.replacement);
         assertResult(command(fixture.replacement,finding,"remediation-submissions",Map.of("expectedVersion",7,"evidenceSetId",second.setId(),"statement","Gap corrected in second round")),"ACCEPTANCE_PENDING",2,8);assertSealed(second);
         assertResult(command(fixture.safety(),finding,"verifications",Map.of("expectedVersion",8,"decision","PASS")),"CLOSED",2,9);

@@ -36,6 +36,14 @@ describe("流程命令面板", () => {
     expect(screen.getByText("已闭环，不可再变更")).toBeInTheDocument();
   });
 
+  it("未成立终态不提供流程操作，并提示新证据创建关联记录", () => {
+    const { run } = setup("NOT_ESTABLISHED");
+    expect(screen.getByText("未成立记录已终止；新证据应创建关联记录")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("没有版本号时不能执行", () => {
     render(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING", null)} adapter={{ run: vi.fn() }} onChanged={vi.fn()} />);
     expect(screen.getByRole("button", { name: "确认发现" })).toBeDisabled();
