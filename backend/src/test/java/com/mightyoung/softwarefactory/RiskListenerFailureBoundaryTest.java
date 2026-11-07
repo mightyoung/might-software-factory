@@ -1,5 +1,8 @@
 package com.mightyoung.softwarefactory;
 
+import com.mightyoung.softwarefactory.support.RiskPublicationJdbcTemplate;
+import com.mightyoung.softwarefactory.support.RiskPublicationSqlCatalog;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;

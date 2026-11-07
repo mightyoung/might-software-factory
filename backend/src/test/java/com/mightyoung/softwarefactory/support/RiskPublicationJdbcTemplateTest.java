@@ -1,4 +1,4 @@
-package com.mightyoung.softwarefactory;
+package com.mightyoung.softwarefactory.support;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -35,7 +35,7 @@ import org.springframework.modulith.events.core.*;
 import org.springframework.core.env.Environment;
 import org.springframework.modulith.events.jdbc.JdbcRepositorySettings;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import static com.mightyoung.softwarefactory.RiskPublicationSqlCatalogTest.Probe;
+import static com.mightyoung.softwarefactory.support.RiskPublicationSqlCatalogTest.Probe;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 

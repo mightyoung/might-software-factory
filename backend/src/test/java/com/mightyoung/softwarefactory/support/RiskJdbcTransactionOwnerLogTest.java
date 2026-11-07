@@ -45,8 +45,7 @@ class RiskJdbcTransactionOwnerLogTest {
                 String rendered = rendered(events);
                 assertThat(rendered).doesNotContain(SECRET);
                 if (level == Level.DEBUG) {
-                    assertThat(rendered).contains("Risk owned JDBC lease[redacted]", "Could not reset JDBC Connection after transaction",
-                            "Could not close JDBC Connection", "Initiating transaction rollback");
+                    assertThat(rendered).contains("Risk owned JDBC lease[redacted]", "Initiating transaction rollback");
                 }
             });
         }

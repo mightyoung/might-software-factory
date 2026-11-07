@@ -1,4 +1,4 @@
-package com.mightyoung.softwarefactory;
+package com.mightyoung.softwarefactory.support;
 
 import java.sql.Timestamp;
 import java.util.LinkedHashMap;

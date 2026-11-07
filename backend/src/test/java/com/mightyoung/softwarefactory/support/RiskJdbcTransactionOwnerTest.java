@@ -18,7 +18,7 @@ import static org.mockito.Mockito.*;
 
 class RiskJdbcTransactionOwnerTest {
     static final String SECRET = "PRIVATE_OWNER_SENTINEL";
-    enum Fault { NONE, ACQUIRE, GET_ISOLATION, SET_ISOLATION, GET_AUTO_COMMIT, SET_AUTO_COMMIT_FALSE,
+    enum Fault { NONE, ACQUIRE, GET_ISOLATION, GET_READ_ONLY, SET_ISOLATION, GET_AUTO_COMMIT, SET_AUTO_COMMIT_FALSE,
         COMMIT_SQL, COMMIT_RUNTIME, COMMIT_ERROR, ROLLBACK_SQL, ROLLBACK_RUNTIME, ROLLBACK_ERROR,
         RESET_AUTO_COMMIT, RESET_ISOLATION, CLOSE }
 
@@ -50,8 +50,7 @@ class RiskJdbcTransactionOwnerTest {
             return "original result";
         });
         assertThat(result).isEqualTo("original result");
-        assertThat(fixture.driver().operations).containsExactly("acquire", "getIsolation", "setIsolation:2",
-                "getAutoCommit", "setAutoCommit:false", "body", "commit", "setAutoCommit:true", "setIsolation:8", "close");
+        assertThat(fixture.driver().operations).containsExactly("acquire", "getAutoCommit", "isReadOnly", "getIsolation", "setIsolation:2", "setAutoCommit:false", "body", "commit", "setAutoCommit:true", "setIsolation:8", "close");
         verify(fixture.source(), times(1)).getConnection();
         assertUnbound(fixture);
         int before = fixture.driver().operations.size();
@@ -73,7 +72,7 @@ class RiskJdbcTransactionOwnerTest {
                 assertThat(failure.outcome()).isEqualTo(RiskJdbcTransactionOwner.Outcome.ROLLED_BACK);
                 assertThat(failure.cleanup()).isEqualTo(RiskJdbcTransactionOwner.Cleanup.COMPLETE);
             } else execution.run();
-            assertThat(fixture.driver().operations).containsExactly("acquire", "getIsolation", "getAutoCommit", "body",
+            assertThat(fixture.driver().operations).containsExactly("acquire", "getAutoCommit", "isReadOnly", "getIsolation", "body",
                     rejectBody ? "rollback" : "commit", "close");
             assertThat(fixture.driver().autoCommit).isFalse();
             assertThat(fixture.driver().isolation).isEqualTo(Connection.TRANSACTION_READ_COMMITTED);
@@ -108,19 +107,19 @@ class RiskJdbcTransactionOwnerTest {
         });
         assertThat(value).isEqualTo("second");
         assertThat(fixture.driver().operations).containsExactlyElementsOf(originalOperations);
-        assertThat(fresh.operations).containsExactly("acquire", "getIsolation", "setIsolation:2", "getAutoCommit",
+        assertThat(fresh.operations).containsExactly("acquire", "getAutoCommit", "isReadOnly", "getIsolation", "setIsolation:2",
                 "setAutoCommit:false", "body", "commit", "setAutoCommit:true", "setIsolation:8", "close");
         verify(fixture.source(), times(2)).getConnection();
         assertUnbound(fixture);
     }
 
-    @ParameterizedTest @EnumSource(value = Fault.class, names = {"ACQUIRE", "GET_ISOLATION", "SET_ISOLATION", "GET_AUTO_COMMIT", "SET_AUTO_COMMIT_FALSE"})
+    @ParameterizedTest @EnumSource(value = Fault.class, names = {"ACQUIRE", "GET_ISOLATION", "GET_READ_ONLY", "SET_ISOLATION", "GET_AUTO_COMMIT", "SET_AUTO_COMMIT_FALSE"})
     void beginFailurePreventsBodyAndSuperReleaseCannotReturnUnknownConnection(Fault fault) throws Exception {
         Fixture fixture = fixture(fault);
         RiskJdbcTransactionOwner.Failure failure = failure(() -> fixture.owner().executeOwned(() -> {
             throw new AssertionError("body must not run");
         }));
-        assertThat(failure.outcome()).isEqualTo(fault == Fault.ACQUIRE
+        assertThat(failure.outcome()).isEqualTo((fault == Fault.ACQUIRE || fault == Fault.GET_AUTO_COMMIT || fault == Fault.GET_ISOLATION || fault == Fault.GET_READ_ONLY)
                 ? RiskJdbcTransactionOwner.Outcome.NOT_STARTED : RiskJdbcTransactionOwner.Outcome.BEGIN_UNKNOWN);
         assertThat(fixture.driver().operations).doesNotContain("commit", "rollback", "setAutoCommit:true", "setIsolation:8", "close");
         if (fault == Fault.SET_AUTO_COMMIT_FALSE) assertThat(fixture.driver().autoCommit).isFalse();
@@ -271,9 +270,37 @@ class RiskJdbcTransactionOwnerTest {
             return null;
         }));
         assertThat(failure.outcome()).isEqualTo(RiskJdbcTransactionOwner.Outcome.ROLLED_BACK);
-        assertThat(fixture.driver().operations).containsExactly("acquire", "getIsolation", "setIsolation:2", "getAutoCommit",
+        assertThat(fixture.driver().operations).containsExactly("acquire", "getAutoCommit", "isReadOnly", "getIsolation", "setIsolation:2",
                 "setAutoCommit:false", "rollback", "setAutoCommit:true", "setIsolation:8", "close");
         assertUnbound(fixture);
+    }
+
+    @Test void everyProvenBaselineIsReadBeforeMutationAndRestoredAfterKnownAcknowledgment() throws Exception {
+        for (boolean autoCommit : List.of(false, true)) {
+            for (boolean readOnly : List.of(false, true)) {
+                for (int isolation : List.of(Connection.TRANSACTION_READ_COMMITTED, Connection.TRANSACTION_SERIALIZABLE)) {
+                    Fixture fixture = fixture(Fault.NONE, autoCommit, isolation);
+                    var readOnlyState = new java.util.concurrent.atomic.AtomicBoolean(readOnly);
+                    doAnswer(call -> { fixture.driver.operations.add("isReadOnly"); return readOnlyState.get(); }).when(fixture.connection).isReadOnly();
+                    doAnswer(call -> {
+                        boolean value = call.getArgument(0);
+                        fixture.driver.operations.add("setReadOnly:" + value); readOnlyState.set(value); return null;
+                    }).when(fixture.connection).setReadOnly(anyBoolean());
+                    fixture.owner.executeOwned(() -> {
+                        assertThat(readOnlyState.get()).isFalse();
+                        assertThat(fixture.driver.autoCommit).isFalse();
+                        assertThat(fixture.driver.isolation).isEqualTo(Connection.TRANSACTION_READ_COMMITTED);
+                        return null;
+                    });
+                    assertThat(fixture.driver.operations.subList(0, 4)).containsExactly("acquire", "getAutoCommit", "isReadOnly", "getIsolation");
+                    if (readOnly) assertThat(fixture.driver.operations.indexOf("setReadOnly:false")).isEqualTo(4);
+                    assertThat(readOnlyState.get()).isEqualTo(readOnly);
+                    assertThat(fixture.driver.autoCommit).isEqualTo(autoCommit);
+                    assertThat(fixture.driver.isolation).isEqualTo(isolation);
+                    assertUnbound(fixture);
+                }
+            }
+        }
     }
 
     @Test void anyPreboundHolderIsRefusedWithNoOwnerActionsAndNoForeignMutation() throws Exception {
@@ -404,7 +431,7 @@ class RiskJdbcTransactionOwnerTest {
                 case "toString" -> SECRET + " connection";
                 case "getTransactionIsolation" -> { operations.add("getIsolation"); if (fault == Fault.GET_ISOLATION) throw secretSql(); yield isolation; }
                 case "getAutoCommit" -> { operations.add("getAutoCommit"); if (fault == Fault.GET_AUTO_COMMIT) throw secretSql(); yield autoCommit; }
-                case "isReadOnly" -> { operations.add("isReadOnly"); yield false; }
+                case "isReadOnly" -> { operations.add("isReadOnly"); if (fault == Fault.GET_READ_ONLY) throw secretSql(); yield false; }
                 case "setTransactionIsolation" -> {
                     int value = (Integer) args[0]; operations.add("setIsolation:" + value); isolation = value;
                     if ((value == Connection.TRANSACTION_READ_COMMITTED && fault == Fault.SET_ISOLATION)

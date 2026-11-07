@@ -1,5 +1,14 @@
-package com.mightyoung.softwarefactory;
+package com.mightyoung.softwarefactory.support;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.modulith.events.core.EventSerializer;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -8,14 +17,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
 import org.springframework.modulith.events.jdbc.JdbcRepositorySettings;
-import static com.mightyoung.softwarefactory.RiskPublicationSqlCatalog.Kind;
+import static com.mightyoung.softwarefactory.support.RiskPublicationSqlCatalog.Kind;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** Original native strings are also replayed through actual auto-configuration in the companion template test. */
 class RiskPublicationSqlCatalogTest {
     @Test void freezesSevenNativeShapesWithoutBorrowingAConnection() throws Exception {
-        AssetFoundationSqlCatalogTest.fixture(true).run(context -> {
+        fixture(true).run(context -> {
             clearInvocations(context.getBean(javax.sql.DataSource.class));
             var catalog = new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                     context.getEnvironment());
@@ -27,7 +36,7 @@ class RiskPublicationSqlCatalogTest {
     }
 
     @Test void publicQualificationIsExactAndOtherSchemasFailClosed() throws Exception {
-        AssetFoundationSqlCatalogTest.fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=public").run(context -> {
+        fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=public").run(context -> {
             var catalog = new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                     context.getEnvironment());
             for (var sample : samples("public.")) assertThat(catalog.require(sample.sql(), sample.kind(), sample.arguments()).sql()).isEqualTo(sample.sql());
@@ -35,7 +44,7 @@ class RiskPublicationSqlCatalogTest {
                     .isInstanceOf(IllegalStateException.class);
         });
         for (String schema : List.of("other", "PUBLIC", "public;PRIVATE")) {
-            AssetFoundationSqlCatalogTest.fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=" + schema).run(context -> {
+            fixture(true).withPropertyValues("spring.modulith.events.jdbc.schema=" + schema).run(context -> {
                 assertThatThrownBy(() -> new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                         context.getEnvironment())).isInstanceOf(IllegalStateException.class)
                         .hasMessage("Risk publication SQL catalog unavailable").hasNoCause();
@@ -44,21 +53,21 @@ class RiskPublicationSqlCatalogTest {
     }
 
     @Test void rejectsV2UnsupportedDatabaseAndNonUpdateCompletion() throws Exception {
-        AssetFoundationSqlCatalogTest.fixture(false).run(context ->
+        fixture(false).run(context ->
                 assertThatThrownBy(() -> new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                         context.getEnvironment())).isInstanceOf(IllegalStateException.class));
-        AssetFoundationSqlCatalogTest.fixture(true, "H2").run(context ->
+        fixture(true, "H2").run(context ->
                 assertThatThrownBy(() -> new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                         context.getEnvironment())).isInstanceOf(IllegalStateException.class));
         for (String mode : List.of("DELETE", "ARCHIVE")) {
-            AssetFoundationSqlCatalogTest.fixture(true).withPropertyValues("spring.modulith.events.completion-mode=" + mode).run(context ->
+            fixture(true).withPropertyValues("spring.modulith.events.completion-mode=" + mode).run(context ->
                     assertThatThrownBy(() -> new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class),
                             context.getEnvironment())).isInstanceOf(IllegalStateException.class));
         }
     }
 
     @Test void missingOrFalseLegacyDeclarationCannotConstructCatalog() throws Exception {
-        AssetFoundationSqlCatalogTest.fixture(true).run(context -> {
+        fixture(true).run(context -> {
             for (var environment : List.of(new org.springframework.mock.env.MockEnvironment(),
                     new org.springframework.mock.env.MockEnvironment().withProperty("spring.modulith.events.jdbc.use-legacy-structure", "false"))) {
                 assertThatThrownBy(() -> new RiskPublicationSqlCatalog(context.getBean(JdbcRepositorySettings.class), environment))
@@ -90,7 +99,7 @@ class RiskPublicationSqlCatalogTest {
 
     static RiskPublicationSqlCatalog catalog() throws Exception {
         var result = new AtomicReference<RiskPublicationSqlCatalog>();
-        AssetFoundationSqlCatalogTest.fixture(true).run(context -> result.set(new RiskPublicationSqlCatalog(
+        fixture(true).run(context -> result.set(new RiskPublicationSqlCatalog(
                 context.getBean(JdbcRepositorySettings.class), context.getEnvironment())));
         return result.get();
     }
@@ -113,4 +122,26 @@ class RiskPublicationSqlCatalogTest {
     }
 
     record Probe(String value) {}
+    static ApplicationContextRunner fixture(boolean applicationYaml)throws Exception {
+        return fixture(applicationYaml,"PostgreSQL");
+    }
+
+    static ApplicationContextRunner fixture(boolean applicationYaml,String product)throws Exception {
+        var source=mock(DataSource.class);var connection=mock(Connection.class);var metadata=mock(DatabaseMetaData.class);
+        when(source.getConnection()).thenReturn(connection);when(connection.getMetaData()).thenReturn(metadata);
+        when(metadata.getDatabaseProductName()).thenReturn(product);
+        doThrow(new AssertionError("Configuration fixture must not execute schema SQL")).when(connection).createStatement();
+        doThrow(new AssertionError("Configuration fixture must not execute SQL")).when(connection).prepareStatement(anyString());
+        var runner=new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(Class.forName("org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration")))
+                .withPropertyValues("spring.modulith.events.jdbc.schema-initialization.enabled=false")
+                .withBean(DataSource.class,()->source).withBean(JdbcTemplate.class,()->new JdbcTemplate(source))
+                .withBean(EventSerializer.class,()->mock(EventSerializer.class));
+        if(applicationYaml)runner=runner.withInitializer(context->{
+            try { for(var properties:new YamlPropertySourceLoader().load("application",new ClassPathResource("application.yml")))
+                context.getEnvironment().getPropertySources().addLast(properties); }
+            catch(java.io.IOException failure){throw new IllegalStateException(failure);}
+        });
+        return runner;
+    }
 }
