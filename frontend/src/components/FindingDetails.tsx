@@ -11,6 +11,7 @@ import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
 import { FindingCommandPanel } from "./FindingCommandPanel";
+import { useAppMode } from "../mode";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
 interface FindingDetailsProps {
@@ -26,6 +27,8 @@ interface FindingDetailsProps {
 }
 
 export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated }: FindingDetailsProps) {
+  const demo = useAppMode() === "synthetic";
+  const noun = demo ? "演示记录" : "记录";
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
       <div className="detail-heading">
@@ -38,7 +41,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
         </button>
       </div>
 
-      {loading && <p className="detail-state" role="status">正在读取演示记录…</p>}
+      {loading && <p className="detail-state" role="status">正在读取{noun}…</p>}
       {!loading && error && (
         <div className="detail-error" role="alert">
           <p>{findingReadFailureMessage(error, "detail")}</p>
@@ -47,7 +50,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
           </button>
         </div>
       )}
-      {!loading && !error && !finding && <p className="detail-state">没有找到这条演示记录。</p>}
+      {!loading && !error && !finding && <p className="detail-state">没有找到这条{noun}。</p>}
       {finding && !error && (
         <>
           <section className="detail-section">
@@ -112,13 +115,17 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
               <span>风险等级</span>
               <strong className="status-label status-muted">{finding.riskLabel}</strong>
             </div>
-            <p>风险等级保持待评估，合成样例不作专业判断。</p>
+            <p>
+              {demo
+                ? "风险等级保持待评估，合成样例不作专业判断。"
+                : finding.riskLabel === "待专业评估" && "风险等级由有权限人员依据适用规则确认。"}
+            </p>
           </section>
 
           <section className="detail-section workflow-section">
             <div className="section-title-row">
               <h3>流程进度</h3>
-              <span>第 {finding.round} 轮 · 演示</span>
+              <span>第 {finding.round} 轮{demo ? " · 演示" : ""}</span>
             </div>
             <ol className="workflow-list" aria-label="隐患流程节点">
               {workflowSteps.map((step, index) => {
@@ -140,7 +147,8 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
           </section>
 
           <section className="detail-section history-section">
-            <h3>演示轨迹</h3>
+            <h3>{demo ? "演示轨迹" : "处理轨迹"}</h3>
+            {!demo && finding.history.length === 0 && <p className="field-hint">后端暂未提供处理轨迹。</p>}
             <ul>
               {finding.history.map((entry) => (
                 <li key={`${entry.at}-${entry.title}`}>
@@ -159,6 +167,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
               key={finding.id}
               finding={finding}
               adapter={commandAdapter}
+              refreshing={loading}
               onChanged={onCommandChanged ?? onRetry}
               onUnauthenticated={onUnauthenticated}
             />

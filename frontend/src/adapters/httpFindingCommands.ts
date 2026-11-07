@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/finding-workflow";
+import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import {
   FindingCommandError,
@@ -27,19 +28,19 @@ function endpoint(id: string, command: FindingCommand): { path: string; body: Re
 }
 
 function classify(error: ApiError): FindingCommandFailureKind {
-  switch (error.status) {
-    case 400:
+  switch (classifyHttpError(error)) {
+    case "invalid":
       return "validation";
-    case 401:
+    case "unauthenticated":
       return "unauthenticated";
-    case 403:
-    case 404: // 不存在与无权同为 404，不区分
+    case "forbidden":
+    case "notVisible": // 不存在与无权同为 404，不区分
       return "forbidden";
-    case 409:
+    case "conflict":
       if (error.code === "VERSION_CONFLICT") return "versionConflict";
       if (error.code === "IDEMPOTENCY_CONFLICT") return "idempotencyConflict";
       return "stateConflict"; // COMMAND_CONFLICT 及未知 409 一律按“状态已变化”处理
-    case 422:
+    case "workflow":
       return "workflow";
     default:
       return "unavailable";

@@ -149,3 +149,18 @@ test("revoked create grant is removed on restore and menu failure has no demo fa
   await expect(page.getByText("导航加载失败。")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "安全管理导航" })).toHaveCount(0);
 });
+
+test("真实模式：台账、详情、上报表单的文字都不称数据为演示或合成，且不提供后端不接受的紧急程度", async ({ page }) => {
+  await signIn(page);
+  const body = page.locator("body");
+  await expect(body).not.toContainText(/演示|合成|示例对象/);
+  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
+  await expect(page.getByLabel("隐患详情面板").getByRole("heading", { name: "处理轨迹" })).toBeVisible();
+  await expect(body).not.toContainText(/演示|合成|示例对象/);
+  await page.getByRole("button", { name: "关闭详情" }).click();
+  await page.getByRole("button", { name: "新建上报" }).click();
+  await expect(page.getByLabel("所属组织")).toBeVisible();
+  await expect(page.getByLabel("需立即处置")).toBeVisible();
+  await expect(page.getByLabel("紧急", { exact: true })).toHaveCount(0);
+  await expect(body).not.toContainText(/演示|合成|示例对象/);
+});

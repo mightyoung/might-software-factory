@@ -419,6 +419,38 @@ describe("所属组织选择", () => {
     expect(vi.mocked(adapter.submit).mock.calls[0]![1]).toMatchObject({ organizationId: "o2" });
   });
 
+  it("缺组织时焦点落到该字段并用 aria-describedby 关联错误；选择后错误消失", async () => {
+    withOrgs(async () => orgs);
+    await screen.findByRole("option", { name: "二车间" });
+    fillValid();
+    fireEvent.click(submitButton());
+    const select = field(/所属组织/);
+    await waitFor(() => expect(document.activeElement).toBe(select));
+    const error = screen.getByText("请选择所属组织");
+    expect(select).toHaveAttribute("aria-describedby", error.id);
+    expect(select).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(select, { target: { value: "o1" } });
+    await waitFor(() => expect(screen.queryByText("请选择所属组织")).not.toBeInTheDocument());
+  });
+
+  it("用户亲自选了组织就算有未提交内容：Esc 先确认；自动选中的单个组织不算", async () => {
+    const adapter: FindingSubmitAdapter = { submit: vi.fn(async () => RESULT), listOrganizations: async () => orgs };
+    const onClose = vi.fn();
+    const { unmount } = render(<FindingReportForm adapter={adapter} onClose={onClose} onSubmitted={vi.fn()} onOpenSubmitted={vi.fn()} now={() => NOW} />);
+    await screen.findByRole("option", { name: "二车间" });
+    fireEvent.change(field(/所属组织/), { target: { value: "o2" } });
+    fireEvent.keyDown(screen.getByRole("complementary"), { key: "Escape" });
+    expect(await screen.findByText("放弃已填写的内容？")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    unmount();
+
+    const single: FindingSubmitAdapter = { submit: vi.fn(async () => RESULT), listOrganizations: async () => [orgs[0]!] };
+    render(<FindingReportForm adapter={single} onClose={onClose} onSubmitted={vi.fn()} onOpenSubmitted={vi.fn()} now={() => NOW} />);
+    await waitFor(() => expect(field(/所属组织/)).toHaveValue("o1"));
+    fireEvent.keyDown(screen.getByRole("complementary"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("只有一个组织时自动选中", async () => {
     const adapter = withOrgs(async () => [orgs[0]!]);
     await waitFor(() => expect(field(/所属组织/)).toHaveValue("o1"));

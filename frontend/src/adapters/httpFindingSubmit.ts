@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/finding-workflow";
+import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import type { FindingUrgency } from "../domain/finding";
 import { normalizeDraft, type FindingDraft, type FindingDraftErrors, type FindingDraftField } from "../domain/findingDraft";
@@ -38,17 +39,17 @@ function fieldErrorsFrom(error: ApiError): FindingDraftErrors {
 }
 
 function toSubmitError(error: ApiError): FindingSubmitError {
-  switch (error.status) {
-    case 400:
+  switch (classifyHttpError(error)) {
+    case "invalid":
       return new FindingSubmitError("validation", fieldErrorsFrom(error));
-    case 401:
+    case "unauthenticated":
       return new FindingSubmitError("unauthenticated");
-    case 403:
-    case 404:
+    case "forbidden":
+    case "notVisible":
       return new FindingSubmitError("forbidden");
-    case 409:
+    case "conflict":
       return new FindingSubmitError("conflict");
-    case 422:
+    case "workflow":
       return new FindingSubmitError("workflow");
     default:
       return new FindingSubmitError("unavailable");
@@ -61,6 +62,8 @@ function toSubmitError(error: ApiError): FindingSubmitError {
  */
 export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapter {
   return {
+    // 与 URGENCY_MAP 一致：后端没有对应值的“紧急”档不提供。
+    urgencies: (Object.keys(URGENCY_MAP) as FindingUrgency[]).filter((key) => URGENCY_MAP[key] !== null),
     async listOrganizations(signal) {
       try {
         const body = await client.get<SessionComponents["schemas"]["ReportableOrganizationsResponse"]>(

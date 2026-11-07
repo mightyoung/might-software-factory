@@ -6,6 +6,7 @@ import {
   type FindingLedgerReadFailureKind,
   type FindingView,
 } from "../../adapters/findingLedger";
+import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetails } from "../../components/FindingDetails";
@@ -29,6 +30,8 @@ interface FindingsLedgerProps {
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
   canReport?: boolean;
+  /** 当前登录者标识；传给上报表单用于登录失效后恢复草稿。 */
+  draftKey?: string;
   /** 读取或提交收到“未登录”时通知应用回到登录页。 */
   onUnauthenticated?: () => void;
 }
@@ -48,8 +51,11 @@ export function FindingsLedger({
   submitAdapter,
   commandAdapter,
   canReport = false,
+  draftKey,
   onUnauthenticated,
 }: FindingsLedgerProps) {
+  const demo = useAppMode() === "synthetic";
+  const noun = demo ? "演示记录" : "记录";
   const location = useLocation();
   const [path, search = ""] = location.split("?");
   const selectedFindingId = new URLSearchParams(search).get("caseId");
@@ -213,7 +219,7 @@ export function FindingsLedger({
           )}
         </div>
 
-        {submitAdapter?.listOrganizations === undefined && (
+        {demo && (
         <div className="demo-notice" role="note">
           <span className="notice-mark" aria-hidden="true">i</span>
           <p>
@@ -225,8 +231,8 @@ export function FindingsLedger({
         {view !== "all" && (
           <p className="view-scope-note">
             {view === "confirmation"
-              ? "展示处于两级确认节点的演示记录，不代表具体成员已获待办授权。"
-              : "展示处于验收节点的演示记录，不代表已提交真实整改证据。"}
+              ? `展示处于两级确认节点的${noun}，不代表具体成员已获待办授权。`
+              : `展示处于验收节点的${noun}，不代表已提交真实整改证据。`}
           </p>
         )}
 
@@ -240,11 +246,11 @@ export function FindingsLedger({
 
         <div className="table-toolbar">
           <span className="selection-summary">已选 {selectedIds.size} 条（当前页）</span>
-          <span className="data-kind-label">示例对象 · 隐患</span>
+          <span className="data-kind-label">{demo ? "示例对象 · 隐患" : "隐患"}</span>
         </div>
 
         <div className="table-frame" aria-busy={loading}>
-          {loading && <div className="table-loading" role="status">正在加载演示记录…</div>}
+          {loading && <div className="table-loading" role="status">正在加载{noun}…</div>}
           {!loading && listError && (
             <div className="table-error" role="alert">
               <span>{findingReadFailureMessage(listError, "list")}</span>
@@ -269,7 +275,7 @@ export function FindingsLedger({
 
         {!listError && (
         <div className="table-footer">
-          <span>共 {page.total} 条{submitAdapter?.listOrganizations === undefined ? "演示" : ""}记录</span>
+          <span>共 {page.total} 条{demo ? "演示" : ""}记录</span>
           <div className="pagination-controls">
             <label className="page-size-select">
               <span className="visually-hidden">每页条数</span>
@@ -305,6 +311,7 @@ export function FindingsLedger({
           onSubmitted={handleSubmitted}
           onOpenSubmitted={openSubmitted}
           onUnauthenticated={onUnauthenticated}
+          draftKey={draftKey}
         />
       )}
 

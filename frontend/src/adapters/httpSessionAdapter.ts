@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/session-api";
+import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap } from "../domain/session";
 import type { Credentials, SessionAdapter } from "./sessionAdapter";
@@ -22,10 +23,16 @@ function checkVersion(version: number): void {
 
 function toSessionError(error: unknown): unknown {
   if (!(error instanceof ApiError)) return error;
-  if (error.status === 429) return new SessionError("rate_limited", false, error.retryAfterSeconds);
-  if (error.status === 401) return new SessionError("unauthenticated");
-  if (error.status === 403) return new SessionError("forbidden");
-  return new SessionError("unavailable", error.retryable);
+  switch (classifyHttpError(error)) {
+    case "rateLimited":
+      return new SessionError("rate_limited", false, error.retryAfterSeconds);
+    case "unauthenticated":
+      return new SessionError("unauthenticated");
+    case "forbidden":
+      return new SessionError("forbidden");
+    default:
+      return new SessionError("unavailable", error.retryable);
+  }
 }
 
 function toBootstrap(body: BootstrapResponse["data"]): SessionBootstrap {
@@ -57,7 +64,7 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
         });
         return await current(signal);
       } catch (error) {
-        if (error instanceof ApiError && (error.status === 401 || error.status === 400)) {
+        if (error instanceof ApiError && ["unauthenticated", "invalid"].includes(classifyHttpError(error))) {
           throw new SessionError("invalid_credentials");
         }
         throw toSessionError(error);
@@ -67,7 +74,7 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
       try {
         return await current(signal);
       } catch (error) {
-        if (error instanceof ApiError && error.status === 401) return null;
+        if (error instanceof ApiError && classifyHttpError(error) === "unauthenticated") return null;
         throw toSessionError(error);
       }
     },
@@ -75,6 +82,28 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
       try {
         await client.post<void>("/api/v1/auth/logout", { signal });
       } catch (error) {
+        throw toSessionError(error);
+      }
+    },
+    async changePassword(currentPassword, newPassword, signal) {
+      try {
+        await client.post<void>("/api/v1/account/password", { body: { currentPassword, newPassword }, signal });
+      } catch (error) {
+        if (error instanceof ApiError) {
+          const kind = classifyHttpError(error);
+          if (kind === "invalid") throw new SessionError("invalid_request", false);
+          if (kind === "conflict") throw new SessionError("stale_attempt", true);
+          if (kind === "unauthenticated") {
+            // 契约里 401 既可能是“会话已失效”也可能是“当前密码不对”：再读一次会话来区分。
+            try {
+              await current(signal);
+            } catch (probe) {
+              if (probe instanceof ApiError && classifyHttpError(probe) === "unauthenticated") throw new SessionError("unauthenticated");
+              throw toSessionError(probe);
+            }
+            throw new SessionError("invalid_credentials");
+          }
+        }
         throw toSessionError(error);
       }
     },

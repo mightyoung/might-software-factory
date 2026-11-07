@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/finding-ledger";
+import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import type { FindingRecord, FindingState } from "../domain/finding";
 import { findingLedgerSchema } from "../features/findings/schema";
@@ -37,18 +38,33 @@ const GRADE_LABELS: Record<components["schemas"]["FindingDetail"]["grade"], stri
   MAJOR: "重大",
 };
 
+/** 服务端响应缺少默认投影里必有的字段：按“读取失败”处理，不替服务端编造状态或内容。 */
+export class MalformedFindingResponseError extends Error {
+  constructor(field: string) {
+    super(`Finding response is missing required field "${field}"`);
+    this.name = "MalformedFindingResponseError";
+  }
+}
+
+function required<T>(value: T | undefined, field: string): T {
+  if (value === undefined) throw new MalformedFindingResponseError(field);
+  return value;
+}
+
 export function toFindingRecord(item: Item | Detail): FindingRecord {
   return {
     id: item.id,
-    code: item.code ?? NOT_PROVIDED,
-    description: item.description ?? "",
+    code: required(item.code, "code"),
+    description: required(item.description, "description"),
+    // location 在契约里可为 null（旧数据无法推断），这是合法的“未提供”。
     location: item.location ?? NOT_PROVIDED,
-    state: item.state ?? "DISCOVERED",
-    reportedAt: item.createdAt ?? "",
+    state: required(item.state, "state"),
+    reportedAt: required(item.createdAt, "createdAt"),
     reporter: NOT_PROVIDED,
     responsible: NOT_PROVIDED,
-    riskLabel: GRADE_LABELS[item.grade ?? "UNKNOWN"],
-    round: item.roundNo ?? 1,
+    riskLabel: GRADE_LABELS[required(item.grade, "grade")],
+    round: required(item.roundNo, "roundNo"),
+    // version 不在列表的默认投影里，只有详情有；缺失时流程命令保持禁用。
     ...(item.version ? { version: item.version } : {}),
     history: [],
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),
@@ -62,9 +78,15 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
 
 function toAccessError(error: unknown): unknown {
   if (!(error instanceof ApiError)) return error;
-  if (error.status === 401) return new FindingLedgerAccessError("unauthenticated");
-  if (error.status === 403 || error.status === 404) return new FindingLedgerAccessError("forbidden");
-  return error;
+  switch (classifyHttpError(error)) {
+    case "unauthenticated":
+      return new FindingLedgerAccessError("unauthenticated");
+    case "forbidden":
+    case "notVisible":
+      return new FindingLedgerAccessError("forbidden");
+    default:
+      return error; // 其余按“未知失败”由界面显示通用提示
+  }
 }
 
 /** 视图过滤作为额外 AND 条件追加；与用户自选的状态条件求交集。 */
@@ -139,7 +161,7 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
         return toFindingRecord(body.data);
       } catch (error) {
         // 不存在与无权限同为 404，按契约呈现为“找不到”，不区分原因。
-        if (error instanceof ApiError && error.status === 404) return null;
+        if (error instanceof ApiError && classifyHttpError(error) === "notVisible") return null;
         throw toAccessError(error);
       }
     },

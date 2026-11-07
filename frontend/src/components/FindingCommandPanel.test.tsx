@@ -109,4 +109,13 @@ describe("流程命令面板", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
     await waitFor(() => expect(expired.onUnauthenticated).toHaveBeenCalled());
   });
+
+  it("详情重新读取期间按钮不可用，避免带着过期版本号提交", () => {
+    const adapter = { run: vi.fn() };
+    const { rerender } = render(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING")} adapter={adapter} onChanged={vi.fn()} refreshing />);
+    expect(screen.getByRole("button", { name: "确认发现" })).toBeDisabled();
+    expect(screen.getByText("正在重新读取最新状态…")).toBeInTheDocument();
+    rerender(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING")} adapter={adapter} onChanged={vi.fn()} refreshing={false} />);
+    expect(screen.getByRole("button", { name: "确认发现" })).toBeEnabled();
+  });
 });

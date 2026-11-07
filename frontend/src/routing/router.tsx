@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react";
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -45,6 +45,7 @@ export function RouteLink({ to, onClick, children, ...props }: RouteLinkProps) {
       return;
     }
     event.preventDefault();
+    if (!confirmLeave()) return;
     navigate(to);
   }
 
@@ -53,4 +54,27 @@ export function RouteLink({ to, onClick, children, ...props }: RouteLinkProps) {
       {children}
     </a>
   );
+}
+
+type LeaveGuard = () => boolean;
+const leaveGuards = new Set<LeaveGuard>();
+
+/** 用户主动点应用内链接离开前询问；系统发起的跳转（登录失效、规范化地址）用 navigate，不经过它。 */
+function confirmLeave(): boolean {
+  return [...leaveGuards].every((guard) => guard());
+}
+
+/**
+ * 有未保存内容时，点击应用内链接（侧栏、顶栏）先确认。浏览器的前进 / 后退按钮拦不住（History API 没有可靠的取消办法），
+ * 刷新或关闭标签页由调用方另用 beforeunload 处理。
+ */
+export function useLeaveGuard(active: boolean, message: string): void {
+  useEffect(() => {
+    if (!active) return;
+    const guard: LeaveGuard = () => window.confirm(message);
+    leaveGuards.add(guard);
+    return () => {
+      leaveGuards.delete(guard);
+    };
+  }, [active, message]);
 }

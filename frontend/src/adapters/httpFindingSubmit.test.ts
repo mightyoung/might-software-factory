@@ -46,4 +46,8 @@ describe("createHttpFindingSubmit", () => {
     const error = await createHttpFindingSubmit(c).submit(draft, { idempotencyKey: "k", organizationId: "o" }).catch((e) => e);
     expect(Object.keys(error.fieldErrors)).toEqual(["source"]);
   });
+
+  it("declares only the urgency levels the backend accepts", () => {
+    expect(createHttpFindingSubmit({} as HttpClient).urgencies).toEqual(["NORMAL", "IMMEDIATE"]);
+  });
 });
