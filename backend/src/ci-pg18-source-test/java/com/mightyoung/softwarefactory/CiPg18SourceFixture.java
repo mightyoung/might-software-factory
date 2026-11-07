@@ -38,6 +38,20 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","19","20","21","22","23","24");
     private static final String RUNTIME = "msf_ci_source_runtime";
     private static final String GRANTS = "/ci-pg18-source/runtime-grants.sql";
+    private static final Set<String> REQUIRED_FUNCTIONS=Set.of(
+            "public.g014_instant_valid(timestamptz)","public.g014_text_valid(text,integer,boolean)",
+            "public.g014r_require_context(uuid)","public.g014r_key_header(text,uuid)",
+            "public.g014r_natural_key_bytes(uuid,text)","public.g014r_receipt_key_bytes(uuid,uuid,text,uuid)",
+            "public.g014r_mutation_key_bytes(text,uuid,uuid,bigint,uuid,uuid)","public.g014r_key_hash(bytea)",
+            "public.g014r_require_key(integer,bytea)","public.g014r_lock_natural_key(uuid,text)",
+            "public.g014r_require_natural_key(uuid,text)","public.g014r_lock_receipt_key(uuid,uuid,text,uuid)",
+            "public.g014r_require_mutation_key(text,uuid,uuid,bigint,uuid,uuid)","public.g014r_require_scenario_keys(uuid,uuid,bigint,uuid)",
+            "public.g014r_mutation_key_plan(uuid,uuid,bigint,uuid,uuid[],bigint[],uuid[])",
+            "public.g014r_lock_mutation_keys(uuid,uuid,bigint,uuid,uuid[],bigint[],uuid[])",
+            "public.g014r_require_identity(uuid,uuid,uuid)","public.g014r_open_command(uuid,uuid,bigint,uuid,uuid,uuid,timestamptz)",
+            "public.g014r_validate_root_revision(uuid,uuid,bigint,uuid)","public.g014r_validate_receipt(public.risk_scenario_receipt)",
+            "public.g014r_validate_scenario(uuid,uuid,bigint,uuid,boolean)","public.g014r_lock_row(integer,uuid,uuid)");
+    private static final Pattern FUNCTION_GRANT=Pattern.compile("grant execute on function (public\\.[a-z0-9_]+\\([a-z0-9_.,\\[\\]]*\\)) to msf_ci_source_runtime;");
     private static final Set<String> PHASES = Set.of("open","target-version","target-marker","empty-schema","migrate","history",
             "framework-schema","source-schema","runtime-role","runtime-rights","seed-identity","seed-foundation","native-graph","closed","unknown");
     private final CiPg18EphemeralTarget target;
@@ -321,7 +335,43 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                 }
             }
             if (!observed.containsAll(expected.keySet())) throw rejected();
+            verifyFunctionRights(connection);
         }
+    }
+
+    private static void verifyFunctionRights(Connection connection) throws Exception {
+        Set<String> signatures=declaredFunctionGrants(resource());
+        var expected=new java.util.HashSet<Long>();
+        for(String signature:signatures)try(var statement=connection.prepareStatement("select pg_catalog.to_regprocedure(?)::oid")) {
+            statement.setString(1,signature);
+            try(var rows=statement.executeQuery()) {
+                if(!rows.next()||rows.getObject(1)==null||!expected.add(rows.getLong(1))||rows.next())throw rejected();
+            }
+        }
+        var found=new java.util.HashSet<Long>();
+        try(var statement=connection.createStatement();var rows=statement.executeQuery("""
+                select p.oid,p.prosecdef,p.prorettype='pg_catalog.trigger'::regtype,
+                       p.proowner=(select oid from pg_roles where rolname='msf_ci_bootstrap'),
+                       p.proowner=(select oid from pg_roles where rolname='msf_ci_source_runtime'),
+                       has_function_privilege('msf_ci_source_runtime',p.oid,'EXECUTE'),
+                       exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                              where a.grantee=0 and a.privilege_type='EXECUTE'),
+                       exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                              where a.grantee=(select oid from pg_roles where rolname='msf_ci_source_runtime') and a.privilege_type='EXECUTE'),
+                       exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                              where a.grantee=(select oid from pg_roles where rolname='msf_ci_source_runtime') and a.is_grantable)
+                  from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+                """)) {
+            while(rows.next()) {
+                boolean allowed=expected.contains(rows.getLong(1));
+                if(rows.getBoolean(5)||rows.getBoolean(9)||rows.getBoolean(8)!=allowed)throw rejected();
+                if(allowed) {
+                    if(rows.getBoolean(2)||rows.getBoolean(3)||!rows.getBoolean(4)||!rows.getBoolean(6)||rows.getBoolean(7))throw rejected();
+                    found.add(rows.getLong(1));
+                } else if(rows.getBoolean(6)!=rows.getBoolean(7))throw rejected();
+            }
+        }
+        if(!found.equals(expected)||found.size()!=22)throw rejected();
     }
 
     private void seedOwnedFoundationPrerequisites() throws Exception {
@@ -386,14 +436,26 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private static Map<String, Map<String, Set<String>>> expectedRights() throws Exception {
         var pattern = Pattern.compile("grant (select|insert|update)\\(([a-z0-9_,]+)\\) on public\\.\"([a-z_]+)\" to msf_ci_source_runtime;");
         Map<String, Map<String, Set<String>>> expected = new HashMap<>();
-        for (String line : resource().lines().toList()) {
+        String text=resource();declaredFunctionGrants(text);
+        for (String line : text.lines().toList()) {
             var match = pattern.matcher(line);
             if (match.matches()) expected.computeIfAbsent(match.group(3), ignored -> new HashMap<>())
                     .put(match.group(1), Set.of(match.group(2).split(",")));
+            else if(FUNCTION_GRANT.matcher(line).matches()) { /* Independently checked against the fixed signature closure above. */ }
             else if (line.startsWith("grant ") && !line.startsWith("grant connect ") && !line.startsWith("grant usage ")) throw rejected();
         }
         if (expected.size() != 30) throw rejected();
         return expected;
+    }
+    static Set<String> declaredFunctionGrants(String text) {
+        var found=new java.util.HashSet<String>();
+        for(String line:text.lines().toList()) {
+            if(!line.stripLeading().toLowerCase(java.util.Locale.ROOT).startsWith("grant execute"))continue;
+            var match=FUNCTION_GRANT.matcher(line);
+            if(!match.matches()||!REQUIRED_FUNCTIONS.contains(match.group(1))||!found.add(match.group(1)))throw rejected();
+        }
+        if(!found.equals(REQUIRED_FUNCTIONS))throw rejected();
+        return Set.copyOf(found);
     }
     private static String resource() throws Exception {
         try (var input = CiPg18SourceFixture.class.getResourceAsStream(GRANTS)) {

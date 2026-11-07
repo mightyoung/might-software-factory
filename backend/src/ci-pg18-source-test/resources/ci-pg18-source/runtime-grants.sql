@@ -1,7 +1,7 @@
 -- Dedicated fresh CI source database only. No identity/admin writes for the runtime role.
 -- Column SELECT on all risk columns is required by SECURITY INVOKER functions using SELECT *.
 -- hazard_source UPDATE(version) is required by its real FOR UPDATE row lock; no hazard INSERT is granted.
--- Built-in and migration PUBLIC EXECUTE defaults remain inherited and must be reported separately.
+-- Unrelated PUBLIC function defaults remain inherited; the exact 22-function runtime delta is checked separately.
 revoke connect,temporary,create on database msf_ci_risk_source from public;
 revoke all privileges on schema public from public;
 grant connect on database msf_ci_risk_source to msf_ci_source_runtime;
@@ -48,3 +48,26 @@ grant update(completion_date) on public."event_publication" to msf_ci_source_run
 grant update(version) on public."hazard_source" to msf_ci_source_runtime;
 grant update(version,ended_at,last_scenario_version,last_command_id,last_actor_id,last_member_id,last_occurred_at) on public."risk_hazard" to msf_ci_source_runtime;
 grant update(description,triggering_conditions,exposure_description,consequence,version,updated_by_actor_id,updated_by_member_id,updated_at,last_command_id) on public."risk_scenario" to msf_ci_source_runtime;
+-- V21 CHECK predicates and the V22 ordinary-function call closure. No trigger-function or ALL FUNCTIONS grant.
+grant execute on function public.g014_instant_valid(timestamptz) to msf_ci_source_runtime;
+grant execute on function public.g014_text_valid(text,integer,boolean) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_context(uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_key_header(text,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_natural_key_bytes(uuid,text) to msf_ci_source_runtime;
+grant execute on function public.g014r_receipt_key_bytes(uuid,uuid,text,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_mutation_key_bytes(text,uuid,uuid,bigint,uuid,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_key_hash(bytea) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_key(integer,bytea) to msf_ci_source_runtime;
+grant execute on function public.g014r_lock_natural_key(uuid,text) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_natural_key(uuid,text) to msf_ci_source_runtime;
+grant execute on function public.g014r_lock_receipt_key(uuid,uuid,text,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_mutation_key(text,uuid,uuid,bigint,uuid,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_scenario_keys(uuid,uuid,bigint,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_mutation_key_plan(uuid,uuid,bigint,uuid,uuid[],bigint[],uuid[]) to msf_ci_source_runtime;
+grant execute on function public.g014r_lock_mutation_keys(uuid,uuid,bigint,uuid,uuid[],bigint[],uuid[]) to msf_ci_source_runtime;
+grant execute on function public.g014r_require_identity(uuid,uuid,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_open_command(uuid,uuid,bigint,uuid,uuid,uuid,timestamptz) to msf_ci_source_runtime;
+grant execute on function public.g014r_validate_root_revision(uuid,uuid,bigint,uuid) to msf_ci_source_runtime;
+grant execute on function public.g014r_validate_receipt(public.risk_scenario_receipt) to msf_ci_source_runtime;
+grant execute on function public.g014r_validate_scenario(uuid,uuid,bigint,uuid,boolean) to msf_ci_source_runtime;
+grant execute on function public.g014r_lock_row(integer,uuid,uuid) to msf_ci_source_runtime;
