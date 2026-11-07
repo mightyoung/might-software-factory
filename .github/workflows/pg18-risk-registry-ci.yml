@@ -1,0 +1,55 @@
+name: PostgreSQL 18 owned registry acceptance
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "pom.xml"
+      - "mvnw"
+      - ".mvn/**"
+      - "tools/ci_pg18/**"
+      - ".github/workflows/pg18-risk-registry-ci.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "backend/**"
+      - "pom.xml"
+      - "mvnw"
+      - ".mvn/**"
+      - "tools/ci_pg18/**"
+      - ".github/workflows/pg18-risk-registry-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pg18-risk-registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify both lanes' report, target and cleanup guards
+        run: python3 -B -m unittest discover -s tools/ci_pg18 -p 'test_*.py' -v
+      - name: Compile registry IT and run offline target guards before creating credentials
+        run: ./mvnw --batch-mode --no-transfer-progress -Pci-pg18-risk-registry test
+      - name: Verify native owned registry on isolated PostgreSQL 18
+        run: python3 -B tools/ci_pg18/risk_registry.py run
+      - name: Always clean only this job's registry container and secrets
+        if: always()
+        run: python3 -B tools/ci_pg18/risk_registry.py cleanup
+      - name: Upload bounded registry acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg18-risk-registry-evidence
+          path: artifacts/ci-pg18-risk-registry/result.json
+          if-no-files-found: error
+          retention-days: 7

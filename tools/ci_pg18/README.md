@@ -1,8 +1,22 @@
-# Temporary PostgreSQL 18 capture acceptance
+# Temporary PostgreSQL 18 acceptance lanes
 
 This job creates a dedicated PostgreSQL container on the hosted runner and exercises the original application migrations and capture core. It does not connect to NAS, install vendor schemas, enable a listener, or establish historical V9 upgrade acceptance.
 
-The dedicated Maven profile selects one integration class and the strict CI target tests. Both Maven and the harness reject missing tests. The harness requires all nine named integration scenarios, nonzero target tests and zero failures/errors/skips. A successful Maven exit alone does not pass acceptance.
+`risk_capture.py` remains the default capture entry. `risk_registry.py` is a thin entry into the same container/process/cleanup engine, using a second immutable code-owned specification. No environment value, command-line target or arbitrary lane object can choose a database, role, profile or artifact path.
+
+| Fixed boundary | Capture | Owned registry |
+| --- | --- | --- |
+| Database | `msf_ci_risk_capture` | `msf_ci_risk_registry` |
+| Runtime role | `msf_ci_capture_runtime` | `msf_ci_registry_runtime` |
+| ACK | `ephemeral-risk-capture-only` | `ephemeral-risk-registry-only` |
+| Maven profile | `ci-pg18-risk-capture` | `ci-pg18-risk-registry` |
+| State/container prefix | `msf-ci-pg18-` | `msf-ci-pg18-risk-registry-` |
+| Container kind label | `risk-capture` | `risk-registry` |
+| Artifact directory | `artifacts/ci-pg18-risk-capture` | `artifacts/ci-pg18-risk-registry` |
+
+The administrator remains `msf_ci_bootstrap` in both isolated containers. The registry lane does not expand capture grants. Its fixture applies the same 21 original migrations, verifies the nine publication columns, and gives its separate nonprivileged runtime only CONNECT, schema USAGE, nine-column SELECT, five-column INSERT and `completion_date` UPDATE. It seeds no tenant, account or source business graph and activates no capture/listener/recovery scheduler. Its actual native graph uses the existing Jackson serializer with a repository-local safe wrapper; it is a separate acceptance gate from source transaction borrowing and full restart recovery.
+
+Each dedicated Maven profile selects one integration class and its strict CI target tests. Both Maven and the harness reject missing tests. The harness requires all nine lane-specific named integration scenarios, nonzero target tests and zero failures/errors/skips. Extra JUnit XML in either Failsafe or Surefire is rejected, including reports copied from the other lane. A successful Maven exit alone does not pass acceptance.
 
 The harness:
 - rejects externally supplied CI database and LAN/tunnel settings;
@@ -16,7 +30,7 @@ The digest is resolved and recorded for each run; this is not a claim that a mut
 
 Before any database credentials or container exist, the workflow runs the dedicated profile through the test lifecycle to expose compilation and offline target failures.
 
-Raw Maven/Flyway output is captured in a private temporary file because failed migrations may echo SQL. It is never printed or uploaded. Only artifacts/ci-pg18-risk-capture/result.json is uploaded. The fixture's optional failure evidence contains fixed phase/version/SQLState fields only. Container logs, complete inspect output, raw JUnit XML, environment files and dumps are excluded.
+Raw Maven/Flyway output is captured in a private temporary file because failed migrations may echo SQL. It is never printed or uploaded. Only the selected lane's `result.json` is uploaded. Success evidence has the fixed database and either `causeSchemaVerified` (capture) or `publicationSchemaVerified` (registry), plus the original migration list and effective-rights proof. Capture keeps its original four-key failure evidence. Registry failure evidence additionally requires its exact database, so a renamed capture failure cannot pass. Unknown phases, fields or SQLState shapes are rejected. Container logs, complete inspect output, raw JUnit XML, environment files and dumps are excluded.
 
 The workflow runs the pure guard suite first:
 
@@ -26,7 +40,25 @@ Container creation is available only in the expected GitHub Actions repository c
 
     python3 -B tools/ci_pg18/risk_capture.py run
 
+The independent registry workflow uses:
+
+    python3 -B tools/ci_pg18/risk_registry.py run
+
+and its `if: always()` cleanup uses `risk_registry.py cleanup`. The nine exact registry cases are:
+
+1. `originalMigrationsAndRegistryPrivilegesAreExact`
+2. `actualJacksonAndSevenNativeSqlPaths`
+3. `pgBaselineAttributesAreRestored`
+4. `ackCommitThenThrowKeepsDurableCompletion`
+5. `registrationCommitThenThrowKeepsOneIncompletePublication`
+6. `committedResetFailureStopsClose`
+7. `committedCloseFailureIsNotRetried`
+8. `statementFailureRollsBackCompletion`
+9. `disposalSerializationFailureIsSafeAndReadOnly`
+
 Maven runs in an exclusive session. Forked JVMs must carry this run’s process marker before the harness can signal the exact group; timeouts terminate and wait before database cleanup. Unproven process ownership prevents destructive cleanup and keeps the result failed. Maven failure diagnostics contain only counts and the nine reviewed case states.
+
+Cleanup validates a present lane-specific intent before any process signal. A missing intent with a process/start receipt is unknown and retained. Only a completely empty state can prove interruption before container intent; leftover resource or credential records without intent are refused and retained. Registry process receipts additionally carry their fixed kind; capture's existing receipt shape remains unchanged. Container removal still requires the exact lane name, ownership labels (repository/run/attempt/instance/kind), container ID and recorded anonymous volume. A copied capture state never authorizes registry process signaling or deletion. Registry PASS artifacts also require their own validated database evidence and exact nine-case summary; changing only `acceptanceKind` cannot create a passing registry receipt.
 
 The script uses try/finally, and the workflow repeats the idempotent cleanup entry with if: always(). A terminated or lost runner cannot be described as verified cleanup unless the recorded result actually proves it.
 

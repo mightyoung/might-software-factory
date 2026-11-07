@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated PostgreSQL 18 capture acceptance. All process output stays private."""
+"""Fixed isolated PostgreSQL 18 lanes. Capture is the unchanged default entry."""
 from __future__ import annotations
 
 import json
@@ -13,35 +13,84 @@ import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 REPOSITORY = "mightyoung/might-software-factory"
-DATABASE = "msf_ci_risk_capture"
 IMAGE_TAG = "docker.io/library/postgres:18-bookworm"
 ADMIN = "msf_ci_bootstrap"
 VERSIONS = tuple(map(str, (*range(2, 9), *range(11, 25))))
-IT_CLASS = "com.mightyoung.softwarefactory.dualprevention.risk.RiskChangeCapturePostgresIT"
-UNIT_CLASS = "com.mightyoung.softwarefactory.dualprevention.risk.CiPg18CaptureTargetTest"
-SCENARIOS = frozenset((
-    "fullMigrationHistoryAndExactCauseSchema",
-    "firstReplayAndActorRotationKeepOriginalAttribution",
-    "runtimePrivilegesAndTenantRlsAreExact",
-    "forgedSourceTupleCreatesNoCause",
-    "missingInstantExecuteRefusesAndRestoredGrantCaptures",
-    "runtimeMutationPrivilegesDeny",
-    "ownerMutationTriggersReject55000",
-    "winnerCommitBlocksThenWaiterReplays",
-    "winnerRollbackBlocksThenWaiterInserts",
-))
-FAILURE_PHASES = frozenset((
-    "migrate", "open", "admin-connect", "runtime-connect", "target-version",
-    "target-marker", "empty-schema", "empty-runtime", "seed-tenant",
-    "seed-template", "seed-graph", "history", "schema", "cause-table",
-    "cause-fks", "cause-triggers", "cause-key", "runtime-role",
-    "runtime-columns", "runtime-required", "runtime-rights", "runtime-login",
-    "runtime-table", "instant-function", "cause-count", "source-snapshot", "cause-columns", "cause-checks", "cause-policy",
-    "closed", "unknown",
-))
+
+
+@dataclass(frozen=True)
+class _LaneSpec:
+    kind: str
+    database: str
+    runtime_role: str
+    ack: str
+    profile: str
+    state_prefix: str
+    artifact_directory: str
+    it_class: str
+    unit_class: str
+    scenarios: frozenset[str]
+    schema_field: str
+    evidence_file: str
+    failure_file: str
+    failure_phases: frozenset[str]
+
+
+CAPTURE = _LaneSpec(
+    kind="risk-capture", database="msf_ci_risk_capture", runtime_role="msf_ci_capture_runtime",
+    ack="ephemeral-risk-capture-only", profile="ci-pg18-risk-capture",
+    state_prefix="msf-ci-pg18-", artifact_directory="ci-pg18-risk-capture",
+    it_class="com.mightyoung.softwarefactory.dualprevention.risk.RiskChangeCapturePostgresIT",
+    unit_class="com.mightyoung.softwarefactory.dualprevention.risk.CiPg18CaptureTargetTest",
+    scenarios=frozenset((
+        "fullMigrationHistoryAndExactCauseSchema",
+        "firstReplayAndActorRotationKeepOriginalAttribution",
+        "runtimePrivilegesAndTenantRlsAreExact",
+        "forgedSourceTupleCreatesNoCause",
+        "missingInstantExecuteRefusesAndRestoredGrantCaptures",
+        "runtimeMutationPrivilegesDeny",
+        "ownerMutationTriggersReject55000",
+        "winnerCommitBlocksThenWaiterReplays",
+        "winnerRollbackBlocksThenWaiterInserts",
+    )),
+    schema_field="causeSchemaVerified", evidence_file="ci-pg18-safe-evidence.json",
+    failure_file="ci-pg18-safe-failure.json", failure_phases=frozenset((
+        "migrate", "open", "admin-connect", "runtime-connect", "target-version",
+        "target-marker", "empty-schema", "empty-runtime", "seed-tenant",
+        "seed-template", "seed-graph", "history", "schema", "cause-table",
+        "cause-fks", "cause-triggers", "cause-key", "runtime-role",
+        "runtime-columns", "runtime-required", "runtime-rights", "runtime-login",
+        "runtime-table", "instant-function", "cause-count", "source-snapshot", "cause-columns", "cause-checks", "cause-policy",
+        "closed", "unknown",
+    )))
+REGISTRY = _LaneSpec(
+    kind="risk-registry", database="msf_ci_risk_registry", runtime_role="msf_ci_registry_runtime",
+    ack="ephemeral-risk-registry-only", profile="ci-pg18-risk-registry",
+    state_prefix="msf-ci-pg18-risk-registry-", artifact_directory="ci-pg18-risk-registry",
+    it_class="com.mightyoung.softwarefactory.support.RiskNativePublicationPostgresIT",
+    unit_class="com.mightyoung.softwarefactory.support.CiPg18RegistryTargetTest",
+    scenarios=frozenset((
+        "originalMigrationsAndRegistryPrivilegesAreExact",
+        "actualJacksonAndSevenNativeSqlPaths",
+        "pgBaselineAttributesAreRestored",
+        "ackCommitThenThrowKeepsDurableCompletion",
+        "registrationCommitThenThrowKeepsOneIncompletePublication",
+        "committedResetFailureStopsClose",
+        "committedCloseFailureIsNotRetried",
+        "statementFailureRollsBackCompletion",
+        "disposalSerializationFailureIsSafeAndReadOnly",
+    )), schema_field="publicationSchemaVerified", evidence_file="ci-pg18-registry-safe-evidence.json",
+    failure_file="ci-pg18-registry-safe-failure.json", failure_phases=frozenset((
+        "open", "target-version", "target-marker", "empty-schema", "empty-runtime", "migrate", "history",
+        "publication-schema", "runtime-role", "runtime-rights", "native-graph", "closed", "unknown",
+    )))
+# Legacy capture constants and default call signatures remain the capture lane.
+DATABASE, IT_CLASS, UNIT_CLASS = CAPTURE.database, CAPTURE.it_class, CAPTURE.unit_class
+SCENARIOS, FAILURE_PHASES = CAPTURE.scenarios, CAPTURE.failure_phases
 LABEL_PREFIX = "com.mightyoung.ci.pg18."
 MAX_JSON = 131072
 MAX_XML = 4194304
@@ -56,6 +105,40 @@ class Rejected(Exception):
 
 def reject(stage):
     raise Rejected(stage)
+
+
+def _spec(lane):
+    if lane is not CAPTURE and lane is not REGISTRY:
+        reject("LANE")
+    return lane
+
+
+def _result_lane(result, lane):
+    lane = _spec(lane)
+    if not isinstance(result, dict):
+        reject("RESULT_LANE")
+    marker = result.get("acceptanceKind")
+    if (lane is REGISTRY and marker != lane.kind) or (lane is CAPTURE and marker not in (None, lane.kind)):
+        reject("RESULT_LANE")
+    # A renamed capture artifact is not an authoritative registry acceptance receipt.
+    if "databaseEvidence" in result:
+        try:
+            validate_success_evidence(result["databaseEvidence"], result.get("imageDigest"), lane)
+        except Rejected:
+            reject("RESULT_LANE")
+    if lane is REGISTRY:
+        if type(result.get("schemaVersion")) is not int or result["schemaVersion"] != 1:
+            reject("RESULT_LANE")
+        if result.get("status") == "PASS":
+            tests = result.get("tests")
+            if ("databaseEvidence" not in result or result.get("stage") != "COMPLETE"
+                    or not isinstance(tests, dict)
+                    or set(tests) != {"integrationTests", "targetGuardTests", "failures", "errors", "skipped", "scenarios"}
+                    or type(tests.get("integrationTests")) is not int or tests["integrationTests"] != len(lane.scenarios)
+                    or type(tests.get("targetGuardTests")) is not int or tests["targetGuardTests"] < 1
+                    or any(type(tests.get(key)) is not int or tests[key] != 0 for key in ("failures", "errors", "skipped"))
+                    or tests.get("scenarios") != sorted(lane.scenarios)):
+                reject("RESULT_LANE")
 
 
 def bounded_bytes(path, maximum, stage):
@@ -86,16 +169,18 @@ def load_json(path):
         reject("EVIDENCE_JSON")
 
 
-def validate_success_evidence(value, digest):
+def validate_success_evidence(value, digest, lane=CAPTURE):
+    lane = _spec(lane)
     keys = {"schemaVersion", "postgresMajor", "database", "instanceMarkerVerified",
-            "imageDigest", "migrations", "causeSchemaVerified", "runtimeRightsVerified"}
-    if not isinstance(value, dict) or set(value) != keys:
+            "imageDigest", "migrations", lane.schema_field, "runtimeRightsVerified"}
+    if (not isinstance(value, dict) or set(value) != keys or not isinstance(digest, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)):
         reject("SUCCESS_EVIDENCE")
     if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
             or type(value["postgresMajor"]) is not int or value["postgresMajor"] != 18
-            or value["database"] != DATABASE or value["imageDigest"] != digest
+            or value["database"] != lane.database or value["imageDigest"] != digest
             or value["instanceMarkerVerified"] is not True
-            or value["causeSchemaVerified"] is not True
+            or value[lane.schema_field] is not True
             or value["runtimeRightsVerified"] is not True):
         reject("SUCCESS_EVIDENCE")
     migrations = value["migrations"]
@@ -112,22 +197,27 @@ def validate_success_evidence(value, digest):
                 or type(checksum) is not int or not -(2**31) <= checksum < 2**31):
             reject("MIGRATION_EVIDENCE")
         found[version] = {"version": version, "script": script, "checksum": checksum}
-    return {"schemaVersion": 1, "postgresMajor": 18, "database": DATABASE,
+    return {"schemaVersion": 1, "postgresMajor": 18, "database": lane.database,
             "instanceMarkerVerified": True, "imageDigest": digest,
             "migrations": [found[version] for version in VERSIONS],
-            "causeSchemaVerified": True, "runtimeRightsVerified": True}
+            lane.schema_field: True, "runtimeRightsVerified": True}
 
 
-def validate_failure_evidence(value):
-    if not isinstance(value, dict) or set(value) != {"schemaVersion", "phase", "migrationVersion", "sqlState"}:
+def validate_failure_evidence(value, lane=CAPTURE):
+    lane = _spec(lane)
+    fields = ("schemaVersion", "phase", "migrationVersion", "sqlState")
+    if lane is REGISTRY:
+        fields += ("database",)
+    if not isinstance(value, dict) or set(value) != set(fields):
         reject("FAILURE_EVIDENCE")
     if (type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
-            or not isinstance(value["phase"], str) or value["phase"] not in FAILURE_PHASES
+            or not isinstance(value["phase"], str) or value["phase"] not in lane.failure_phases
             or (value["migrationVersion"] is not None and value["migrationVersion"] not in VERSIONS)
             or (value["sqlState"] is not None and
-                (not isinstance(value["sqlState"], str) or not re.fullmatch(r"[0-9A-Z]{5}", value["sqlState"])))):
+                (not isinstance(value["sqlState"], str) or not re.fullmatch(r"[0-9A-Z]{5}", value["sqlState"])))
+            or (lane is REGISTRY and value["database"] != lane.database)):
         reject("FAILURE_EVIDENCE")
-    return {key: value[key] for key in ("schemaVersion", "phase", "migrationVersion", "sqlState")}
+    return {key: value[key] for key in fields}
 
 
 def validate_report(path, classname, scenarios=None):
@@ -155,24 +245,26 @@ def validate_report(path, classname, scenarios=None):
         reject("REPORT_XML")
 
 
-def verify_reports(repo):
+def verify_reports(repo, lane=CAPTURE):
+    lane = _spec(lane)
     base = repo / "backend" / "target"
-    integration = validate_report(base / "failsafe-reports" / ("TEST-" + IT_CLASS + ".xml"),
-                                  IT_CLASS, SCENARIOS)
-    unit = validate_report(base / "surefire-reports" / ("TEST-" + UNIT_CLASS + ".xml"), UNIT_CLASS)
-    # No other Failsafe suites may silently enter this dedicated acceptance target.
-    if set((base / "failsafe-reports").glob("TEST-*.xml")) != {
-            base / "failsafe-reports" / ("TEST-" + IT_CLASS + ".xml")}:
-        reject("REPORT_EXTRA_SUITE")
+    integration = validate_report(base / "failsafe-reports" / ("TEST-" + lane.it_class + ".xml"),
+                                  lane.it_class, lane.scenarios)
+    unit = validate_report(base / "surefire-reports" / ("TEST-" + lane.unit_class + ".xml"), lane.unit_class)
+    # Both profiles select exactly one IT and one target-guard suite.
+    for folder, classname in (("failsafe-reports", lane.it_class), ("surefire-reports", lane.unit_class)):
+        if set((base / folder).glob("TEST-*.xml")) != {base / folder / ("TEST-" + classname + ".xml")}:
+            reject("REPORT_EXTRA_SUITE")
     return {"integrationTests": integration, "targetGuardTests": unit,
-            "failures": 0, "errors": 0, "skipped": 0, "scenarios": sorted(SCENARIOS)}
+            "failures": 0, "errors": 0, "skipped": 0, "scenarios": sorted(lane.scenarios)}
 
 
-def report_diagnostics(repo):
+def report_diagnostics(repo, lane=CAPTURE):
     """Whitelist counts and known scenario states, never failure text or properties."""
-    result = {"scenarios": {name: "missing" for name in sorted(SCENARIOS)}}
-    for kind, folder, classname in (("integration", "failsafe-reports", IT_CLASS),
-                                    ("targetGuard", "surefire-reports", UNIT_CLASS)):
+    lane = _spec(lane)
+    result = {"scenarios": {name: "missing" for name in sorted(lane.scenarios)}}
+    for kind, folder, classname in (("integration", "failsafe-reports", lane.it_class),
+                                    ("targetGuard", "surefire-reports", lane.unit_class)):
         path = repo / "backend" / "target" / folder / ("TEST-" + classname + ".xml")
         try:
             data = bounded_bytes(path, MAX_XML, "REPORT_DIAGNOSTIC")
@@ -191,7 +283,7 @@ def report_diagnostics(repo):
                     if case.get("classname") != classname:
                         continue
                     name = case.get("name")
-                    if name not in SCENARIOS:
+                    if name not in lane.scenarios:
                         continue
                     if name in seen:
                         result["scenarios"][name] = "duplicate"
@@ -248,14 +340,17 @@ def terminate_owned_group(pgid, marker):
 
 
 
-def stop_maven_group(state):
+def stop_maven_group(state, lane=CAPTURE):
+    lane = _spec(lane)
     path = state / "maven-process.json"
     if not path.exists():
         if (state / "maven-starting").exists():
             reject("MAVEN_GROUP_UNKNOWN")
         return
     record = load_json(path)
-    if (not isinstance(record, dict) or set(record) != {"pgid", "marker"}
+    keys = {"pgid", "marker"} | ({"acceptanceKind"} if lane is REGISTRY else set())
+    if (not isinstance(record, dict) or set(record) != keys
+            or (lane is REGISTRY and record.get("acceptanceKind") != lane.kind)
             or type(record["pgid"]) is not int or record["pgid"] <= 1
             or not isinstance(record["marker"], str)
             or not re.fullmatch(r"[0-9a-f]{32}", record["marker"])):
@@ -265,18 +360,22 @@ def stop_maven_group(state):
     (state / "maven-starting").unlink(missing_ok=True)
 
 
-def run_maven(repo, state, environment):
+def run_maven(repo, state, environment, lane=CAPTURE):
+    lane = _spec(lane)
     marker = secrets.token_hex(16)
     child_environment = dict(environment, MSF_PG18_PROCESS_MARKER=marker)
     private_write(state / "maven-starting", marker)
     with (state / "maven.log").open("wb") as output:
         process = subprocess.Popen(
             [str(repo / "mvnw"), "--batch-mode", "--no-transfer-progress",
-             "-Pci-pg18-risk-capture", "clean", "verify"],
+             "-P" + lane.profile, "clean", "verify"],
             cwd=repo, env=child_environment, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
         try:
-            private_write(state / "maven-process.json", json.dumps({"pgid": process.pid, "marker": marker}))
+            record = {"pgid": process.pid, "marker": marker}
+            if lane is REGISTRY:
+                record["acceptanceKind"] = lane.kind
+            private_write(state / "maven-process.json", json.dumps(record))
             try:
                 return process.wait(timeout=900)
             except subprocess.TimeoutExpired:
@@ -312,7 +411,8 @@ def docker_field(identity, expression):
         reject("CONTAINER_INSPECT")
 
 
-def context(environment):
+def context(environment, lane=CAPTURE):
+    lane = _spec(lane)
     if (environment.get("GITHUB_ACTIONS") != "true" or environment.get("CI") != "true"
             or environment.get("GITHUB_REPOSITORY") != REPOSITORY):
         reject("CI_CONTEXT")
@@ -329,12 +429,13 @@ def context(environment):
         reject("CI_CONTEXT")
     if not temporary.is_dir():
         reject("CI_CONTEXT")
-    state = temporary / ("msf-ci-pg18-" + run + "-" + attempt)
+    state = temporary / (lane.state_prefix + run + "-" + attempt)
     return run, attempt, state
 
 
-def expected_labels(run, attempt, marker):
-    return {LABEL_PREFIX + "kind": "risk-capture", LABEL_PREFIX + "repository": REPOSITORY,
+def expected_labels(run, attempt, marker, lane=CAPTURE):
+    lane = _spec(lane)
+    return {LABEL_PREFIX + "kind": lane.kind, LABEL_PREFIX + "repository": REPOSITORY,
             LABEL_PREFIX + "run": run, LABEL_PREFIX + "attempt": attempt,
             LABEL_PREFIX + "instance": marker}
 
@@ -345,9 +446,10 @@ def private_write(path, content):
         handle.write(content)
 
 
-def validate_intent(value, run, attempt):
+def validate_intent(value, run, attempt, lane=CAPTURE):
+    lane = _spec(lane)
     if (not isinstance(value, dict) or set(value) != {"name", "instance"}
-            or value["name"] != "msf-ci-pg18-" + run + "-" + attempt):
+            or value["name"] != lane.state_prefix + run + "-" + attempt):
         reject("CLEANUP_INTENT")
     try:
         if str(uuid.UUID(value["instance"])) != value["instance"]:
@@ -357,10 +459,11 @@ def validate_intent(value, run, attempt):
     return value
 
 
-def validate_resources(value, run, attempt, marker):
+def validate_resources(value, run, attempt, marker, lane=CAPTURE):
+    lane = _spec(lane)
     if (not isinstance(value, dict) or set(value) != {"container_id", "volumes", "run_id", "run_attempt", "instance", "name"}
             or value.get("run_id") != run or value.get("run_attempt") != attempt
-            or value.get("instance") != marker or value.get("name") != "msf-ci-pg18-" + run + "-" + attempt
+            or value.get("instance") != marker or value.get("name") != lane.state_prefix + run + "-" + attempt
             or not isinstance(value["container_id"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", value["container_id"])
             or not isinstance(value["volumes"], list) or len(value["volumes"]) != 1
@@ -376,18 +479,24 @@ def verify_volume_absent(name):
         reject("CLEANUP_VOLUME_REMAINS")
 
 
-def cleanup_container(state, run, attempt):
+def cleanup_container(state, run, attempt, lane=CAPTURE):
+    lane = _spec(lane)
     if not state.exists():
         return {"verified": False, "notCreated": True}
     if state.is_symlink() or not state.is_dir():
         reject("CLEANUP_STATE")
-    stop_maven_group(state)
     intent_file = state / "intent.json"
+    # Check a present lane identity before any process signal, as well as before Docker removal.
+    intent = validate_intent(load_json(intent_file), run, attempt, lane) if intent_file.exists() else None
+    if intent is None and ((state / "maven-process.json").exists() or (state / "maven-starting").exists()):
+        reject("MAVEN_GROUP_UNKNOWN")
+    stop_maven_group(state, lane)
     if not intent_file.exists():
-        # State was created before Docker was invoked.
+        # Only an empty state proves interruption before the pre-Docker intent was written.
+        if any(state.iterdir()):
+            reject("CLEANUP_INTENT")
         shutil.rmtree(state)
         return {"verified": True, "notCreated": True}
-    intent = validate_intent(load_json(intent_file), run, attempt)
     listed = command(["docker", "ps", "-a", "--no-trunc", "--filter",
                       "name=^/" + intent["name"] + "$", "--format", "{{.ID}}"])
     identifiers = listed.stdout.split()
@@ -396,7 +505,7 @@ def cleanup_container(state, run, attempt):
         if not resources_file.exists():
             scrub_private(state)
             return {"verified": False, "containerAbsent": True, "anonymousVolumesUnknown": True}
-        resources = validate_resources(load_json(resources_file), run, attempt, intent["instance"])
+        resources = validate_resources(load_json(resources_file), run, attempt, intent["instance"], lane)
         for name in resources["volumes"]:
             remaining = command(["docker", "volume", "ls", "--format", "{{.Name}}"])
             if name in remaining.stdout.splitlines():
@@ -409,12 +518,12 @@ def cleanup_container(state, run, attempt):
     identity = identifiers[0]
     resources = None
     if (state / "resources.json").exists():
-        resources = validate_resources(load_json(state / "resources.json"), run, attempt, intent["instance"])
+        resources = validate_resources(load_json(state / "resources.json"), run, attempt, intent["instance"], lane)
         if resources["container_id"] != identity:
             reject("CLEANUP_IDENTITY")
     labels = docker_field(identity, ".Config.Labels")
     if not isinstance(labels, dict) or any(labels.get(key) != value
-            for key, value in expected_labels(run, attempt, intent["instance"]).items()):
+            for key, value in expected_labels(run, attempt, intent["instance"], lane).items()):
         reject("CLEANUP_OWNERSHIP")
     mounts = docker_field(identity, ".Mounts")
     mounts_valid = isinstance(mounts, list) and len(mounts) == 1 and all(isinstance(mount, dict)
@@ -445,7 +554,8 @@ def scrub_private(state):
         (state / name).unlink(missing_ok=True)
 
 
-def create_container(state, run, attempt):
+def create_container(state, run, attempt, lane=CAPTURE):
+    lane = _spec(lane)
     version = command(["docker", "version", "--format", "{{.Server.Version}}"], failure_stage="ENGINE_VERSION").stdout.strip()
     major = version.split(".", 1)[0]
     if not re.fullmatch(r"[1-9][0-9]{0,2}", major) or int(major) < 28:
@@ -465,7 +575,7 @@ def create_container(state, run, attempt):
     digest = digests.pop()
     pinned = "docker.io/library/postgres@" + digest
     marker = str(uuid.uuid4())
-    name = "msf-ci-pg18-" + run + "-" + attempt
+    name = lane.state_prefix + run + "-" + attempt
     private_write(state / "intent.json", json.dumps({"name": name, "instance": marker}))
     admin_password, runtime_password = secrets.token_hex(32), secrets.token_hex(32)
     if admin_password == runtime_password:
@@ -474,13 +584,13 @@ def create_container(state, run, attempt):
         print("::add-mask::" + password, flush=True)
     private_write(state / "admin.password", admin_password)
     private_write(state / "runtime.password", runtime_password)
-    private_write(state / "postgres.env", "POSTGRES_USER=" + ADMIN + "\nPOSTGRES_DB=" + DATABASE
+    private_write(state / "postgres.env", "POSTGRES_USER=" + ADMIN + "\nPOSTGRES_DB=" + lane.database
                   + "\nPOSTGRES_PASSWORD=" + admin_password
                   + "\nPOSTGRES_INITDB_ARGS=--auth-host=scram-sha-256\n")
     arguments = ["docker", "run", "--detach", "--name", name, "--platform", "linux/amd64",
                  "--publish", "127.0.0.1::5432/tcp", "--env-file", str(state / "postgres.env"),
                  "--memory", "1g", "--cpus", "2", "--shm-size", "128m"]
-    for key, value in expected_labels(run, attempt, marker).items():
+    for key, value in expected_labels(run, attempt, marker, lane).items():
         arguments.extend(["--label", key + "=" + value])
     arguments.extend([pinned, "postgres", "-c", "msf.ci_instance=" + marker,
                       "-c", "log_statement=none", "-c", "log_min_error_statement=panic",
@@ -492,7 +602,7 @@ def create_container(state, run, attempt):
         reject("CONTAINER_IMAGE")
     labels = docker_field(identity, ".Config.Labels")
     if not isinstance(labels, dict) or any(labels.get(key) != value
-            for key, value in expected_labels(run, attempt, marker).items()):
+            for key, value in expected_labels(run, attempt, marker, lane).items()):
         reject("CONTAINER_LABELS")
     ports = docker_field(identity, ".NetworkSettings.Ports")
     if not isinstance(ports, dict) or set(ports) != {"5432/tcp"}:
@@ -514,12 +624,12 @@ def create_container(state, run, attempt):
     private_write(state / "resources.json", json.dumps({"container_id": identity, "volumes": [mounts[0]["Name"]],
                   "run_id": run, "run_attempt": attempt, "instance": marker, "name": name}))
     ownership = {"container_id": identity, "instance_id": marker, "host": "127.0.0.1", "port": port,
-                 "database": DATABASE, "image_digest": digest, "repository": REPOSITORY,
+                 "database": lane.database, "image_digest": digest, "repository": REPOSITORY,
                  "run_id": run, "run_attempt": attempt, "engine_major": major}
     private_write(state / "ownership", "".join(key + "=" + value + "\n" for key, value in ownership.items()))
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        readiness = command(["docker", "exec", identity, "pg_isready", "-U", ADMIN, "-d", DATABASE],
+        readiness = command(["docker", "exec", identity, "pg_isready", "-U", ADMIN, "-d", lane.database],
                             timeout=5, allow_failure=True)
         if readiness.returncode == 0:
             return ownership
@@ -527,12 +637,14 @@ def create_container(state, run, attempt):
     reject("POSTGRES_READINESS")
 
 
-def result_path(repo):
-    return repo / "artifacts" / "ci-pg18-risk-capture" / "result.json"
+def result_path(repo, lane=CAPTURE):
+    lane = _spec(lane)
+    return repo / "artifacts" / lane.artifact_directory / "result.json"
 
 
-def write_result(repo, result):
-    path = result_path(repo)
+def write_result(repo, result, lane=CAPTURE):
+    _result_lane(result, lane)
+    path = result_path(repo, lane)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 
@@ -553,15 +665,16 @@ def migration_diagnostics(path):
     return output
 
 
-def public_diagnostics(result):
+def public_diagnostics(result, lane=CAPTURE):
     """Render only known test outcomes and validated database evidence."""
+    lane = _spec(lane)
     output = {"status": "PASS" if result.get("status") == "PASS" else "FAILED",
               "cleanupVerified": result.get("cleanup", {}).get("verified") is True}
     diagnostics = result.get("reportDiagnostics", {})
     if isinstance(diagnostics, dict):
         scenarios = diagnostics.get("scenarios", {})
         if isinstance(scenarios, dict):
-            output["scenarios"] = {name: scenarios[name] for name in sorted(SCENARIOS)
+            output["scenarios"] = {name: scenarios[name] for name in sorted(lane.scenarios)
                                    if scenarios.get(name) in {"passed", "failed", "error", "skipped", "missing", "duplicate"}}
         for kind in ("integration", "targetGuard"):
             counts = diagnostics.get(kind, {})
@@ -569,11 +682,11 @@ def public_diagnostics(result):
                 output[kind] = {key: counts[key] for key in ("tests", "failures", "errors", "skipped")
                                 if type(counts.get(key)) is int and counts[key] >= 0}
     if "databaseFailure" in result:
-        output["databaseFailure"] = validate_failure_evidence(result["databaseFailure"])
+        output["databaseFailure"] = validate_failure_evidence(result["databaseFailure"], lane)
     if "databaseEvidence" in result:
         digest = result.get("imageDigest")
         if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-            output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest)
+            output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest, lane)
     migration = result.get("migrationDiagnostics", {})
     if isinstance(migration, dict):
         version = migration.get("lastMigrationVersion")
@@ -585,25 +698,28 @@ def public_diagnostics(result):
     return output
 
 
-def run_acceptance(repo, environment):
-    run, attempt, state = context(environment)
+def run_acceptance(repo, environment, lane=CAPTURE):
+    lane = _spec(lane)
+    run, attempt, state = context(environment, lane)
     if state.exists() or state.is_symlink():
         reject("STATE_ALREADY_EXISTS")
     os.umask(0o077)
     state.mkdir(mode=0o700)
     result = {"schemaVersion": 1, "status": "FAILED", "stage": "INITIALIZE",
               "cleanup": {"verified": False}}
-    write_result(repo, result)
+    if lane is REGISTRY:
+        result["acceptanceKind"] = lane.kind
+    write_result(repo, result, lane)
     stage = "INITIALIZE"
     try:
         stage = "CONTAINER"
-        ownership = create_container(state, run, attempt)
+        ownership = create_container(state, run, attempt, lane)
         result["imageDigest"] = ownership["image_digest"]
         result["engineMajor"] = int(ownership["engine_major"])
         child = dict(environment)
         child.update({
-            "MSF_CI_PG18_ACK": "ephemeral-risk-capture-only",
-            "MSF_CI_PG18_URL": "jdbc:postgresql://127.0.0.1:" + ownership["port"] + "/" + DATABASE,
+            "MSF_CI_PG18_ACK": lane.ack,
+            "MSF_CI_PG18_URL": "jdbc:postgresql://127.0.0.1:" + ownership["port"] + "/" + lane.database,
             "MSF_CI_PG18_CONTAINER_ID": ownership["container_id"],
             "MSF_CI_PG18_INSTANCE_ID": ownership["instance_id"],
             "MSF_CI_PG18_IMAGE_DIGEST": ownership["image_digest"],
@@ -612,20 +728,20 @@ def run_acceptance(repo, environment):
             "MSF_CI_PG18_RUNTIME_PASSWORD_FILE": str(state / "runtime.password"),
         })
         stage = "MAVEN_VERIFY"
-        maven_exit = run_maven(repo, state, child)
+        maven_exit = run_maven(repo, state, child, lane)
         result["mavenExit"] = maven_exit
         if maven_exit:
             result["migrationDiagnostics"] = migration_diagnostics(state / "maven.log")
-            result["reportDiagnostics"] = report_diagnostics(repo)
-            failure = repo / "backend" / "target" / "ci-pg18-safe-failure.json"
+            result["reportDiagnostics"] = report_diagnostics(repo, lane)
+            failure = repo / "backend" / "target" / lane.failure_file
             if failure.exists():
-                result["databaseFailure"] = validate_failure_evidence(load_json(failure))
+                result["databaseFailure"] = validate_failure_evidence(load_json(failure), lane)
             reject("MAVEN_VERIFY")
         stage = "REPORT_VERIFY"
-        result["tests"] = verify_reports(repo)
+        result["tests"] = verify_reports(repo, lane)
         stage = "DATABASE_EVIDENCE"
         result["databaseEvidence"] = validate_success_evidence(
-            load_json(repo / "backend" / "target" / "ci-pg18-safe-evidence.json"), ownership["image_digest"])
+            load_json(repo / "backend" / "target" / lane.evidence_file), ownership["image_digest"], lane)
         result["status"], result["stage"] = "PASS", "COMPLETE"
     except Rejected as failure:
         result["stage"] = str(failure)
@@ -635,9 +751,9 @@ def run_acceptance(repo, environment):
         result["stage"] = stage
     finally:
         if stage == "MAVEN_VERIFY" and result["status"] != "PASS":
-            result["reportDiagnostics"] = report_diagnostics(repo)
+            result["reportDiagnostics"] = report_diagnostics(repo, lane)
         try:
-            result["cleanup"] = cleanup_container(state, run, attempt)
+            result["cleanup"] = cleanup_container(state, run, attempt, lane)
             if not result["cleanup"].get("verified"):
                 result["status"], result["stage"] = "FAILED", "CLEANUP_UNVERIFIED"
         except Exception:
@@ -646,27 +762,30 @@ def run_acceptance(repo, environment):
             scrub_private(state)
         except Exception:
             result["status"], result["stage"] = "FAILED", "PRIVATE_CLEANUP_FAILED"
-        write_result(repo, result)
+        write_result(repo, result, lane)
     print(json.dumps({"status": result["status"], "stage": result["stage"],
                       "cleanupVerified": result["cleanup"].get("verified", False)}), flush=True)
-    print(json.dumps(public_diagnostics(result)), flush=True)
+    print(json.dumps(public_diagnostics(result, lane)), flush=True)
     return 0 if result["status"] == "PASS" else 1
 
 
-def always_cleanup(repo, environment):
-    run, attempt, state = context(environment)
-    path = result_path(repo)
+def always_cleanup(repo, environment, lane=CAPTURE):
+    lane = _spec(lane)
+    run, attempt, state = context(environment, lane)
+    path = result_path(repo, lane)
     previous = load_json(path) if path.exists() else {
-        "schemaVersion": 1, "status": "FAILED", "stage": "RUN_NOT_COMPLETED"}
+        "schemaVersion": 1, "status": "FAILED", "stage": "RUN_NOT_COMPLETED",
+        **({"acceptanceKind": lane.kind} if lane is REGISTRY else {})}
+    _result_lane(previous, lane)
     if not state.exists():
         if previous.get("cleanup", {}).get("verified") is True:
             return 0
         previous["cleanup"] = {"verified": False, "notCreated": True}
         previous["status"], previous["stage"] = "FAILED", "CLEANUP_UNVERIFIED"
-        write_result(repo, previous)
+        write_result(repo, previous, lane)
         return 1
     try:
-        previous["cleanup"] = cleanup_container(state, run, attempt)
+        previous["cleanup"] = cleanup_container(state, run, attempt, lane)
     except Exception:
         previous["status"], previous["stage"] = "FAILED", "CLEANUP_FAILED"
         previous["cleanup"] = {"verified": False}
@@ -674,16 +793,16 @@ def always_cleanup(repo, environment):
             scrub_private(state)
         except Exception:
             previous["stage"] = "PRIVATE_CLEANUP_FAILED"
-        write_result(repo, previous)
+        write_result(repo, previous, lane)
         return 1
     scrub_private(state)
     if not previous["cleanup"].get("verified"):
         previous["status"], previous["stage"] = "FAILED", "CLEANUP_UNVERIFIED"
-    write_result(repo, previous)
+    write_result(repo, previous, lane)
     return 0 if previous["cleanup"].get("verified") else 1
 
 
-def main():
+def main(lane=CAPTURE):
     repo = Path(__file__).resolve().parents[2]
     def interrupted(_signum, _frame):
         reject("INTERRUPTED")
@@ -691,9 +810,9 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     try:
         if sys.argv[1:] == ["run"]:
-            return run_acceptance(repo, os.environ)
+            return run_acceptance(repo, os.environ, lane)
         if sys.argv[1:] == ["cleanup"]:
-            return always_cleanup(repo, os.environ)
+            return always_cleanup(repo, os.environ, lane)
         reject("COMMAND")
     except Exception:
         print("CI PostgreSQL harness rejected", flush=True)
