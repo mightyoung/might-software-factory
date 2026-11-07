@@ -28,10 +28,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.AnnotatedBeanDefinitionReader;
 import org.springframework.boot.tomcat.TomcatWebServer;
+import org.springframework.boot.convert.ApplicationConversionService;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.support.PropertySourcesPlaceholderConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -179,6 +181,7 @@ class TenantAuditHttpContainerTest {
     @Import({RiskScenarioHttpConfiguration.class,SecurityConfiguration.class,SessionCookieConfiguration.class,
             SessionContextResolver.class,AuthenticationSessionController.class,TenantAuditQueryController.class,BootRegistrations.class})
     static class Application {
+        @Bean static PropertySourcesPlaceholderConfigurer placeholders(){return new PropertySourcesPlaceholderConfigurer();}
         @Bean TomcatServletWebServerFactory tomcat(Scenario scenario){
             var factory=new TomcatServletWebServerFactory(0);factory.setAddress(InetAddress.getLoopbackAddress());factory.setBaseDirectory(scenario.directory.toFile());return factory;
         }
@@ -244,6 +247,7 @@ class TenantAuditHttpContainerTest {
         Fixture(Path directory,Boolean enabled)throws IOException {
             Files.createDirectories(directory);scenario=new Scenario(directory);if(enabled!=null)properties.put("msf.audit-query.http.enabled",enabled.toString());
             properties.put("server.port","0");context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("audit-container-fixture",properties));
+            context.getBeanFactory().setConversionService(ApplicationConversionService.getSharedInstance());
             context.registerBean(Scenario.class,()->scenario);new AnnotatedBeanDefinitionReader(context).register(Application.class);
             try{context.refresh();assertThat(context.getWebServer().getPort()).isPositive();assertThat(scenario.borrowAttempts.get()).isZero();}
             catch(RuntimeException|Error failure){try{context.close();}catch(RuntimeException|Error cleanup){if(cleanup!=failure)failure.addSuppressed(cleanup);}throw failure;}
