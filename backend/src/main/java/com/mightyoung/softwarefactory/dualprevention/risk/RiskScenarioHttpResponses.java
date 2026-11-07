@@ -30,7 +30,7 @@ final class RiskScenarioHttpResponses {
     }
     static void error(HttpServletRequest request,HttpServletResponse response,RiskScenarioHttpTransport transport,Exception error)throws IOException{
         if(error instanceof com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure){
-            var body=com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.unknown(failure,IdentityRequestIds.get(request).traceId());
+            var body=com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.error(failure,IdentityRequestIds.get(request).traceId());
             var encoded=encodeOwnedResponse(body,ResponseBudget.ERROR);
             transport.stage(request,response,503,jsonHeaders("no-store"),encoded.size(),encoded::writeTo);
             return;

@@ -120,8 +120,14 @@ class AssetFoundationManagedClockCatalogTest {
         final AtomicInteger clockReads=new AtomicInteger();final List<String> prepared=new ArrayList<>();
         DriverFixture(){
             try{
-                when(pool.getConnection()).thenReturn(driver);when(driver.getAutoCommit()).thenReturn(true,false);
-                when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+                when(pool.getConnection()).thenReturn(driver);var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+                var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
                 when(driver.prepareStatement(anyString())).thenAnswer(call->{
                     String sql=call.getArgument(0);prepared.add(sql);var statement=mock(PreparedStatement.class);
                     when(statement.execute()).thenReturn(false);when(statement.getLargeUpdateCount()).thenReturn(0L);

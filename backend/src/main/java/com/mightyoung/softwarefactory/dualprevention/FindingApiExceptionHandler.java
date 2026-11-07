@@ -171,10 +171,10 @@ public final class FindingApiExceptionHandler {
     }
 
     @ExceptionHandler(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException.class)
-    ResponseEntity<ErrorResponse> commandOutcomeUnknown(
+    ResponseEntity<ErrorResponse> commandLifecycleFailure(
             com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(org.springframework.http.CacheControl.noStore())
-                .body(G014LifecycleHttpResponses.unknown(failure, UUID.randomUUID()));
+                .body(G014LifecycleHttpResponses.error(failure, UUID.randomUUID()));
     }
 
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,

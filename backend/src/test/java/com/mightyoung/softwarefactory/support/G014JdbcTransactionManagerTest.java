@@ -13,14 +13,20 @@ import static org.mockito.Mockito.*;
 
 /** Uses the real pinned Spring manager pipeline with a recording JDBC fixture, not a real database. */
 class G014JdbcTransactionManagerTest {
-    private record Fixture(Connection driver,G014JdbcTransactionManager manager,TransactionTemplate transaction,TransactionSqlSealGate gate) {}
+    private record Fixture(Connection driver,G014JdbcTransactionManager manager,TransactionTemplate transaction,TransactionSqlSealGate gate,java.util.concurrent.atomic.AtomicBoolean autoCommit) {}
     private Fixture fixture()throws SQLException {
         return fixture(List.of());
     }
     private Fixture fixture(List<TransactionSqlSealGate.SqlTemplate> templates)throws SQLException {
         var pool=mock(DataSource.class);var driver=mock(Connection.class);
-        when(pool.getConnection()).thenReturn(driver);when(driver.getAutoCommit()).thenReturn(true,false);
-        when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        when(pool.getConnection()).thenReturn(driver);var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+        var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
         var manager=new G014JdbcTransactionManager(pool,templates);var transaction=new TransactionTemplate(manager);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         var authority=mock(com.mightyoung.softwarefactory.identity.HumanSessionAuthorityTransaction.class);
@@ -38,7 +44,7 @@ class G014JdbcTransactionManagerTest {
             connection.getAutoCommit();connection.isReadOnly();connection.getTransactionIsolation();return result;
         });
         var gate=new TransactionSqlSealGate(manager,authority,actions,java.util.Map.of(action,validator));
-        return new Fixture(driver,manager,transaction,gate);
+        return new Fixture(driver,manager,transaction,gate,jdbcAutoCommit);
     }
     private void sealFixture(Fixture fixture) {bindFixture(fixture);fixture.gate.finalizeCommand();}
     private void bindFixture(Fixture fixture) {
@@ -261,7 +267,7 @@ class G014JdbcTransactionManagerTest {
     @ParameterizedTest @EnumSource(FailureKind.class)
     void beginFailureHelperRollbackUnknownUnbindsBeforePropagatingTypedReason(FailureKind kind)throws Exception {
         var f=fixture();Throwable original=driverFailure(kind);
-        when(f.driver.getAutoCommit()).thenThrow(new SQLException(UNKNOWN_SECRET+" setup"));
+        doAnswer(call->{f.autoCommit.set(false);throw new SQLException(UNKNOWN_SECRET+" setup");}).when(f.driver).setAutoCommit(false);
         doAnswer(invocation->{throw original;}).when(f.driver).rollback();
         Throwable failure=catchThrowable(()->f.transaction.execute(status->{throw new AssertionError("body must not run");}));
         assertUnknown(failure,G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN);

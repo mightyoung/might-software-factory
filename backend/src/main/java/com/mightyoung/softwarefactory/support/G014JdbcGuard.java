@@ -13,6 +13,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /** One physical lease; deliberately implements no raw-target or vendor interface. */
 final class G014JdbcGuard implements InvocationHandler {
     enum Phase { SETUP, STAGING, FINAL_VALIDATING, SEALED, COMMIT_SENT, COMMITTED, ROLLBACK_PENDING, ROLLED_BACK, UNKNOWN }
+    enum CleanupOutcome { NOT_ATTEMPTED, COMPLETE, RESET_FAILED, CLOSE_UNKNOWN, BASELINE_UNVERIFIED }
+    private record Baseline(boolean autoCommit,boolean readOnly,int isolation) {}
     private final G014SqlProfile profile;
     private final Connection delegate;
     private final Thread owner=Thread.currentThread();
@@ -24,6 +26,9 @@ final class G014JdbcGuard implements InvocationHandler {
     private ConnectionHolder holder;
     private Object source;
     private Phase phase=Phase.SETUP;
+    private Baseline baseline;
+    private CleanupOutcome cleanupOutcome=CleanupOutcome.NOT_ATTEMPTED;
+    private boolean autoCommitChanged,readOnlyChanged,isolationChanged;
     private Boolean autoCommit,readOnly;
     private Integer isolation;
     private boolean closed,normalFinalReturn,constraintsAcknowledged;
@@ -42,8 +47,34 @@ final class G014JdbcGuard implements InvocationHandler {
         this.templates=Map.copyOf(selected);
         this.connection=(Connection)Proxy.newProxyInstance(Connection.class.getClassLoader(),new Class<?>[]{Connection.class},this);
     }
+    /** Capture the complete immutable pool baseline before any setup mutation. */
+    void captureBaseline()throws SQLException {
+        if(owner!=Thread.currentThread() || phase!=Phase.SETUP || baseline!=null
+                || cleanupOutcome!=CleanupOutcome.NOT_ATTEMPTED)throw reject();
+        try {
+            boolean auto=delegate.getAutoCommit();
+            boolean read=delegate.isReadOnly();
+            int level=delegate.getTransactionIsolation();
+            baseline=new Baseline(auto,read,level);
+        }catch(SQLException|RuntimeException|Error failure){
+            cleanupOutcome=CleanupOutcome.BASELINE_UNVERIFIED;poison();
+            throw new SQLException("G014 connection baseline is unavailable");
+        }
+    }
+    boolean baselineVerified(){return baseline!=null;}
+    CleanupOutcome cleanupOutcome(){return cleanupOutcome;}
+    /** Spring's readOnly=false definition does not clear an initially read-only lease. */
+    void establishWriteMode()throws SQLException {
+        if(!baselineVerified() || owner!=Thread.currentThread() || phase!=Phase.SETUP)throw reject();
+        if(baseline.readOnly()){
+            try{connection.setReadOnly(false);}
+            catch(SQLException|RuntimeException|Error failure){
+                throw new SQLException("G014 connection setup is unavailable");
+            }
+        }
+    }
     void bind(Object source,ConnectionHolder holder) {
-        if(phase!=Phase.SETUP || this.holder!=null || holder.getConnection()!=connection) throw reject();
+        if(phase!=Phase.SETUP || !baselineVerified() || this.holder!=null || holder.getConnection()!=connection) throw reject();
         this.source=source;this.holder=holder;phase=Phase.STAGING;
     }
     G014SqlProfile profile(){return profile;}
@@ -107,6 +138,7 @@ final class G014JdbcGuard implements InvocationHandler {
     }
     void rollback() throws SQLException {
         if(owner!=Thread.currentThread()) throw reject();
+        if(!baselineVerified()){cleanupOutcome=CleanupOutcome.BASELINE_UNVERIFIED;throw reject();}
         if(phase==Phase.COMMITTED || phase==Phase.ROLLED_BACK)return;
         if(phase==Phase.UNKNOWN || phase==Phase.COMMIT_SENT){phase=Phase.UNKNOWN;poison();return;}
         phase=Phase.ROLLBACK_PENDING;
@@ -114,9 +146,24 @@ final class G014JdbcGuard implements InvocationHandler {
         catch(SQLException|RuntimeException|Error failure){phase=Phase.UNKNOWN;poison();throw failure;}
     }
     void cleanup() throws SQLException {
-        if(owner!=Thread.currentThread() || !(phase==Phase.COMMITTED || phase==Phase.ROLLED_BACK)) throw reject();
-        // Acknowledgment precedes every reset/return to the existing pool.
-        delegate.setAutoCommit(true);delegate.close();closed=true;
+        if(owner!=Thread.currentThread() || !(phase==Phase.COMMITTED || phase==Phase.ROLLED_BACK)
+                || closed || cleanupOutcome!=CleanupOutcome.NOT_ATTEMPTED)throw reject();
+        if(!baselineVerified()){cleanupOutcome=CleanupOutcome.BASELINE_UNVERIFIED;throw reject();}
+        if(holder!=null && (TransactionSynchronizationManager.getResource(source)!=holder || holder.getConnection()!=connection))throw reject();
+        // Only acknowledged outcomes restore properties; each failed step stops all later reset/return work.
+        try {
+            if(isolationChanged)delegate.setTransactionIsolation(baseline.isolation());
+            if(readOnlyChanged)delegate.setReadOnly(baseline.readOnly());
+            if(autoCommitChanged)delegate.setAutoCommit(baseline.autoCommit());
+        }catch(SQLException|RuntimeException|Error failure){
+            cleanupOutcome=CleanupOutcome.RESET_FAILED;
+            throw new SQLException("G014 acknowledged transaction cleanup is unavailable");
+        }
+        try{delegate.close();closed=true;cleanupOutcome=CleanupOutcome.COMPLETE;}
+        catch(SQLException|RuntimeException|Error failure){
+            cleanupOutcome=CleanupOutcome.CLOSE_UNKNOWN;
+            throw new SQLException("G014 acknowledged transaction cleanup is unavailable");
+        }
     }
     void poison(){poisoned.set(true);if(holder!=null)holder.setRollbackOnly();}
     IllegalStateException reject(){poison();return new IllegalStateException("G014 transaction boundary is unavailable");}
@@ -145,13 +192,20 @@ final class G014JdbcGuard implements InvocationHandler {
         if(localMethod(method))return local(proxy,method,args,Connection.class);
         if(method.getName().equals("isClosed"))return closed;
         if(phase==Phase.SETUP){
-            if(owner!=Thread.currentThread() || poisoned.get())throw reject();
+            if(owner!=Thread.currentThread() || poisoned.get() || !baselineVerified())throw reject();
             String operation=method.getName();
             if(args.length==0 && Set.of("getAutoCommit","isReadOnly","getTransactionIsolation").contains(operation))return call(delegate,method,args);
             if(args.length==1 && ((operation.equals("setAutoCommit")&&Boolean.FALSE.equals(args[0]))
                     || (operation.equals("setReadOnly")&&Boolean.FALSE.equals(args[0]))
-                    || (operation.equals("setTransactionIsolation")&&Integer.valueOf(Connection.TRANSACTION_READ_COMMITTED).equals(args[0]))))
+                    || (operation.equals("setTransactionIsolation")&&Integer.valueOf(Connection.TRANSACTION_READ_COMMITTED).equals(args[0])))){
+                // Record possible mutation before the driver can take effect and lose its acknowledgment.
+                switch(operation){
+                    case "setAutoCommit"->autoCommitChanged=true;
+                    case "setReadOnly"->readOnlyChanged=true;
+                    default->isolationChanged=true;
+                }
                 return call(delegate,method,args);
+            }
             throw reject();
         }
         requireBound();

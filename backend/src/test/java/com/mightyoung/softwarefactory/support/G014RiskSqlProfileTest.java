@@ -96,7 +96,9 @@ class G014RiskSqlProfileTest {
     }
     @Test void changedValidatorIdentityPoisonsAnAlreadyBorrowedFrame()throws Exception {
         var pool=mock(DataSource.class);var driver=mock(Connection.class);when(pool.getConnection()).thenReturn(driver);
-        when(driver.getAutoCommit()).thenReturn(true);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getAutoCommit()).thenReturn(true);var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
         var manager=new G014JdbcTransactionManager(pool,List.of());
         var validator=mock(TransactionSqlSealGate.ProfiledCommandValidator.class);when(validator.profile()).thenReturn(ASSET);
         var gate=new TransactionSqlSealGate(manager,mock(HumanSessionAuthorityTransaction.class),mock(EntityActionAuthorization.class),Map.of(ACTION,validator));
@@ -117,11 +119,15 @@ class G014RiskSqlProfileTest {
         var driver=mock(Connection.class);var statement=mock(PreparedStatement.class);
         when(driver.prepareStatement(riskFlush().sql())).thenReturn(statement);
         when(statement.execute()).thenReturn(false);when(statement.getLargeUpdateCount()).thenReturn(0L);
+        when(driver.getAutoCommit()).thenReturn(false);when(driver.isReadOnly()).thenReturn(false);
+        when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
         var guard=new G014JdbcGuard(RISK,driver,List.of(riskFlush()));
+        guard.captureBaseline();
         var source=new Object();var holder=new ConnectionHolder(guard.connection);holder.setSynchronizedWithTransaction(true);
         TransactionSynchronizationManager.bindResource(source,holder);TransactionSynchronizationManager.initSynchronization();
         TransactionSynchronizationManager.setActualTransactionActive(true);guard.bind(source,holder);
         try {
+            clearInvocations(driver); // Discard baseline acquisition observations, retain command-boundary assertions.
             assertThat(guard.profile()).isSameAs(RISK);
             assertThatThrownBy(guard::beginFinal).isInstanceOf(IllegalStateException.class);
             verifyNoInteractions(driver);
@@ -131,7 +137,10 @@ class G014RiskSqlProfileTest {
         var driver=mock(Connection.class);var statement=mock(PreparedStatement.class);
         when(driver.prepareStatement(riskFlush().sql())).thenReturn(statement);when(statement.execute()).thenReturn(false);
         when(statement.getLargeUpdateCount()).thenReturn(0L);
+        when(driver.getAutoCommit()).thenReturn(false);when(driver.isReadOnly()).thenReturn(false);
+        when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
         var guard=new G014JdbcGuard(RISK,driver,List.of(riskFlush()));
+        guard.captureBaseline();
         var source=new Object();var holder=new ConnectionHolder(guard.connection);holder.setSynchronizedWithTransaction(true);
         TransactionSynchronizationManager.bindResource(source,holder);TransactionSynchronizationManager.initSynchronization();
         TransactionSynchronizationManager.setActualTransactionActive(true);guard.bind(source,holder);
@@ -205,8 +214,12 @@ class G014RiskSqlProfileTest {
             TransactionSqlSealGate.CommandPlan plan,HumanSessionAuthorityTransaction.WriteScope scope) {}
     private RiskFixture riskFixture(RegisteredEntityAction action)throws Exception {
         var pool=mock(DataSource.class);var driver=mock(Connection.class);var statement=mock(PreparedStatement.class);
-        when(pool.getConnection()).thenReturn(driver);when(driver.getAutoCommit()).thenReturn(true,false);
-        when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        when(pool.getConnection()).thenReturn(driver);var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+        var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
         when(driver.prepareStatement(riskFlush().sql())).thenReturn(statement);when(statement.execute()).thenReturn(false);
         when(statement.getLargeUpdateCount()).thenReturn(0L);
         var manager=new G014JdbcTransactionManager(RISK,pool,List.of(riskFlush()));

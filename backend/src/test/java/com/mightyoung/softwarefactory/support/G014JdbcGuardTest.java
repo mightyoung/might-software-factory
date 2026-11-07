@@ -19,6 +19,7 @@ class G014JdbcGuardTest {
         when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
         guard=new G014JdbcGuard(driver,List.of(new TransactionSqlSealGate.SqlTemplate("select 1",0,true,null),
                 new TransactionSqlSealGate.SqlTemplate("insert into proof values (?)",1,false,"proof")));
+        guard.captureBaseline();
         holder=new ConnectionHolder(guard.connection);holder.setSynchronizedWithTransaction(true);
         TransactionSynchronizationManager.bindResource(source,holder);
         TransactionSynchronizationManager.initSynchronization();TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -95,7 +96,8 @@ class G014JdbcGuardTest {
     }
     @Test void acknowledgedRollbackPrecedesAnyCleanupReset()throws Exception {
         guard.rollback();guard.cleanup();var order=inOrder(driver);
-        order.verify(driver).rollback();order.verify(driver).setAutoCommit(true);order.verify(driver).close();
+        order.verify(driver).rollback();order.verify(driver).close();
+        verify(driver,never()).setAutoCommit(true); // Original manual-commit baseline is preserved.
     }
     @Test void timestampBindingSnapshotsCallerAndDriverMutationsAsImmutableInstant()throws Exception {
         var raw=mock(PreparedStatement.class);when(driver.prepareStatement("insert into proof values (?)")).thenReturn(raw);

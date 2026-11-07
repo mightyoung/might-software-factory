@@ -42,8 +42,14 @@ class AssetFoundationReceiptAuthorizationTest {
         when(scopes.observedAt()).thenReturn(Instant.parse("2026-11-04T01:00:00Z"));
         when(actions.requireFinalCommand(any(),any(),any())).thenReturn(scopes);
         var pool=mock(DataSource.class);when(pool.getConnection()).thenReturn(driver);
-        when(driver.getAutoCommit()).thenReturn(true,false);when(driver.isReadOnly()).thenReturn(false);
-        when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());
+        var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
         var metadata=mock(DatabaseMetaData.class);when(driver.getMetaData()).thenReturn(metadata);
         when(metadata.getDatabaseMajorVersion()).thenReturn(18);when(metadata.getDatabaseMinorVersion()).thenReturn(0);
         when(metadata.getDatabaseProductVersion()).thenReturn("18.0");

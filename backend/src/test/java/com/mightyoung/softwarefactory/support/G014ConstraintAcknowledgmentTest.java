@@ -23,9 +23,12 @@ class G014ConstraintAcknowledgmentTest {
     private G014JdbcGuard guard;
     private ConnectionHolder holder;
     @BeforeEach void bind()throws Exception {
+        when(driver.getAutoCommit()).thenReturn(false);when(driver.isReadOnly()).thenReturn(false);
+        when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
         guard=new G014JdbcGuard(driver,List.of(FLUSH,
                 new TransactionSqlSealGate.SqlTemplate("insert into proof values (1)",0,false,"proof"),
                 new TransactionSqlSealGate.SqlTemplate("select 1",0,true,null)));
+        guard.captureBaseline();
         holder=new ConnectionHolder(guard.connection);holder.setSynchronizedWithTransaction(true);
         TransactionSynchronizationManager.bindResource(source,holder);
         TransactionSynchronizationManager.initSynchronization();TransactionSynchronizationManager.setActualTransactionActive(true);

@@ -30,7 +30,7 @@ class RiskScenarioUnknownOutcomeHttpTest {
     private static final UUID ID = UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
 
     static Stream<Arguments> routes() {
-        return Stream.of(LifecycleOutcome.values()).flatMap(outcome ->
+        return Stream.of(LifecycleOutcome.COMMIT_UNKNOWN, LifecycleOutcome.ROLLBACK_UNKNOWN).flatMap(outcome ->
                 Stream.of(Arguments.of(outcome, false), Arguments.of(outcome, true)));
     }
 
@@ -69,6 +69,53 @@ class RiskScenarioUnknownOutcomeHttpTest {
         var error = JsonMapper.builder().build().readTree(body);
         assertThat(error.get("traceId").asString()).isEqualTo(IdentityRequestIds.get(result.getRequest()).traceId().toString());
         assertThat(body).doesNotContain("PRIVATE", "08006", "请求未完成", "LifecycleException");
+        assertThat(transport.calls).isEqualTo(1);
+        assertThat(transport.length).isEqualTo(result.getResponse().getContentAsByteArray().length).isLessThanOrEqualTo(8192);
+        verify(capture).close();
+    }
+
+    static Stream<Arguments> cleanupRoutes() {
+        return Stream.of(G014UnknownOutcomeTestFixture.CleanupFault.values()).flatMap(fault ->
+                Stream.of(Arguments.of(fault, false), Arguments.of(fault, true)));
+    }
+
+    @ParameterizedTest @MethodSource("cleanupRoutes")
+    void localTransportPreservesKnownCommitAfterResetOrCloseFailure(
+            G014UnknownOutcomeTestFixture.CleanupFault fault, boolean metadata) throws Exception {
+        var requests = mock(SessionSensitiveRequests.class);
+        var capture = mock(CapturedHumanRequest.class);
+        when(requests.capture(any())).thenReturn(capture);
+        var transport = new RecordingTransport();
+        var parser = new RiskScenarioParser(JsonMapper.builder().build());
+        Object controller;
+        String path;
+        if (metadata) {
+            var service = mock(RiskScenarioMetadataService.class);
+            when(service.schema(eq(capture), any(), any())).thenAnswer(invocation -> {
+                throw G014UnknownOutcomeTestFixture.committedCleanupFailure(fault);
+            });
+            controller = new RiskScenarioMetadataController(service, parser, requests, transport);
+            path = "/api/v1/entities/risk_scenario/schema";
+        } else {
+            var service = mock(RiskScenarioReadService.class);
+            when(service.detail(eq(capture), eq(ID), any(), any())).thenAnswer(invocation -> {
+                throw G014UnknownOutcomeTestFixture.committedCleanupFailure(fault);
+            });
+            controller = new RiskScenarioReadController(service, parser, requests, transport);
+            path = "/api/v1/entities/risk_scenario/" + ID;
+        }
+        var result = MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new FindingApiExceptionHandler()).build()
+                .perform(get(path)).andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(jsonPath("$.code").value("COMMAND_COMMITTED"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.message").value("操作已提交，请查看结果"))
+                .andExpect(jsonPath("$.cleanup").doesNotExist()).andReturn();
+        String body = result.getResponse().getContentAsString();
+        var error = JsonMapper.builder().build().readTree(body);
+        assertThat(error.get("traceId").asString()).isEqualTo(IdentityRequestIds.get(result.getRequest()).traceId().toString());
+        assertThat(body).doesNotContain("PRIVATE", "08006", "请求未完成", "COMMAND_OUTCOME_UNKNOWN", "RESET_FAILED", "CLOSE_UNKNOWN");
         assertThat(transport.calls).isEqualTo(1);
         assertThat(transport.length).isEqualTo(result.getResponse().getContentAsByteArray().length).isLessThanOrEqualTo(8192);
         verify(capture).close();

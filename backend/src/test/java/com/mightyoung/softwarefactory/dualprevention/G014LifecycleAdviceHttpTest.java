@@ -14,7 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Actual owner-emitted failures through MVC advice; not database or full authenticated-command acceptance. */
 class G014LifecycleAdviceHttpTest {
-    @ParameterizedTest @EnumSource(LifecycleOutcome.class)
+    @ParameterizedTest @EnumSource(value = LifecycleOutcome.class, names = {"COMMIT_UNKNOWN", "ROLLBACK_UNKNOWN"})
     void actualUnknownOutcomeIsNotAdvertisedAsRetryable(LifecycleOutcome outcome) throws Exception {
         var mvc = MockMvcBuilders.standaloneSetup(new CommandController())
                 .setControllerAdvice(new FindingApiExceptionHandler()).build();
@@ -30,8 +30,29 @@ class G014LifecycleAdviceHttpTest {
                 .doesNotContain("PRIVATE", "08006", "java.", "rolled back", "请求未完成");
     }
 
+    @ParameterizedTest @EnumSource(G014UnknownOutcomeTestFixture.CleanupFault.class)
+    void actualCommittedCleanupFailureRetainsTheCommittedFact(G014UnknownOutcomeTestFixture.CleanupFault fault) throws Exception {
+        var mvc = MockMvcBuilders.standaloneSetup(new CommandController())
+                .setControllerAdvice(new FindingApiExceptionHandler()).build();
+        var result = mvc.perform(get("/committed-cleanup/" + fault))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(jsonPath("$.code").value("COMMAND_COMMITTED"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.message").value("操作已提交，请查看结果"))
+                .andExpect(jsonPath("$.cleanup").doesNotExist()).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain(
+                "PRIVATE", "08006", "请求未完成", "COMMAND_OUTCOME_UNKNOWN", "RESET_FAILED", "CLOSE_UNKNOWN");
+    }
+
     @RestController
     static class CommandController {
+        @GetMapping("/committed-cleanup/{fault}")
+        String committed(@PathVariable G014UnknownOutcomeTestFixture.CleanupFault fault) throws Exception {
+            throw G014UnknownOutcomeTestFixture.committedCleanupFailure(fault);
+        }
+
         @GetMapping("/owner-outcome/{outcome}")
         String command(@PathVariable LifecycleOutcome outcome) throws Exception {
             throw G014UnknownOutcomeTestFixture.failure(outcome);

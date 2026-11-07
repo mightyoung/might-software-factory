@@ -17,10 +17,10 @@ final class AssetFoundationHttpResponses {
         UUID trace = UUID.randomUUID(); request.setAttribute(TRACE, trace); return trace;
     }
     static Metadata metadata(UUID trace) { return new Metadata(trace.toString(), trace.toString(), "1"); }
-    static ResponseEntity<ErrorResponse> unknown(
+    static ResponseEntity<ErrorResponse> lifecycleFailure(
             com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure, UUID trace) {
         return ResponseEntity.status(503).cacheControl(CacheControl.noStore()).body(
-                com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.unknown(failure, trace));
+                com.mightyoung.softwarefactory.dualprevention.G014LifecycleHttpResponses.error(failure, trace));
     }
     static ResponseEntity<ErrorResponse> error(int status, UUID trace) {
         String code = switch (status) {

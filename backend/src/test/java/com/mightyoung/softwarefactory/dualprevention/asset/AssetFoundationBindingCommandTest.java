@@ -42,8 +42,14 @@ class AssetFoundationBindingCommandTest {
         when(repository.receipt(scope,key)).thenReturn(Optional.empty());
         when(repository.row(any(),eq(context.tenantId()),any())).thenAnswer(call->Optional.of(new AssetFoundationRepository.Row(call.getArgument(2),org,parentVersion,"ARCHIVED")));
         when(repository.current(kind.parentCurrent,scope,parent)).thenReturn(Optional.of(new AssetFoundationRepository.Row(parent,org,parentVersion,"ARCHIVED")));
-        var pool=mock(DataSource.class);when(pool.getConnection()).thenReturn(driver);when(driver.getAutoCommit()).thenReturn(true,false);
-        when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        var pool=mock(DataSource.class);when(pool.getConnection()).thenReturn(driver);var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+        var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
         var metadata=mock(DatabaseMetaData.class);when(driver.getMetaData()).thenReturn(metadata);when(metadata.getDatabaseMajorVersion()).thenReturn(18);when(metadata.getDatabaseProductVersion()).thenReturn("18.0");
         var flush=mock(PreparedStatement.class);when(driver.prepareStatement(AssetFoundationSql.FLUSH_CONSTRAINTS.sql)).thenReturn(flush);
         when(flush.execute()).thenReturn(false);when(flush.getLargeUpdateCount()).thenReturn(0L);

@@ -186,9 +186,9 @@ public final class AssetFoundationController {
         return AssetFoundationHttpResponses.error(status,AssetFoundationHttpResponses.trace(request));
     }
     @ExceptionHandler(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException.class)
-    ResponseEntity<ErrorResponse> commandOutcomeUnknown(
+    ResponseEntity<ErrorResponse> commandLifecycleFailure(
             com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException error,HttpServletRequest request) {
-        return AssetFoundationHttpResponses.unknown(error,AssetFoundationHttpResponses.trace(request));
+        return AssetFoundationHttpResponses.lifecycleFailure(error,AssetFoundationHttpResponses.trace(request));
     }
     @ExceptionHandler(AssetFoundationFailure.class)
     ResponseEntity<ErrorResponse> failure(AssetFoundationFailure error,HttpServletRequest request) { return AssetFoundationHttpResponses.error(error.status(),AssetFoundationHttpResponses.trace(request)); }

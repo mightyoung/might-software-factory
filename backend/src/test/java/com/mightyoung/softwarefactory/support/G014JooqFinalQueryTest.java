@@ -55,8 +55,14 @@ class G014JooqFinalQueryTest {
     @Test @Order(3) void optionalJooqWarningFetchIsRejectedRatherThanSilentlyFaked()throws Exception {run(true,true,true);}
     private void run(boolean fetchWarnings,boolean rejection,boolean stagingRead)throws Exception {
         var pool=mock(DataSource.class);var driver=mock(Connection.class);var statement=mock(PreparedStatement.class);var rows=mock(ResultSet.class);
-        when(pool.getConnection()).thenReturn(driver);when(driver.getAutoCommit()).thenReturn(true,false);
-        when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        when(pool.getConnection()).thenReturn(driver);var jdbcAutoCommit=new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(driver.getAutoCommit()).thenAnswer(call->jdbcAutoCommit.get());
+        doAnswer(call->{jdbcAutoCommit.set(call.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
+        var jdbcReadOnly=new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(driver.isReadOnly()).thenAnswer(call->jdbcReadOnly.get());
+        doAnswer(call->{jdbcReadOnly.set(call.getArgument(0));return null;}).when(driver).setReadOnly(anyBoolean());var jdbcIsolation=new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getTransactionIsolation()).thenAnswer(call->jdbcIsolation.get());
+        doAnswer(call->{jdbcIsolation.set(call.getArgument(0));return null;}).when(driver).setTransactionIsolation(anyInt());
         when(driver.prepareStatement(SQL)).thenReturn(statement);when(statement.execute()).thenReturn(true);when(statement.getResultSet()).thenReturn(rows);
         when(rows.next()).thenReturn(true,false,true,false);when(rows.getInt(1)).thenReturn(7);
         var metadata=mock(DatabaseMetaData.class);when(driver.getMetaData()).thenReturn(metadata);

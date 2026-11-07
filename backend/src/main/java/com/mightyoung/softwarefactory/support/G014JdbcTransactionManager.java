@@ -14,12 +14,14 @@ import org.springframework.transaction.support.*;
 
 /** Explicit G014 graph only: never replace the application's existing transaction manager. */
 public final class G014JdbcTransactionManager extends JdbcTransactionManager {
-    public enum LifecycleOutcome { COMMIT_UNKNOWN, ROLLBACK_UNKNOWN }
-    /** Owner-issued unknown fact only: no original failure, command data or application exception. */
+    public enum LifecycleOutcome { COMMIT_UNKNOWN, ROLLBACK_UNKNOWN, COMMITTED_CLEANUP_FAILED }
+    /** Owner-issued lifecycle fact only: no original failure, command data or application exception. */
     public static final class LifecycleException extends TransactionException {
         private final LifecycleOutcome outcome;
         private LifecycleException(LifecycleOutcome outcome){
-            super("G014 transaction outcome is unknown");this.outcome=Objects.requireNonNull(outcome);
+            super(outcome==LifecycleOutcome.COMMITTED_CLEANUP_FAILED
+                    ?"G014 committed transaction cleanup failed":"G014 transaction outcome is unknown");
+            this.outcome=Objects.requireNonNull(outcome);
         }
         public LifecycleOutcome outcome(){return outcome;}
     }
@@ -55,6 +57,8 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         // Reject here so even that scope's callbacks/resources remain untouched.
         if(TransactionSynchronizationManager.isSynchronizationActive())
             throw new IllegalTransactionStateException("G014 cannot enter an existing synchronization scope");
+        if(TransactionSynchronizationManager.hasResource(source) || TransactionSynchronizationManager.hasResource(source.pool))
+            throw new IllegalTransactionStateException("G014 cannot enter a prebound connection scope");
         return super.doGetTransaction();
     }
     Frame currentFrame(){
@@ -77,16 +81,25 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
             if(!(TransactionSynchronizationManager.getResource(source) instanceof ConnectionHolder holder))throw frame.jdbc.reject();
             frame.holder=holder;frame.jdbc.bind(source,holder);transactions.put(transaction,frame);
         }catch(RuntimeException|Error failure){
-            LifecycleException unknown=null;
+            LifecycleException unknown=null;boolean baselineUnverified=false;
             Frame frame=active.get();if(frame!=null){
                 try {
-                    frame.jdbc.poison();unknown=rollbackAndRetainOnFailure(frame);
-                    if(frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK){
-                        try{frame.jdbc.cleanup();}catch(SQLException|RuntimeException|Error cleanupFailure){retained.add(frame);}
+                    frame.jdbc.poison();
+                    if(!frame.jdbc.baselineVerified()){
+                        baselineUnverified=true;retained.add(frame); // No mutation or rollback was sent.
+                    }else{
+                        unknown=rollbackAndRetainOnFailure(frame);
+                        if(frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK){
+                            try{frame.jdbc.cleanup();}
+                            catch(SQLException|RuntimeException|Error cleanupFailure){
+                                retained.add(frame);logger.warn("G014 acknowledged transaction cleanup did not complete");
+                            }
+                        }
                     }
                 }finally{unbind(frame);}
             }
             if(unknown!=null)throw unknown;
+            if(baselineUnverified)throw new CannotCreateTransactionException("G014 connection baseline is unavailable");
             throw failure;
         }finally{source.acquiring.remove();}
     }
@@ -164,21 +177,28 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
     @Override protected void doCleanupAfterCompletion(Object transaction){
         Frame frame=transactions.remove(transaction);
         if(frame==null)return;
-        LifecycleException helperUnknown=null;
+        LifecycleException helperUnknown=null;boolean committedCleanupFailed=false;
         try {
             // An already emitted unknown keeps its original reason; cleanup never compensates or replaces it.
-            if(frame.unknownOutcome!=null)retained.add(frame);
+            if(frame.unknownOutcome!=null || !frame.jdbc.baselineVerified())retained.add(frame);
             else if(frame.jdbc.phase()!=G014JdbcGuard.Phase.COMMITTED && frame.jdbc.phase()!=G014JdbcGuard.Phase.ROLLED_BACK)
                 helperUnknown=rollbackAndRetainOnFailure(frame);
-            if(frame.unknownOutcome==null && (frame.jdbc.phase()==G014JdbcGuard.Phase.COMMITTED || frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK)){
-                try{frame.jdbc.cleanup();}catch(SQLException|RuntimeException|Error failure){retained.add(frame);}
+            if(frame.unknownOutcome==null && frame.jdbc.baselineVerified()
+                    && (frame.jdbc.phase()==G014JdbcGuard.Phase.COMMITTED || frame.jdbc.phase()==G014JdbcGuard.Phase.ROLLED_BACK)){
+                try{frame.jdbc.cleanup();}
+                catch(SQLException|RuntimeException|Error failure){
+                    retained.add(frame);logger.warn("G014 acknowledged transaction cleanup did not complete");
+                    committedCleanupFailed=frame.jdbc.phase()==G014JdbcGuard.Phase.COMMITTED;
+                }
             }else retained.add(frame);
         }finally{unbind(frame);}
         if(helperUnknown!=null)throw helperUnknown;
+        if(committedCleanupFailed)throw new LifecycleException(LifecycleOutcome.COMMITTED_CLEANUP_FAILED);
         // Never call superclass cleanup: it resets autoCommit before proving rollback acknowledgment.
     }
     private LifecycleException rollbackAndRetainOnFailure(Frame frame){
         if(frame.unknownOutcome!=null)return unknown(frame,frame.unknownOutcome);
+        if(!frame.jdbc.baselineVerified()){retained.add(frame);return null;}
         try{frame.jdbc.rollback();}catch(SQLException|RuntimeException|Error failure){retained.add(frame);}
         if(frame.jdbc.phase()==G014JdbcGuard.Phase.UNKNOWN || frame.jdbc.phase()==G014JdbcGuard.Phase.COMMIT_SENT)
             return unknown(frame,LifecycleOutcome.ROLLBACK_UNKNOWN);
@@ -225,7 +245,8 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
                 throw new SQLException("Only the G014 manager may acquire a command lease");
             }
             var guard=new G014JdbcGuard(profile,pool.getConnection(),templates);
-            active.set(new Frame(G014JdbcTransactionManager.this,guard));return guard.connection;
+            active.set(new Frame(G014JdbcTransactionManager.this,guard));
+            guard.captureBaseline();guard.establishWriteMode();return guard.connection;
         }
         @Override public Connection getConnection(String username,String password)throws SQLException {throw new SQLException("Alternate credentials are unsupported");}
         @Override public <T>T unwrap(Class<T> iface)throws SQLException {if(iface==DataSource.class)return iface.cast(this);throw new SQLException("Raw datasource access is unsupported");}

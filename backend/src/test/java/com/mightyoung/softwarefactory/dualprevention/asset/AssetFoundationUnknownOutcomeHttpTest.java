@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AssetFoundationUnknownOutcomeHttpTest {
     @AfterEach void clearIdentity() { SecurityContextHolder.clearContext(); }
 
-    @ParameterizedTest @EnumSource(LifecycleOutcome.class)
+    @ParameterizedTest @EnumSource(value = LifecycleOutcome.class, names = {"COMMIT_UNKNOWN", "ROLLBACK_UNKNOWN"})
     void localTypedHandlerPreservesCommandTraceWithGlobalAdvicePresent(LifecycleOutcome outcome) throws Exception {
         var trace = new AtomicReference<UUID>();
         var capture = new AtomicReference<CapturedHumanRequest>();
@@ -46,6 +46,32 @@ class AssetFoundationUnknownOutcomeHttpTest {
         AssetFoundationHttpWireContractTest.validate("ErrorResponse", body);
         assertThat(JsonMapper.builder().build().readTree(body).get("traceId").asString()).isEqualTo(trace.get().toString());
         assertThat(body).doesNotContain("PRIVATE", "08006", "请求未完成", "LifecycleException", "data", "meta");
+        assertThatThrownBy(capture.get()::requireCurrent).isInstanceOf(SessionSensitiveException.class);
+        verify(commands).createWorkshop(any(), any(), any(), any());
+    }
+
+    @ParameterizedTest @EnumSource(G014UnknownOutcomeTestFixture.CleanupFault.class)
+    void committedCleanupFailureKeepsCommandTraceAndDoesNotInviteRetry(G014UnknownOutcomeTestFixture.CleanupFault fault) throws Exception {
+        var trace = new AtomicReference<UUID>();
+        var capture = new AtomicReference<CapturedHumanRequest>();
+        var commands = mock(AssetFoundationService.class);
+        when(commands.createWorkshop(any(), any(), any(), any())).thenAnswer(invocation -> {
+            capture.set(invocation.getArgument(0));
+            trace.set(invocation.getArgument(2));
+            throw G014UnknownOutcomeTestFixture.committedCleanupFailure(fault);
+        });
+        var response = mvc(commands).perform(request())
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(jsonPath("$.code").value("COMMAND_COMMITTED"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.message").value("操作已提交，请查看结果"))
+                .andExpect(jsonPath("$.cleanup").doesNotExist()).andReturn();
+        String body = response.getResponse().getContentAsString();
+        AssetFoundationHttpWireContractTest.validate("ErrorResponse", body);
+        assertThat(JsonMapper.builder().build().readTree(body).get("traceId").asString()).isEqualTo(trace.get().toString());
+        assertThat(body).doesNotContain("PRIVATE", "08006", "请求未完成", "COMMAND_OUTCOME_UNKNOWN", "RESET_FAILED", "CLOSE_UNKNOWN");
         assertThatThrownBy(capture.get()::requireCurrent).isInstanceOf(SessionSensitiveException.class);
         verify(commands).createWorkshop(any(), any(), any(), any());
     }

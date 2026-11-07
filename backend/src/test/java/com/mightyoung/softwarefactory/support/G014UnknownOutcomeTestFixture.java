@@ -8,8 +8,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import javax.sql.DataSource;
 import org.springframework.transaction.TransactionDefinition;
@@ -18,18 +20,59 @@ import org.springframework.transaction.support.TransactionTemplate;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** Actual owner/gate/TransactionTemplate with a synthetic JDBC driver; no database or HTTP authorization proof. */
+/** Actual owner/gate/TransactionTemplate with a stateful synthetic JDBC driver; no database or HTTP authorization proof. */
 public final class G014UnknownOutcomeTestFixture {
+    public enum CleanupFault { RESET, CLOSE }
     private G014UnknownOutcomeTestFixture() { }
 
     public static G014JdbcTransactionManager.LifecycleException failure(
             G014JdbcTransactionManager.LifecycleOutcome outcome) throws SQLException {
+        if (outcome != G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN
+                && outcome != G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN)
+            throw new IllegalArgumentException("The fixture requires an unknown outcome");
+        return exercise(outcome, null);
+    }
+
+    public static G014JdbcTransactionManager.LifecycleException committedCleanupFailure(CleanupFault fault) throws SQLException {
+        return exercise(G014JdbcTransactionManager.LifecycleOutcome.COMMITTED_CLEANUP_FAILED, Objects.requireNonNull(fault));
+    }
+
+    private static G014JdbcTransactionManager.LifecycleException exercise(
+            G014JdbcTransactionManager.LifecycleOutcome outcome, CleanupFault fault) throws SQLException {
         var pool = mock(DataSource.class);
         var driver = mock(Connection.class);
+        var state = new DriverState();
         when(pool.getConnection()).thenReturn(driver);
-        when(driver.getAutoCommit()).thenReturn(true, false);
-        when(driver.isReadOnly()).thenReturn(false);
-        when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
+        when(driver.getAutoCommit()).thenAnswer(invocation -> state.autoCommit);
+        when(driver.isReadOnly()).thenAnswer(invocation -> state.readOnly);
+        when(driver.getTransactionIsolation()).thenAnswer(invocation -> state.isolation);
+        doAnswer(invocation -> {
+            state.autoCommit = invocation.getArgument(0);
+            if (state.autoCommit && state.committed && fault == CleanupFault.RESET)
+                throw new SQLException("PRIVATE committed reset detail", "08006");
+            return null;
+        }).when(driver).setAutoCommit(anyBoolean());
+        doAnswer(invocation -> { state.readOnly = invocation.getArgument(0); return null; })
+                .when(driver).setReadOnly(anyBoolean());
+        doAnswer(invocation -> { state.isolation = invocation.getArgument(0); return null; })
+                .when(driver).setTransactionIsolation(anyInt());
+        doAnswer(invocation -> {
+            if (outcome == G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN)
+                throw new SQLException("PRIVATE driver commit acknowledgment", "08006");
+            state.committed = true;
+            return null;
+        }).when(driver).commit();
+        doAnswer(invocation -> {
+            if (outcome == G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN)
+                throw new SQLException("PRIVATE driver rollback acknowledgment", "08006");
+            return null;
+        }).when(driver).rollback();
+        doAnswer(invocation -> {
+            state.returned = true;
+            if (fault == CleanupFault.CLOSE) throw new SQLException("PRIVATE close after return detail", "08006");
+            return null;
+        }).when(driver).close();
+
         var manager = new G014JdbcTransactionManager(pool, List.of());
         var template = new TransactionTemplate(manager);
         template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -51,11 +94,9 @@ public final class G014UnknownOutcomeTestFixture {
             return result;
         });
         var gate = new TransactionSqlSealGate(manager, authority, actions, Map.of(action, validator));
-        if (outcome == G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN)
-            doThrow(new SQLException("PRIVATE driver commit acknowledgment", "08006")).when(driver).commit();
-        else
-            doThrow(new SQLException("PRIVATE driver rollback acknowledgment", "08006")).when(driver).rollback();
+        var guarded = new AtomicReference<G014JdbcGuard>();
         Throwable thrown = catchThrowable(() -> template.execute(status -> {
+            guarded.set(manager.currentFrame().jdbc);
             if (outcome == G014JdbcTransactionManager.LifecycleOutcome.ROLLBACK_UNKNOWN)
                 throw new IllegalStateException("PRIVATE callback failure");
             var plan = mock(TransactionSqlSealGate.CommandPlan.class);
@@ -75,15 +116,38 @@ public final class G014UnknownOutcomeTestFixture {
         assertThat(failure.getSuppressed()).isEmpty();
         assertThat(manager.retainedUnusableLeaseCount()).isEqualTo(1);
         assertThat(TransactionSynchronizationManager.hasResource(manager.commandDataSource())).isFalse();
-        verify(driver, never()).setAutoCommit(true);
-        verify(driver, never()).close();
-        if (outcome == G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN) {
+        if (outcome == G014JdbcTransactionManager.LifecycleOutcome.COMMITTED_CLEANUP_FAILED) {
+            assertThat(state.committed).isTrue();
+            assertThat(guarded.get().phase()).isEqualTo(G014JdbcGuard.Phase.COMMITTED);
             verify(driver).commit();
             verify(driver, never()).rollback();
+            verify(driver).setAutoCommit(true);
+            if (fault == CleanupFault.RESET) {
+                verify(driver, never()).close();
+                assertThat(state.returned).isFalse();
+            } else {
+                verify(driver).close();
+                assertThat(state.returned).isTrue();
+            }
         } else {
-            verify(driver, never()).commit();
-            verify(driver).rollback();
+            verify(driver, never()).setAutoCommit(true);
+            verify(driver, never()).close();
+            if (outcome == G014JdbcTransactionManager.LifecycleOutcome.COMMIT_UNKNOWN) {
+                verify(driver).commit();
+                verify(driver, never()).rollback();
+            } else {
+                verify(driver, never()).commit();
+                verify(driver).rollback();
+            }
         }
         return failure;
+    }
+
+    private static final class DriverState {
+        boolean autoCommit = true;
+        boolean readOnly;
+        int isolation = Connection.TRANSACTION_READ_COMMITTED;
+        boolean committed;
+        boolean returned;
     }
 }
