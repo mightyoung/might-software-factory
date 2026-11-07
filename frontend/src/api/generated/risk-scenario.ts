@@ -1142,7 +1142,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Dependency/encoding unavailable; no fabricated OFF/readiness. An actual command outcome UNKNOWN uses COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body for explicit reconciliation and do not infer rollback from an absent receipt. */
+        /** @description Dependency/encoding unavailable; no fabricated OFF/readiness. An actual command outcome UNKNOWN uses COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body for explicit reconciliation and do not infer rollback from an absent receipt. A confirmed commit followed by cleanup failure uses COMMAND_COMMITTED with retryable=false and message 操作已提交，请查看结果; do not automatically resend or expose internal cleanup details. */
         Error503: {
             headers: {
                 "Cache-Control"?: "no-store";

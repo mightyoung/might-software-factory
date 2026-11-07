@@ -3247,7 +3247,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Dependency unavailable or transaction outcome UNKNOWN. An actual command outcome UNKNOWN uses COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body for explicit reconciliation and never infer rollback from an absent receipt or fabricate success/failure. */
+        /** @description Dependency unavailable or transaction outcome UNKNOWN. An actual command outcome UNKNOWN uses COMMAND_OUTCOME_UNKNOWN with retryable=false; do not automatically resend. Preserve the original key/body for explicit reconciliation and never infer rollback from an absent receipt or fabricate success/failure. A confirmed commit followed by cleanup failure uses COMMAND_COMMITTED with retryable=false and the message 操作已提交，请查看结果; do not automatically resend and do not expose internal cleanup details. */
         Error503: {
             headers: {
                 [name: string]: unknown;
