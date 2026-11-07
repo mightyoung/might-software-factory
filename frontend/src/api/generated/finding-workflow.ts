@@ -100,6 +100,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/findings/{id}/dispatch-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search current eligible remediation members for a finding awaiting dispatch
+         * @description The server derives tenant and organization from the verified session and finding. Requires current finding.dispatch action scope and an enabled safety application. Eligibility is identical to the assignment check used by the dispatch command, including active human identity, direct current organization membership and finding.remediate action scope. Only SAFETY_DISPATCH_PENDING or an unassigned rework round is eligible; otherwise409. Results are read-only snapshot hints, not task ownership or permission to execute dispatch. Dispatch checks current permission, version, target eligibility and task assignment again. Eligibility and literal name prefix filtering precede the bounded UUID-ordered lookahead. Pagination is live per request; it is not a stable snapshot across requests. No total count, account/principal identifiers or ineligible cursor identifiers are returned. Unknown or repeated query parameters are rejected. No caller identity or organization input.
+         */
+        get: operations["findFindingDispatchCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/findings/{id}/dispatch": {
         parameters: {
             query?: never;
@@ -184,6 +204,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        DispatchCandidate: {
+            /** Format: uuid */
+            memberId: string;
+            displayName: string;
+        };
+        DispatchCandidatesResponse: {
+            data: components["schemas"]["DispatchCandidate"][];
+            findingVersion: number;
+            roundNo: number;
+            /** @enum {string} */
+            state: "SAFETY_DISPATCH_PENDING" | "RECTIFYING";
+            hasMore: boolean;
+            /**
+             * Format: uuid
+             * @description Last returned eligible member when hasMore is true; otherwise null.
+             */
+            nextAfterMemberId: string | null;
+        };
         /** @description The create endpoint rejects unknown properties at runtime; the server assigns the business code and the backfill flag. Source and urgency are reporter choices and do not set the professional grade. relatedFindingId is optional and only accepts a same-tenant NOT_ESTABLISHED parent; the parent is not reopened or changed. */
         CreateFindingRequest: {
             /** Format: uuid */
@@ -553,6 +591,42 @@ export interface operations {
             404: components["responses"]["NotVisible"];
             409: components["responses"]["CommandConflict"];
             422: components["responses"]["WorkflowRule"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    findFindingDispatchCandidates: {
+        parameters: {
+            query?: {
+                /** @description Optional case-sensitive literal display-name prefix, at most100 Unicode code points before edge whitespace trimming. Percent, underscore and backslash are literal; controls and malformed surrogate input are rejected. */
+                q?: string;
+                /** @description Canonical positive decimal integer without leading zeros. */
+                limit?: number;
+                /** @description Canonical UUID of the last returned eligible member; uppercase hex is accepted. */
+                afterMemberId?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["FindingId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded candidate hint; current permissions and data are reevaluated for every request. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchCandidatesResponse"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["ActionDenied"];
+            404: components["responses"]["NotVisible"];
+            409: components["responses"]["CommandConflict"];
             503: components["responses"]["DependencyUnavailable"];
         };
     };

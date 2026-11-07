@@ -99,6 +99,7 @@ public final class FindingApiExceptionHandler {
     }
 
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
+            org.springframework.transaction.TransactionTimedOutException.class,
             WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
             AuthorizationWriteGuardUnavailableException.class})
     ResponseEntity<ErrorResponse> unavailable() {

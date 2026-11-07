@@ -5,7 +5,8 @@ info:
   description: >-
     Session-authenticated commands for finding creation, the required person and safety
     confirmations, safety dispatch, remediation submission, safety acceptance, and authorized reads
-    of submitted evidence content. The command service is the only writer of the finding workflow projection.
+    of submitted evidence content and scoped dispatch candidates. The command service is the only
+    writer of the finding workflow projection.
 x-implementation-status: local-command-service-flowable-facade-and-opt-in-pinned-evidence-reader
 x-tenant-context: >-
   Tenant, actor, account, and member are resolved from the verified server session. Request bodies
@@ -234,6 +235,63 @@ paths:
           $ref: '#/components/responses/CommandConflict'
         '422':
           $ref: '#/components/responses/WorkflowRule'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /api/v1/findings/{id}/dispatch-candidates:
+    get:
+      operationId: findFindingDispatchCandidates
+      summary: Search current eligible remediation members for a finding awaiting dispatch
+      description: >-
+        The server derives tenant and organization from the verified session and finding. Requires
+        current finding.dispatch action scope and an enabled safety application. Eligibility is
+        identical to the assignment check used by the dispatch command, including active human
+        identity, direct current organization membership and finding.remediate action scope.
+        Only SAFETY_DISPATCH_PENDING or an unassigned rework round is eligible; otherwise409.
+        Results are read-only snapshot hints, not task ownership or permission to execute dispatch.
+        Dispatch checks current permission, version, target eligibility and task assignment again.
+        Eligibility and literal name prefix filtering precede the bounded UUID-ordered lookahead.
+        Pagination is live per request; it is not a stable snapshot across requests. No total count,
+        account/principal identifiers or ineligible cursor identifiers are returned.
+        Unknown or repeated query parameters are rejected. No caller identity or organization input.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FindingId'
+        - name: q
+          in: query
+          description: >-
+            Optional case-sensitive literal display-name prefix, at most100 Unicode code points before
+            edge whitespace trimming. Percent, underscore and backslash are literal; controls and
+            malformed surrogate input are rejected.
+          schema: { type: string, maxLength: 100 }
+        - name: limit
+          in: query
+          description: Canonical positive decimal integer without leading zeros.
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: afterMemberId
+          in: query
+          description: Canonical UUID of the last returned eligible member; uppercase hex is accepted.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Bounded candidate hint; current permissions and data are reevaluated for every request.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DispatchCandidatesResponse' }
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ActionDenied'
+        '404':
+          $ref: '#/components/responses/NotVisible'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '503':
           $ref: '#/components/responses/DependencyUnavailable'
 
@@ -586,6 +644,30 @@ components:
                 retryable: true
                 fieldErrors: []
   schemas:
+    DispatchCandidate:
+      type: object
+      additionalProperties: false
+      required: [memberId, displayName]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: string, maxLength: 200 }
+    DispatchCandidatesResponse:
+      type: object
+      additionalProperties: false
+      required: [data, findingVersion, roundNo, state, hasMore, nextAfterMemberId]
+      properties:
+        data:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/DispatchCandidate' }
+        findingVersion: { type: integer, minimum: 1 }
+        roundNo: { type: integer, minimum: 1 }
+        state: { type: string, enum: [SAFETY_DISPATCH_PENDING, RECTIFYING] }
+        hasMore: { type: boolean }
+        nextAfterMemberId:
+          type: [string, 'null']
+          format: uuid
+          description: Last returned eligible member when hasMore is true; otherwise null.
     CreateFindingRequest:
       type: object
       additionalProperties: false
