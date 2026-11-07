@@ -39,3 +39,38 @@ describe("createHttpFindingCommands", () => {
     }
   });
 });
+
+describe("派单与不成立关闭", () => {
+  it("dispatch / closeNotEstablished 的路径与请求体", async () => {
+    const f = fake(ok);
+    const commands = createHttpFindingCommands(f.client);
+    await commands.run("a/b", 2, { kind: "dispatch", assigneeMemberId: "m1", dueAt: "2026-12-01T18:00:00+08:00", requirements: "加装防护罩" }, ctx);
+    await commands.run("a/b", 2, { kind: "closeNotEstablished", stage: "SAFETY", reason: "未发现" }, ctx);
+    expect(f.calls[0]).toMatchObject({ path: "/api/v1/findings/a%2Fb/dispatch", req: { body: { expectedVersion: 2, assigneeMemberId: "m1", dueAt: "2026-12-01T18:00:00+08:00", requirements: "加装防护罩" } } });
+    expect(f.calls[1]).toMatchObject({ path: "/api/v1/findings/a%2Fb/close-not-established", req: { body: { expectedVersion: 2, stage: "SAFETY", reason: "未发现" } } });
+  });
+
+  function getClient(result: unknown) {
+    const urls: string[] = [];
+    const client = { get: async (path: string) => { urls.push(path); if (result instanceof Error) throw result; return result; } } as unknown as HttpClient;
+    return { client, urls };
+  }
+  const body = { data: [{ memberId: "m1", displayName: "张三" }], findingVersion: 4, roundNo: 1, state: "SAFETY_DISPATCH_PENDING", hasMore: true, nextAfterMemberId: "m1" };
+
+  it("候选查询：查询参数编码、只带有值的参数，返回映射后的分页", async () => {
+    const g = getClient(body);
+    const page = await createHttpFindingCommands(g.client).searchDispatchCandidates!("a/b", { prefix: "张 %_", afterMemberId: "m0", limit: 20 });
+    expect(g.urls[0]).toBe("/api/v1/findings/a%2Fb/dispatch-candidates?q=%E5%BC%A0+%25_&limit=20&afterMemberId=m0");
+    expect(page).toEqual({ items: [{ memberId: "m1", displayName: "张三" }], hasMore: true, next: "m1", findingVersion: 4, state: "SAFETY_DISPATCH_PENDING", roundNo: 1 });
+    const bare = getClient(body);
+    await createHttpFindingCommands(bare.client).searchDispatchCandidates!("f", {});
+    expect(bare.urls[0]).toBe("/api/v1/findings/f/dispatch-candidates");
+  });
+
+  it("候选 409 / 403 / 401 映射为命令失败类别", async () => {
+    for (const [status, kind] of [[409, "stateConflict"], [403, "forbidden"], [401, "unauthenticated"]] as const) {
+      const g = getClient(new ApiError(status, "COMMAND_CONFLICT", "t", false));
+      await expect(createHttpFindingCommands(g.client).searchDispatchCandidates!("f", {})).rejects.toMatchObject({ kind, traceId: "t" });
+    }
+  });
+});

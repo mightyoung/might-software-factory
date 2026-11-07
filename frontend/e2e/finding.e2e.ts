@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 async function signIn(page: Page) {
@@ -90,8 +91,44 @@ test("流程：新建上报 → 确认发现 → 安全确认（需选等级）�
   await detail.getByRole("button", { name: "确认安全确认" }).click();
   await expect(detail.locator(".status-current")).toHaveText("待安全部门派单");
   await expect(detail.locator(".status-muted")).toHaveText("重大");
-  // 派单需要成员查询接口，契约暂缺：按钮禁用并写明原因，不假装可用。
-  await expect(detail.getByRole("button", { name: "分派整改" })).toBeDisabled();
+
+  // 分派整改：搜索候选（按姓名开头）、选责任人、填期限与要求
+  await detail.getByRole("button", { name: "分派整改" }).click();
+  await detail.getByLabel("按姓名开头搜索成员").fill("李");
+  await detail.getByLabel("李四").check();
+  await expect(detail.getByText("已选：李四")).toBeVisible();
+  // 分派表单（含候选列表）的无障碍扫描；其余界面见 a11y.e2e.ts
+  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(" | ")}`)).toEqual([]);
+  await detail.getByRole("button", { name: "确认分派整改" }).click();
+  await expect(detail.getByText("请填写整改期限")).toBeVisible();
+  await expect(detail.getByText("请填写整改要求")).toBeVisible();
+  await detail.getByLabel(/整改期限/).fill("2027-01-15T18:00");
+  await detail.getByLabel(/整改要求/).fill("加装防护罩并复测");
+  await detail.getByRole("button", { name: "确认分派整改" }).click();
+  await expect(detail.locator(".status-current")).toHaveText("整改中");
+  // 当前轮已有责任人：不能再次分派，也没有“重新分派”之外的入口；提交整改证据仍缺上传接口
+  await expect(detail.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
+});
+
+test("不成立关闭：人员确认阶段填意见后终止，终态没有任何动作", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "新建上报" }).click();
+  await page.getByLabel(/所属组织/).selectOption({ label: "一车间" });
+  await page.getByLabel(/所在位置/).fill("不成立测试工位");
+  await page.getByLabel(/隐患描述/).fill("不成立端到端：现场未发现");
+  await page.getByRole("button", { name: "提交上报" }).click();
+  await page.getByRole("button", { name: "查看详情" }).click();
+
+  const detail = page.getByLabel("隐患详情面板");
+  await detail.getByRole("button", { name: "不成立" }).click();
+  await detail.getByRole("button", { name: "确认不成立" }).click();
+  await expect(detail.getByText("请填写意见")).toBeVisible();
+  await detail.getByLabel(/意见/).fill("现场核查未发现该隐患");
+  await detail.getByRole("button", { name: "确认不成立" }).click();
+  await expect(detail.locator(".status-current")).toHaveText("未成立");
+  await expect(detail.getByText(/新证据应创建关联记录/)).toBeVisible();
+  await expect(detail.getByRole("button", { name: /确认|分派|不成立/ })).toHaveCount(0);
 });
 
 test("验收：退回必须填意见，退回后进入下一轮整改", async ({ page }) => {

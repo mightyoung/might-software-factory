@@ -180,6 +180,67 @@ describe("HTTP adapters × 契约模拟服务", () => {
     expect(failed).toMatchObject({ state: "RECTIFYING", roundNo: pending.round + 1 });
   });
 
+  it("派单：候选分页与前缀 → 分派 → 责任人已定后候选与重复分派 409；验收退回后可重新分派", async () => {
+    const c = await signIn();
+    const submit = createHttpFindingSubmit(c);
+    const commands = createHttpFindingCommands(c);
+    const ledger = createHttpFindingLedger(c);
+    const orgs = await submit.listOrganizations!();
+    const created = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: orgs[0]!.id });
+    await expect(commands.searchDispatchCandidates!(created.id, {})).rejects.toMatchObject({ kind: "stateConflict" }); // 还没到派单节点
+
+    await commands.run(created.id, 1, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: KEY() });
+    await commands.run(created.id, 2, { kind: "confirmSafety", reason: "同意", grade: "GENERAL" }, { idempotencyKey: KEY() });
+
+    const first = await commands.searchDispatchCandidates!(created.id, { limit: 20 });
+    expect(first).toMatchObject({ hasMore: true, findingVersion: 3, state: "SAFETY_DISPATCH_PENDING", roundNo: 1 });
+    expect(first.items).toHaveLength(20);
+    const second = await commands.searchDispatchCandidates!(created.id, { limit: 20, afterMemberId: first.next });
+    expect(second.items.length).toBeGreaterThan(0);
+    expect(new Set([...first.items, ...second.items].map((m) => m.memberId)).size).toBe(first.items.length + second.items.length); // 无重复
+    const li = await commands.searchDispatchCandidates!(created.id, { prefix: "李" });
+    expect(li.items.map((m) => m.displayName)).toEqual(["李四"]);
+    expect((await commands.searchDispatchCandidates!(created.id, { prefix: "不存在" })).items).toEqual([]);
+
+    const assignee = li.items[0]!.memberId;
+    await expect(commands.run(created.id, 3, { kind: "dispatch", assigneeMemberId: "00000000-0000-4000-8000-0000000000ff", dueAt: "2026-12-01T18:00:00+08:00", requirements: "x" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "validation" });
+    const dispatched = await commands.run(created.id, 3, { kind: "dispatch", assigneeMemberId: assignee, dueAt: "2026-12-01T18:00:00+08:00", requirements: "加装防护罩" }, { idempotencyKey: KEY() });
+    expect(dispatched).toMatchObject({ state: "RECTIFYING", version: 4 });
+    await expect(commands.searchDispatchCandidates!(created.id, {})).rejects.toMatchObject({ kind: "stateConflict" }); // 当前轮已有责任人
+    await expect(commands.run(created.id, 4, { kind: "dispatch", assigneeMemberId: assignee, dueAt: "2026-12-01T18:00:00+08:00", requirements: "x" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "stateConflict" });
+    expect((await ledger.get(created.id))?.state).toBe("RECTIFYING");
+
+    // 验收退回后新一轮没有责任人：可以重新分派。前面的“流程命令”用例已把种子的待验收记录退回成新一轮；
+    // 这里在整改中的记录里找“候选查询不报 409”的那一条。
+    const rectifying = (await ledger.list({ query: { keyword: "", state: "RECTIFYING", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "all" })).items;
+    const reopened = (
+      await Promise.all(rectifying.map(async (r) => ((await commands.searchDispatchCandidates!(r.id, {}).then(() => true, () => false)) ? r : null)))
+    ).find((r) => r !== null);
+    expect(reopened).toBeDefined();
+    const detail = (await ledger.get(reopened!.id))!;
+    expect(detail.round).toBeGreaterThan(1);
+    await commands.run(detail.id, detail.version!, { kind: "dispatch", assigneeMemberId: assignee, dueAt: "2026-12-02T09:00:00+08:00", requirements: "重新整改" }, { idempotencyKey: KEY() });
+    await expect(commands.searchDispatchCandidates!(detail.id, {})).rejects.toMatchObject({ kind: "stateConflict" });
+  });
+
+  it("不成立关闭：按当前阶段；阶段不符 409；成为终态后不能再操作", async () => {
+    const c = await signIn();
+    const submit = createHttpFindingSubmit(c);
+    const commands = createHttpFindingCommands(c);
+    const ledger = createHttpFindingLedger(c);
+    const orgs = await submit.listOrganizations!();
+    const created = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: orgs[0]!.id });
+
+    await expect(commands.run(created.id, 1, { kind: "closeNotEstablished", stage: "SAFETY", reason: "x" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "stateConflict" });
+    await expect(commands.run(created.id, 1, { kind: "closeNotEstablished", stage: "PERSON", reason: "  " }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "validation" });
+    const closed = await commands.run(created.id, 1, { kind: "closeNotEstablished", stage: "PERSON", reason: "现场核查未发现" }, { idempotencyKey: KEY() });
+    expect(closed).toMatchObject({ state: "NOT_ESTABLISHED", version: 2 });
+    expect((await ledger.get(created.id))?.state).toBe("NOT_ESTABLISHED");
+    await expect(commands.run(created.id, 2, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "stateConflict" });
+    const filtered = await ledger.list({ query: { keyword: "", state: "NOT_ESTABLISHED", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
+    expect(filtered.items.map((r) => r.id)).toContain(created.id);
+  });
+
   // 本用例改变共享模拟服务的密码，必须放在本文件最后。
   it("改密：当前密码错 → invalid_credentials；成功后旧会话作废、旧密码不能登录、新密码可登录；限流", async () => {
     const adapter = () => createHttpSessionAdapter(client());

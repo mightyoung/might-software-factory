@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
-const STATES = ["DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "CLOSED"];
+const STATES = ["DISCOVERED", "PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "SAFETY_DISPATCH_PENDING", "RECTIFYING", "ACCEPTANCE_PENDING", "NOT_ESTABLISHED", "CLOSED"];
 const ORGS = [
   { id: "11111111-1111-4111-8111-111111111111", code: "WS-A", name: "一车间" },
   { id: "22222222-2222-4222-8222-222222222222", code: "WS-B", name: "二车间" },
@@ -13,7 +13,7 @@ const ORGS = [
 const WHITESPACE_ONLY = new RegExp("^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$");
 const field = (type, operators, extra = {}) => ({ type, nullable: false, selectable: true, sortable: false, operators, maxLength: 0, enumValues: [], ...extra });
 const SCHEMA = {
-  key: "finding", schemaVersion: "3", idField: "id",
+  key: "finding", schemaVersion: "4", idField: "id",
   defaultFields: ["id", "code", "organizationId", "organizationName", "description", "discoveredAt", "sourceCategory", "urgency", "location", "interimMeasure", "backfill", "sourceEventId", "riskId", "grade", "state", "roundNo", "createdAt"],
   fields: {
     id: field("UUID", ["EQ", "IN"], { sortable: true }),
@@ -31,6 +31,16 @@ const SCHEMA = {
     createdAt: field("DATETIME", ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"], { sortable: true }), updatedAt: field("DATETIME", ["EQ", "GT", "GTE", "LT", "LTE", "BETWEEN"]),
   },
 };
+
+// 派单候选成员：24 个“张”开头（用于分页）+ 李四、王五；memberId 稳定且按此顺序升序。
+const MEMBERS = [
+  ...Array.from({ length: 24 }, (_, i) => `张${"一二三四五六七八九十"[i % 10]}${i >= 10 ? i : ""}`),
+  "李四",
+  "王五",
+].map((displayName, i) => ({ memberId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`, displayName }));
+// 当前轮是否已有责任人：用 Symbol 键保存，不会出现在 JSON 响应里。
+const ASSIGNED = Symbol("assigned");
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const shanghaiDay = (d) => new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10).replaceAll("-", "");
 const cp = (s) => [...s].length;
@@ -55,7 +65,7 @@ export function createMockServer(options = {}) {
       id: randomUUID(), code: `YH-${day}-${String(seq).padStart(4, "0")}`, organizationId: org.id, organizationName: org.name,
       description: input.description, discoveredAt: discovered.toISOString(), sourceCategory: input.sourceCategory, urgency: input.urgency,
       location: input.location ?? null, interimMeasure: input.interimMeasure ?? null, backfill: now.getTime() - discovered.getTime() > 24 * 3600_000,
-      sourceEventId: null, riskId: null, grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1,
+      sourceEventId: null, riskId: null, relatedFindingId: null, [ASSIGNED]: (input.state ?? "PERSON_CONFIRM_PENDING") === "RECTIFYING", grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1,
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     findings.unshift(row);
@@ -73,7 +83,7 @@ export function createMockServer(options = {}) {
   }
   const err = (res, status, code, message, extra = {}, headers = {}) =>
     send(res, status, { code, message, traceId: randomUUID(), retryable: status === 503, fieldErrors: [], ...extra }, headers);
-  const meta = () => ({ requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "3" });
+  const meta = () => ({ requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "4" });
 
   async function readJson(req) {
     const chunks = [];
@@ -184,6 +194,24 @@ export function createMockServer(options = {}) {
       const total = rows.length;
       return send(res, 200, { data: { items: rows.slice((number - 1) * size, number * size), page: { number, size, total, pageCount: Math.ceil(total / size) } }, meta: meta() });
     }
+    const candidates = /^\/api\/v1\/findings\/([^/]+)\/dispatch-candidates$/.exec(path);
+    if (req.method === "GET" && candidates) {
+      const row = findings.find((r) => r.id === decodeURIComponent(candidates[1]));
+      if (!row) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const allowed = new Set(["q", "limit", "afterMemberId"]);
+      const keys = [...url.searchParams.keys()];
+      const q = url.searchParams.get("q") ?? "";
+      const limitText = url.searchParams.get("limit");
+      const after = url.searchParams.get("afterMemberId");
+      const limit = limitText === null ? 20 : /^[1-9][0-9]*$/.test(limitText) ? Number(limitText) : NaN;
+      if (keys.some((k) => !allowed.has(k)) || new Set(keys).size !== keys.length || cp(q) > 100 || !(limit >= 1 && limit <= 50) || (after !== null && !UUID_RE.test(after)))
+        return err(res, 400, "INVALID_QUERY", "Invalid query");
+      if (!(row.state === "SAFETY_DISPATCH_PENDING" || (row.state === "RECTIFYING" && !row[ASSIGNED]))) return err(res, 409, "COMMAND_CONFLICT", "Not awaiting dispatch");
+      const eligible = MEMBERS.filter((m) => m.displayName.startsWith(q) && (after === null || m.memberId > after.toLowerCase()));
+      const pageItems = eligible.slice(0, limit);
+      const hasMore = eligible.length > limit;
+      return send(res, 200, { data: pageItems, findingVersion: row.version, roundNo: row.roundNo, state: row.state, hasMore, nextAfterMemberId: hasMore ? pageItems.at(-1).memberId : null }, { "Cache-Control": "no-store" });
+    }
     const detail = /^\/api\/v1\/entities\/finding\/([^/]+)$/.exec(path);
     if (req.method === "GET" && detail) {
       const row = findings.find((r) => r.id === decodeURIComponent(detail[1]));
@@ -205,7 +233,7 @@ export function createMockServer(options = {}) {
       receipts.set(key, { body: canonical, response });
       return send(res, 200, response);
     }
-    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|verifications)$/.exec(path);
+    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|close-not-established|dispatch|verifications)$/.exec(path);
     if (req.method === "POST" && command) {
       const key = req.headers["idempotency-key"];
       if (typeof key !== "string" || !/^[0-9a-f-]{36}$/i.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
@@ -227,6 +255,15 @@ export function createMockServer(options = {}) {
         if (!reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
         if (!["GENERAL", "MAJOR"].includes(b.grade)) fieldErrors.push({ field: "grade", reason: "Pattern" });
       }
+      if (op === "close-not-established") {
+        if (!["PERSON", "SAFETY"].includes(b.stage)) fieldErrors.push({ field: "stage", reason: "Pattern" });
+        if (!reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
+      }
+      if (op === "dispatch") {
+        if (!MEMBERS.some((m) => m.memberId === b.assigneeMemberId)) fieldErrors.push({ field: "assigneeMemberId", reason: "NotInScope" });
+        if (typeof b.dueAt !== "string" || Number.isNaN(Date.parse(b.dueAt))) fieldErrors.push({ field: "dueAt", reason: "Pattern" });
+        if (typeof b.requirements !== "string" || cp(b.requirements) > 4000 || b.requirements.trim().length === 0) fieldErrors.push({ field: "requirements", reason: "NotBlank" });
+      }
       if (op === "verifications") {
         if (!["PASS", "FAIL"].includes(b.decision)) fieldErrors.push({ field: "decision", reason: "Pattern" });
         else if (b.decision === "FAIL" && !reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
@@ -235,12 +272,20 @@ export function createMockServer(options = {}) {
       if (b.expectedVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale version", { currentVersion: row.version });
 
       const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING" }[op];
-      if (row.state !== from) return err(res, 409, "COMMAND_CONFLICT", "State does not allow this command");
+      const stateOk =
+        op === "close-not-established"
+          ? row.state === (b.stage === "PERSON" ? "PERSON_CONFIRM_PENDING" : "SAFETY_CONFIRM_PENDING")
+          : op === "dispatch"
+            ? row.state === "SAFETY_DISPATCH_PENDING" || (row.state === "RECTIFYING" && !row[ASSIGNED])
+            : row.state === from;
+      if (!stateOk) return err(res, 409, "COMMAND_CONFLICT", "State does not allow this command");
       if (op === "workflow-initialization") row.state = "PERSON_CONFIRM_PENDING";
       else if (op === "confirm/person") row.state = "SAFETY_CONFIRM_PENDING";
       else if (op === "confirm/safety") { row.state = "SAFETY_DISPATCH_PENDING"; row.grade = b.grade; }
+      else if (op === "close-not-established") row.state = "NOT_ESTABLISHED";
+      else if (op === "dispatch") { row.state = "RECTIFYING"; row[ASSIGNED] = true; }
       else if (b.decision === "PASS") row.state = "CLOSED";
-      else { row.state = "RECTIFYING"; row.roundNo += 1; }
+      else { row.state = "RECTIFYING"; row.roundNo += 1; row[ASSIGNED] = false; }
       row.version += 1;
       row.updatedAt = new Date().toISOString();
       const response = { data: { findingId: row.id, code: row.code, state: row.state, roundNo: row.roundNo, version: row.version } };
