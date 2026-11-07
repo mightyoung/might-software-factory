@@ -86,6 +86,25 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    FilterRegistrationBean<LoginAuditFilter> loginAuditBoundary(
+            org.springframework.core.env.Environment environment, AuthenticationEvents events,
+            ObjectProvider<Clock> clocks,
+            @Value("${software-factory.security.login-audit.max-concurrent:8}") int maximumConcurrent) {
+        int sessionOrder = environment.getProperty("spring.session.servlet.filter-order", Integer.class,
+                org.springframework.session.web.http.SessionRepositoryFilter.DEFAULT_ORDER);
+        if (sessionOrder < Integer.MIN_VALUE + 2) {
+            throw new IllegalStateException("Session filter order must allow both login response boundaries");
+        }
+        var registration = new FilterRegistrationBean<>(new LoginAuditFilter(events,
+                clocks.getIfAvailable(Clock::systemUTC), maximumConcurrent));
+        registration.setOrder(sessionOrder - 2);
+        registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
+        // Other routes retain their async support; only the wrapped login request forbids it.
+        registration.setAsyncSupported(true);
+        return registration;
+    }
+
+    @Bean
     FilterRegistrationBean<LoginSessionPersistenceFailureFilter> loginSessionPersistenceFailureBoundary(
             org.springframework.core.env.Environment environment) {
         int sessionOrder = environment.getProperty("spring.session.servlet.filter-order", Integer.class,

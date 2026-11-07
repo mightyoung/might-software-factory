@@ -78,6 +78,7 @@ class IdentityLoginFailurePostgresIT {
 
     @Test void actualAuthenticationReadTimeoutDoesNotAuthenticateAndSameBrowserRecovers()throws Exception {
         var client=browser();expect(client.get(CSRF),204);
+        var beforeEvents=authenticationEventIds();
         var fault=new Fault(Mode.AUTHENTICATION_READ,fixture.reporter.accountId());faults.armed.set(fault);
         ExecutorService worker=Executors.newSingleThreadExecutor();
         try(Connection owner=ownerConnection()) {
@@ -90,6 +91,7 @@ class IdentityLoginFailurePostgresIT {
                 boolean observed=observeBlocked(owner,blocker,waiter,pending);
                 var response=pending.get(8,TimeUnit.SECONDS);
                 assertDependencyUnavailable(response);
+                assertAuthenticationEvent(beforeEvents,"AUTHENTICATION_UNAVAILABLE",false);
                 assertThat(observed).as("actual PostgreSQL relation-lock waiter").isTrue();
                 assertThat(fault.sqlState.get()).isEqualTo("57014");
                 assertThat(fault.readOnly.get()).as("real authentication read-only transaction").isTrue();
@@ -104,10 +106,12 @@ class IdentityLoginFailurePostgresIT {
     @Test void lateJdbcSessionAttributeFailureRollsBackParentAndAuthenticationThenLoginRecovers()throws Exception {
         var client=browser();expect(client.get(CSRF),204);
         assertThat(client.cookie("SESSION").isPresent()).isFalse();
+        var beforeEvents=authenticationEventIds();
         var fault=new Fault(Mode.SESSION_WRITE,fixture.reporter.accountId());faults.armed.set(fault);
         var response=post(client,fault);
         // Deliberately strict: an erroneous 204/500 must expose the production response-boundary bug.
         assertDependencyUnavailable(response);
+        assertAuthenticationEvent(beforeEvents,"SESSION_OUTCOME_UNKNOWN",true);
         var proof=fault.sessionProof.get();assertThat(proof).as("actual parent and authentication attribute written before fault").isNotNull();
         assertThat(proof.parents()).isEqualTo(1);assertThat(proof.authenticationAttributes()).isEqualTo(1);
         assertThat(proof.authenticationTimeAttributes()).isEqualTo(1);assertThat(proof.autoCommit()).isFalse();
@@ -134,10 +138,12 @@ class IdentityLoginFailurePostgresIT {
     @Test void earlySessionSaveFailureCannotPublishTheSessionThatFinallySavesSuccessfully()throws Exception {
         var client=browser();expect(client.get(CSRF),204);
         assertThat(client.cookie("SESSION").isPresent()).isFalse();
+        var beforeEvents=authenticationEventIds();
         var fault=new Fault(Mode.EARLY_SESSION_WRITE,fixture.reporter.accountId());faults.armed.set(fault);
         var response=post(client,fault);
 
         assertDependencyUnavailable(response);
+        assertAuthenticationEvent(beforeEvents,"SESSION_OUTCOME_UNKNOWN",true);
         assertThat(fault.earlyFlushTriggered.get()).isTrue();assertThat(fault.injected.get()).isTrue();
         var proof=fault.sessionProof.get();assertThat(proof).isNotNull();
         assertThat(proof.parents()).isEqualTo(1);assertThat(proof.authenticationAttributes()).isEqualTo(1);
@@ -166,6 +172,26 @@ class IdentityLoginFailurePostgresIT {
         return b.postWithHeaders(LOGIN,json.writeValueAsString(Map.of("loginKey",fixture.reporter.loginKey(),"password",fixture.reporter.password(),"tenantCode",fixture.tenantCode)),b.csrf(),fault==null?Map.of():Map.of(FAULT_HEADER,fault.token));
     }
     private long ownedSessionCount(){return fixture.read(db->db.queryForObject("select count(*) from public.spring_session where principal_name=?",Long.class,fixture.reporter.accountId().toString()));}
+    private Set<UUID> authenticationEventIds() throws SQLException {
+        try(var owner=ownerConnection();var statement=owner.createStatement();
+            var rows=statement.executeQuery("select attempt_id from public.authentication_event")) {
+            var ids=new HashSet<UUID>();while(rows.next())ids.add(rows.getObject(1,UUID.class));return ids;
+        }
+    }
+    private void assertAuthenticationEvent(Set<UUID> before,String outcome,boolean verified) throws SQLException {
+        var added=authenticationEventIds();added.removeAll(before);assertThat(added).hasSize(1);
+        try(var owner=ownerConnection();var statement=owner.prepareStatement(
+                "select outcome,account_id,actor_id,tenant_id,member_id from public.authentication_event where attempt_id=?")) {
+            statement.setObject(1,added.iterator().next());try(var row=statement.executeQuery()) {
+                assertThat(row.next()).isTrue();assertThat(row.getString(1)).isEqualTo(outcome);
+                assertThat(row.getObject(2,UUID.class)).isEqualTo(verified?fixture.reporter.accountId():null);
+                assertThat(row.getObject(3,UUID.class)).isEqualTo(verified?fixture.reporter.principalId():null);
+                assertThat(row.getObject(4,UUID.class)).isEqualTo(verified?fixture.tenantId:null);
+                assertThat(row.getObject(5,UUID.class)).isEqualTo(verified?fixture.reporter.memberId():null);
+                assertThat(row.next()).isFalse();
+            }
+        }
+    }
     private static Connection ownerConnection()throws SQLException {
         var target=IdentityAcceptanceTarget.validateInputs(System.getenv());
         return DriverManager.getConnection(target.jdbcUrl(),required("LAN_PG_USERNAME"),required("LAN_PG_PASSWORD"));

@@ -34,6 +34,7 @@ class FindingWorkflowContractTest {
                 "/api/v1/findings/{id}/confirm/safety",
                 "/api/v1/findings/{id}/close-not-established",
                 "/api/v1/findings/{id}/dispatch",
+                "/api/v1/findings/{id}/dispatch-candidates",
                 "/api/v1/findings/{id}/remediation-submissions",
                 "/api/v1/findings/{id}/verifications",
                 "/api/v1/findings/{id}/workflow-initialization",
@@ -43,6 +44,11 @@ class FindingWorkflowContractTest {
             Map<String, Object> path = (Map<String, Object>) entry.getValue();
             if (path.containsKey("get")) {
                 Map<String, Object> get = (Map<String, Object>) path.get("get");
+                if(entry.getKey().endsWith("/dispatch-candidates")) {
+                    assertThat(get.get("operationId")).isEqualTo("findFindingDispatchCandidates");
+                    assertThat(get.get("description").toString()).contains("not task ownership", "Unknown or repeated");
+                    continue;
+                }
                 assertThat(get.get("operationId")).isEqualTo("readSubmittedFindingEvidenceContent");
                 assertThat(get.get("description").toString())
                         .contains("does not accept a file ID, object key, storage path, or storage version");
@@ -64,6 +70,26 @@ class FindingWorkflowContractTest {
             assertThat(properties.keySet()).doesNotContain("actorId", "tenantId", "memberId");
             assertThat(request.get("additionalProperties")).isEqualTo(false);
         }
+    }
+
+    @Test
+    void dispatchCandidateContractBoundsTheHintAndExposesNoAccountDirectory() throws Exception {
+        Map<String,Object> document=new Yaml().load(Files.readString(Path.of("..","contracts","openapi","finding-workflow.yaml")));
+        var paths=(Map<String,Object>)document.get("paths");
+        var operation=(Map<String,Object>)((Map<String,Object>)paths.get("/api/v1/findings/{id}/dispatch-candidates")).get("get");
+        var parameters=(List<Map<String,Object>>)operation.get("parameters");
+        assertThat(parameters).extracting(value->value.get("name")).contains("q","limit","afterMemberId");
+        assertThat(parameters).noneMatch(value->String.valueOf(value.get("$ref")).contains("IdempotencyKey")
+                ||String.valueOf(value.get("$ref")).contains("CsrfToken"));
+        var limit=parameters.stream().filter(value->"limit".equals(value.get("name"))).findFirst().orElseThrow();
+        assertThat((Map<String,Object>)limit.get("schema")).containsEntry("minimum",1).containsEntry("maximum",50).containsEntry("default",20);
+        var schemas=(Map<String,Object>)((Map<String,Object>)document.get("components")).get("schemas");
+        var candidate=(Map<String,Object>)schemas.get("DispatchCandidate");
+        assertThat((Map<String,Object>)candidate.get("properties")).containsOnlyKeys("memberId","displayName");
+        assertThat(candidate.get("additionalProperties")).isEqualTo(false);
+        var response=(Map<String,Object>)schemas.get("DispatchCandidatesResponse");
+        assertThat((Map<String,Object>)response.get("properties")).containsOnlyKeys("data","findingVersion","roundNo","state","hasMore","nextAfterMemberId");
+        assertThat(response.get("additionalProperties")).isEqualTo(false);
     }
 
     @Test
