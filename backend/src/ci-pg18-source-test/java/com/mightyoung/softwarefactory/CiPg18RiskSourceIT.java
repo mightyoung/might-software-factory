@@ -66,12 +66,12 @@ class CiPg18RiskSourceIT {
     @AfterAll void close() { if (fixture != null) fixture.close(); }
 
     @Test void actualCreateCommitsSourceAndNativePublicationTogether() throws Exception {
-        graph(context -> {
+        graph("actualCreateCommitsSourceAndNativePublicationTogether",context -> {
             long[] before = counts();
             var controls = fixture.metrics();
             var input = input();
-            var outcome = context.getBean(CiPg18SourceGraph.class).service().create(fixture.session().captured(),
-                    UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), input);
+            var outcome = fixture.invokeIssuer(()->context.getBean(CiPg18SourceGraph.class).service().create(fixture.session().captured(),
+                    UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), input));
             assertThat(outcome.replay()).isFalse();
             assertThat(outcome.result().code()).isEqualTo(input.code());
             assertThat(outcome.result().version()).isEqualTo(1);
@@ -86,14 +86,14 @@ class CiPg18RiskSourceIT {
     }
 
     @Test void sameKeyReplayAddsNoEffectsAndChangedPayloadConflicts() throws Exception {
-        graph(context -> {
+        graph("sameKeyReplayAddsNoEffectsAndChangedPayloadConflicts",context -> {
             var service = context.getBean(CiPg18SourceGraph.class).service();
             UUID key = UUID.randomUUID();
             var input = input();
-            var original = service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input);
+            var original = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input));
             long[] before = counts();
             var controls = fixture.metrics();
-            var replay = service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input);
+            var replay = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input));
             assertThat(replay.replay()).isTrue();
             assertThat(replay.result()).isEqualTo(original.result());
             assertThat(replay.responseBody()).containsExactly(original.responseBody());
@@ -101,7 +101,7 @@ class CiPg18RiskSourceIT {
             assertThat(fixture.metrics().publicationInserts()).isEqualTo(controls.publicationInserts());
             var changed = new RiskScenarioContracts.Create(input.code(),input.organizationId(),"changed payload",
                     input.triggeringConditions(),input.exposureDescription(),input.consequence(),input.hazardIds());
-            assertThatThrownBy(() -> service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), changed))
+            assertThatThrownBy(() -> fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), changed)))
                     .isInstanceOf(RiskScenarioContracts.Failure.class)
                     .satisfies(failure -> assertThat(((RiskScenarioContracts.Failure) failure).status()).isEqualTo(409));
             assertThat(counts()).containsExactly(before);
@@ -110,7 +110,7 @@ class CiPg18RiskSourceIT {
     }
 
     @Test void latePublisherFailureRollsBackAllSourceEffects() throws Exception {
-        graph(context -> {
+        graph("latePublisherFailureRollsBackAllSourceEffects",context -> {
             long[] before = counts();
             var controls = fixture.metrics();
             ApplicationListener<ApplicationEvent> lateFailure = event -> {
@@ -119,8 +119,8 @@ class CiPg18RiskSourceIT {
             };
             context.addApplicationListener(lateFailure);
             try {
-                assertThatThrownBy(() -> context.getBean(CiPg18SourceGraph.class).service().create(fixture.session().captured(),
-                        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), input())).isInstanceOf(RuntimeException.class);
+                assertThatThrownBy(() -> fixture.invokeIssuer(()->context.getBean(CiPg18SourceGraph.class).service().create(fixture.session().captured(),
+                        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), input()))).isInstanceOf(RuntimeException.class);
             } finally { context.removeApplicationListener(lateFailure); }
             assertThat(counts()).containsExactly(before);
             var after = fixture.metrics();
@@ -160,8 +160,11 @@ class CiPg18RiskSourceIT {
     private static long[] difference(long[] after,long[] before) {
         return java.util.stream.IntStream.range(0,after.length).mapToLong(index -> after[index]-before[index]).toArray();
     }
-    private void graph(Consumer<AbstractApplicationContext> assertions) throws Exception {
-        new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(DataSourceTransactionManagerAutoConfiguration.class,
+    private void graph(String name,Consumer<AbstractApplicationContext> assertions) throws Exception {
+        fixture.beginCase(name);
+        Throwable failed=null;
+        try {
+            new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(DataSourceTransactionManagerAutoConfiguration.class,
                 TransactionAutoConfiguration.class,EventPublicationAutoConfiguration.class,
                 Class.forName("org.springframework.modulith.events.jdbc.JdbcEventPublicationAutoConfiguration"),
                 Class.forName("org.springframework.modulith.events.jackson.JacksonEventSerializationConfiguration")))
@@ -178,9 +181,12 @@ class CiPg18RiskSourceIT {
                     assertThat(context.getBeansOfType(EventPublicationRepository.class)).hasSize(1);
                     assertThat(context.getBeansOfType(PlatformTransactionManager.class)).hasSize(1);
                     assertThat(context.getBeansOfType(EventSerializer.class)).hasSize(1);
+                    fixture.graphReady();
                     assertions.accept((AbstractApplicationContext) context.getSourceApplicationContext());
                 });
-        fixture.verifyHistory(); fixture.verifyRights(); fixture.verifySourceSchema();
+            fixture.verifyHistory(); fixture.verifyRights(); fixture.verifySourceSchema();
+        } catch(Exception|Error failure) {failed=failure;throw failure;}
+        finally {fixture.finishCase(failed);}
     }
 
     @Configuration(proxyBeanMethods=false)

@@ -163,6 +163,10 @@ def _result_lane(result, lane):
                         or any(not isinstance(revision[key], str) or not re.fullmatch(r"[0-9a-f]{40}", revision[key])
                                for key in ("commit", "tree"))):
                     reject("RESULT_LANE")
+                try:
+                    validate_source_diagnostics(result.get("sourceDiagnostics"), require_complete=True)
+                except Rejected:
+                    reject("RESULT_LANE")
 
 
 def bounded_bytes(path, maximum, stage):
@@ -242,6 +246,53 @@ def validate_failure_evidence(value, lane=CAPTURE):
             or (lane is not CAPTURE and value["database"] != lane.database)):
         reject("FAILURE_EVIDENCE")
     return {key: value[key] for key in fields}
+
+
+def validate_source_diagnostics(value, require_complete=False):
+    """Only fixed source phases, numeric outcomes and one-way SQL hashes; never raw failure text."""
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "database", "cases"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or value["database"] != SOURCE.database or not isinstance(value["cases"], list)
+            or not 1 <= len(value["cases"]) <= len(SOURCE.scenarios)):
+        reject("SOURCE_DIAGNOSTIC")
+    operations = {"PREPARE", "EXECUTE_QUERY", "EXECUTE_UPDATE", "EXECUTE", "RESULT_READ", "COMMIT", "ROLLBACK", "CLOSE"}
+    phases = {"GRAPH_STARTUP", "GRAPH_READY", "ISSUER_ENTERED", "ISSUER_RETURNED", "ISSUER_FAILED"}
+    found = set()
+    for row in value["cases"]:
+        fields = {"name", "status", "phase", "issuerEntered", "issuerReturned", "lastIssuerStatus",
+                  "counts", "failureKind", "lastSuccess", "firstDriverFailure"}
+        if (not isinstance(row, dict) or set(row) != fields or not isinstance(row["name"],str) or row["name"] not in SOURCE.scenarios
+                or row["name"] in found or not isinstance(row["status"],str) or row["status"] not in {"PASSED", "FAILED"}
+                or not isinstance(row["phase"],str) or row["phase"] not in phases
+                or type(row["issuerEntered"]) is not int or not 0 <= row["issuerEntered"] <= 16
+                or type(row["issuerReturned"]) is not int or not 0 <= row["issuerReturned"] <= row["issuerEntered"]
+                or row["failureKind"] is not None and not isinstance(row["failureKind"],str)
+                or row["failureKind"] not in {None, "ASSERTION", "RISK_COMMAND", "UNAVAILABLE"}
+                or (row["status"] == "PASSED") != (row["failureKind"] is None)
+                or row["lastIssuerStatus"] is not None and
+                   (type(row["lastIssuerStatus"]) is not int or row["lastIssuerStatus"] not in {400,403,404,409,413,415,503})):
+            reject("SOURCE_DIAGNOSTIC")
+        found.add(row["name"])
+        counts = row["counts"]
+        if (not isinstance(counts, dict) or set(counts) != {"borrows", "commits", "rollbacks", "publicationInserts"}
+                or any(type(count) is not int or not 0 <= count <= 1000 for count in counts.values())):
+            reject("SOURCE_DIAGNOSTIC")
+        for field in ("lastSuccess", "firstDriverFailure"):
+            operation = row[field]
+            if operation is None:
+                continue
+            fields = {"operation", "sqlSha256"} | ({"sqlState"} if field == "firstDriverFailure" else set())
+            if (not isinstance(operation, dict) or set(operation) != fields or not isinstance(operation["operation"],str)
+                    or operation["operation"] not in operations
+                    or operation["sqlSha256"] is not None and
+                       (not isinstance(operation["sqlSha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", operation["sqlSha256"]))
+                    or field == "firstDriverFailure" and operation["sqlState"] is not None and
+                       (not isinstance(operation["sqlState"], str) or not re.fullmatch(r"[0-9A-Z]{5}", operation["sqlState"]))):
+                reject("SOURCE_DIAGNOSTIC")
+    if require_complete and (found != SOURCE.scenarios or any(row["status"] != "PASSED" or row["issuerEntered"] == 0
+                                                           for row in value["cases"])):
+        reject("SOURCE_DIAGNOSTIC_NOT_PASS")
+    return value
 
 
 def validate_report(path, classname, scenarios=None):
@@ -713,6 +764,8 @@ def public_diagnostics(result, lane=CAPTURE):
         digest = result.get("imageDigest")
         if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest, lane)
+    if lane is SOURCE and "sourceDiagnostics" in result:
+        output["sourceDiagnostics"] = validate_source_diagnostics(result["sourceDiagnostics"])
     migration = result.get("migrationDiagnostics", {})
     if isinstance(migration, dict):
         version = migration.get("lastMigrationVersion")
@@ -777,6 +830,18 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         stage = "MAVEN_VERIFY"
         maven_exit = run_maven(repo, state, child, lane)
         result["mavenExit"] = maven_exit
+        if lane is SOURCE:
+            stage = "SOURCE_DIAGNOSTICS"
+            diagnostics = repo / "backend" / "target" / "ci-pg18-source-case-diagnostics.json"
+            if diagnostics.exists():
+                result["sourceDiagnostics"] = validate_source_diagnostics(load_json(diagnostics), require_complete=not maven_exit)
+            elif not maven_exit:
+                reject("SOURCE_DIAGNOSTIC_MISSING")
+            # Preserve genuine completed fixture checks even if a later source command failed.
+            evidence = repo / "backend" / "target" / lane.evidence_file
+            if evidence.exists():
+                result["databaseEvidence"] = validate_success_evidence(load_json(evidence), ownership["image_digest"], lane)
+            stage = "MAVEN_VERIFY"
         if maven_exit:
             result["migrationDiagnostics"] = migration_diagnostics(state / "maven.log")
             result["reportDiagnostics"] = report_diagnostics(repo, lane)

@@ -53,6 +53,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger rollbacks = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger publicationInserts = new java.util.concurrent.atomic.AtomicInteger();
+    private final CiPg18SourceDiagnostics diagnostics = new CiPg18SourceDiagnostics();
 
     public record Identity(UUID tenant, UUID account, UUID actor, UUID member, UUID organization) { }
     public record Metrics(int borrows, int commits, int rollbacks, int publicationInserts) { }
@@ -119,6 +120,18 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     public CiPg18SourceSession session() { ensureOpen(); return session; }
     public UUID hazard() { ensureOpen(); return hazard; }
     public Metrics metrics() { return new Metrics(borrows.get(),commits.get(),rollbacks.get(),publicationInserts.get()); }
+    void beginCase(String name) { diagnostics.begin(name,metrics()); }
+    void graphReady() { diagnostics.graphReady(); }
+    <T> T invokeIssuer(java.util.function.Supplier<T> command) {
+        diagnostics.enter();
+        try { T value=command.get();diagnostics.exit(true,null);return value; }
+        catch(RuntimeException|Error failure){diagnostics.exit(false,failure);throw failure;}
+    }
+    void finishCase(Throwable failure) throws Exception {
+        diagnostics.finish(failure,metrics());
+        Files.writeString(Path.of("target","ci-pg18-source-case-diagnostics.json"),
+                tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(diagnostics.snapshot()),StandardCharsets.UTF_8);
+    }
     /** Independent observations are permitted after source commands; this connection never performs source writes. */
     public Connection observer() throws SQLException {
         ensureOpen();
@@ -167,21 +180,52 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private Connection observe(Connection physical) {
         return (Connection)java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class<?>[]{Connection.class},
                 (proxy, method, arguments) -> {
-                    Object result = invoke(physical,method,arguments);
+                    var operation=switch(method.getName()) {
+                        case "prepareStatement" -> CiPg18SourceDiagnostics.Operation.PREPARE;
+                        case "commit" -> CiPg18SourceDiagnostics.Operation.COMMIT;
+                        case "rollback" -> CiPg18SourceDiagnostics.Operation.ROLLBACK;
+                        case "close" -> CiPg18SourceDiagnostics.Operation.CLOSE;
+                        default -> null;
+                    };
+                    String sql=operation==CiPg18SourceDiagnostics.Operation.PREPARE&&arguments!=null&&arguments.length>0&&arguments[0] instanceof String text?text:null;
+                    Object result;
+                    try {result=invoke(physical,method,arguments);if(operation!=null)diagnostics.success(operation,sql);}
+                    catch(Throwable failure){if(operation!=null)diagnostics.failure(operation,sql,failure);throw failure;}
                     if (method.getName().equals("commit")) commits.incrementAndGet();
                     if (method.getName().equals("rollback") && method.getParameterCount()==0) rollbacks.incrementAndGet();
-                    if (method.getName().equals("prepareStatement") && arguments!=null && arguments.length>0
-                            && arguments[0] instanceof String sql && result instanceof PreparedStatement statement
-                            && sql.toUpperCase(java.util.Locale.ROOT).matches("INSERT INTO (PUBLIC\\.)?EVENT_PUBLICATION \\(ID, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT\\)\\s+VALUES \\(\\?, \\?, \\?, \\?, \\?\\)\\s*")) {
-                        return java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class<?>[]{PreparedStatement.class},
-                                (ignored, call, values) -> {
-                                    Object value=invoke(statement,call,values);
-                                    if (call.getName().equals("executeUpdate") && Integer.valueOf(1).equals(value)) publicationInserts.incrementAndGet();
-                                    return value;
-                                });
-                    }
+                    if(result instanceof PreparedStatement statement)return observeStatement(statement,PreparedStatement.class,sql);
+                    if(result instanceof java.sql.Statement statement)return observeStatement(statement,java.sql.Statement.class,null);
                     return result;
                 });
+    }
+    private Object observeStatement(java.sql.Statement statement,Class<?> contract,String preparedSql) {
+        return java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class<?>[]{contract},(proxy,method,arguments)->{
+            var operation=switch(method.getName()) {
+                case "executeQuery" -> CiPg18SourceDiagnostics.Operation.EXECUTE_QUERY;
+                case "executeUpdate" -> CiPg18SourceDiagnostics.Operation.EXECUTE_UPDATE;
+                case "execute" -> CiPg18SourceDiagnostics.Operation.EXECUTE;
+                default -> null;
+            };
+            String sql=preparedSql!=null?preparedSql:arguments!=null&&arguments.length>0&&arguments[0] instanceof String text?text:null;
+            try {
+                Object value=invoke(statement,method,arguments);
+                if(operation!=null)diagnostics.success(operation,sql);
+                if(operation==CiPg18SourceDiagnostics.Operation.EXECUTE_UPDATE&&Integer.valueOf(1).equals(value)&&sql!=null
+                        &&sql.toUpperCase(java.util.Locale.ROOT).matches("INSERT INTO (PUBLIC\\.)?EVENT_PUBLICATION \\(ID, EVENT_TYPE, LISTENER_ID, PUBLICATION_DATE, SERIALIZED_EVENT\\)\\s+VALUES \\(\\?, \\?, \\?, \\?, \\?\\)\\s*"))publicationInserts.incrementAndGet();
+                if(value instanceof ResultSet rows)return observeRows(rows,sql);
+                return value;
+            }catch(Throwable failure){if(operation!=null)diagnostics.failure(operation,sql,failure);throw failure;}
+        });
+    }
+    private ResultSet observeRows(ResultSet rows,String sql) {
+        return (ResultSet)java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class<?>[]{ResultSet.class},(proxy,method,arguments)->{
+            boolean read=method.getName().startsWith("get")||method.getName().equals("next")||method.getName().equals("wasNull");
+            try {
+                Object value=invoke(rows,method,arguments);
+                if(read)diagnostics.success(CiPg18SourceDiagnostics.Operation.RESULT_READ,sql);
+                return value;
+            }catch(Throwable failure){if(read)diagnostics.failure(CiPg18SourceDiagnostics.Operation.RESULT_READ,sql,failure);throw failure;}
+        });
     }
     private static Object invoke(Object target,java.lang.reflect.Method method,Object[] arguments) throws Throwable {
         try { return method.invoke(target,arguments); }

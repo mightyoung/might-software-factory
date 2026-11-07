@@ -50,6 +50,19 @@ class SourceLaneTests(unittest.TestCase):
         lane = lane or self.lane
         self.write_report(lane.it_class, sorted(lane.scenarios))
         self.write_report(lane.unit_class, ["strictTarget_" + str(index) for index in range(52)], "surefire-reports")
+        if lane is self.lane:
+            (self.root / "backend/target/ci-pg18-source-case-diagnostics.json").write_text(json.dumps(self.diagnostics()))
+
+    def diagnostics(self):
+        cases=[]
+        for name in sorted(self.lane.scenarios):
+            rollback=name=="latePublisherFailureRollsBackAllSourceEffects"
+            cases.append({"name":name,"status":"PASSED","phase":"ISSUER_FAILED" if rollback else "ISSUER_RETURNED",
+                          "issuerEntered":1,"issuerReturned":0 if rollback else 1,"lastIssuerStatus":503 if rollback else None,
+                          "counts":{"borrows":1,"commits":0 if rollback else 1,"rollbacks":1 if rollback else 0,"publicationInserts":1},
+                          "failureKind":None,"lastSuccess":{"operation":"EXECUTE_UPDATE","sqlSha256":"a"*64},
+                          "firstDriverFailure":None})
+        return {"schemaVersion":1,"database":self.lane.database,"cases":cases}
 
     def state(self, lane=None):
         lane = lane or self.lane
@@ -97,6 +110,77 @@ class SourceLaneTests(unittest.TestCase):
                 subject.verify_reports(self.root, self.lane)
         self.reports()
         self.assertEqual(subject.verify_reports(self.root, self.lane)["targetGuardTests"], 52)
+
+    def test_source_diagnostics_accept_only_fixed_case_phases_and_alphanumeric_sqlstates(self):
+        value=self.diagnostics()
+        self.assertEqual(subject.validate_source_diagnostics(value,require_complete=True),value)
+        row=value["cases"][0];row.update(status="FAILED",failureKind="RISK_COMMAND",issuerReturned=0,lastIssuerStatus=503,phase="ISSUER_FAILED")
+        for state in ("42501","XX000","25P02",None):
+            row["firstDriverFailure"]={"operation":"EXECUTE_QUERY","sqlSha256":"b"*64,"sqlState":state}
+            self.assertEqual(subject.validate_source_diagnostics(value),value)
+        safe=subject.public_diagnostics({"status":"FAILED","sourceDiagnostics":value},self.lane)
+        self.assertEqual(safe["sourceDiagnostics"],value)
+        with self.assertRaisesRegex(subject.Rejected,"SOURCE_DIAGNOSTIC_NOT_PASS"):
+            subject.validate_source_diagnostics(value,require_complete=True)
+
+    def test_source_diagnostics_reject_private_fields_wrong_types_unbounded_counts_and_unknown_operations(self):
+        changes=({"message":"PRIVATE"},{"phase":"PRIVATE"},{"name":"PRIVATE"},{"status":"PRIVATE"},
+                 {"name":{}},{"phase":[]},{"failureKind":[]},{"issuerEntered":True},{"issuerEntered":17},
+                 {"issuerReturned":2},{"lastIssuerStatus":"PRIVATE"},{"lastIssuerStatus":True},
+                 {"counts":{"borrows":-1,"commits":0,"rollbacks":0,"publicationInserts":0}},
+                 {"counts":{"borrows":1001,"commits":0,"rollbacks":0,"publicationInserts":0}},
+                 {"counts":{"borrows":True,"commits":0,"rollbacks":0,"publicationInserts":0}},
+                 {"lastSuccess":{"operation":"execute PRIVATE","sqlSha256":"a"*64}},
+                 {"lastSuccess":{"operation":"EXECUTE_QUERY","sqlSha256":"PRIVATE"}},
+                 {"lastSuccess":{"operation":"EXECUTE_QUERY","sqlSha256":"a"*64,"sql":"PRIVATE"}},
+                 {"firstDriverFailure":{"operation":"EXECUTE_QUERY","sqlSha256":"a"*64,"sqlState":"xX000"}},
+                 {"firstDriverFailure":{"operation":"EXECUTE_QUERY","sqlSha256":"a"*64,"sqlState":"1234"}},
+                 {"firstDriverFailure":{"operation":"EXECUTE_QUERY","sqlSha256":"a"*64,"sqlState":"XX000","stack":"PRIVATE"}})
+        for change in changes:
+            value=self.diagnostics();value["cases"][0].update(change)
+            with self.subTest(change=change),self.assertRaisesRegex(subject.Rejected,"SOURCE_DIAGNOSTIC") as caught:
+                subject.validate_source_diagnostics(value)
+            self.assertNotIn("PRIVATE",str(caught.exception))
+
+    def test_source_diagnostics_refuse_extra_duplicate_missing_or_never_entered_cases(self):
+        for mutation in ("database","extra","duplicate","missing","empty","not-entered"):
+            value=self.diagnostics()
+            if mutation=="database":value["database"]=subject.REGISTRY.database
+            elif mutation=="extra":value["raw"]="PRIVATE"
+            elif mutation=="duplicate":value["cases"][1]=copy.deepcopy(value["cases"][0])
+            elif mutation=="missing":value["cases"].pop()
+            elif mutation=="empty":value["cases"]=[]
+            else:value["cases"][0].update(issuerEntered=0,issuerReturned=0)
+            with self.subTest(mutation=mutation),self.assertRaises(subject.Rejected):
+                subject.validate_source_diagnostics(value,require_complete=True)
+
+    @patch.object(subject,"source_revision",return_value={"commit":"1"*40,"tree":"2"*40})
+    @patch.object(subject,"cleanup_container",return_value={"verified":True})
+    @patch.object(subject,"create_container")
+    @patch.object(subject,"run_maven",return_value=1)
+    def test_failed_source_run_preserves_only_validated_fixture_and_driver_diagnostics(self,maven,create,cleanup,revision):
+        self.reports()
+        evidence=self.root/"backend/target"/self.lane.evidence_file;evidence.write_text(json.dumps(self.evidence()))
+        value=self.diagnostics();value["cases"][0].update(status="FAILED",failureKind="RISK_COMMAND",issuerReturned=0,lastIssuerStatus=503)
+        value["cases"][0]["firstDriverFailure"]={"operation":"EXECUTE_QUERY","sqlSha256":"b"*64,"sqlState":"42501"}
+        (self.root/"backend/target/ci-pg18-source-case-diagnostics.json").write_text(json.dumps(value))
+        create.return_value={"image_digest":self.digest,"engine_major":"28","port":"35432","container_id":"a"*64,"instance_id":self.marker}
+        with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(subject.run_acceptance(self.root,self.environment,self.lane),1)
+        result=subject.load_json(subject.result_path(self.root,self.lane))
+        self.assertEqual(result["status"],"FAILED");self.assertEqual(result["stage"],"MAVEN_VERIFY")
+        self.assertEqual(result["sourceDiagnostics"],value);self.assertEqual(result["databaseEvidence"],self.evidence())
+        self.assertTrue(result["cleanup"]["verified"])
+
+    @patch.object(subject,"source_revision",return_value={"commit":"1"*40,"tree":"2"*40})
+    @patch.object(subject,"cleanup_container",return_value={"verified":True})
+    @patch.object(subject,"create_container")
+    @patch.object(subject,"run_maven",return_value=0)
+    def test_source_success_without_diagnostics_remains_failed(self,maven,create,cleanup,revision):
+        self.reports();(self.root/"backend/target/ci-pg18-source-case-diagnostics.json").unlink()
+        create.return_value={"image_digest":self.digest,"engine_major":"28","port":"35432","container_id":"a"*64,"instance_id":self.marker}
+        with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(subject.run_acceptance(self.root,self.environment,self.lane),1)
+        result=subject.load_json(subject.result_path(self.root,self.lane))
+        self.assertEqual(result["stage"],"SOURCE_DIAGNOSTIC_MISSING");self.assertTrue(result["cleanup"]["verified"])
 
     @patch.object(subject, "command")
     def test_source_revision_requires_matching_hosted_head_tree_and_clean_tracked_files(self, command):
@@ -173,6 +257,7 @@ class SourceLaneTests(unittest.TestCase):
         valid = {"schemaVersion": 1, "status": "PASS", "stage": "COMPLETE", "acceptanceKind": self.lane.kind,
                  "cleanup": {"verified": True}, "imageDigest": self.digest, "databaseEvidence": self.evidence(),
                  "sourceRevision": {"commit": "1" * 40, "tree": "2" * 40},
+                 "sourceDiagnostics": self.diagnostics(),
                  "tests": {"integrationTests": 3, "targetGuardTests": 52, "failures": 0, "errors": 0,
                            "skipped": 0, "scenarios": sorted(self.lane.scenarios)}}
         subject.write_result(self.root, valid, self.lane)
@@ -181,6 +266,7 @@ class SourceLaneTests(unittest.TestCase):
                        {"sourceRevision": {"commit": "1" * 40, "tree": "2" * 40, "raw": "PRIVATE"}},
                        {"tests": dict(valid["tests"], targetGuardTests=1)},
                        {"tests": dict(valid["tests"], integrationTests=9)},
+                       {"sourceDiagnostics": None},
                        {"databaseEvidence": self.evidence(subject.REGISTRY)}):
             with self.subTest(change=change), self.assertRaisesRegex(subject.Rejected, "RESULT_LANE"):
                 subject.write_result(self.root, dict(valid, **change), self.lane)
@@ -418,6 +504,7 @@ class SourceLaneTests(unittest.TestCase):
                     "cleanup": {"verified": True}, "imageDigest": self.digest,
                     "databaseEvidence": self.evidence(subject.CAPTURE),
                     "sourceRevision": {"commit": "1" * 40, "tree": "2" * 40},
+                    "sourceDiagnostics": self.diagnostics(),
                     "tests": {"integrationTests": 3, "targetGuardTests": 52, "failures": 0, "errors": 0,
                               "skipped": 0, "scenarios": sorted(self.lane.scenarios)}}
         path = subject.result_path(self.root, self.lane); path.parent.mkdir(parents=True)
