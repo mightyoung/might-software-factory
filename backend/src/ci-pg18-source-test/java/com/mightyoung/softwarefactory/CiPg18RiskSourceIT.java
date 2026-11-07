@@ -89,16 +89,32 @@ class CiPg18RiskSourceIT {
         graph("sameKeyReplayAddsNoEffectsAndChangedPayloadConflicts",context -> {
             var service = context.getBean(CiPg18SourceGraph.class).service();
             UUID key = UUID.randomUUID();
+            UUID requestId = UUID.randomUUID(), traceId = UUID.randomUUID();
             var input = input();
-            var original = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input));
+            var original = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, requestId, traceId, input));
             long[] before = counts();
             var controls = fixture.metrics();
-            var replay = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), input));
+            var replay = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, requestId, traceId, input));
             assertThat(replay.replay()).isTrue();
             assertThat(replay.result()).isEqualTo(original.result());
             assertThat(replay.responseBody()).containsExactly(original.responseBody());
             assertThat(counts()).containsExactly(before);
             assertThat(fixture.metrics().publicationInserts()).isEqualTo(controls.publicationInserts());
+            UUID nextRequestId = UUID.randomUUID(), nextTraceId = UUID.randomUUID();
+            var refreshed = fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, nextRequestId, nextTraceId, input));
+            assertThat(refreshed.replay()).isTrue();
+            assertThat(refreshed.result()).isEqualTo(original.result());
+            var json = JsonMapper.builder().build();
+            var originalWire = json.readTree(original.responseBody());
+            var refreshedWire = json.readTree(refreshed.responseBody());
+            assertThat(refreshedWire.get("data")).isEqualTo(originalWire.get("data"));
+            assertThat(originalWire.get("meta").get("requestId").stringValue()).isEqualTo(requestId.toString());
+            assertThat(originalWire.get("meta").get("traceId").stringValue()).isEqualTo(traceId.toString());
+            assertThat(refreshedWire.get("meta").get("requestId").stringValue()).isEqualTo(nextRequestId.toString());
+            assertThat(refreshedWire.get("meta").get("traceId").stringValue()).isEqualTo(nextTraceId.toString());
+            assertThat(counts()).containsExactly(before);
+            assertThat(fixture.metrics().publicationInserts()).isEqualTo(controls.publicationInserts());
+            assertThat(context.getBean(DeferredConsumers.class).pending).hasSize(1);
             var changed = new RiskScenarioContracts.Create(input.code(),input.organizationId(),"changed payload",
                     input.triggeringConditions(),input.exposureDescription(),input.consequence(),input.hazardIds());
             assertThatThrownBy(() -> fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), changed)))
