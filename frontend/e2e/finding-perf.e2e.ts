@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Request } from "@playwright/test";
 
 // 只读；文件名须排在 password.e2e.ts 之前（它会改共享模拟服务里的密码）。
 // 对着模拟服务（零网络延迟、内存数据）的冒烟：只防前端自身的回归（同步长任务、重复请求），
@@ -11,9 +11,28 @@ test("登录到台账首行可见：时间与长任务，每次查询复核当�
     }).observe({ type: "longtask", buffered: true });
   });
   const requests: string[] = [];
+  type BootstrapAttempt = { phase: "restore" | "login"; status?: number; failure?: string };
+  const bootstrapAttempts: BootstrapAttempt[] = [];
+  const bootstrapByRequest = new Map<Request, BootstrapAttempt>();
+  let loginSubmitted = false;
   page.on("request", (request) => {
     const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/api/v1/auth/login") loginSubmitted = true;
     if (url.pathname.startsWith("/api/")) requests.push(`${request.method()} ${url.pathname}${url.search}`);
+    if (request.method() === "GET" && url.pathname === "/api/v1/session/bootstrap") {
+      const attempt: BootstrapAttempt = { phase: loginSubmitted ? "login" : "restore" };
+      bootstrapAttempts.push(attempt);
+      bootstrapByRequest.set(request, attempt);
+    }
+  });
+
+  page.on("response", (response) => {
+    const attempt = bootstrapByRequest.get(response.request());
+    if (attempt) attempt.status = response.status();
+  });
+  page.on("requestfailed", (request) => {
+    const attempt = bootstrapByRequest.get(request);
+    if (attempt) attempt.failure = request.failure()?.errorText ?? "unknown";
   });
 
   await page.goto("/");
@@ -42,8 +61,22 @@ test("登录到台账首行可见：时间与长任务，每次查询复核当�
   expect(initialDefinitions).toBeGreaterThanOrEqual(initialQueries);
   expect(initialDefinitions).toBeLessThanOrEqual(2);
   expect(count("/entities/finding/schema")).toBe(0);
-  expect(count("/session/bootstrap")).toBeGreaterThan(0);
-  expect(count("/session/bootstrap")).toBeLessThanOrEqual(2);
+  // main.tsx 的开发 StrictMode 可启动两次匿名 restore；登录成功另需一次当前 bootstrap。
+  // 分别计数，不能把匿名恢复尝试和登录后的授权读取混成“最多两次”。
+  const restores = bootstrapAttempts.filter((attempt) => attempt.phase === "restore");
+  const loginBootstraps = bootstrapAttempts.filter((attempt) => attempt.phase === "login");
+  expect(restores.length).toBeGreaterThan(0);
+  expect(restores.length).toBeLessThanOrEqual(2);
+  await expect.poll(() => restores.filter((attempt) => attempt.status === undefined && attempt.failure === undefined).length).toBe(0);
+  const completedRestores = restores.filter((attempt) => attempt.status !== undefined);
+  expect(completedRestores.length).toBeGreaterThan(0);
+  for (const attempt of completedRestores) expect(attempt.status).toBe(401);
+  for (const attempt of restores.filter((entry) => entry.status === undefined)) expect(attempt.failure).toMatch(/ERR_ABORTED/i);
+  expect(loginBootstraps).toHaveLength(1);
+  expect(loginBootstraps[0]!.status).toBe(200);
+  expect(loginBootstraps[0]!.failure).toBeUndefined();
+  const bootstrapsAtFirstRow = bootstrapAttempts.length;
+  test.info().annotations.push({ type: "bootstrap phases", description: JSON.stringify({ anonymousRestore: restores, afterLogin: loginBootstraps }) });
   expect(count("/applications/safety/menu")).toBeGreaterThan(0);
   expect(count("/applications/safety/menu")).toBeLessThanOrEqual(2);
   expect(count("/entities/finding/definition?use=CREATE")).toBe(0);
@@ -62,4 +95,6 @@ test("登录到台账首行可见：时间与长任务，每次查询复核当�
   await expect(page.locator(".ledger-row").first()).toBeVisible();
   expect(definitionReads()).toBe(initialDefinitions + 1);
   expect(queries()).toBe(initialQueries + 1);
+  expect(bootstrapAttempts).toHaveLength(bootstrapsAtFirstRow); // 刷新台账只复核定义，不重复恢复/登录会话。
+  expect(bootstrapAttempts.filter((attempt) => attempt.phase === "login")).toHaveLength(1);
 });
