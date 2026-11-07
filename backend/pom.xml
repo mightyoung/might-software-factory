@@ -183,5 +183,52 @@
                 </plugins>
             </build>
         </profile>
+        <profile>
+            <id>ci-pg18-risk-capture</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.1</version>
+                        <executions>
+                            <execution>
+                                <id>add-ci-pg18-capture-tests</id>
+                                <phase>generate-test-sources</phase>
+                                <goals><goal>add-test-source</goal><goal>add-test-resource</goal></goals>
+                                <configuration>
+                                    <sources><source>src/ci-pg18-test/java</source></sources>
+                                    <resources><resource><directory>src/ci-pg18-test/resources</directory></resource></resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration><testIncludes><testInclude>**/*.java</testInclude></testIncludes></configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes><include>**/CiPg18CaptureTargetTest.java</include></includes>
+                            <failIfNoTests>true</failIfNoTests>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.5.4</version>
+                        <configuration>
+                            <includes><include>**/RiskChangeCapturePostgresIT.java</include></includes>
+                            <failIfNoTests>true</failIfNoTests>
+                            <rerunFailingTestsCount>0</rerunFailingTestsCount>
+                        </configuration>
+                        <executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 </project>
