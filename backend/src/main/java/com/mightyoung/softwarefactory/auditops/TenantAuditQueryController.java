@@ -26,6 +26,12 @@ public final class TenantAuditQueryController {
         this.service=Objects.requireNonNull(service);this.parser=Objects.requireNonNull(parser);
         this.requests=Objects.requireNonNull(requests);this.transport=Objects.requireNonNull(transport);
     }
+    /** Composition identity only; this does not establish authorization or database readiness. */
+    public boolean usesDependencies(TenantAuditQueryService service, TenantAuditQueryParser parser,
+            SessionSensitiveRequests requests, TenantAuditHttpTransport transport) {
+        return this.service == service && this.parser == parser
+                && this.requests == requests && this.transport == transport;
+    }
     @PostMapping("/api/v1/audit-events/query")
     public void query(HttpServletRequest request,HttpServletResponse response) throws IOException {
         TenantAuditQueryService.EncodedResult result;
