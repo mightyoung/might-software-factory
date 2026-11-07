@@ -29,7 +29,7 @@ const VIEW_STATES: Record<Exclude<FindingView, "all">, readonly FindingState[]> 
   acceptance: ["ACCEPTANCE_PENDING"],
 };
 
-/** 契约列表/详情没有上报人、责任人、历史（frontend-contract-gap R4），不臆造。 */
+/** 列表投影或旧服务器未提供的身份不臆造。 */
 const NOT_PROVIDED = "—";
 
 const GRADE_LABELS: Record<components["schemas"]["FindingDetail"]["grade"], string> = {
@@ -67,12 +67,62 @@ export function toFindingRecord(item: Item | Detail): FindingRecord {
     // version 不在列表的默认投影里，只有详情有；缺失时流程命令保持禁用。
     ...(item.version ? { version: item.version } : {}),
     history: [],
+    ...(item.reviewCycle ? { reviewCycle: item.reviewCycle } : {}),
+    ...(item.reviewProtocol ? { reviewProtocol: item.reviewProtocol } : {}),
     ...(item.discoveredAt ? { foundAt: item.discoveredAt } : {}),
     ...(item.sourceCategory ? { source: item.sourceCategory } : {}),
     // 后端 URGENT 表示“需立即处置”，与提交适配器的 IMMEDIATE → URGENT 对应。
     ...(item.urgency ? { urgency: item.urgency === "URGENT" ? "IMMEDIATE" : item.urgency } : {}),
     ...(item.interimMeasure ? { interimMeasure: item.interimMeasure } : {}),
     ...(typeof item.backfill === "boolean" ? { backfill: item.backfill } : {}),
+  };
+}
+
+function historyTitle(entry: components["schemas"]["FindingHistoryEntry"]): string {
+  if (entry.fromState === null) return "发现上报";
+  switch (entry.toState) {
+    case "PERSON_CONFIRM_PENDING":
+      return entry.fromState === "REPORTER_SUPPLEMENT_PENDING" ? "提交补充资料" : "启动确认流程";
+    case "REPORTER_SUPPLEMENT_PENDING": return "退回补充";
+    case "SAFETY_CONFIRM_PENDING": return "一人确认";
+    case "SAFETY_DISPATCH_PENDING": return "安全确认";
+    case "RECTIFYING":
+      return entry.fromState === "ACCEPTANCE_PENDING" ? "退回整改"
+        : entry.fromState === "RECTIFYING" ? "重新分派" : "分派整改";
+    case "ACCEPTANCE_PENDING": return "提交整改";
+    case "CLOSED": return "验收通过";
+    case "NOT_ESTABLISHED": return "不成立";
+    default: return "状态变更";
+  }
+}
+
+function toFindingDetailRecord(detail: Detail): FindingRecord {
+  return {
+    ...toFindingRecord(detail),
+    reporter: detail.reporter?.displayName ?? NOT_PROVIDED,
+    responsible: detail.responsible?.displayName ?? NOT_PROVIDED,
+    history: (detail.history ?? []).map((entry) => ({
+      id: entry.id,
+      at: entry.at,
+      title: historyTitle(entry),
+      note: [entry.actorName, entry.reason].filter((value) => value != null && value !== "").join(" · "),
+    })),
+    ...(detail.historyTruncated === undefined ? {} : { historyTruncated: detail.historyTruncated }),
+    submittedRemediations: (detail.submittedRemediations ?? []).map((submission) => ({
+      id: submission.id,
+      roundNo: submission.roundNo,
+      statement: submission.statement,
+      submittedAt: submission.submittedAt,
+      submitterMemberId: submission.submitterMemberId,
+      submitterName: submission.submitterName,
+      evidence: submission.evidence.map((item) => ({
+        itemId: item.itemId,
+        fileId: item.fileId,
+        sha256: item.sha256,
+        verificationLevel: item.verificationLevel,
+      })),
+    })),
+    ...(detail.submittedRemediationsTruncated === undefined ? {} : { submittedRemediationsTruncated: detail.submittedRemediationsTruncated }),
   };
 }
 
@@ -158,7 +208,7 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
           `/api/v1/entities/finding/${encodeURIComponent(id)}`,
           { signal: options?.signal },
         );
-        return toFindingRecord(body.data);
+        return toFindingDetailRecord(body.data);
       } catch (error) {
         // 不存在与无权限同为 404，按契约呈现为“找不到”，不区分原因。
         if (error instanceof ApiError && classifyHttpError(error) === "notVisible") return null;

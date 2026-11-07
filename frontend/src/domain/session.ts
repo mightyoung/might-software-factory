@@ -31,6 +31,8 @@ export interface AppMenu {
 /** 登录后的最小 bootstrap：身份、租户、有权应用的轻量列表和权限摘要。 */
 export interface SessionBootstrap {
   actor: { id: string; displayName: string };
+  /** Server identity metadata for clearing local UI state only; never command authority. */
+  identityScope?: { accountId: string; memberId: string };
   tenant: { id: string; name: string };
   applications: readonly ApplicationEntry[];
   /** 权限摘要仅用于界面呈现；不得据此放行任何业务操作。 */

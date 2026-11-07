@@ -7,7 +7,7 @@ import {
 } from "../../adapters/findingCommands";
 import { newIdempotencyKey } from "../../adapters/findingSubmit";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
-import { ACTIONS, REFRESH_ON, validateCommandInput, type ActionDef, type CommandInputErrors, type Grade } from "./commandActions";
+import { ACTIONS, EMPTY_VALUES, REFRESH_ON, validateCommandInput, type ActionDef, type CommandErrors, type CommandValues } from "./commandActions";
 
 interface Options {
   finding: FindingRecord;
@@ -19,9 +19,8 @@ interface Options {
 /** 一个详情面板里“选动作 → 填写 → 提交 → 刷新”的状态机。同一份命令的重试复用同一个幂等键。 */
 export function useFindingCommandRunner({ finding, adapter, onChanged, onUnauthenticated }: Options) {
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
-  const [grade, setGrade] = useState<"" | Grade>("");
-  const [errors, setErrors] = useState<CommandInputErrors>({});
+  const [values, setValues] = useState<CommandValues>(EMPTY_VALUES);
+  const [errors, setErrors] = useState<CommandErrors>({});
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<FindingCommandFailureKind | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -41,8 +40,7 @@ export function useFindingCommandRunner({ finding, adapter, onChanged, onUnauthe
 
   function open(id: string) {
     setActiveId(id);
-    setReason("");
-    setGrade("");
+    setValues(EMPTY_VALUES);
     setErrors({});
     setFailure(null);
     setDone(null);
@@ -77,12 +75,12 @@ export function useFindingCommandRunner({ finding, adapter, onChanged, onUnauthe
     event.preventDefault();
     const version = finding.version;
     if (!active || pending || version === undefined) return;
-    const found = validateCommandInput(active, reason, grade);
+    const found = validateCommandInput(active, values);
     setErrors(found);
     setFailure(null);
     if (Object.keys(found).length > 0) return;
 
-    const command = active.build({ reason: reason.trim(), grade: grade || "GENERAL" });
+    const command = active.build(values);
     const abort = new AbortController();
     controller.current = abort;
     setPending(true);
@@ -97,5 +95,16 @@ export function useFindingCommandRunner({ finding, adapter, onChanged, onUnauthe
     }
   }
 
-  return { active, open, cancel: () => setActiveId(null), reason, setReason, grade, setGrade, errors, pending, failure, done, submit };
+  /** 编辑一个字段（不可变更新），并清掉该字段自己的错误。 */
+  function setValue<K extends keyof CommandValues>(key: K, value: CommandValues[K]) {
+    setValues((current) => ({ ...current, [key]: value }));
+    setErrors((current) => {
+      const fieldKey = key === "assigneeMemberId" ? "assignee" : (key as keyof CommandErrors);
+      if (!(fieldKey in current)) return current;
+      const { [fieldKey]: _removed, ...rest } = current;
+      return rest;
+    });
+  }
+
+  return { active, open, cancel: () => setActiveId(null), values, setValue, errors, pending, failure, done, submit };
 }

@@ -8,4 +8,4 @@ export interface MockNavigation {
   permissions: string[];
   failure?: number;
 }
-export function createMockServer(options?: { navigation?: () => MockNavigation }): MockServer;
+export function createMockServer(options?: { navigation?: () => MockNavigation; reviewCycles?: boolean }): MockServer;

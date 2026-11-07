@@ -3,6 +3,7 @@ export const findingStates = [
   "DISCOVERED",
   "PERSON_CONFIRM_PENDING",
   "SAFETY_CONFIRM_PENDING",
+  "REPORTER_SUPPLEMENT_PENDING",
   "SAFETY_DISPATCH_PENDING",
   "RECTIFYING",
   "ACCEPTANCE_PENDING",
@@ -16,6 +17,7 @@ export const findingStateLabels: Record<FindingState, string> = {
   DISCOVERED: "已发现·待启动流程",
   PERSON_CONFIRM_PENDING: "待一人确认",
   SAFETY_CONFIRM_PENDING: "待安全确认",
+  REPORTER_SUPPLEMENT_PENDING: "待上报人补充",
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
   RECTIFYING: "整改中",
   ACCEPTANCE_PENDING: "待安全验收",
@@ -43,9 +45,27 @@ export const findingUrgencyLabels: Record<FindingUrgency, string> = {
 export const workflowSteps = ["发现上报", "一人确认", "安全部门确认", "安全部门派单", "整改", "安全验收"] as const;
 
 export interface FindingHistoryEntry {
+  /** 服务端持久轨迹 ID；合成数据可不提供。 */
+  id?: string;
   at: string;
   title: string;
   note: string;
+}
+
+export interface SubmittedRemediation {
+  id: string;
+  roundNo: number;
+  statement: string;
+  submittedAt: string;
+  submitterMemberId: string;
+  /** 当前成员名称；缺失时不推断历史姓名。 */
+  submitterName: string | null;
+  evidence: readonly {
+    itemId: string;
+    fileId: string;
+    sha256: string;
+    verificationLevel: "CONTENT" | "SCANNED_CONTENT_V2";
+  }[];
 }
 
 export interface FindingRecord {
@@ -64,7 +84,14 @@ export interface FindingRecord {
   round: number;
   /** 乐观锁版本（契约的 version）；流程命令必须带它。合成数据没有。 */
   version?: number;
+  reviewCycle?: number;
+  reviewProtocol?: "LEGACY" | "CYCLE_V1";
   history: readonly FindingHistoryEntry[];
+  /** 服务端详情返回有界轨迹，为 true 时还有更早记录。 */
+  historyTruncated?: boolean;
+  /** 详情提供的持久整改提交与该次提交固定的证据引用。旧服务可缺省。 */
+  submittedRemediations?: readonly SubmittedRemediation[];
+  submittedRemediationsTruncated?: boolean;
   /** 以下字段只有通过上报表单创建的记录才有；发现时间与上报时间分开保存，补报不改写发现时间。 */
   foundAt?: string;
   source?: FindingSource;
@@ -84,6 +111,7 @@ export function getFindingActions(state: FindingState): FindingAction[] {
     DISCOVERED: ["启动确认流程"],
     PERSON_CONFIRM_PENDING: ["确认发现", "退回补充"],
     SAFETY_CONFIRM_PENDING: ["安全确认", "退回第一确认"],
+    REPORTER_SUPPLEMENT_PENDING: ["补充说明"],
     SAFETY_DISPATCH_PENDING: ["分派整改"],
     RECTIFYING: ["提交整改证据"],
     ACCEPTANCE_PENDING: ["验收通过", "退回整改"],
@@ -102,6 +130,7 @@ export function workflowCurrentIndex(state: FindingState): number {
     DISCOVERED: 0,
     PERSON_CONFIRM_PENDING: 1,
     SAFETY_CONFIRM_PENDING: 2,
+    REPORTER_SUPPLEMENT_PENDING: 0,
     SAFETY_DISPATCH_PENDING: 3,
     RECTIFYING: 4,
     ACCEPTANCE_PENDING: 5,

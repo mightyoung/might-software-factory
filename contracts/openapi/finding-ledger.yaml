@@ -216,7 +216,7 @@ components:
           const: finding
         schemaVersion:
           type: string
-          const: '4'
+          const: '5'
           description: >-
             Monotonic version of this entity's fields and query defaults; it is not an authorization
             token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share
@@ -234,7 +234,7 @@ components:
         fields:
           type: object
           additionalProperties: false
-          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
+          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, reviewCycle, reviewProtocol, createdAt, updatedAt]
           properties:
             id:
               $ref: '#/components/schemas/UuidField'
@@ -270,12 +270,40 @@ components:
               $ref: '#/components/schemas/FindingStateField'
             roundNo:
               $ref: '#/components/schemas/NumberField'
+            reviewCycle:
+              $ref: '#/components/schemas/ReviewCycleField'
+            reviewProtocol:
+              $ref: '#/components/schemas/ReviewProtocolField'
             version:
               $ref: '#/components/schemas/NumberField'
             createdAt:
               $ref: '#/components/schemas/DateTimeField'
             updatedAt:
               $ref: '#/components/schemas/DateTimeField'
+    ReviewCycleField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: NUMBER }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    ReviewProtocolField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [LEGACY, CYCLE_V1] }
     UuidField:
       type: object
       additionalProperties: false
@@ -468,7 +496,7 @@ components:
         maxLength: { const: 0 }
         enumValues:
           type: array
-          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
+          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
           items: { type: string }
     FindingListResponse:
       type: object
@@ -515,9 +543,11 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
         relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
+        reviewCycle: { type: integer, minimum: 1, readOnly: true }
+        reviewProtocol: { enum: [LEGACY, CYCLE_V1], readOnly: true }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -542,8 +572,36 @@ components:
     FindingDetail:
       type: object
       additionalProperties: false
-      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
+      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, reviewCycle, reviewProtocol, createdAt, updatedAt]
       properties:
+        reporter:
+          description: Persisted reporting member identifier with the current same-tenant directory label; a missing label is null.
+          anyOf:
+            - $ref: '#/components/schemas/FindingMember'
+            - type: 'null'
+        responsible:
+          description: Assignee from the notice for this finding's current round only; null before that round is assigned.
+          anyOf:
+            - $ref: '#/components/schemas/FindingMember'
+            - type: 'null'
+        history:
+          description: Latest 200 immutable transition facts, ordered by increasing toVersion then id. Actor labels are current same-tenant labels, not historical snapshots.
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/FindingHistoryEntry'
+        historyTruncated:
+          type: boolean
+          description: True when older transitions were omitted by the bounded history window.
+        submittedRemediations:
+          type: array
+          maxItems: 20
+          description: Latest 20 persisted remediation submissions, in increasing round order. Evidence is read only from each sealed submission's immutable snapshot manifest, never the current evidence set. Missing, unsealed or oversized snapshots fail closed with 503 instead of returning incomplete evidence. Submitter labels are current same-tenant directory labels.
+          items:
+            $ref: '#/components/schemas/SubmittedRemediation'
+        submittedRemediationsTruncated:
+          type: boolean
+          description: True only when older submissions were omitted by the latest-20 window; evidence within a returned submission is never silently truncated.
         id: { type: string, format: uuid }
         code: { type: string }
         organizationId: { type: string, format: uuid }
@@ -566,12 +624,60 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
         relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
+        reviewCycle: { type: integer, minimum: 1, readOnly: true }
+        reviewProtocol: { enum: [LEGACY, CYCLE_V1], readOnly: true }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    FindingMember:
+      type: object
+      additionalProperties: false
+      required: [memberId, displayName]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: [string, 'null'] }
+    FindingHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, at, fromState, toState, fromVersion, toVersion, actorName, reason]
+      properties:
+        id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+        fromState: { type: [string, 'null'] }
+        toState: { type: string }
+        fromVersion: { type: integer, minimum: 0 }
+        toVersion: { type: integer, minimum: 1 }
+        actorName: { type: [string, 'null'] }
+        reason: { type: [string, 'null'] }
+    SubmittedRemediation:
+      type: object
+      additionalProperties: false
+      required: [id, roundNo, statement, submittedAt, submitterMemberId, submitterName, evidence]
+      properties:
+        id: { type: string, format: uuid }
+        roundNo: { type: integer, minimum: 1 }
+        statement: { type: string }
+        submittedAt: { type: string, format: date-time }
+        submitterMemberId: { type: string, format: uuid }
+        submitterName: { type: [string, 'null'] }
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SubmittedRemediationEvidence'
+    SubmittedRemediationEvidence:
+      type: object
+      additionalProperties: false
+      required: [itemId, fileId, sha256, verificationLevel]
+      properties:
+        itemId: { type: string, format: uuid }
+        fileId: { type: string, format: uuid }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        verificationLevel: { enum: [CONTENT, SCANNED_CONTENT_V2] }
     FindingEntitySchemaResponse:
       type: object
       additionalProperties: false

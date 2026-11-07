@@ -90,6 +90,57 @@ class FileEvidenceVerificationAutoConfigurationTest {
                 });
     }
 
+    @Test
+    void publishedV2ReadsAreAvailableWithoutEnablingUploadReadiness() {
+        var sql=org.mockito.Mockito.mock(org.jooq.DSLContext.class);
+        var source=org.mockito.Mockito.mock(javax.sql.DataSource.class);
+        contextRunner.withBean(org.jooq.DSLContext.class,()->sql)
+                .withBean(javax.sql.DataSource.class,()->source)
+                .withBean(JooqFileIngestionLedger.class,()->new JooqFileIngestionLedger(sql,source,IngestionProofCodec.unavailable()))
+                .withPropertyValues(
+                        "software-factory.files.ingestion.storage.quarantine-root="+storageRoot.resolve("quarantine"),
+                        "software-factory.files.ingestion.storage.immutable-root="+storageRoot.resolve("immutable"),
+                        "software-factory.files.ingestion.storage.receipt-root="+storageRoot.resolve("receipts"),
+                        "software-factory.files.ingestion.storage.root-generation="+"a".repeat(64))
+                .run(context->{
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(StorageContentVerificationPort.class)).isInstanceOf(PublishedIngestionContentReader.class);
+                    assertThat(context.getBean(VerifiedStorageVersionReadPort.class)).isSameAs(context.getBean(StorageContentVerificationPort.class));
+                    assertThat(context.getBean(UploadProducerReadiness.class)).isInstanceOf(UnconfiguredUploadProducerReadiness.class);
+                    assertThat(context.getBean(TrustedContentReceiptIssuer.class)).isInstanceOf(UnconfiguredTrustedContentReceiptIssuer.class);
+                    assertThatThrownBy(()->context.getBean(StorageContentVerificationPort.class).findByReceiptId(java.util.UUID.randomUUID(),java.util.UUID.randomUUID()))
+                            .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+                });
+    }
+
+    @Test
+    void mixedV1AndV2ConfigurationKeepsLegacyIssuerAndChoosesCompositeReads() throws Exception {
+        SecureLocalStorageTestSupport.requireOrAssumeSecureStorage(storageRoot);
+        Files.setPosixFilePermissions(storageRoot,java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+        Files.createDirectory(storageRoot.resolve(".receipt-registry"),java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")));
+        var sql=org.mockito.Mockito.mock(org.jooq.DSLContext.class);
+        var source=org.mockito.Mockito.mock(javax.sql.DataSource.class);
+        contextRunner.withBean(org.jooq.DSLContext.class,()->sql)
+                .withBean(javax.sql.DataSource.class,()->source)
+                .withBean(JooqFileIngestionLedger.class,()->new JooqFileIngestionLedger(sql,source,IngestionProofCodec.unavailable()))
+                .withPropertyValues(
+                        "software-factory.files.local.root="+storageRoot,
+                        "software-factory.files.local.receipt-hmac-key-base64="+Base64.getEncoder().encodeToString(new byte[32]),
+                        "software-factory.files.local.receipt-key-id=legacy-key",
+                        "software-factory.files.ingestion.storage.quarantine-root="+storageRoot.resolve("quarantine"),
+                        "software-factory.files.ingestion.storage.immutable-root="+storageRoot.resolve("immutable"),
+                        "software-factory.files.ingestion.storage.receipt-root="+storageRoot.resolve("receipts"),
+                        "software-factory.files.ingestion.storage.root-generation="+"a".repeat(64))
+                .run(context->{
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBeansOfType(StorageContentVerificationPort.class)).hasSize(2);
+                    assertThat(context.getBean(StorageContentVerificationPort.class)).isInstanceOf(PublishedIngestionContentReader.class);
+                    assertThat(context.getBean(VerifiedStorageVersionReadPort.class)).isInstanceOf(PublishedIngestionContentReader.class);
+                    assertThat(context.getBean(TrustedContentReceiptIssuer.class)).isSameAs(context.getBean(LocalPrivateFileStorageAdapter.class));
+                });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class TrustedVerifierConfiguration {
         @Bean

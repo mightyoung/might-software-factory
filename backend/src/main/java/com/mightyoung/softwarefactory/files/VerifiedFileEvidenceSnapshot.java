@@ -43,8 +43,8 @@ public record VerifiedFileEvidenceSnapshot(
                 || verificationPolicyVersion == null || verificationPolicyVersion.isBlank()) {
             throw new IllegalArgumentException("Immutable storage and verifier provenance is required");
         }
-        if (verificationLevel != FileEvidenceVerificationLevel.CONTENT) {
-            throw new IllegalArgumentException("Only CONTENT-verified evidence can be snapshotted");
+        if (!verificationLevel.isContentVerified()) {
+            throw new IllegalArgumentException("Only content-verified evidence can be snapshotted");
         }
     }
 }

@@ -26,7 +26,19 @@ public record FindingRecord(
         String location,
         String interimMeasure,
         Boolean backfill,
-        UUID relatedFindingId) {
+        UUID relatedFindingId,
+        Integer reviewCycle, String reviewProtocol) {
+
+    /** Compatibility constructor for pre-cycle callers. */
+    public FindingRecord(UUID id, String code, String description, OffsetDateTime discoveredAt,
+                         UUID sourceEventId, UUID riskId, String grade, String state, Integer roundNo,
+                         Long version, OffsetDateTime createdAt, OffsetDateTime updatedAt,
+                         UUID organizationId, String organizationName, String sourceCategory,
+                         String urgency, String location, String interimMeasure, Boolean backfill, UUID relatedFindingId) {
+        this(id, code, description, discoveredAt, sourceEventId, riskId, grade, state, roundNo, version,
+             createdAt, updatedAt, organizationId, organizationName, sourceCategory, urgency, location,
+             interimMeasure, backfill, relatedFindingId, 1, "LEGACY");
+    }
 
     public FindingRecord(UUID id, String code, String description, OffsetDateTime discoveredAt,
                          UUID sourceEventId, UUID riskId, String grade, String state, Integer roundNo,
@@ -60,6 +72,8 @@ public record FindingRecord(
         values.put("interimMeasure", interimMeasure);
         values.put("backfill", backfill);
         values.put("relatedFindingId", relatedFindingId);
+        values.put("reviewCycle", reviewCycle);
+        values.put("reviewProtocol", reviewProtocol);
         return values;
     }
 }

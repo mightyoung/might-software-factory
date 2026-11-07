@@ -1664,3 +1664,29 @@ select:focus-visible {
 .brand-mark::before {
   content: "M";
 }
+
+/* ---- 派单候选 ---- */
+.candidate-list {
+  display: grid;
+  gap: 4px;
+  max-height: 200px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+  border: 1px solid #d6deea;
+  border-radius: 6px;
+}
+
+.candidate-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.field-label {
+  color: #46566e;
+  font-size: 12px;
+  font-weight: 580;
+}

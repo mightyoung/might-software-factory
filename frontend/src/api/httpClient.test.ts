@@ -6,6 +6,21 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 }
 
 describe("createHttpClient", () => {
+  it("sends a raw Blob PUT with current CSRF and never JSON-wraps or retries its bytes", async () => {
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchImpl = vi.fn(async () => json(202, { data: { state: "QUARANTINED" } }));
+    const client = createHttpClient({ fetchImpl: fetchImpl as typeof fetch, readCookie: () => "rotated" });
+    await client.putBytes("/content", file, "image/png");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1]).toMatchObject({ method: "PUT", body: file, credentials: "same-origin", headers: { "Content-Type": "image/png", "X-XSRF-TOKEN": "rotated" } });
+  });
+
+  it("reports an ambiguous byte-upload network failure without replaying PUT", async () => {
+    const fetchImpl = vi.fn(async () => { throw new TypeError("connection lost"); });
+    const client = createHttpClient({ fetchImpl: fetchImpl as typeof fetch, readCookie: () => "token" });
+    await expect(client.putBytes("/content", new Blob(["bytes"]), "image/png")).rejects.toMatchObject({ status: 0, code: "NETWORK" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
   it("fetches the CSRF cookie before the first write and sends it as a header", async () => {
     let token: string | null = null;
     const fetchImpl = vi.fn(async (path: RequestInfo | URL, _init?: RequestInit) => {

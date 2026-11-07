@@ -75,10 +75,10 @@ test("流程：新建上报 → 确认发现 → 安全确认（需选等级）�
   await expect(detail.getByRole("button", { name: "分派整改" })).toHaveCount(0); // 当前节点不出现后续动作
 
   await detail.getByRole("button", { name: "确认发现" }).click();
-  await detail.getByRole("button", { name: "确认确认发现" }).click();
+  await detail.getByRole("form", { name: "确认发现" }).getByRole("button", { name: "确认发现", exact: true }).click();
   await expect(detail.getByText("请填写意见")).toBeVisible();
   await detail.getByLabel(/意见/).fill("现场核实属实");
-  await detail.getByRole("button", { name: "确认确认发现" }).click();
+  await detail.getByRole("form", { name: "确认发现" }).getByRole("button", { name: "确认发现", exact: true }).click();
   await expect(detail.getByRole("status").filter({ hasText: "已完成“确认发现”" })).toBeVisible();
   await expect(detail.locator(".status-current")).toHaveText("待安全确认");
 

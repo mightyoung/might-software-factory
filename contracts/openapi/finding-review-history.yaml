@@ -1,0 +1,126 @@
+openapi: 3.1.0
+info:
+  title: Finding review history
+  version: 1.0.0
+  description: Authorized append-only history and point-in-time review hints. Commands revalidate all authority.
+paths:
+  /api/v1/findings/{id}/review-history:
+    get:
+      operationId: readFindingReviewHistory
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pageSize, in: query, schema: { type: integer, enum: [20, 50, 100], default: 20 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 4096 }, description: Opaque continuation bound to tenant, finding, current member/scope and page size. Authenticated continuations expire on service restart. }
+      responses:
+        '200':
+          description: Current authorized snapshot. No totals are exposed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryResponse' }
+        '400': { description: Invalid page size or cursor }
+        '401': { description: Authentication required }
+        '403': { description: Current finding.read permission required }
+        '404': { description: Finding outside current authorized scope }
+        '503': { description: Workflow or persistence dependency unavailable }
+components:
+  schemas:
+    HistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/HistoryData' }
+        meta: { $ref: 'entity-query.yaml#/components/schemas/Metadata' }
+    HistoryData:
+      type: object
+      additionalProperties: false
+      required: [entries, currentVersion, currentState, reviewCycle, reviewProtocol, processDefinitionKey, reviewStage, availableReviewActions, blockedReason, hasMore, nextCursor]
+      properties:
+        entries:
+          type: array
+          maxItems: 100
+          description: Ascending stable order by reviewCycle, occurredAt, origin, source-qualified id. Legacy cycle1 is never copied into new history.
+          items: { $ref: '#/components/schemas/HistoryEntry' }
+        currentVersion: { type: integer, minimum: 1 }
+        currentState: { type: string }
+        reviewCycle: { type: integer, minimum: 1 }
+        reviewProtocol: { enum: [LEGACY, CYCLE_V1] }
+        processDefinitionKey: { type: [string, 'null'], description: Exact verified bound key; null for uninitialized DISCOVERED. No engine IDs are exposed. }
+        reviewStage: { enum: [PERSON, SAFETY, null] }
+        availableReviewActions:
+          type: array
+          uniqueItems: true
+          items: { enum: [APPROVE, RETURN_FOR_INFORMATION, NOT_ESTABLISHED, SUPPLEMENT] }
+          description: Current identity, action, effective route, reporter, protocol and actual task checks. These hints confer no command authority. V1 permits APPROVE only; V2 adds NOT_ESTABLISHED; V3 CYCLE_V1 supports the new routes.
+        blockedReason:
+          enum: [null, WORKFLOW_NOT_INITIALIZED, UNSUPPORTED_REVIEW_PROTOCOL, NO_REVIEW_ACTION_AT_CURRENT_STATE, REVIEW_ROUTE_UNAVAILABLE, NOT_CURRENT_REVIEW_PARTICIPANT, PERSON_APPROVAL_REQUIRED, CURRENT_TASK_NOT_ASSIGNED, ACTION_NOT_AUTHORIZED, CURRENT_TASK_UNAVAILABLE]
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'], maxLength: 4096 }
+    HistoryEntry:
+      oneOf:
+        - $ref: '#/components/schemas/LegacyConfirmation'
+        - $ref: '#/components/schemas/ReviewDecision'
+        - $ref: '#/components/schemas/ReporterSupplement'
+      discriminator:
+        propertyName: origin
+        mapping:
+          LEGACY_CONFIRMATION: '#/components/schemas/LegacyConfirmation'
+          REVIEW_DECISION: '#/components/schemas/ReviewDecision'
+          REPORTER_SUPPLEMENT: '#/components/schemas/ReporterSupplement'
+    EntryFields:
+      type: object
+      required: [id, origin, reviewCycle, stage, decision, actorMemberId, actorDisplay, occurredAt, text, recordedGrade, nextReviewCycle]
+      properties:
+        id: { type: string, maxLength: 160 }
+        origin: { enum: [LEGACY_CONFIRMATION, REVIEW_DECISION, REPORTER_SUPPLEMENT] }
+        reviewCycle: { type: integer, minimum: 1 }
+        stage: { enum: [PERSON, SAFETY, null] }
+        decision: { enum: [APPROVE, RETURN_FOR_INFORMATION, NOT_ESTABLISHED, null] }
+        actorMemberId: { type: string, format: uuid }
+        actorDisplay:
+          type: object
+          additionalProperties: false
+          required: [label, provenance]
+          properties:
+            label: { type: [string, 'null'] }
+            provenance: { enum: [CURRENT_DIRECTORY, RECORDED_SNAPSHOT, UNAVAILABLE] }
+          description: Initial implementation returns null/UNAVAILABLE because no authorized public display lookup exists. No invented historical name or private account data.
+        occurredAt: { type: string, format: date-time }
+        text: { type: [string, 'null'], description: Stored reason or statement; genuine legacy null is preserved. }
+        recordedGrade: { enum: [GENERAL, MAJOR, null] }
+        nextReviewCycle: { type: [integer, 'null'], minimum: 2 }
+    LegacyConfirmation:
+      allOf:
+        - $ref: '#/components/schemas/EntryFields'
+        - type: object
+          properties:
+            origin: { const: LEGACY_CONFIRMATION }
+            id: { type: string, pattern: '^legacy-confirmation:[0-9a-f-]{36}:(PERSON|SAFETY)$' }
+            reviewCycle: { const: 1 }
+            stage: { enum: [PERSON, SAFETY] }
+            decision: { enum: [APPROVE, NOT_ESTABLISHED] }
+            recordedGrade: { type: 'null' }
+            nextReviewCycle: { type: 'null' }
+    ReviewDecision:
+      allOf:
+        - $ref: '#/components/schemas/EntryFields'
+        - type: object
+          properties:
+            origin: { const: REVIEW_DECISION }
+            id: { type: string, pattern: '^review-decision:[0-9a-f-]{36}:[1-9][0-9]*:(PERSON|SAFETY)$' }
+            stage: { enum: [PERSON, SAFETY] }
+            decision: { enum: [APPROVE, RETURN_FOR_INFORMATION, NOT_ESTABLISHED] }
+            text: { type: string }
+            nextReviewCycle: { type: 'null' }
+    ReporterSupplement:
+      allOf:
+        - $ref: '#/components/schemas/EntryFields'
+        - type: object
+          properties:
+            origin: { const: REPORTER_SUPPLEMENT }
+            id: { type: string, pattern: '^reporter-supplement:[0-9a-f-]{36}$' }
+            stage: { type: 'null' }
+            decision: { type: 'null' }
+            text: { type: string }
+            recordedGrade: { type: 'null' }
+            nextReviewCycle: { type: integer, minimum: 2 }

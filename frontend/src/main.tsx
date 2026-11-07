@@ -6,6 +6,7 @@ import { parseAppMode } from "./mode";
 import { createFindingStoreFactory, createSessionAdapter } from "./adapters/sessionAdapterFactory";
 
 const mode = parseAppMode(import.meta.env.VITE_API_MODE);
+document.title = mode === "http" ? "MIGHT 工厂安全" : "MIGHT 工厂安全 · 演示";
 const sessionAdapter = createSessionAdapter(import.meta.env.VITE_API_MODE);
 const createFindingStore = createFindingStoreFactory(import.meta.env.VITE_API_MODE);
 

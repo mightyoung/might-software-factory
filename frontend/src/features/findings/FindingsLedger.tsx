@@ -29,6 +29,7 @@ interface FindingsLedgerProps {
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
+  evidenceRecoveryOwnerKey?: string;
   canReport?: boolean;
   /** 当前登录者标识；传给上报表单用于登录失效后恢复草稿。 */
   draftKey?: string;
@@ -50,6 +51,7 @@ export function FindingsLedger({
   adapter = mockFindingLedger,
   submitAdapter,
   commandAdapter,
+  evidenceRecoveryOwnerKey,
   canReport = false,
   draftKey,
   onUnauthenticated,
@@ -75,6 +77,7 @@ export function FindingsLedger({
   const [reporting, setReporting] = useState(false);
   const reportButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
+  const detailController = useRef<AbortController | null>(null);
   const showReport = canReport && submitAdapter !== undefined && view === "all";
 
   useEffect(() => {
@@ -95,6 +98,16 @@ export function FindingsLedger({
         if (!current || controller.signal.aborted) return;
         const kind = classifyFindingLedgerReadFailure(error);
         setListError(kind);
+        if (kind === "unauthenticated" || kind === "forbidden") {
+          detailController.current?.abort();
+          setDetail(null);
+          setDetailError(kind);
+          setDetailLoading(false);
+          setSelectedIds(new Set());
+          setPage(firstPage);
+          setReporting(false);
+          navigate(path, true);
+        }
         if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
         if (!current || controller.signal.aborted) return;
@@ -105,7 +118,7 @@ export function FindingsLedger({
       current = false;
       controller.abort();
     };
-  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view]);
+  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view, path]);
 
   useEffect(() => {
     let current = true;
@@ -118,6 +131,7 @@ export function FindingsLedger({
       };
     }
     const controller = new AbortController();
+    detailController.current = controller;
     // 刷新同一条记录时保留旧内容直到新内容到达（流程命令成功后的提示不会被卸载）；换记录才清空。
     setDetail((previous) => (previous?.id === selectedFindingId ? previous : null));
     setDetailError(null);
@@ -130,7 +144,7 @@ export function FindingsLedger({
       } catch (error) {
         if (!current || controller.signal.aborted) return;
         const kind = classifyFindingLedgerReadFailure(error);
-        setDetail(null);
+        if (kind !== "unknown") setDetail(null);
         setDetailError(kind);
         if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
@@ -323,6 +337,8 @@ export function FindingsLedger({
           onClose={() => navigate(path, true)}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}
+          evidenceRecoveryOwnerKey={evidenceRecoveryOwnerKey}
+          onForbidden={() => { setDetail(null); setDetailError("forbidden"); }}
           onCommandChanged={() => {
             setDetailRefreshKey((value) => value + 1);
             setRefreshKey((value) => value + 1);

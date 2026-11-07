@@ -40,6 +40,7 @@ function toBootstrap(body: BootstrapResponse["data"]): SessionBootstrap {
   const current = body.identity;
   return {
     actor: { id: current.actorId, displayName: current.displayName },
+    identityScope: { accountId: current.accountId, memberId: current.memberId },
     tenant: { id: current.tenantId, name: current.tenantName },
     applications: body.applications.filter((app) => APPLICATIONS.has(app.id)).map((app) => ({ ...app, id: app.id as ApplicationId })),
     permissions: permissions(body.permissions),

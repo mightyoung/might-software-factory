@@ -25,6 +25,7 @@ export const findingLedgerSchema: LedgerSchema<FindingRecord> = {
         { value: "DISCOVERED", label: findingStateLabels.DISCOVERED },
         { value: "PERSON_CONFIRM_PENDING", label: findingStateLabels.PERSON_CONFIRM_PENDING },
         { value: "SAFETY_CONFIRM_PENDING", label: findingStateLabels.SAFETY_CONFIRM_PENDING },
+        { value: "REPORTER_SUPPLEMENT_PENDING", label: findingStateLabels.REPORTER_SUPPLEMENT_PENDING },
         { value: "SAFETY_DISPATCH_PENDING", label: findingStateLabels.SAFETY_DISPATCH_PENDING },
         { value: "RECTIFYING", label: findingStateLabels.RECTIFYING },
         { value: "ACCEPTANCE_PENDING", label: findingStateLabels.ACCEPTANCE_PENDING },

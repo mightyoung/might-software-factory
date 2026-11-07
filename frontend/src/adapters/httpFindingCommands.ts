@@ -1,6 +1,8 @@
+import type { components as HistoryComponents } from "../api/generated/finding-review-history";
 import type { components } from "../api/generated/finding-workflow";
 import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
+import { createHttpFindingEvidence } from "./httpFindingEvidence";
 import {
   FindingCommandError,
   type FindingCommand,
@@ -13,12 +15,24 @@ type Response = components["schemas"]["CommandResponse"];
 function endpoint(id: string, command: FindingCommand): { path: string; body: Record<string, unknown> } {
   const base = `/api/v1/findings/${encodeURIComponent(id)}`;
   switch (command.kind) {
+    case "reviewDecision": {
+      const { kind: _, ...body } = command;
+      return { path: `${base}/review-decisions`, body };
+    }
+    case "supplement":
+      return { path: `${base}/supplements`, body: { reviewCycle: command.reviewCycle, statement: command.statement } };
+    case "closeNotEstablished":
+      return { path: `${base}/close-not-established`, body: { stage: command.stage, reason: command.reason } };
     case "initialize":
       return { path: `${base}/workflow-initialization`, body: {} };
     case "confirmPerson":
       return { path: `${base}/confirm/person`, body: { reason: command.reason } };
     case "confirmSafety":
       return { path: `${base}/confirm/safety`, body: { reason: command.reason, grade: command.grade } };
+    case "dispatch":
+      return { path: `${base}/dispatch`, body: { assigneeMemberId: command.assigneeMemberId, dueAt: command.dueAt, requirements: command.requirements } };
+    case "submitRemediation":
+      return { path: `${base}/remediation-submissions`, body: { evidenceSetId: command.evidenceSetId, statement: command.statement } };
     case "verify":
       return {
         path: `${base}/verifications`,
@@ -49,16 +63,52 @@ function classify(error: ApiError): FindingCommandFailureKind {
 
 export function createHttpFindingCommands(client: HttpClient): FindingCommandAdapter {
   return {
+    evidence: createHttpFindingEvidence(client),
+    async searchDispatchCandidates(findingId, { prefix, afterMemberId, limit }, signal) {
+      const params = new URLSearchParams();
+      if (prefix) params.set("q", prefix);
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (afterMemberId) params.set("afterMemberId", afterMemberId);
+      const query = params.toString();
+      try {
+        const body = await client.get<components["schemas"]["DispatchCandidatesResponse"]>(
+          `/api/v1/findings/${encodeURIComponent(findingId)}/dispatch-candidates${query ? `?${query}` : ""}`,
+          { signal },
+        );
+        return {
+          items: body.data.map(({ memberId, displayName }) => ({ memberId, displayName })),
+          hasMore: body.hasMore,
+          next: body.nextAfterMemberId,
+          findingVersion: body.findingVersion,
+          state: body.state,
+          roundNo: body.roundNo,
+        };
+      } catch (error) {
+        if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
+        throw error;
+      }
+    },
+    async history(findingId, options) {
+      try {
+        const query = options?.cursor ? `&cursor=${encodeURIComponent(options.cursor)}` : "";
+        return (await client.get<HistoryComponents["schemas"]["HistoryResponse"]>(
+          `/api/v1/findings/${encodeURIComponent(findingId)}/review-history?pageSize=20${query}`, { signal: options?.signal },
+        )).data;
+      } catch (error) {
+        if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
+        throw error;
+      }
+    },
     async run(findingId, expectedVersion, command, { idempotencyKey, signal }) {
       const { path, body } = endpoint(findingId, command);
       try {
-        const response = await client.post<Response>(path, {
+        const response = await client.post<Response | components["schemas"]["ReviewCycleCommandResponse"]>(path, {
           body: { expectedVersion, ...body },
           headers: { "Idempotency-Key": idempotencyKey },
           signal,
         });
         const { state, roundNo, version } = response.data;
-        return { state, roundNo, version };
+        return { state, roundNo, version, ...("reviewCycle" in response.data ? { reviewCycle: response.data.reviewCycle } : {}) };
       } catch (error) {
         if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
         throw error;

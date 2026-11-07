@@ -28,6 +28,8 @@ export interface HttpClient {
   /** 成功返回解析后的 JSON；204 返回 undefined。其他情况抛 ApiError（取消抛 AbortError）。 */
   get<T>(path: string, request?: HttpRequest): Promise<T>;
   post<T>(path: string, request?: HttpRequest): Promise<T>;
+  /** 原始文件字节；浏览器按 Blob 大小发送长度，不使用 JSON / multipart，也不自动重放。 */
+  putBytes<T>(path: string, body: Blob, contentType: string, request?: Omit<HttpRequest, "body">): Promise<T>;
 }
 
 export interface HttpClientOptions {
@@ -76,9 +78,9 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
   const readCookie = options.readCookie ?? documentCookie;
 
-  async function send<T>(method: "GET" | "POST", path: string, request: HttpRequest = {}): Promise<T> {
+  async function send<T>(method: "GET" | "POST" | "PUT", path: string, request: HttpRequest = {}, bytes?: Blob, contentType?: string): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json", ...request.headers };
-    if (method === "POST") {
+    if (method !== "GET") {
       let token = readCookie(CSRF_COOKIE);
       if (!token) {
         await send<void>("GET", CSRF_PATH, { signal: request.signal });
@@ -86,7 +88,8 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
       }
       if (token) headers[CSRF_HEADER] = token;
     }
-    if (request.body !== undefined) headers["Content-Type"] = "application/json";
+    if (bytes !== undefined) headers["Content-Type"] = contentType!;
+    else if (request.body !== undefined) headers["Content-Type"] = "application/json";
 
     let response: Response;
     try {
@@ -94,7 +97,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         method,
         headers,
         credentials: "same-origin",
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+        body: bytes ?? (request.body === undefined ? undefined : JSON.stringify(request.body)),
         signal: request.signal,
       });
     } catch (error) {
@@ -109,5 +112,6 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   return {
     get: (path, request) => send("GET", path, request),
     post: (path, request) => send("POST", path, request),
+    putBytes: (path, body, contentType, request) => send("PUT", path, request, body, contentType),
   };
 }

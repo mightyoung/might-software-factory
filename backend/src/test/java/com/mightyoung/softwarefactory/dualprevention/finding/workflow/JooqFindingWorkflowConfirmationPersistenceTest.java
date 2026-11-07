@@ -59,10 +59,12 @@ class JooqFindingWorkflowConfirmationPersistenceTest {
         repository.inTenantTransaction(TENANT, tx -> {tx.insertFinding(finding); return null;});
         var insert = statements.stream().filter(statement -> statement.sql().toLowerCase(Locale.ROOT)
                 .contains("insert into public.finding")).findFirst().orElseThrow();
-        assertThat(insert.sql().replaceAll("\\s+", " ")).contains("backfill, related_finding_id)",
+        assertThat(insert.sql().replaceAll("\\s+", " ")).contains("backfill, related_finding_id, review_cycle, review_protocol)",
                 "values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as timestamptz)");
         assertThat(OffsetDateTime.parse(insert.bindings().get(5).toString().replace(' ', 'T')).isEqual(NOW)).isTrue();
-        assertThat(insert.bindings().getLast().toString()).isEqualTo(related.toString());
+        assertThat(insert.bindings().get(insert.bindings().size() - 3).toString()).isEqualTo(related.toString());
+        assertThat(insert.bindings().subList(insert.bindings().size() - 2, insert.bindings().size()))
+                .containsExactly(1, "LEGACY");
     }
 
     @Test

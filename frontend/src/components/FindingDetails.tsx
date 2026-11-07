@@ -10,6 +10,7 @@ import {
 import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
+import { FindingRemediationHistory } from "./FindingRemediationHistory";
 import { FindingCommandPanel } from "./FindingCommandPanel";
 import { useAppMode } from "../mode";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
@@ -22,11 +23,13 @@ interface FindingDetailsProps {
   onRetry: () => void;
   /** 提供时显示可用的流程操作（需要记录带版本号）；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
+  evidenceRecoveryOwnerKey?: string;
   onCommandChanged?: () => void;
   onUnauthenticated?: () => void;
+  onForbidden?: () => void;
 }
 
-export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated }: FindingDetailsProps) {
+export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, evidenceRecoveryOwnerKey, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
   const demo = useAppMode() === "synthetic";
   const noun = demo ? "演示记录" : "记录";
   return (
@@ -127,7 +130,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
               <h3>流程进度</h3>
               <span>第 {finding.round} 轮{demo ? " · 演示" : ""}</span>
             </div>
-            <ol className="workflow-list" aria-label="隐患流程节点">
+            {finding.state === "REPORTER_SUPPLEMENT_PENDING" ? <p>确认已退回，等待原上报人补充说明。补充后重新完成两级确认。</p> : <ol className="workflow-list" aria-label="隐患流程节点">
               {workflowSteps.map((step, index) => {
                 const terminal = finding.state === "CLOSED" || finding.state === "NOT_ESTABLISHED";
                 const complete = finding.state === "CLOSED" ||
@@ -143,16 +146,19 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                   </li>
                 );
               })}
-            </ol>
+            </ol>}
           </section>
+
+          {!demo && <FindingRemediationHistory findingId={finding.id} submissions={finding.submittedRemediations} truncated={finding.submittedRemediationsTruncated} />}
 
           <section className="detail-section history-section">
             <h3>{demo ? "演示轨迹" : "处理轨迹"}</h3>
             {!demo && finding.history.length === 0 && <p className="field-hint">后端暂未提供处理轨迹。</p>}
+            {finding.historyTruncated && <p className="field-hint">仅显示最近 200 条处理轨迹。</p>}
             <ul>
               {finding.history.map((entry) => (
-                <li key={`${entry.at}-${entry.title}`}>
-                  <time>{entry.at}</time>
+                <li key={entry.id ?? `${entry.at}-${entry.title}`}>
+                  <time>{formatDateTime(entry.at)}</time>
                   <div>
                     <strong>{entry.title}</strong>
                     <p>{entry.note}</p>
@@ -162,16 +168,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </ul>
           </section>
 
-          {commandAdapter ? (
-            <FindingCommandPanel
-              key={finding.id}
-              finding={finding}
-              adapter={commandAdapter}
-              refreshing={loading}
-              onChanged={onCommandChanged ?? onRetry}
-              onUnauthenticated={onUnauthenticated}
-            />
-          ) : (
+          {!commandAdapter && (
             <>
               <p className="action-hint" role="note">
                 审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
@@ -188,6 +185,19 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </>
           )}
         </>
+      )}
+      {finding && commandAdapter && (!error || error === "unknown") && (
+        <FindingCommandPanel
+          key={finding.id}
+          finding={finding}
+          adapter={commandAdapter}
+          evidenceRecoveryOwnerKey={evidenceRecoveryOwnerKey}
+          onChanged={onCommandChanged ?? onRetry}
+          onUnauthenticated={onUnauthenticated}
+          readBlocked={Boolean(error)}
+          refreshing={loading}
+          onForbidden={onForbidden}
+        />
       )}
     </aside>
   );

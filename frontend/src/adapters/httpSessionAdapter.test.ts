@@ -18,7 +18,7 @@ function fake(handlers: Record<string, () => unknown>): { client: HttpClient; ca
     if (result instanceof Error) throw result;
     return result;
   };
-  return { client: { get: run as HttpClient["get"], post: ((p: string) => run(p)) as HttpClient["post"] }, calls };
+  return { client: { get: run as HttpClient["get"], post: ((p: string) => run(p)) as HttpClient["post"], putBytes: ((p: string) => run(p)) as HttpClient["putBytes"] }, calls };
 }
 
 describe("createHttpSessionAdapter", () => {
@@ -26,7 +26,7 @@ describe("createHttpSessionAdapter", () => {
     const { client, calls } = fake({ "/api/v1/auth/login": () => undefined, "/api/v1/session/bootstrap": () => bootstrap });
     const session = await createHttpSessionAdapter(client).login({ username: "u", password: "p", tenantCode: "c" });
     expect(calls).toEqual(["/api/v1/auth/login", "/api/v1/session/bootstrap"]);
-    expect(session).toMatchObject({ actor: { id: "a", displayName: "张三" }, tenant: { id: "t", name: "租户" }, permissions: ["safety.finding.read", "safety.finding.report"] });
+    expect(session).toMatchObject({ identityScope: { accountId: "b", memberId: "m" }, actor: { id: "a", displayName: "张三" }, tenant: { id: "t", name: "租户" }, permissions: ["safety.finding.read", "safety.finding.report"] });
   });
 
   it("treats a missing tenant code and a 401 as the same invalid_credentials", async () => {
