@@ -6,6 +6,7 @@ const LABELS = {
   roundNo: "整改轮次", version: "版本", reviewCycle: "审核轮次", reviewProtocol: "审核协议", createdAt: "上报日期", updatedAt: "更新日期",
 };
 const VALUES = {
+  state: {"DISCOVERED":"已发现","PERSON_CONFIRM_PENDING":"待责任人确认","SAFETY_CONFIRM_PENDING":"待安全确认","REPORTER_SUPPLEMENT_PENDING":"待上报人补充","SAFETY_DISPATCH_PENDING":"待安全派单","RECTIFYING":"整改中","ACCEPTANCE_PENDING":"待验收","NOT_ESTABLISHED":"不成立","CLOSED":"已关闭"},
   sourceCategory: { FIELD_OBSERVATION: "现场发现", INSPECTION: "检查发现", PERSON_REPORT: "人员举报" },
   urgency: { NORMAL: "一般", URGENT: "需立即处置" }, grade: { UNKNOWN: "待专业评估", GENERAL: "一般", MAJOR: "重大" },
 };

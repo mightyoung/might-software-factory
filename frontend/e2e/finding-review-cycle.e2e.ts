@@ -64,7 +64,7 @@ test("MOCK V3 HTTP: PERSON return → reporter supplement → SAFETY return → 
     await personPanel.getByLabel(/意见/).fill("MOCK 第一次退回：补充现场范围");
     await personPanel.getByRole("button", { name: "确认退回补充" }).click();
     await expect(personPanel.getByRole("alert")).toContainText("操作尚未确认成功");
-    await expect(personPanel.locator(".status-current")).toHaveText("待一人确认");
+    await expect(personPanel.locator(".status-current")).toHaveText("待责任人确认");
     await expect(personPanel.getByLabel(/意见/)).toBeDisabled();
     await personPanel.getByRole("button", { name: "重试", exact: true }).click();
     await expect(personPanel.locator(".status-current")).toHaveText("待上报人补充");
@@ -73,7 +73,7 @@ test("MOCK V3 HTTP: PERSON return → reporter supplement → SAFETY return → 
     expect(await readDetail(person)).toMatchObject({ version: 2, reviewCycle: 1, roundNo: 1, grade: "UNKNOWN" });
 
     await reporter.reload();
-    await act(reporter, "补充说明", "MOCK 补充一：范围与现场情况", "待一人确认");
+    await act(reporter, "补充说明", "MOCK 补充一：范围与现场情况", "待责任人确认");
     expect(await readDetail(reporter)).toMatchObject({ version: 3, reviewCycle: 2, roundNo: 1, grade: "UNKNOWN" });
     await person.reload();
     await act(person, "确认发现", "MOCK 第二次一人确认通过", "待安全确认");
@@ -82,12 +82,12 @@ test("MOCK V3 HTTP: PERSON return → reporter supplement → SAFETY return → 
     expect(await readDetail(safety)).toMatchObject({ version: 5, reviewCycle: 2, roundNo: 1, grade: "UNKNOWN" });
     await expect(safety.getByRole("button", { name: "补充说明", exact: true })).toHaveCount(0);
     await reporter.reload();
-    await act(reporter, "补充说明", "MOCK 补充二：保护措施", "待一人确认");
+    await act(reporter, "补充说明", "MOCK 补充二：保护措施", "待责任人确认");
     expect(await readDetail(reporter)).toMatchObject({ version: 6, reviewCycle: 3, roundNo: 1, grade: "UNKNOWN" });
     await person.reload();
     await act(person, "确认发现", "MOCK 第三次一人确认通过", "待安全确认");
     await safety.reload();
-    await act(safety, "安全确认", "MOCK 第三次安全确认通过", "待安全部门派单", "MAJOR");
+    await act(safety, "安全确认", "MOCK 第三次安全确认通过", "待安全派单", "MAJOR");
     await safety.reload();
     expect(await readDetail(safety)).toMatchObject({ version: 8, reviewCycle: 3, roundNo: 1, grade: "MAJOR", description: "MOCK V3：循环补充与两级复核" });
     const historyResponse = await safety.request.get(base + "/review-history");

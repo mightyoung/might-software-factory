@@ -80,6 +80,15 @@ describe("HTTP adapters × 契约模拟服务", () => {
     await expect(createHttpFindingLedger(c).list({ query: {}, page: { index: 1, size: 20 }, view: "all" })).rejects.toMatchObject({ kind: "forbidden" });
   });
 
+  it("publishes the complete nine-state query enum and backend-owned labels over the actual mock HTTP definition route",async()=>{
+    const c=await signIn();
+    const body=await c.get<{data:{fields:{state:{query:{enumValues:string[]};presentation:{uiKind:string;valueLabels:Record<string,string>}}}}}>("/api/v1/entities/finding/definition?use=READ");
+    const expected={"DISCOVERED":"已发现","PERSON_CONFIRM_PENDING":"待责任人确认","SAFETY_CONFIRM_PENDING":"待安全确认","REPORTER_SUPPLEMENT_PENDING":"待上报人补充","SAFETY_DISPATCH_PENDING":"待安全派单","RECTIFYING":"整改中","ACCEPTANCE_PENDING":"待验收","NOT_ESTABLISHED":"不成立","CLOSED":"已关闭"};
+    expect(body.data.fields.state.query.enumValues).toEqual(Object.keys(expected));
+    expect(body.data.fields.state.presentation.uiKind).toBe("STATUS");
+    expect(body.data.fields.state.presentation.valueLabels).toEqual(expected);
+  });
+
   it("synthetic organization lookup is bounded, UUID-cursored and literal; legacy fixture route remains explicit", async () => {
     const c = await signIn();
     const query = createHttpFindingSubmit(c).queryOrganizations!;

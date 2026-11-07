@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openFindingReport } from "./findingForm";
 
 // 只读：不创建 / 修改数据（finding.e2e.ts 依赖种子记录数）。文件名排在 finding 之前、password 之前。
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -34,10 +35,9 @@ test("台账、详情、上报表单、改密对话框", async ({ page }) => {
   await scan(page, "详情");
   await page.getByRole("button", { name: "关闭详情" }).click();
 
-  await page.getByRole("button", { name: "新建上报" }).click();
-  await expect(page.getByLabel(/所属组织/)).toBeVisible();
+  const report = await openFindingReport(page);
   await scan(page, "上报表单");
-  await page.getByRole("button", { name: "提交上报" }).click(); // 触发校验错误态
+  await report.submit.click(); // 触发校验错误态
   await expect(page.getByText("请选择所属组织")).toBeVisible();
   await scan(page, "上报表单（校验错误态）");
   await page.keyboard.press("Escape");

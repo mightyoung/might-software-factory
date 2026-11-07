@@ -18,6 +18,7 @@ import { matchesQuery } from "../../domain/ledger";
 import { findingLedgerSchema } from "./schema";
 import { navigate } from "../../routing/router";
 import { findingDefinitionFixture } from "../../adapters/findingDefinition.fixtures";
+import { ModeProvider } from "../../mode";
 
 function createPagedFixtureAdapter(): FindingLedgerAdapter {
   const rows: FindingRecord[] = Array.from({ length: 23 }, (_, index) => ({
@@ -555,7 +556,7 @@ it("renders published list/detail labels and clears the old context before accep
   const row = { ...syntheticFindings[0]!, code: "PUBLISHED-A", registeredValues: { id: syntheticFindings[0]!.id, code: "PUBLISHED-A", state: "PERSON_CONFIRM_PENDING", description: "已授权内容" } };
   const adapter: FindingLedgerAdapter = { publishedDefinition: true, list: async () => ({ items: [row], page: { index: 1, size: 20 }, total: 1, pageCount: 1, definition }), get: async () => row, getDetailSnapshot: async () => ({ record: row, definition }) };
   const props = { view: "all" as const, title: "旧标题", description: "", adapter };
-  const view = render(<FindingsLedger {...props} />);
+  const view = render(<ModeProvider value="http"><FindingsLedger {...props} /></ModeProvider>);
   await screen.findByRole("heading", { name: "服务端台账" });
   expect(screen.getByRole("columnheader", { name: "发布编号" })).toBeInTheDocument();
   expect(screen.queryByRole("columnheader", { name: "责任人" })).not.toBeInTheDocument();
@@ -566,11 +567,13 @@ it("renders published list/detail labels and clears the old context before accep
   const next = createDeferred<Awaited<ReturnType<FindingLedgerAdapter["list"]>>>();
   let nextReads = 0;
   const nextAdapter: FindingLedgerAdapter = { publishedDefinition: true, list: () => next.promise, get: async () => { ++nextReads; return null; } };
-  view.rerender(<FindingsLedger {...props} adapter={nextAdapter} />);
+  view.rerender(<ModeProvider value="http"><FindingsLedger {...props} adapter={nextAdapter} /></ModeProvider>);
   expect(screen.queryByText("已授权内容")).not.toBeInTheDocument();
   expect(screen.queryByText("PUBLISHED-A")).not.toBeInTheDocument();
   await act(async () => next.resolve({ items: [], page: { index: 1, size: 20 }, total: 0, pageCount: 1, definition }));
   await screen.findByText("共 0 条记录");
+  expect(screen.queryByText("共 0 条演示记录")).not.toBeInTheDocument();
+  expect(screen.queryByText("合成演示数据")).not.toBeInTheDocument();
   expect(nextReads).toBe(0);
   expect(window.location.search).not.toContain("caseId");
 });
@@ -582,7 +585,7 @@ it("renders the current HTTP detail definition rather than the prior list defini
   listDefinition.fields.description!.presentation.label = "列表旧描述";
   const detailDefinition = findingDefinitionFixture();
   detailDefinition.layout.detail = ["location"]; detailDefinition.fields.location!.presentation.label = "当前地点";
-  const item = { id: "00000000-0000-4000-8000-000000000301", code: "CURRENT-DETAIL", description: "旧描述正文", location: "当前作业点", grade: "UNKNOWN", state: "RECTIFYING", roundNo: 1, version: 1 };
+  const item = { id: "00000000-0000-4000-8000-000000000301", code: "CURRENT-DETAIL", description: "旧描述正文", location: "当前作业点", createdAt: "2026-11-07T00:00:00Z", grade: "UNKNOWN", state: "RECTIFYING", roundNo: 1, version: 1 };
   let definitionCalls = 0;
   const adapter = createHttpFindingLedger({
     get: async (path: string) => path.includes("/definition?use=READ")
@@ -590,7 +593,7 @@ it("renders the current HTTP detail definition rather than the prior list defini
       : { data: item },
     post: async () => ({ data: { items: [item], page: { number: 1, size: 20, total: 1, pageCount: 1 } } }),
   } as unknown as import("../../api/httpClient").HttpClient);
-  render(<FindingsLedger view="all" title="隐患台账" description="" adapter={adapter} />);
+  render(<ModeProvider value="http"><FindingsLedger view="all" title="隐患台账" description="" adapter={adapter} /></ModeProvider>);
   const row = (await screen.findByText("CURRENT-DETAIL")).closest("tr")!;
   fireEvent.click(within(row).getByRole("button", { name: "详情" }));
   const panel = await screen.findByRole("complementary", { name: "隐患详情面板" });
