@@ -6,6 +6,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.sql.DataSource;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.jdbc.support.JdbcTransactionManager;
@@ -32,6 +33,10 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
     private final Set<Frame> retained=ConcurrentHashMap.newKeySet();
     private final Map<Object,Frame> transactions=Collections.synchronizedMap(new IdentityHashMap<>());
     private TransactionSqlSealGate registeredGate;
+    private RiskPublicationBinding riskPublicationBinding;
+    private boolean commandStarted;
+    private final ThreadLocal<RiskPublicationWitness> riskPublication=new ThreadLocal<>();
+    private record RiskPublicationBinding(DataSource alias,ApplicationEventPublisher publisher) {}
     public G014JdbcTransactionManager(DataSource existingPool,Collection<TransactionSqlSealGate.SqlTemplate> templates){
         this(G014SqlProfile.ASSET_FOUNDATION,existingPool,templates);
     }
@@ -51,7 +56,124 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         if(Objects.requireNonNull(gate).profile()!=profile)throw new IllegalArgumentException("Mixed G014 gate/manager profiles");
         registeredGate=gate;
     }
+    /** Configuration only, after service/gate construction and before any transaction attempt. */
+    public synchronized void configureRiskPublication(DataSource alias,ApplicationEventPublisher publisher){
+        if(profile!=G014SqlProfile.RISK_SCENARIO || registeredGate==null || commandStarted
+                || riskPublicationBinding!=null || active.get()!=null || !transactions.isEmpty()
+                || alias==null || alias==source || publisher==null
+                || TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.isSynchronizationActive()
+                || TransactionSynchronizationManager.hasResource(source)
+                || TransactionSynchronizationManager.hasResource(alias))
+            throw new IllegalStateException("G014 publication configuration is unavailable");
+        registeredGate.requireRiskPublicationConfiguration();
+        riskPublicationBinding=new RiskPublicationBinding(alias,publisher);
+    }
+    /** The only runtime publication action. The caller supplies no callback, alias or permit. */
+    public void publishRiskEvent(Object event){
+        Frame frame=currentFrame();
+        RiskPublicationBinding binding=riskPublicationBinding;
+        try {
+            if(profile!=G014SqlProfile.RISK_SCENARIO || binding==null || event==null || riskPublication.get()!=null
+                    || frame.jdbc.phase()!=G014JdbcGuard.Phase.STAGING || frame.jdbc.poisoned()
+                    || frame.holder.isRollbackOnly() || TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                    || TransactionSynchronizationManager.hasResource(binding.alias))throw frame.jdbc.reject();
+            registeredGate.requirePublication(frame,event);
+            requirePublicationSynchronizationFirst();
+        }catch(RuntimeException|Error failure){frame.jdbc.poison();throw publicationUnavailable();}
+        RiskPublicationWitness witness=new RiskPublicationWitness(this,frame,binding,event);
+        boolean bodyFailed=false;
+        try {
+            TransactionSynchronizationManager.bindResource(binding.alias,frame.holder);
+            witness.publicationAliasBound=true;
+            riskPublication.set(witness);
+            witness.requireLive();binding.publisher.publishEvent(event);witness.requireLive();
+        }catch(Throwable failure){bodyFailed=true;witness.reject();throw publicationUnavailable();}
+        finally {
+            boolean valid=false;
+            try { valid=witness.detach(); }
+            catch(Throwable cleanupFailure){frame.jdbc.poison();}
+            finally { if(riskPublication.get()==witness)riskPublication.remove(); }
+            if(!valid && !bodyFailed)throw publicationUnavailable();
+        }
+    }
+    RiskPublicationWitness currentRiskPublicationWitness(DataSource expectedAlias,Object event){
+        RiskPublicationWitness witness=riskPublication.get();
+        if(witness==null)return null;
+        witness.requireLive();
+        if(witness.binding.alias!=expectedAlias || witness.event!=event)throw witness.reject();
+        return witness;
+    }
+    private static IllegalStateException publicationUnavailable(){return new IllegalStateException("G014 publication boundary is unavailable");}
+    /** Package-private observation capability; only this manager constructs it inside the real issuer window. */
+    static final class RiskPublicationWitness {
+        private final G014JdbcTransactionManager manager;
+        private final Frame frame;
+        private final RiskPublicationBinding binding;
+        private final Object event,transaction,plan,scope,validator;
+        private final ConnectionHolder holder;
+        private final Thread thread=Thread.currentThread();
+        private final Map<DataSource,ConnectionHolder> aliases=new IdentityHashMap<>();
+        private volatile boolean closed,rejected;
+        private boolean nativePublicationClaimed,publicationAliasBound;
+        private RiskPublicationWitness(G014JdbcTransactionManager manager,Frame frame,RiskPublicationBinding binding,Object event){
+            this.manager=manager;this.frame=frame;this.binding=binding;this.event=event;
+            transaction=frame.transactionIdentity;plan=frame.plan;scope=frame.scope;validator=frame.validator;holder=frame.holder;
+        }
+        void requireLive(){
+            try { requireLiveState(); }
+            catch(Throwable failure){throw reject();}
+        }
+        private void requireLiveState(){
+            if(closed || rejected || !publicationAliasBound || thread!=Thread.currentThread() || manager.riskPublication.get()!=this
+                    || manager.riskPublicationBinding!=binding || manager.active.get()!=frame
+                    || manager.transactions.get(transaction)!=frame || frame.transactionIdentity!=transaction
+                    || frame.manager!=manager || frame.profile!=G014SqlProfile.RISK_SCENARIO
+                    || frame.plan!=plan || frame.scope!=scope || frame.validator!=validator || frame.holder!=holder
+                    || frame.jdbc.phase()!=G014JdbcGuard.Phase.STAGING || frame.jdbc.poisoned()
+                    || TransactionSynchronizationManager.getResource(manager.source)!=holder
+                    || TransactionSynchronizationManager.getResource(binding.alias)!=holder
+                    || holder.getConnection()!=frame.jdbc.connection || !holder.isSynchronizedWithTransaction()
+                    || holder.isRollbackOnly() || !TransactionSynchronizationManager.isActualTransactionActive()
+                    || !TransactionSynchronizationManager.isSynchronizationActive()
+                    || TransactionSynchronizationManager.isCurrentTransactionReadOnly())throw reject();
+            for(var alias:aliases.entrySet())if(TransactionSynchronizationManager.getResource(alias.getKey())!=alias.getValue())throw reject();
+            try { manager.requirePublicationSynchronizationFirst();manager.registeredGate.requirePublication(frame,event); }
+            catch(RuntimeException|Error failure){throw reject();}
+        }
+        void claimNativePublication(){requireLive();if(nativePublicationClaimed)throw reject();nativePublicationClaimed=true;}
+        void requireConnection(Connection connection){requireLive();if(connection!=frame.jdbc.connection)throw reject();}
+        void bindTemplateAlias(DataSource alias){
+            requireLive();
+            if(alias==null || aliases.containsKey(alias) || TransactionSynchronizationManager.hasResource(alias))throw reject();
+            TransactionSynchronizationManager.bindResource(alias,holder);aliases.put(alias,holder);
+        }
+        void releaseTemplateAlias(DataSource alias){
+            requireLive();
+            if(!aliases.containsKey(alias) || TransactionSynchronizationManager.getResource(alias)!=holder)throw reject();
+            TransactionSynchronizationManager.unbindResource(alias);aliases.remove(alias);
+        }
+        IllegalStateException reject(){rejected=true;frame.jdbc.poison();return publicationUnavailable();}
+        private boolean detach(){
+            boolean valid=publicationAliasBound && !rejected && !closed && thread==Thread.currentThread()
+                    && TransactionSynchronizationManager.getResource(manager.source)==holder
+                    && TransactionSynchronizationManager.getResource(binding.alias)==holder;
+            closed=true;
+            for(var alias:aliases.entrySet()){
+                if(TransactionSynchronizationManager.getResource(alias.getKey())==holder)TransactionSynchronizationManager.unbindResource(alias.getKey());
+                else valid=false;
+            }
+            aliases.clear();
+            if(publicationAliasBound){
+                if(TransactionSynchronizationManager.getResource(binding.alias)==holder)TransactionSynchronizationManager.unbindResource(binding.alias);
+                else valid=false;
+            }
+            if(!valid)frame.jdbc.poison();return valid;
+        }
+        @Override public String toString(){return "G014RiskPublicationWitness[redacted]";}
+    }
     @Override protected Object doGetTransaction(){
+        synchronized(this){commandStarted=true;}
         Frame existing=active.get();if(existing!=null)throw existing.jdbc.reject();
         // APTM may suspend an existing synchronization-only scope before doBegin.
         // Reject here so even that scope's callbacks/resources remain untouched.
@@ -79,7 +201,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
             super.doBegin(transaction,definition);
             Frame frame=Objects.requireNonNull(active.get());
             if(!(TransactionSynchronizationManager.getResource(source) instanceof ConnectionHolder holder))throw frame.jdbc.reject();
-            frame.holder=holder;frame.jdbc.bind(source,holder);transactions.put(transaction,frame);
+            frame.holder=holder;frame.transactionIdentity=transaction;frame.jdbc.bind(source,holder);transactions.put(transaction,frame);
         }catch(RuntimeException|Error failure){
             LifecycleException unknown=null;boolean baselineUnverified=false;
             Frame frame=active.get();if(frame!=null){
@@ -218,6 +340,7 @@ public final class G014JdbcTransactionManager extends JdbcTransactionManager {
         final Thread thread=Thread.currentThread();
         final G014JdbcGuard jdbc;
         ConnectionHolder holder;
+        private Object transactionIdentity;
         LifecycleOutcome unknownOutcome;
         TransactionSynchronization suspensionVeto;
         TransactionSqlSealGate.CommandPlan plan;

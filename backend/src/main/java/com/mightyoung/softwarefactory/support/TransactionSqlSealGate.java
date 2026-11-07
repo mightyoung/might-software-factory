@@ -146,6 +146,10 @@ public final class TransactionSqlSealGate {
     public interface ProfiledCommandValidator extends RegisteredCommandValidator {
         G014SqlProfile profile();
     }
+    /** Fixed source validator: only its own live NEW publication window can authorize this require. */
+    public interface SourcePublicationValidator extends ProfiledCommandValidator {
+        void requirePublication(CommandPlan plan, Object event);
+    }
     private final G014SqlProfile profile;
     private final G014JdbcTransactionManager manager;
     private final HumanSessionAuthorityTransaction authority;
@@ -169,6 +173,16 @@ public final class TransactionSqlSealGate {
     G014SqlProfile profile(){return profile;}
     private static G014SqlProfile validatorProfile(RegisteredCommandValidator validator){
         return validator instanceof ProfiledCommandValidator profiled?Objects.requireNonNull(profiled.profile()):G014SqlProfile.ASSET_FOUNDATION;
+    }
+    void requireRiskPublicationConfiguration() {
+        if(profile!=G014SqlProfile.RISK_SCENARIO || validators.values().stream().anyMatch(value->!(value instanceof SourcePublicationValidator)))
+            throw new IllegalStateException("G014 publication configuration is unavailable");
+    }
+    void requirePublication(G014JdbcTransactionManager.Frame frame, Object event) {
+        requireProfile(frame);
+        if(frame.plan==null || frame.scope==null || frame.validator!=validators.get(frame.action)
+                || !(frame.validator instanceof SourcePublicationValidator validator))throw frame.jdbc.reject();
+        validator.requirePublication(frame.plan,event);
     }
     private void requireProfile(G014JdbcTransactionManager.Frame frame){
         if(frame.profile!=profile || frame.manager!=manager || frame.jdbc.profile()!=profile || manager.profile()!=profile

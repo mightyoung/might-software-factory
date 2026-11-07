@@ -41,6 +41,7 @@ public final class RiskNativePublicationTransactions {
     private final Supplier<PlatformTransactionManager> original;
     private final RiskJdbcTransactionOwner owner;
     private final RiskPublicationJdbcTemplate template;
+    private SharedNativePublicationRouting shared;
     private final AnnotationTransactionAttributeSource attributes = new AnnotationTransactionAttributeSource();
     private final ThreadLocal<Invocation> current = new ThreadLocal<>();
     private final Advisor outer;
@@ -75,13 +76,30 @@ public final class RiskNativePublicationTransactions {
             outer = advisor((MethodInterceptor) this::around, Ordered.HIGHEST_PRECEDENCE + 20);
             inner = advisor((MethodInterceptor) invocation -> {
                 requireInvocation(invocation);
-                try { return invocation.proceed(); }
+                try {
+                    Object result = invocation.proceed();
+                    if (shared != null) shared.nativeReturned(invocation);
+                    return result;
+                }
                 catch (RiskJdbcTransactionOwner.Failure failure) { throw failure; }
-                catch (Throwable failure) { owner.poisonIfActive(); throw unavailable(); }
+                catch (Throwable failure) { if (shared != null) shared.rejectCurrent(); owner.poisonIfActive(); throw unavailable(); }
             }, Ordered.LOWEST_PRECEDENCE);
         } catch (RuntimeException | Error | ReflectiveOperationException failure) { throw unavailable(); }
     }
-    public RiskPublicationJdbcTemplate template() { return template; }
+    /** Explicit, inactive-by-default shared graph. Risk source/ACK stay closed until source authority is integrated. */
+    public static RiskNativePublicationTransactions shared(DataSource canonical, Supplier<PlatformTransactionManager> original,
+            Supplier<?> registry, Supplier<?> repository, JdbcRepositorySettings settings, Environment environment,
+            org.springframework.jdbc.core.JdbcTemplate ordinary, org.springframework.context.support.AbstractApplicationContext context) {
+        var inventory = new NativePublicationInventory(context);
+        var transactions = new RiskNativePublicationTransactions(canonical, original, registry, repository, settings, environment,
+                inventory.eventTypes(), context.getClassLoader());
+        transactions.shared = new SharedNativePublicationRouting(canonical, original, ordinary, inventory,
+                new RiskPublicationSqlCatalog(settings, environment), transactions.registryClass, transactions.repositoryClass, transactions.publicationTypes);
+        return transactions;
+    }
+    public RiskPublicationJdbcTemplate template() { if (shared != null) throw unavailable(); return template; }
+    /** Bind only to the unique actual native repository constructor argument zero. Raw use has no route. */
+    public org.springframework.jdbc.core.JdbcOperations jdbcOperations() { if (shared == null) throw unavailable(); return shared.jdbcOperations(); }
     public Advisor outerAdvisor() { return outer; }
     public Advisor sanitizingAdvisor() { return inner; }
     public TransactionManagementConfigurer transactionConfigurer() { return () -> router; }
@@ -99,7 +117,7 @@ public final class RiskNativePublicationTransactions {
                     String value = serialized.toString();
                     if (value == null) throw unavailable();
                     return value;
-                } catch (Throwable failure) { owner.poisonIfActive(); throw unavailable(); }
+                } catch (Throwable failure) { if (shared != null) shared.rejectCurrent(); owner.poisonIfActive(); throw unavailable(); }
             }
             @Override public <T> T deserialize(Object serialized, Class<T> type) {
                 try {
@@ -107,7 +125,7 @@ public final class RiskNativePublicationTransactions {
                     T event = delegate.deserialize(serialized, type);
                     if (event == null || event.getClass() != type) throw unavailable();
                     return event;
-                } catch (Throwable failure) { owner.poisonIfActive(); throw unavailable(); }
+                } catch (Throwable failure) { if (shared != null) shared.rejectCurrent(); owner.poisonIfActive(); throw unavailable(); }
             }
         };
     }
@@ -137,7 +155,7 @@ public final class RiskNativePublicationTransactions {
     private Object around(MethodInvocation call) throws Throwable {
         try { return aroundNative(call); }
         catch (RiskJdbcTransactionOwner.Failure failure) { throw failure; }
-        catch (Throwable failure) { owner.poisonIfActive(); throw unavailable(); }
+        catch (Throwable failure) { if (shared != null) shared.rejectCurrent(); owner.poisonIfActive(); throw unavailable(); }
     }
     private Object aroundNative(MethodInvocation call) throws Throwable {
         Class<?> targetClass = call.getThis() == null ? null : call.getThis().getClass();
@@ -156,6 +174,7 @@ public final class RiskNativePublicationTransactions {
                 || !(advisors[transactionIndex] instanceof Ordered ordered) || ordered.getOrder() >= Ordered.LOWEST_PRECEDENCE) throw unavailable();
         Method method = AopUtils.getMostSpecificMethod(call.getMethod(), targetClass);
         if (!(targetClass == registryClass ? registryMethods : repositoryMethods).contains(method)) throw unavailable();
+        if (shared != null) return shared.around(call, method, attributes.getTransactionAttribute(method, targetClass));
         Invocation previous = current.get();
         Validation validation = validateArguments(method, call.getArguments(), previous);
         TransactionAttribute attribute = attributes.getTransactionAttribute(method, targetClass);
@@ -244,6 +263,7 @@ public final class RiskNativePublicationTransactions {
         catch (ReflectiveOperationException failure) { throw unavailable(); }
     }
     private Invocation requireInvocation(MethodInvocation call) {
+        if (shared != null) { shared.requireInvocation(call); return null; }
         Invocation invocation = current.get();
         if (invocation == null || invocation.thread != Thread.currentThread() || invocation.target != call.getThis()
                 || !invocation.method.equals(AopUtils.getMostSpecificMethod(call.getMethod(), call.getThis().getClass())))
@@ -277,6 +297,7 @@ public final class RiskNativePublicationTransactions {
     }
     private final class Router implements PlatformTransactionManager {
         @Override public TransactionStatus getTransaction(TransactionDefinition definition) {
+            if (shared != null && shared.active()) return shared.begin(definition);
             Invocation invocation = current.get();
             if (invocation == null) {
                 String name = definition == null ? null : definition.getName();
@@ -295,10 +316,12 @@ public final class RiskNativePublicationTransactions {
             return owner.beginNative(definition);
         }
         @Override public void commit(TransactionStatus status) {
+            if (shared != null && shared.complete(status, true)) return;
             if (status instanceof RoutedStatus routed) routed.manager.commit(routed.delegate);
             else owner.finishNative(status, true);
         }
         @Override public void rollback(TransactionStatus status) {
+            if (shared != null && shared.complete(status, false)) return;
             if (status instanceof RoutedStatus routed) routed.manager.rollback(routed.delegate);
             else owner.finishNative(status, false);
         }

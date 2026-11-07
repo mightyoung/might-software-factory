@@ -21,6 +21,7 @@ public final class RiskPublicationSqlCatalog {
     static final String SQL_STATEMENT_UPDATE_BY_EVENT_AND_LISTENER_ID = "UPDATE %s\nSET COMPLETION_DATE = ?\nWHERE\n\t\tLISTENER_ID = ?\n\t\tAND COMPLETION_DATE IS NULL\n\t\tAND SERIALIZED_EVENT = ?\n";
     static final String SQL_STATEMENT_UPDATE_BY_ID = "UPDATE %s\nSET COMPLETION_DATE = ?\nWHERE\n\t\tID = ?\n";
     private final Map<String, Operation> operations;
+    private final Operation insertOperation;
 
     public RiskPublicationSqlCatalog(JdbcRepositorySettings settings, Environment environment) {
         try {
@@ -43,8 +44,11 @@ public final class RiskPublicationSqlCatalog {
                     Timestamp.class, String.class, String.class);
             add(values, table, "complete-id", SQL_STATEMENT_UPDATE_BY_ID, Kind.UPDATE, Timestamp.class, UUID.class);
             operations = Map.copyOf(values);
+            insertOperation = values.get(SQL_STATEMENT_INSERT.formatted(table));
         } catch (RuntimeException | Error failure) { throw unavailable(); }
     }
+
+    Operation insertOperation() { return insertOperation; }
 
     Operation require(String sql, Kind kind, Object[] arguments) {
         if (sql == null || kind == null) throw unavailable();

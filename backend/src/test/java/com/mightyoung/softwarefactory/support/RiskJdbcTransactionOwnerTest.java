@@ -28,8 +28,17 @@ class RiskJdbcTransactionOwnerTest {
         assertThat(Modifier.isPublic(RiskJdbcTransactionOwner.class.getModifiers())).isFalse();
         assertThat(RiskJdbcTransactionOwner.class.getDeclaredConstructors()).allSatisfy(constructor ->
                 assertThat(Modifier.isPrivate(constructor.getModifiers())).isTrue());
-        assertThat(RiskJdbcTransactionOwner.class.getDeclaredMethods()).noneSatisfy(method ->
-                assertThat(Modifier.isPublic(method.getModifiers())).isTrue());
+        assertThat(Modifier.isPublic(RiskPublicationJdbcAccess.class.getModifiers())).isFalse();
+        assertThat(RiskPublicationJdbcAccess.class.isSealed()).isTrue();
+        assertThat(RiskPublicationJdbcAccess.class.getPermittedSubclasses())
+                .containsExactlyInAnyOrder(RiskJdbcTransactionOwner.class, G014RiskPublicationJdbcAccess.class);
+        var publicMethods = java.util.Arrays.stream(RiskJdbcTransactionOwner.class.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers())).toList();
+        assertThat(publicMethods).hasSize(RiskPublicationJdbcAccess.class.getDeclaredMethods().length);
+        for (var method : publicMethods) {
+            var contract = RiskPublicationJdbcAccess.class.getDeclaredMethod(method.getName(), method.getParameterTypes());
+            assertThat(method.getReturnType()).isEqualTo(contract.getReturnType());
+        }
         assertThat(RiskJdbcTransactionOwner.class.getDeclaredMethods()).noneSatisfy(method ->
                 assertThat(method.getReturnType().getName()).matches(".*(DataSource|TransactionManager|Connection)$"));
     }

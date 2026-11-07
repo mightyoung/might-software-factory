@@ -341,6 +341,14 @@ final class G014JdbcGuard implements InvocationHandler {
                 Object result=call(raw,method,args);return result==null?null:new Child(result,ResultSet.class,this,null).proxy;
             }
             if(Set.of("getUpdateCount","getLargeUpdateCount").contains(name)&&args.length==0)return call(raw,method,args);
+            // The bound native publication template checks warnings after its INSERT. No driver warning
+            // object (or diagnostic chain) may escape the source guard, and warnings cannot be cleared.
+            if(name.equals("getWarnings")&&args.length==0&&iface==PreparedStatement.class
+                    && profile==G014SqlProfile.RISK_SCENARIO&&phase==Phase.STAGING
+                    && prepared!=null&&"risk.publication".equals(prepared.effect())) {
+                try { if(call(raw,method,args)!=null)throw reject();return null; }
+                catch(Throwable failure){throw reject();}
+            }
             // Framework methods require explicit source review before extending this finite list.
             if(Set.of("setQueryTimeout","setFetchSize","setMaxRows").contains(name)&&args.length==1&&args[0] instanceof Integer count&&count>=0)
                 return call(raw,method,args);

@@ -30,7 +30,7 @@ import static com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioCon
 import static com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioLockPlan.*;
 
 /** Sole issuer of command plans. An invocation cannot recover after any observed refusal, even if a holder is reset. */
-final class RiskScenarioCommandValidator implements TransactionSqlSealGate.ProfiledCommandValidator {
+final class RiskScenarioCommandValidator implements TransactionSqlSealGate.SourcePublicationValidator {
     static final String AUDIT_EFFECT="risk.audit",PUBLICATION_EFFECT="risk.publication";
     private final DataSource source;
     private final RiskScenarioRepository repository;
@@ -165,8 +165,16 @@ final class RiskScenarioCommandValidator implements TransactionSqlSealGate.Profi
     });}
     void publish(Handle handle){var plan=owned(handle);plan.invocation.call(()->{
         if(plan.replay||plan.auditReceipt==null||plan.publicationReturned)throw fail(plan);
-        publisher.publish(plan.event);plan.publicationReturned=true;return null;
+        if(plan.publicationInProgress)throw fail(plan);
+        plan.publicationInProgress=true;
+        try { publisher.publish(plan.event);plan.publicationReturned=true;return null; }
+        finally { plan.publicationInProgress=false; }
     });}
+    @Override public void requirePublication(TransactionSqlSealGate.CommandPlan candidate,Object event){
+        requireOwnedPlan(candidate);var plan=(Plan)candidate;
+        if(plan.replay || plan.auditReceipt==null || !plan.publicationInProgress || plan.publicationReturned
+                || event!=plan.event)throw fail(plan);
+    }
     private Plan owned(Handle handle){Objects.requireNonNull(handle);requireOwnedPlan(handle.plan);return handle.plan;}
     @Override public void requireOwnedPlan(TransactionSqlSealGate.CommandPlan candidate){
         var invocation=live.get();
@@ -219,7 +227,7 @@ final class RiskScenarioCommandValidator implements TransactionSqlSealGate.Profi
         final List<RiskScenarioRepository.Statement> statements;final RiskScenarioRepository.Root expectedRoot;final List<ActiveLink> expectedLinks;
         final Map<UUID,RiskScenarioRepository.HazardReference> references;final List<RiskScenarioRepository.SnapshotIndex> expectedSnapshots;
         final RiskScenarioRepository.Receipt receipt;final boolean replay;final byte[] responseBody;
-        BusinessAuditAppend.AuditAppendReceipt auditReceipt;boolean publicationReturned;
+        BusinessAuditAppend.AuditAppendReceipt auditReceipt;boolean publicationReturned,publicationInProgress;
         Plan(Invocation invocation,Intent intent,CurrentTenantContext context,UUID key,String fingerprint,UUID organization,UUID command,CommandResult result,
                 ActionScope stagingScope,BusinessAuditRecord audit,RiskScenarioDraftChangedEvent event,List<RiskScenarioRepository.Statement> statements,
                 RiskScenarioRepository.Root expectedRoot,List<ActiveLink> expectedLinks,Map<UUID,RiskScenarioRepository.HazardReference> references,

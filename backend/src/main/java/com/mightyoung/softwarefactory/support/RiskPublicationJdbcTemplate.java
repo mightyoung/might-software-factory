@@ -29,7 +29,7 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
     private static final String SAFE = "Risk publication JDBC unavailable";
     private static final SQLExceptionTranslator TRANSLATOR = (task, sql, error) -> translateSafely(error);
     private final RiskPublicationSqlCatalog catalog;
-    private final RiskJdbcTransactionOwner owner;
+    private final RiskPublicationJdbcAccess owner;
     private final java.util.function.Predicate<java.util.UUID> completionIds;
     private boolean ownedReady;
     private final Map<String, Class<?>> eventTypes;
@@ -41,11 +41,11 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
         this(source, catalog, eventTypes, eventClassLoader, null);
     }
     RiskPublicationJdbcTemplate(DataSource source, RiskPublicationSqlCatalog catalog,
-            Set<Class<?>> eventTypes, ClassLoader eventClassLoader, RiskJdbcTransactionOwner owner) {
+            Set<Class<?>> eventTypes, ClassLoader eventClassLoader, RiskPublicationJdbcAccess owner) {
         this(source, catalog, eventTypes, eventClassLoader, owner, id -> false);
     }
     RiskPublicationJdbcTemplate(DataSource source, RiskPublicationSqlCatalog catalog,
-            Set<Class<?>> eventTypes, ClassLoader eventClassLoader, RiskJdbcTransactionOwner owner,
+            Set<Class<?>> eventTypes, ClassLoader eventClassLoader, RiskPublicationJdbcAccess owner,
             java.util.function.Predicate<java.util.UUID> completionIds) {
         super();
         this.owner = owner;
@@ -79,7 +79,7 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
     @Override public void afterPropertiesSet() { if (!ownedReady) super.afterPropertiesSet(); }
     @Override public DataSource getDataSource() { return super.getDataSource(); }
     @Override protected DataSource obtainDataSource() {
-        if (ownedReady && !owner.hasOwnedTransaction()) throw refusal();
+        if (ownedReady && !owner.hasActiveTransaction()) throw refusal();
         return super.getDataSource();
     }
 
@@ -144,7 +144,10 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
         @Override public String getSql() { return operation.label(); }
         @Override public PreparedStatement createPreparedStatement(Connection connection) throws SQLException {
             try {
-                if (owner != null) owner.requireOperation(operation);
+                if (owner != null) {
+                    owner.requireOperation(operation);
+                    owner.requireConnection(connection);
+                }
                 return handle(connection.prepareStatement(operation.sql()), PreparedStatement.class);
             }
             catch (SQLException failure) { throw safeSql(failure); }
@@ -155,11 +158,12 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
     private <T> T handle(T target, Class<T> type) {
         if (target == null) throw refusal();
         var closed = new AtomicBoolean();
+        Object epoch = owner == null ? null : owner.operationEpoch();
         return type.cast(Proxy.newProxyInstance(RiskPublicationJdbcTemplate.class.getClassLoader(),
-                new Class<?>[]{type}, (proxy, method, arguments) -> invokeHandle(proxy, target, type, method, arguments, closed)));
+                new Class<?>[]{type}, (proxy, method, arguments) -> invokeHandle(proxy, target, type, method, arguments, closed, epoch)));
     }
 
-    private Object invokeHandle(Object proxy, Object target, Class<?> type, Method method, Object[] arguments, AtomicBoolean closed) throws SQLException {
+    private Object invokeHandle(Object proxy, Object target, Class<?> type, Method method, Object[] arguments, AtomicBoolean closed, Object epoch) throws SQLException {
         String name = method.getName();
         if (method.getDeclaringClass() == Object.class) {
             return switch (name) {
@@ -169,6 +173,7 @@ public final class RiskPublicationJdbcTemplate extends JdbcTemplate {
                 default -> throw refusal();
             };
         }
+        if (owner != null) owner.requireOperationEpoch(epoch);
         if (name.equals("isClosed") && closed.get()) return true;
         if (name.equals("close")) { if (!closed.compareAndSet(false, true)) return null; }
         else if (closed.get()) throw refusal();

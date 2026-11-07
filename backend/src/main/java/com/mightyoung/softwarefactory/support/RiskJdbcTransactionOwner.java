@@ -26,7 +26,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** Explicit owned lifecycle. No bean or foreign/G014 borrowed-holder permit. */
-final class RiskJdbcTransactionOwner {
+final class RiskJdbcTransactionOwner implements RiskPublicationJdbcAccess {
     private static final String SAFE = "Risk JDBC transaction unavailable";
     enum Outcome { NOT_STARTED, BEGIN_IN_PROGRESS, BEGIN_UNKNOWN, ACTIVE, COMMIT_SENT, COMMITTED,
         COMMIT_UNKNOWN, ROLLBACK_SENT, ROLLED_BACK, ROLLBACK_UNKNOWN }
@@ -95,11 +95,12 @@ final class RiskJdbcTransactionOwner {
         }
     }
 
-    void poisonIfActive() {
+    @Override public void poisonIfActive() {
         Frame frame = active.get();
         if (frame != null && frame.thread == Thread.currentThread()) frame.rejected = true;
     }
     boolean hasOwnedTransaction() { return active.get() != null; }
+    @Override public boolean hasActiveTransaction() { return hasOwnedTransaction(); }
 
     TransactionStatus beginNative(TransactionDefinition definition) {
         Frame frame = active.get();
@@ -174,7 +175,7 @@ final class RiskJdbcTransactionOwner {
         public void releaseSavepoint(Object savepoint) { throw reject(frame); }
     }
 
-    <T> T operation(RiskPublicationSqlCatalog.Operation operation, Supplier<T> callback) {
+    @Override public <T> T operation(RiskPublicationSqlCatalog.Operation operation, Supplier<T> callback) {
         Frame frame = frame();
         requireBound(frame);
         if (frame.rejected || frame.outcome != Outcome.ACTIVE || frame.operation != null || operation == null)
@@ -186,12 +187,35 @@ final class RiskJdbcTransactionOwner {
         catch (RuntimeException | Error failure) { frame.rejected = true; throw failure(frame); }
         finally { frame.operation = null; frame.operationEpoch = null; }
     }
-    void requireOperation(RiskPublicationSqlCatalog.Operation operation) {
+    @Override public void requireOperation(RiskPublicationSqlCatalog.Operation operation) {
         Frame frame = frame();
         requireBound(frame);
         if (operation == null || frame.operation != operation || frame.rejected || frame.outcome != Outcome.ACTIVE
                 || frame.permit != Permit.NONE) throw reject(frame);
     }
+
+    @Override public void requireConnection(Connection connection) {
+        Frame frame = frame();
+        requireOperation(frame.operation);
+        if (frame.lease == null || connection != frame.lease.connection) throw reject(frame);
+    }
+    @Override public Object operationEpoch() {
+        Frame frame = frame();
+        requireOperation(frame.operation);
+        if (frame.operationEpoch == null) throw reject(frame);
+        return new OperationEpoch(frame, frame.operationEpoch);
+    }
+    @Override public void requireOperationEpoch(Object epoch) {
+        if (!(epoch instanceof OperationEpoch captured)) { poisonIfActive(); throw new IllegalStateException(SAFE); }
+        Frame frame = captured.frame;
+        if (frame.thread != Thread.currentThread() || active.get() != frame
+                || captured.value == null || frame.operationEpoch != captured.value) {
+            poisonIfActive();
+            throw reject(frame);
+        }
+        requireOperation(frame.operation);
+    }
+    private record OperationEpoch(Frame frame, Object value) {}
 
     private <T> T child(T target, Class<T> type, Frame frame, RiskPublicationSqlCatalog.Operation operation) {
         if (target == null) throw reject(frame);
@@ -255,8 +279,8 @@ final class RiskJdbcTransactionOwner {
         @Override public Connection getConnection() {
             Frame frame = frame(); requireOperation(frame.operation); return frame.lease.connection;
         }
-        @Override public Connection getConnection(String user, String password) throws SQLException { throw sql(null); }
-        @Override public <T> T unwrap(Class<T> type) throws SQLException { throw sql(null); }
+        @Override public Connection getConnection(String user, String password) throws SQLException { poisonIfActive(); throw sql(null); }
+        @Override public <T> T unwrap(Class<T> type) throws SQLException { poisonIfActive(); throw sql(null); }
         @Override public boolean isWrapperFor(Class<?> type) { return false; }
         @Override public String toString() { return "Risk owned JDBC template source[redacted]"; }
     }

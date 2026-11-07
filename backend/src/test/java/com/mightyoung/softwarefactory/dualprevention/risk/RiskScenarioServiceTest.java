@@ -27,7 +27,7 @@ import static org.mockito.Mockito.*;
 
 /** Real G014 manager/gate/guard, recording JDBC and synthetic authority/repository/audit/publication owners.
  * This is not SQL, RLS, durable listener, actual opaque audit-owner, HUMAN or PostgreSQL acceptance. */
-class RiskScenarioServiceTest {
+public class RiskScenarioServiceTest {
     static final UUID TENANT=id(1),ACTOR=id(2),ACCOUNT=id(3),MEMBER=id(4),ORG=id(5),SCENARIO=id(6),KEY=id(7),TRACE=id(8),REQUEST=id(9);
     static final Instant CUT=Instant.parse("2026-11-07T00:00:00.123456Z");
     static final String PUB_SQL="""
@@ -115,7 +115,16 @@ class RiskScenarioServiceTest {
         assertThat(f.auditWrites.get()).isOne();assertThat(f.publicationWrites.get()).isOne();assertThat(f.flushes.get()).isOne();
         assertThat(f.commits.get()).isZero();assertThat(f.rollbacks.get()).isOne();
     }
-    static final class Fixture {
+    @Test void configurationBeforeFixedGateIsRejectedWithoutBorrowing() {
+        var pool=mock(DataSource.class);var templates=new ArrayList<>(RiskScenarioService.businessSqlTemplates());
+        templates.add(RiskScenarioService.auditSqlTemplate());
+        templates.add(new TransactionSqlSealGate.SqlTemplate(PUB_SQL,5,false,RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO));
+        var manager=new G014JdbcTransactionManager(G014SqlProfile.RISK_SCENARIO,pool,templates);
+        assertThatThrownBy(()->manager.configureRiskPublication(pool,event->{throw new AssertionError("must not publish");}))
+                .hasMessage("G014 publication configuration is unavailable");
+        verifyNoInteractions(pool);
+    }
+    public static final class Fixture {
         final DataSource pool=mock(DataSource.class);final Connection driver=mock(Connection.class);
         final CurrentTenantContext context=new CurrentTenantContext(ACTOR,ACCOUNT,TENANT,MEMBER,0,0,1);
         final CapturedHumanRequest request=mock(CapturedHumanRequest.class);
@@ -131,18 +140,29 @@ class RiskScenarioServiceTest {
         final Set<UUID> hidden=new HashSet<>();final Map<UUID,RiskScenarioRepository.HazardReference> hazards=new HashMap<>();
         final G014JdbcTransactionManager manager;final RiskScenarioRepository repository;final RiskScenarioService service;
         RiskScenarioRepository.Root root;RiskScenarioRepository.Receipt receipt;RiskScenarioLockPlan lockPlan;
-        Consumer<RiskScenarioDraftChangedEvent> publicationHook;Runnable finalHook;boolean duplicatePublication;
+        Consumer<RiskScenarioDraftChangedEvent> publicationHook;Consumer<Object> bridgeEntryHook;Runnable bridgeExitHook;Runnable finalHook;boolean duplicatePublication,publicationExecutedByHook;
         Function<String,String> publicationJsonTransform=Function.identity();
-        Fixture()throws Exception {
+        private SQLWarning publicationWarning;
+        private Throwable publicationWarningFailure;
+        private final AtomicInteger publicationWarningReads=new AtomicInteger();
+        private final String publicationSql;
+        public Fixture()throws Exception { this(true,true); }
+        public Fixture(boolean configureBridge)throws Exception { this(configureBridge,true); }
+        public Fixture(boolean configureBridge,boolean qualified)throws Exception {
+            publicationSql=qualified?PUB_SQL:PUB_SQL.replace("public.EVENT_PUBLICATION","EVENT_PUBLICATION");
             var templates=new ArrayList<>(RiskScenarioService.businessSqlTemplates());templates.add(RiskScenarioService.auditSqlTemplate());
-            templates.add(new TransactionSqlSealGate.SqlTemplate(PUB_SQL,5,false,RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO));
+            templates.add(new TransactionSqlSealGate.SqlTemplate(publicationSql,5,false,RiskScenarioService.PUBLICATION_EFFECT,null,G014SqlProfile.RISK_SCENARIO));
             manager=new G014JdbcTransactionManager(G014SqlProfile.RISK_SCENARIO,pool,templates);
             when(pool.getConnection()).thenReturn(driver);var auto=new AtomicBoolean(true);when(driver.getAutoCommit()).thenAnswer(i->auto.get());
             doAnswer(i->{auto.set(i.getArgument(0));return null;}).when(driver).setAutoCommit(anyBoolean());
             when(driver.isReadOnly()).thenReturn(false);when(driver.getTransactionIsolation()).thenReturn(Connection.TRANSACTION_READ_COMMITTED);
             doAnswer(i->{commits.incrementAndGet();return null;}).when(driver).commit();doAnswer(i->{rollbacks.incrementAndGet();return null;}).when(driver).rollback();
             when(driver.prepareStatement(anyString())).thenAnswer(invocation->{String sql=invocation.getArgument(0);var statement=mock(PreparedStatement.class);
-                when(statement.executeUpdate()).thenAnswer(i->{if(sql.equals(JooqBusinessAuditAppend.commandInsertSql()))auditWrites.incrementAndGet();if(sql.equals(PUB_SQL))publicationWrites.incrementAndGet();return 1;});
+                when(statement.executeUpdate()).thenAnswer(i->{if(sql.equals(JooqBusinessAuditAppend.commandInsertSql()))auditWrites.incrementAndGet();if(sql.equals(publicationSql))publicationWrites.incrementAndGet();return 1;});
+                when(statement.getWarnings()).thenAnswer(i->{
+                    if(!sql.equals(publicationSql))return null;
+                    publicationWarningReads.incrementAndGet();if(publicationWarningFailure!=null)throw publicationWarningFailure;return publicationWarning;
+                });
                 when(statement.execute()).thenAnswer(i->{flushes.incrementAndGet();return false;});when(statement.getLargeUpdateCount()).thenReturn(0L);return statement;});
             when(request.context()).thenReturn(context);
             when(authority.withGuarded(any(),any())).thenAnswer(invocation->{
@@ -183,13 +203,42 @@ class RiskScenarioServiceTest {
                 jdbc(JooqBusinessAuditAppend.commandInsertSql(),List.of(TENANT,record.auditId(),ACTOR,scope.action().permissionCode(),ENTITY_KEY,record.resourceId(),record.commandId().toString(),record.changeKind().name(),categories,record.traceId().toString(),scope.observedAt().atOffset(ZoneOffset.UTC)));
                 var receipt=mock(BusinessAuditAppend.AuditAppendReceipt.class);receipts.put(receipt,Map.entry(scope,record));return receipt;});
             when(audit.requireMatches(any(),any(),any())).thenAnswer(invocation->{var pair=receipts.get(invocation.getArgument(0));if(pair==null||pair.getKey()!=invocation.getArgument(1)||!pair.getValue().equals(invocation.getArgument(2)))throw new Failure(503);return pair.getValue().auditId();});
-            RiskScenarioEventPublisher publisher=event->{events.add(event);if(publicationHook!=null)publicationHook.accept(event);publish(event);if(duplicatePublication)publish(event);};
+            var fixedPublisher=new ModulithRiskScenarioEventPublisher(manager);
+            RiskScenarioEventPublisher publisher=event->{if(bridgeEntryHook!=null)bridgeEntryHook.accept(event);fixedPublisher.publish(event);if(bridgeExitHook!=null)bridgeExitHook.run();};
             service=new RiskScenarioService(manager,repository,actions,authority,writeGuard,directory,audit,publisher,json,RiskScenarioService.REQUIRED_LISTENER_ID);
+            if(configureBridge)configurePublication(pool);
             for(long h=20;h<=22;h++)hazards.put(id(h),new RiskScenarioRepository.HazardReference(id(h),ORG,4,"H-"+h,"a".repeat(64),ExistenceState.UNKNOWN));
         }
+        /** Test-only harness over the actual service/validator/gate; not a native/PG acceptance fixture. */
+        public G014JdbcTransactionManager manager(){return manager;}
+        public DataSource publicationAlias(){return configuredPublicationAlias;}
+        private DataSource configuredPublicationAlias;
+        public void configurePublication(DataSource alias){
+            manager.configureRiskPublication(alias,published->{
+                var event=(RiskScenarioDraftChangedEvent)published;events.add(event);
+                if(publicationHook!=null)publicationHook.accept(event);
+                if(!publicationExecutedByHook)publish(event);if(duplicatePublication)publish(event);
+            });
+            configuredPublicationAlias=alias;
+        }
+        public Connection guardedConnection(){return boundConnection();}
+        public void onPublication(Consumer<Object> hook){publicationHook=hook::accept;}
+        public void beforePublication(Consumer<Object> hook){bridgeEntryHook=hook;}
+        public void afterPublication(Runnable hook){bridgeExitHook=hook;}
+        public void executePublicationWith(Consumer<Object> executor){publicationHook=executor::accept;publicationExecutedByHook=true;}
+        public void executeCreate(){service.create(request,KEY,REQUEST,TRACE,input(List.of(id(20))));}
+        public int commits(){return commits.get();}
+        public int rollbacks(){return rollbacks.get();}
+        public int publicationWrites(){return publicationWrites.get();}
+        public String serializeEvent(Object event){return json.writeValueAsString(event);}
+        public long physicalCalls(String method){return mockingDetails(driver).getInvocations().stream().filter(call->call.getMethod().getName().equals(method)).count();}
+        public void warning(SQLWarning warning){publicationWarning=warning;}
+        public void warningFailure(Throwable failure){publicationWarningFailure=failure;}
+        public int warningReads(){return publicationWarningReads.get();}
+        public long poolBorrows(){return mockingDetails(pool).getInvocations().stream().filter(call->call.getMethod().getName().equals("getConnection")).count();}
         Connection boundConnection(){return ((ConnectionHolder)TransactionSynchronizationManager.getResource(manager.commandDataSource())).getConnection();}
         void jdbc(String sql,List<?> values)throws Exception {try(var query=boundConnection().prepareStatement(sql)){for(int i=0;i<values.size();i++)query.setObject(i+1,values.get(i));query.executeUpdate();}}
-        void publish(RiskScenarioDraftChangedEvent event){try(var query=boundConnection().prepareStatement(PUB_SQL)){
+        void publish(RiskScenarioDraftChangedEvent event){try(var query=boundConnection().prepareStatement(publicationSql)){
             query.setObject(1,UUID.randomUUID());query.setString(2,RiskScenarioDraftChangedEvent.class.getName());query.setString(3,RiskScenarioService.REQUIRED_LISTENER_ID);
             query.setTimestamp(4,Timestamp.from(CUT));query.setString(5,publicationJsonTransform.apply(json.writeValueAsString(event)));query.executeUpdate();
         }catch(Exception failure){throw new IllegalStateException(failure);}}
