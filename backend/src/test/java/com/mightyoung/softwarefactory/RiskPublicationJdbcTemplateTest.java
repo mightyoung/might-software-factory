@@ -231,7 +231,8 @@ class RiskPublicationJdbcTemplateTest {
             doThrow(secretSql("58000")).when(f.statement()).close();
             doThrow(secretSql("58000")).when(f.rows()).close();
             withLogs(level, logs -> {
-                assertThat(f.template().query(READ, rows -> "original")).isEqualTo("original");
+                String result = f.template().query(READ, rows -> "original");
+                assertThat(result).isEqualTo("original");
                 assertThat(logs()).doesNotContain(SECRET, INSERT, READ);
             });
         }
@@ -419,7 +420,7 @@ class RiskPublicationJdbcTemplateTest {
             assertThat(cursor.getMessage()).doesNotContain(SECRET);
             assertThat(cursor.getSuppressed()).isEmpty();
             if (cursor instanceof SQLException sql) {
-                assertThat(sql.getNextException()).isNull();
+                assertThat((Object) sql.getNextException()).isNull();
                 assertThat(sql.getSQLState() == null || sql.getSQLState().matches("[0-9A-Z]{5}")).isTrue();
             }
         }
