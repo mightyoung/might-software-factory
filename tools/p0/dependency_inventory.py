@@ -28,6 +28,8 @@ MAX_NESTED_JAR_BYTES = 256 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
+MAX_PARENT_DEPTH = 16
+MAX_PARENT_CHAIN_BYTES = 32 * 1024 * 1024
 TOKEN = re.compile(r"[A-Za-z0-9_+.-]+\Z")
 RUNTIME_SCOPES = {"compile", "runtime"}
 JAR_TYPES = {"jar", "bundle", "test-jar", "maven-plugin"}
@@ -187,7 +189,7 @@ def resolve_tree(tree):
     return root, dependencies, edges
 
 
-def pom_evidence(path, relative_path):
+def read_pom(path):
     raw = document(path)
     # ElementTree has no external resolver; reject all DTD/entity declarations as well.
     upper = raw.upper()
@@ -197,6 +199,11 @@ def pom_evidence(path, relative_path):
     if project.tag.rsplit("}", 1)[-1] != "project":
         raise InventoryError("POM root must be project")
     namespace = project.tag.removesuffix("project")
+    return raw, project, namespace
+
+
+def pom_evidence(path, relative_path, parsed=None):
+    raw, project, namespace = parsed if parsed is not None else read_pom(path)
     declared = []
     for license_element in project.findall(namespace + "licenses/" + namespace + "license"):
         license_fields = {}
@@ -217,6 +224,151 @@ def pom_evidence(path, relative_path):
             "UNRESOLVED_DECLARATION" if unresolved else "ABSENT_OR_INHERITED_NOT_RESOLVED"),
         "declaredLicenses": declared,
     }
+
+
+def pom_model_text(element, namespace, name):
+    fields = element.findall(namespace + name)
+    if len(fields) > 1 or (fields and len(fields[0])):
+        raise InventoryError("Ambiguous published POM coordinate field")
+    return fields[0].text.strip() if fields and fields[0].text else None
+
+
+def nearest_pom_licenses(project, namespace):
+    """Strict declaration structure for the new source decision only."""
+    containers = project.findall(namespace + "licenses")
+    if len(containers) > 1:
+        raise InventoryError("Ambiguous nearest POM licenses container")
+    if not containers:
+        return []
+    container = containers[0]
+    if (container.text or "").strip():
+        raise InventoryError("Unexpected nearest POM license text")
+    allowed = {namespace + name: name for name in ("name", "url", "distribution", "comments")}
+    declared = []
+    for license_element in container:
+        if (license_element.tag != namespace + "license" or (license_element.text or "").strip()
+                or (license_element.tail or "").strip()):
+            raise InventoryError("Unexpected nearest POM license structure")
+        fields = {}
+        for element in license_element:
+            name = allowed.get(element.tag)
+            if name is None or name in fields or len(element) or (element.tail or "").strip():
+                raise InventoryError("Ambiguous nearest POM license scalar")
+            value = element.text or ""
+            if len(value) > 16_384:
+                raise InventoryError("Nearest POM license scalar exceeds the size limit")
+            fields[name] = value.strip()
+        declared.append(fields)
+    return declared
+
+
+def pom_parent(project, namespace):
+    parents = project.findall(namespace + "parent")
+    if len(parents) > 1:
+        raise InventoryError("Ambiguous published POM parent")
+    if not parents:
+        return None
+    return tuple(pom_model_text(parents[0], namespace, name) for name in ("groupId", "artifactId", "version"))
+
+
+def literal_parent_coordinate(fields):
+    for index, value in enumerate(fields):
+        if not value:
+            continue
+        if "/" in value or "\\" in value:
+            raise InventoryError("Unsafe published parent coordinate")
+        if "${" not in value:
+            token(value, "parent coordinate")
+            if index == 0 and any(part in {"", ".", ".."} for part in value.split(".")):
+                raise InventoryError("Unsafe published parent groupId")
+    if not all(fields):
+        return "INCOMPLETE_PARENT_COORDINATE"
+    if any("${" in value for value in fields):
+        return "UNRESOLVED_PARENT_COORDINATE"
+    identity({"groupId": fields[0], "artifactId": fields[1], "version": fields[2], "type": "pom"})
+    return None
+
+
+def nearest_license_declaration(repository, group, artifact, version, initial=None):
+    """Literal nearest-source evidence, not a complete Maven/legal effective model."""
+    proof = {"selectionPolicy": "NEAREST_DECLARATION", "provenance": "UNKNOWN",
+             "sourceCoordinate": None, "source": None, "sha256": None,
+             "declaredLicenses": [], "parentChain": [], "requestedParent": None,
+             "unknownReason": None}
+    current = (group, artifact, version)
+    seen = {current}
+    consumed = 0
+    for depth in range(MAX_PARENT_DEPTH + 1):
+        coordinate = ":".join((current[0], current[1], "pom", current[2]))
+        relative = str(PurePosixPath(*current[0].split("."), current[1], current[2], current[1] + "-" + current[2] + ".pom"))
+        path = repository / relative
+        try:
+            contained = path.resolve().is_relative_to(repository.resolve())
+        except (OSError, RuntimeError) as error:
+            raise InventoryError("Invalid local POM provenance path") from error
+        if not contained:
+            raise InventoryError("POM provenance must remain inside the supplied repository")
+        if not path.is_file():
+            proof["unknownReason"] = "MISSING_ARTIFACT_POM" if depth == 0 else "MISSING_PARENT_POM"
+            return proof
+        if consumed + path.stat().st_size > MAX_PARENT_CHAIN_BYTES:
+            proof["unknownReason"] = "PARENT_BYTE_LIMIT"
+            return proof
+        parsed = initial if depth == 0 and initial is not None else read_pom(path)
+        raw, project, namespace = parsed
+        consumed += len(raw)
+        if consumed > MAX_PARENT_CHAIN_BYTES:
+            proof["unknownReason"] = "PARENT_BYTE_LIMIT"
+            return proof
+        declared_group = pom_model_text(project, namespace, "groupId")
+        declared_artifact = pom_model_text(project, namespace, "artifactId")
+        declared_version = pom_model_text(project, namespace, "version")
+        parent = pom_parent(project, namespace)
+        parent_reason = literal_parent_coordinate(parent) if parent is not None else None
+        published = (declared_group or (parent[0] if parent else None), declared_artifact,
+                     declared_version or (parent[2] if parent else None))
+        if not all(published):
+            raise InventoryError("Published POM identity is incomplete")
+        if any("/" in value or "\\" in value for value in published):
+            raise InventoryError("Unsafe published POM identity")
+        if any("${" in value for value in published):
+            proof["unknownReason"] = "UNRESOLVED_PUBLISHED_COORDINATE"
+            return proof
+        if published != current:
+            raise InventoryError("Published POM identity does not match its coordinate")
+        declared = nearest_pom_licenses(project, namespace)
+        proof["requestedParent"] = None
+        source_sha256 = hashlib.sha256(raw).hexdigest()
+        source = {"coordinate": coordinate, "source": relative, "sha256": source_sha256}
+        if depth:
+            proof["parentChain"].append(source)
+        if declared:
+            if any("${" in value for item in declared for value in item.values()):
+                proof["unknownReason"] = "UNRESOLVED_DECLARATION"
+                return proof
+            if not all(item.get("name") or item.get("url") for item in declared):
+                proof["unknownReason"] = "INCOMPLETE_DECLARATION"
+                return proof
+            proof.update(provenance="DIRECT" if depth == 0 else "PARENT", sourceCoordinate=coordinate,
+                         source=relative, sha256=source_sha256,
+                         declaredLicenses=declared, requestedParent=None)
+            return proof
+        if parent is None:
+            proof["unknownReason"] = "NO_DECLARATION_OR_PARENT"
+            return proof
+        if parent_reason:
+            proof["unknownReason"] = parent_reason
+            return proof
+        proof["requestedParent"] = ":".join((parent[0], parent[1], "pom", parent[2]))
+        if parent in seen:
+            proof["unknownReason"] = "PARENT_CYCLE"
+            return proof
+        if depth == MAX_PARENT_DEPTH:
+            proof["unknownReason"] = "PARENT_DEPTH_LIMIT"
+            return proof
+        seen.add(parent)
+        current = parent
+    raise AssertionError("Parent provenance traversal exceeded its bound")
 
 
 def license_notices(path):
@@ -338,10 +490,12 @@ def embedded_packaging_evidence(specification, repository, errors):
                 "hostArtifact": {"source": jar_relative, "sha256": None},
                 "hostPom": None, "hostLicenseNotices": [],
                 "embeddedEntry": entry_name, "embeddedSha256": None, "embeddedSize": None}
-    if pom.is_file():
-        evidence["hostPom"] = pom_evidence(pom, pom_relative)
+    parsed_host = read_pom(pom) if pom.is_file() else None
+    if parsed_host is not None:
+        evidence["hostPom"] = pom_evidence(pom, pom_relative, parsed_host)
     else:
         errors.append({"code": "MISSING_PACKAGING_HOST_POM", "coordinate": coordinate})
+    evidence["hostNearestLicenseDeclarationEvidence"] = nearest_license_declaration(repository, group, artifact, version, parsed_host)
     if not host.is_file():
         errors.append({"code": "MISSING_PACKAGING_HOST_ARTIFACT", "coordinate": coordinate})
         return evidence
@@ -403,10 +557,12 @@ def build_inventory(tree_path, boot_jar, repository, embedded_packaging_library=
         if runtime:
             required_runtime.add(coordinate)
             item["packagingCoverage"] = "REQUIRED_RUNTIME"
-        if pom_path.is_file():
-            item["pom"] = pom_evidence(pom_path, pom_relative)
+        parsed_pom = read_pom(pom_path) if pom_path.is_file() else None
+        if parsed_pom is not None:
+            item["pom"] = pom_evidence(pom_path, pom_relative, parsed_pom)
         else:
             errors.append({"code": "MISSING_RESOLVED_POM", "coordinate": coordinate})
+        item["nearestLicenseDeclarationEvidence"] = nearest_license_declaration(repository, group, artifact, version, parsed_pom)
         artifacts.append(item)
 
     matched = set()
@@ -450,7 +606,7 @@ def build_inventory(tree_path, boot_jar, repository, embedded_packaging_library=
         "licenseReview": "NOT_PERFORMED",
         "projectLicense": "NOT_EVALUATED",
         "limitations": ["Not SPDX or CycloneDX", "Only supplied tree and explicit embedded packaging source; complete build plugins and JDK excluded",
-                        "POM licenses are unverified declarations; parent inheritance is not resolved",
+                        "POM licenses and nearest literal parent declarations are source evidence, not a complete Maven or legal model",
                         "Runtime reconciliation covers compile/runtime JAR artifacts only"],
         "artifacts": artifacts,
         "packagingEvidence": [packaging] if packaging else [],
@@ -458,6 +614,8 @@ def build_inventory(tree_path, boot_jar, repository, embedded_packaging_library=
         "dependencyEdges": [{"from": parent, "to": child} for parent, child in sorted(edges)],
         "packagedLibraries": libraries,
         "unknownLicenseCoordinates": unknown,
+        "unresolvedNearestLicenseDeclarationCoordinates": [item["coordinate"] for item in artifacts
+                                                          if item["nearestLicenseDeclarationEvidence"]["provenance"] == "UNKNOWN"],
         "errors": errors,
     }
 

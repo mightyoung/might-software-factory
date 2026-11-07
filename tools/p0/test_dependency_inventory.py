@@ -410,5 +410,209 @@ class InventoryBehaviorTest(unittest.TestCase):
                 self.assertEqual("retained report", self.output.read_text())
 
 
+    def parent_pom(self, name, license_xml="", parent_xml=""):
+        path = self.repository / "example" / name / "1.0" / (name + "-1.0.pom")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('<project xmlns="http://maven.apache.org/POM/4.0.0">'
+                        '<groupId>example</groupId><artifactId>' + name + '</artifactId><version>1.0</version>'
+                        + parent_xml + license_xml + '</project>')
+        return path
+
+    def parent_reference(self, name, version="1.0", relative=""):
+        return ('<parent><groupId>example</groupId><artifactId>' + name + '</artifactId><version>'
+                + version + '</version>' + relative + '</parent>')
+
+    def test_nearest_parent_chain_preserves_raw_unknown_and_exact_source_hashes(self):
+        terms = '<licenses><license><name>Declared parent terms</name></license></licenses>'
+        base = self.parent_pom("base", license_xml=terms)
+        parent = self.parent_pom("parent", parent_xml=self.parent_reference("base"))
+        node, content = self.dependency("child", license_xml=self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        result = self.run_inventory()
+        artifact = result["artifacts"][0]
+        self.assertEqual("UNKNOWN", artifact["pom"]["licenseStatus"])
+        self.assertEqual(["example:child:jar:1.0"], result["unknownLicenseCoordinates"])
+        self.assertEqual([], result["unresolvedNearestLicenseDeclarationCoordinates"])
+        proof = artifact["nearestLicenseDeclarationEvidence"]
+        self.assertEqual("PARENT", proof["provenance"])
+        self.assertEqual("example:base:pom:1.0", proof["sourceCoordinate"])
+        self.assertEqual("example/base/1.0/base-1.0.pom", proof["source"])
+        self.assertEqual(inventory.hashlib.sha256(base.read_bytes()).hexdigest(), proof["sha256"])
+        self.assertEqual(["example:parent:pom:1.0", "example:base:pom:1.0"],
+                         [item["coordinate"] for item in proof["parentChain"]])
+        self.assertEqual(inventory.hashlib.sha256(parent.read_bytes()).hexdigest(), proof["parentChain"][0]["sha256"])
+        self.assertEqual("Declared parent terms", proof["declaredLicenses"][0]["name"])
+        self.assertEqual(result, self.run_inventory())
+        self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_nearest_direct_declaration_does_not_read_a_parent_or_claim_legal_clearance(self):
+        terms = '<licenses><license><name>Child declaration</name></license></licenses>'
+        node, content = self.dependency("direct_terms", license_xml=terms + self.parent_reference("not_cached"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/direct.jar": content}
+        result = self.run_inventory()
+        proof = result["artifacts"][0]["nearestLicenseDeclarationEvidence"]
+        self.assertEqual("DIRECT", proof["provenance"])
+        self.assertEqual([], proof["parentChain"])
+        self.assertEqual("example:direct_terms:pom:1.0", proof["sourceCoordinate"])
+        self.assertEqual("NOT_PERFORMED", result["licenseReview"])
+
+    def test_missing_cycle_and_depth_remain_unknown_without_changing_byte_coverage(self):
+        node, content = self.dependency("child", license_xml=self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        missing = self.run_inventory()
+        self.assertEqual("COMPLETE", missing["completeness"])
+        self.assertEqual("MISSING_PARENT_POM", missing["artifacts"][0]["nearestLicenseDeclarationEvidence"]["unknownReason"])
+        self.assertEqual("example:parent:pom:1.0", missing["artifacts"][0]["nearestLicenseDeclarationEvidence"]["requestedParent"])
+        self.parent_pom("parent", parent_xml=self.parent_reference("next"))
+        self.parent_pom("next", parent_xml=self.parent_reference("parent"))
+        cycle = self.run_inventory()
+        self.assertEqual("PARENT_CYCLE", cycle["artifacts"][0]["nearestLicenseDeclarationEvidence"]["unknownReason"])
+        with mock.patch.object(inventory, "MAX_PARENT_DEPTH", 1):
+            depth = self.run_inventory()
+        self.assertEqual("PARENT_DEPTH_LIMIT", depth["artifacts"][0]["nearestLicenseDeclarationEvidence"]["unknownReason"])
+        self.assertEqual(["example:child:jar:1.0"], cycle["unresolvedNearestLicenseDeclarationCoordinates"])
+
+    def test_unresolved_parent_or_nearest_declaration_is_not_interpolated_or_skipped(self):
+        self.parent_pom("parent", license_xml='<licenses><license><name>Parent terms</name></license></licenses>')
+        for name, declarations, expected in (
+            ("property_parent", self.parent_reference("parent", "${revision}"), "UNRESOLVED_PARENT_COORDINATE"),
+            ("property_license", '<licenses><license><name>${license.name}</name></license></licenses>' + self.parent_reference("parent"), "UNRESOLVED_DECLARATION"),
+        ):
+            with self.subTest(name=name):
+                node, content = self.dependency(name, license_xml=declarations)
+                self.project["children"] = [node]
+                self.libraries = {"BOOT-INF/lib/child.jar": content}
+                result = self.run_inventory()
+                proof = result["artifacts"][0]["nearestLicenseDeclarationEvidence"]
+                self.assertEqual("UNKNOWN", proof["provenance"])
+                self.assertEqual(expected, proof["unknownReason"])
+                self.assertEqual([], proof["parentChain"])
+
+    def test_relative_path_is_ignored_in_favor_of_published_parent_coordinate(self):
+        parent = self.parent_pom("parent", license_xml='<licenses><license><name>Published terms</name></license></licenses>')
+        node, content = self.dependency("child", license_xml=self.parent_reference("parent", relative='<relativePath>../../untrusted-parent.xml</relativePath>'))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        result = self.run_inventory()
+        proof = result["artifacts"][0]["nearestLicenseDeclarationEvidence"]
+        self.assertEqual("Published terms", proof["declaredLicenses"][0]["name"])
+        self.assertEqual(inventory.hashlib.sha256(parent.read_bytes()).hexdigest(), proof["sha256"])
+
+    def test_malicious_parent_path_and_xml_are_rejected(self):
+        node, content = self.dependency("child", license_xml=self.parent_reference("../escape"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        with self.assertRaises(inventory.InventoryError):
+            self.run_inventory()
+        child_pom = self.repository / "example/child/1.0/child-1.0.pom"
+        child_pom.write_text(child_pom.read_text().replace("../escape", "parent"))
+        parent = self.parent_pom("parent")
+        parent.write_text('<!DOCTYPE project [<!ENTITY x "secret">]><project/>')
+        with self.assertRaises(inventory.InventoryError):
+            self.run_inventory()
+
+    def test_parent_content_must_match_the_published_coordinate(self):
+        parent = self.parent_pom("parent", license_xml='<licenses><license><name>Terms</name></license></licenses>')
+        parent.write_text(parent.read_text().replace('<artifactId>parent</artifactId>', '<artifactId>other</artifactId>'))
+        node, content = self.dependency("child", license_xml=self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        with self.assertRaises(inventory.InventoryError):
+            self.run_inventory()
+
+
+    def test_empty_license_list_can_follow_parent_but_nonempty_invalid_list_cannot(self):
+        parent = self.parent_pom("parent", license_xml='<licenses><license><name>Parent terms</name></license></licenses>')
+        node, content = self.dependency("empty_list", license_xml='<licenses/>' + self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        inherited = self.run_inventory()
+        self.assertEqual("PARENT", inherited["artifacts"][0]["nearestLicenseDeclarationEvidence"]["provenance"])
+        child = self.repository / "example/empty_list/1.0/empty_list-1.0.pom"
+        child.write_text(child.read_text().replace('<licenses/>', '<licenses><license/></licenses>'))
+        invalid = self.run_inventory()
+        proof = invalid["artifacts"][0]["nearestLicenseDeclarationEvidence"]
+        self.assertEqual("UNKNOWN", proof["provenance"])
+        self.assertEqual("INCOMPLETE_DECLARATION", proof["unknownReason"])
+        self.assertEqual([], proof["parentChain"])
+        child.write_text(child.read_text().replace('<licenses><license/></licenses>', '<licenses/>'))
+        with mock.patch.object(inventory, "MAX_PARENT_CHAIN_BYTES", child.stat().st_size + parent.stat().st_size - 1):
+            limited = self.run_inventory()
+        self.assertEqual("PARENT_BYTE_LIMIT", limited["artifacts"][0]["nearestLicenseDeclarationEvidence"]["unknownReason"])
+        self.assertEqual("COMPLETE", limited["completeness"])
+
+
+    def test_parent_symlink_cannot_escape_the_supplied_repository(self):
+        external = self.root / "external-parent.pom"
+        external.write_text('<project><groupId>example</groupId><artifactId>parent</artifactId><version>1.0</version>'
+                            '<licenses><license><name>Untrusted external terms</name></license></licenses></project>')
+        parent = self.repository / "example/parent/1.0/parent-1.0.pom"
+        parent.parent.mkdir(parents=True)
+        parent.symlink_to(external)
+        node, content = self.dependency("symlink_child", license_xml=self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        with self.assertRaises(inventory.InventoryError):
+            self.run_inventory()
+
+
+    def test_nearest_license_fields_reject_duplicates_and_nested_scalars_without_changing_raw_parser(self):
+        malformed = (
+            '<licenses><license><name>Terms</name><name>${unresolved.name}</name></license></licenses>',
+            '<licenses><license><name>Terms<hidden>${unresolved.name}</hidden></name></license></licenses>',
+            '<licenses><license><name>Terms</name><url><hidden>${url}</hidden></url></license></licenses>',
+        )
+        for index, license_xml in enumerate(malformed):
+            with self.subTest(index=index):
+                name = "malformed_terms_" + str(index)
+                node, content = self.dependency(name, license_xml=license_xml)
+                self.project["children"] = [node]
+                self.libraries = {"BOOT-INF/lib/child.jar": content}
+                pom = self.repository / "example" / name / "1.0" / (name + "-1.0.pom")
+                # The legacy raw view is deliberately preserved; the new source
+                # decision must not trust its first-value projection.
+                self.assertEqual("DECLARED", inventory.pom_evidence(pom, "fixture.pom")["licenseStatus"])
+                with self.assertRaises(inventory.InventoryError):
+                    self.run_inventory()
+
+    def test_direct_license_still_validates_all_declared_parent_structure(self):
+        terms = '<licenses><license><name>Direct terms</name></license></licenses>'
+        malformed = (
+            self.parent_reference("first") + self.parent_reference("second"),
+            '<parent><groupId>example</groupId><artifactId>parent</artifactId><artifactId>other</artifactId><version>1.0</version></parent>',
+            self.parent_reference("../unsafe"),
+        )
+        for index, parent_xml in enumerate(malformed):
+            with self.subTest(index=index):
+                node, content = self.dependency("malformed_parent_" + str(index), license_xml=terms + parent_xml)
+                self.project["children"] = [node]
+                self.libraries = {"BOOT-INF/lib/child.jar": content}
+                with self.assertRaises(inventory.InventoryError):
+                    self.run_inventory()
+
+    def test_parent_license_declaration_uses_the_same_strict_scalar_validation(self):
+        self.parent_pom("parent", license_xml='<licenses><license><name>Terms</name><name>${hidden}</name></license></licenses>')
+        node, content = self.dependency("inherited_malformed", license_xml=self.parent_reference("parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        with self.assertRaises(inventory.InventoryError):
+            self.run_inventory()
+
+
+    def test_accepted_terminal_parent_is_not_reported_as_still_requested(self):
+        self.parent_pom("terminal_parent")
+        node, content = self.dependency("terminal_child", license_xml=self.parent_reference("terminal_parent"))
+        self.project["children"] = [node]
+        self.libraries = {"BOOT-INF/lib/child.jar": content}
+        result = self.run_inventory()
+        proof = result["artifacts"][0]["nearestLicenseDeclarationEvidence"]
+        self.assertEqual("NO_DECLARATION_OR_PARENT", proof["unknownReason"])
+        self.assertEqual(["example:terminal_parent:pom:1.0"], [item["coordinate"] for item in proof["parentChain"]])
+        self.assertIsNone(proof["requestedParent"])
+
+
 if __name__ == "__main__":
     unittest.main()
