@@ -11,7 +11,8 @@ import java.util.regex.Pattern;
 public final class CiPg18EphemeralTarget {
     public enum Lane {
         CAPTURE("msf_ci_risk_capture", "ephemeral-risk-capture-only", "msf_ci_capture_runtime"),
-        REGISTRY("msf_ci_risk_registry", "ephemeral-risk-registry-only", "msf_ci_registry_runtime");
+        REGISTRY("msf_ci_risk_registry", "ephemeral-risk-registry-only", "msf_ci_registry_runtime"),
+        SOURCE("msf_ci_risk_source", "ephemeral-risk-source-only", "msf_ci_source_runtime");
         private final String database, acknowledgment, runtime;
         Lane(String database, String acknowledgment, String runtime) {
             this.database = database; this.acknowledgment = acknowledgment; this.runtime = runtime;

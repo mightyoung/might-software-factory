@@ -1,0 +1,50 @@
+-- Dedicated fresh CI source database only. No identity/admin writes for the runtime role.
+-- Column SELECT on all risk columns is required by SECURITY INVOKER functions using SELECT *.
+-- hazard_source UPDATE(version) is required by its real FOR UPDATE row lock; no hazard INSERT is granted.
+-- Built-in and migration PUBLIC EXECUTE defaults remain inherited and must be reported separately.
+revoke connect,temporary,create on database msf_ci_risk_source from public;
+revoke all privileges on schema public from public;
+grant connect on database msf_ci_risk_source to msf_ci_source_runtime;
+grant usage on schema public to msf_ci_source_runtime;
+grant select(id,status,credential_version) on public."account" to msf_ci_source_runtime;
+grant select(primary_id,account_id,session_key_id,session_digest,authenticated_at,absolute_expires_at,state,bound_credential_version) on public."account_session_authority" to msf_ci_source_runtime;
+grant select(tenant_id,id,actor_id,action,resource_type,resource_id,result,trace_id,occurred_at,diff_redacted) on public."audit_event" to msf_ci_source_runtime;
+grant select(id,listener_id,event_type,serialized_event,publication_date,completion_date,status,completion_attempts,last_resubmission_date) on public."event_publication" to msf_ci_source_runtime;
+grant select(tenant_id,member_id,group_id,valid_from,valid_to) on public."group_member" to msf_ci_source_runtime;
+grant select(tenant_id,id,organization_id,version,interval_mutex_revision,created_at,updated_at,created_by,updated_by,last_command_id,code,work_unit_id,description,identified_at,existence_state,factor_code_ref,factor_version) on public."hazard_source" to msf_ci_source_runtime;
+grant select(tenant_id,entity_id,version,command_id,change_kind,occurred_at,actor_id,snapshot_organization_id,snapshot_created_at,snapshot_updated_at,snapshot_created_by,snapshot_updated_by,snapshot_code,snapshot_work_unit_id,snapshot_description,snapshot_identified_at,snapshot_existence_state,snapshot_factor_code_ref,snapshot_factor_version) on public."hazard_source_revision" to msf_ci_source_runtime;
+grant select(tenant_id,member_id,org_id,valid_from,valid_to) on public."member_org" to msf_ci_source_runtime;
+grant select(tenant_id,member_id,position_id,valid_from,valid_to) on public."member_position" to msf_ci_source_runtime;
+grant select(tenant_id,id,code,name,active,parent_id) on public."org_unit" to msf_ci_source_runtime;
+grant select(id,code,resource_type,action) on public."permission" to msf_ci_source_runtime;
+grant select(tenant_id,id,code,name,org_id,active) on public."position" to msf_ci_source_runtime;
+grant select(id,account_id,kind,status) on public."principal" to msf_ci_source_runtime;
+grant select(tenant_id,id,scenario_id,hazard_id,hazard_version_at_link,version,linked_at,ended_at,created_by_actor_id,created_by_member_id,last_scenario_version,last_command_id,last_actor_id,last_member_id,last_occurred_at) on public."risk_hazard" to msf_ci_source_runtime;
+grant select(tenant_id,entity_id,scenario_id,hazard_id,hazard_version_at_link,version,linked_at,ended_at,created_by_actor_id,created_by_member_id,scenario_version,command_id,actor_id,member_id,occurred_at) on public."risk_hazard_revision" to msf_ci_source_runtime;
+grant select(tenant_id,id,organization_id,code,version,description,triggering_conditions,exposure_description,consequence,accident_code_ref,accident_version,created_by_actor_id,created_by_member_id,created_at,updated_by_actor_id,updated_by_member_id,updated_at,last_command_id) on public."risk_scenario" to msf_ci_source_runtime;
+grant select(tenant_id,command_id,actor_id,account_id,member_id,action_code,idempotency_key,fingerprint_version,payload_sha256,result_scenario_id,result_version,result_code,occurred_at,audit_event_id,trace_id) on public."risk_scenario_receipt" to msf_ci_source_runtime;
+grant select(tenant_id,entity_id,organization_id,code,version,description,triggering_conditions,exposure_description,consequence,accident_code_ref,accident_version,created_by_actor_id,created_by_member_id,created_at,updated_by_actor_id,updated_by_member_id,updated_at,command_id,actor_id,member_id,occurred_at,change_kind) on public."risk_scenario_revision" to msf_ci_source_runtime;
+grant select(tenant_id,scenario_id,scenario_version,hazard_id,link_id,link_version,hazard_version_at_link,hazard_version_at_scenario_revision,snapshot_code,full_description,description_preview,description_truncated,existence,command_id,actor_id,member_id,occurred_at) on public."risk_scenario_revision_hazard" to msf_ci_source_runtime;
+grant select(tenant_id,id,active) on public."role" to msf_ci_source_runtime;
+grant select(tenant_id,role_id,subject_kind,member_id,org_id,position_id,group_id,valid_from,valid_to) on public."role_grant" to msf_ci_source_runtime;
+grant select(tenant_id,role_id,permission_id,scope_rule_id) on public."role_permission" to msf_ci_source_runtime;
+grant select(tenant_id,scope_rule_id,org_id) on public."scope_org" to msf_ci_source_runtime;
+grant select(tenant_id,id,kind) on public."scope_rule" to msf_ci_source_runtime;
+grant select(singleton,state,version,activated_at,activated_by_database_role,activation_event_id,activation_evidence_sha256) on public."session_authority_activation" to msf_ci_source_runtime;
+grant select(primary_id,session_id,principal_name,expiry_time) on public."spring_session" to msf_ci_source_runtime;
+grant select(id,status,auth_epoch) on public."tenant" to msf_ci_source_runtime;
+grant select(tenant_id,application_key,enabled,version) on public."tenant_application" to msf_ci_source_runtime;
+grant select(tenant_id,id,account_id,status,auth_epoch) on public."tenant_member" to msf_ci_source_runtime;
+grant select(tenant_id,id,active) on public."user_group" to msf_ci_source_runtime;
+grant insert(tenant_id,id,actor_id,action,resource_type,resource_id,result,reason,diff_redacted,trace_id,policy_version,occurred_at) on public."audit_event" to msf_ci_source_runtime;
+grant insert(id,event_type,listener_id,publication_date,serialized_event) on public."event_publication" to msf_ci_source_runtime;
+grant insert(tenant_id,id,scenario_id,hazard_id,hazard_version_at_link,version,linked_at,ended_at,created_by_actor_id,created_by_member_id,last_scenario_version,last_command_id,last_actor_id,last_member_id,last_occurred_at) on public."risk_hazard" to msf_ci_source_runtime;
+grant insert(tenant_id,entity_id,scenario_id,hazard_id,hazard_version_at_link,version,linked_at,ended_at,created_by_actor_id,created_by_member_id,scenario_version,command_id,actor_id,member_id,occurred_at) on public."risk_hazard_revision" to msf_ci_source_runtime;
+grant insert(tenant_id,id,organization_id,code,version,description,triggering_conditions,exposure_description,consequence,accident_code_ref,accident_version,created_by_actor_id,created_by_member_id,created_at,updated_by_actor_id,updated_by_member_id,updated_at,last_command_id) on public."risk_scenario" to msf_ci_source_runtime;
+grant insert(tenant_id,command_id,actor_id,account_id,member_id,action_code,idempotency_key,fingerprint_version,payload_sha256,result_scenario_id,result_version,result_code,occurred_at,audit_event_id,trace_id) on public."risk_scenario_receipt" to msf_ci_source_runtime;
+grant insert(tenant_id,entity_id,organization_id,code,version,description,triggering_conditions,exposure_description,consequence,accident_code_ref,accident_version,created_by_actor_id,created_by_member_id,created_at,updated_by_actor_id,updated_by_member_id,updated_at,command_id,actor_id,member_id,occurred_at,change_kind) on public."risk_scenario_revision" to msf_ci_source_runtime;
+grant insert(tenant_id,scenario_id,scenario_version,hazard_id,link_id,link_version,hazard_version_at_link,hazard_version_at_scenario_revision,snapshot_code,full_description,description_preview,description_truncated,existence,command_id,actor_id,member_id,occurred_at) on public."risk_scenario_revision_hazard" to msf_ci_source_runtime;
+grant update(completion_date) on public."event_publication" to msf_ci_source_runtime;
+grant update(version) on public."hazard_source" to msf_ci_source_runtime;
+grant update(version,ended_at,last_scenario_version,last_command_id,last_actor_id,last_member_id,last_occurred_at) on public."risk_hazard" to msf_ci_source_runtime;
+grant update(description,triggering_conditions,exposure_description,consequence,version,updated_by_actor_id,updated_by_member_id,updated_at,last_command_id) on public."risk_scenario" to msf_ci_source_runtime;

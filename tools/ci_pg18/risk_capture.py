@@ -38,6 +38,7 @@ class _LaneSpec:
     evidence_file: str
     failure_file: str
     failure_phases: frozenset[str]
+    guard_count: int | None = None
 
 
 CAPTURE = _LaneSpec(
@@ -88,6 +89,22 @@ REGISTRY = _LaneSpec(
         "open", "target-version", "target-marker", "empty-schema", "empty-runtime", "migrate", "history",
         "publication-schema", "runtime-role", "runtime-rights", "native-graph", "closed", "unknown",
     )))
+SOURCE = _LaneSpec(
+    kind="risk-source", database="msf_ci_risk_source", runtime_role="msf_ci_source_runtime",
+    ack="ephemeral-risk-source-only", profile="ci-pg18-risk-source",
+    state_prefix="msf-ci-pg18-risk-source-", artifact_directory="ci-pg18-risk-source",
+    it_class="com.mightyoung.softwarefactory.CiPg18RiskSourceIT",
+    unit_class="com.mightyoung.softwarefactory.CiPg18SourceTargetTest",
+    scenarios=frozenset((
+        "actualCreateCommitsSourceAndNativePublicationTogether",
+        "sameKeyReplayAddsNoEffectsAndChangedPayloadConflicts",
+        "latePublisherFailureRollsBackAllSourceEffects",
+    )), schema_field="sourceSchemaVerified", evidence_file="ci-pg18-source-safe-evidence.json",
+    failure_file="ci-pg18-source-safe-failure.json", failure_phases=frozenset((
+        "open", "target-version", "target-marker", "empty-schema", "migrate", "history",
+        "framework-schema", "source-schema", "runtime-role", "runtime-rights", "seed-identity",
+        "seed-foundation", "native-graph", "closed", "unknown",
+    )), guard_count=52)
 # Legacy capture constants and default call signatures remain the capture lane.
 DATABASE, IT_CLASS, UNIT_CLASS = CAPTURE.database, CAPTURE.it_class, CAPTURE.unit_class
 SCENARIOS, FAILURE_PHASES = CAPTURE.scenarios, CAPTURE.failure_phases
@@ -108,7 +125,7 @@ def reject(stage):
 
 
 def _spec(lane):
-    if lane is not CAPTURE and lane is not REGISTRY:
+    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE:
         reject("LANE")
     return lane
 
@@ -118,7 +135,7 @@ def _result_lane(result, lane):
     if not isinstance(result, dict):
         reject("RESULT_LANE")
     marker = result.get("acceptanceKind")
-    if (lane is REGISTRY and marker != lane.kind) or (lane is CAPTURE and marker not in (None, lane.kind)):
+    if (lane is not CAPTURE and marker != lane.kind) or (lane is CAPTURE and marker not in (None, lane.kind)):
         reject("RESULT_LANE")
     # A renamed capture artifact is not an authoritative registry acceptance receipt.
     if "databaseEvidence" in result:
@@ -126,7 +143,7 @@ def _result_lane(result, lane):
             validate_success_evidence(result["databaseEvidence"], result.get("imageDigest"), lane)
         except Rejected:
             reject("RESULT_LANE")
-    if lane is REGISTRY:
+    if lane is not CAPTURE:
         if type(result.get("schemaVersion")) is not int or result["schemaVersion"] != 1:
             reject("RESULT_LANE")
         if result.get("status") == "PASS":
@@ -136,9 +153,16 @@ def _result_lane(result, lane):
                     or set(tests) != {"integrationTests", "targetGuardTests", "failures", "errors", "skipped", "scenarios"}
                     or type(tests.get("integrationTests")) is not int or tests["integrationTests"] != len(lane.scenarios)
                     or type(tests.get("targetGuardTests")) is not int or tests["targetGuardTests"] < 1
+                    or lane.guard_count is not None and tests["targetGuardTests"] != lane.guard_count
                     or any(type(tests.get(key)) is not int or tests[key] != 0 for key in ("failures", "errors", "skipped"))
                     or tests.get("scenarios") != sorted(lane.scenarios)):
                 reject("RESULT_LANE")
+            if lane is SOURCE:
+                revision = result.get("sourceRevision")
+                if (not isinstance(revision, dict) or set(revision) != {"commit", "tree"}
+                        or any(not isinstance(revision[key], str) or not re.fullmatch(r"[0-9a-f]{40}", revision[key])
+                               for key in ("commit", "tree"))):
+                    reject("RESULT_LANE")
 
 
 def bounded_bytes(path, maximum, stage):
@@ -206,7 +230,7 @@ def validate_success_evidence(value, digest, lane=CAPTURE):
 def validate_failure_evidence(value, lane=CAPTURE):
     lane = _spec(lane)
     fields = ("schemaVersion", "phase", "migrationVersion", "sqlState")
-    if lane is REGISTRY:
+    if lane is not CAPTURE:
         fields += ("database",)
     if not isinstance(value, dict) or set(value) != set(fields):
         reject("FAILURE_EVIDENCE")
@@ -215,7 +239,7 @@ def validate_failure_evidence(value, lane=CAPTURE):
             or (value["migrationVersion"] is not None and value["migrationVersion"] not in VERSIONS)
             or (value["sqlState"] is not None and
                 (not isinstance(value["sqlState"], str) or not re.fullmatch(r"[0-9A-Z]{5}", value["sqlState"])))
-            or (lane is REGISTRY and value["database"] != lane.database)):
+            or (lane is not CAPTURE and value["database"] != lane.database)):
         reject("FAILURE_EVIDENCE")
     return {key: value[key] for key in fields}
 
@@ -251,6 +275,8 @@ def verify_reports(repo, lane=CAPTURE):
     integration = validate_report(base / "failsafe-reports" / ("TEST-" + lane.it_class + ".xml"),
                                   lane.it_class, lane.scenarios)
     unit = validate_report(base / "surefire-reports" / ("TEST-" + lane.unit_class + ".xml"), lane.unit_class)
+    if lane.guard_count is not None and unit != lane.guard_count:
+        reject("REPORT_GUARD_COUNT")
     # Both profiles select exactly one IT and one target-guard suite.
     for folder, classname in (("failsafe-reports", lane.it_class), ("surefire-reports", lane.unit_class)):
         if set((base / folder).glob("TEST-*.xml")) != {base / folder / ("TEST-" + classname + ".xml")}:
@@ -348,9 +374,9 @@ def stop_maven_group(state, lane=CAPTURE):
             reject("MAVEN_GROUP_UNKNOWN")
         return
     record = load_json(path)
-    keys = {"pgid", "marker"} | ({"acceptanceKind"} if lane is REGISTRY else set())
+    keys = {"pgid", "marker"} | ({"acceptanceKind"} if lane is not CAPTURE else set())
     if (not isinstance(record, dict) or set(record) != keys
-            or (lane is REGISTRY and record.get("acceptanceKind") != lane.kind)
+            or (lane is not CAPTURE and record.get("acceptanceKind") != lane.kind)
             or type(record["pgid"]) is not int or record["pgid"] <= 1
             or not isinstance(record["marker"], str)
             or not re.fullmatch(r"[0-9a-f]{32}", record["marker"])):
@@ -373,7 +399,7 @@ def run_maven(repo, state, environment, lane=CAPTURE):
             start_new_session=True)
         try:
             record = {"pgid": process.pid, "marker": marker}
-            if lane is REGISTRY:
+            if lane is not CAPTURE:
                 record["acceptanceKind"] = lane.kind
             private_write(state / "maven-process.json", json.dumps(record))
             try:
@@ -698,6 +724,23 @@ def public_diagnostics(result, lane=CAPTURE):
     return output
 
 
+def source_revision(repo, environment):
+    """Bind source acceptance to the actual clean hosted checkout, before creating any database."""
+    expected = environment.get("GITHUB_SHA")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{40}", expected):
+        reject("SOURCE_REVISION")
+    actual = command(["git", "rev-parse", "HEAD"], cwd=repo, failure_stage="SOURCE_REVISION").stdout.strip()
+    tree = command(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, failure_stage="SOURCE_REVISION").stdout.strip()
+    if actual != expected or not re.fullmatch(r"[0-9a-f]{40}", tree):
+        reject("SOURCE_REVISION")
+    command(["git", "diff", "--quiet", "HEAD", "--"], cwd=repo, failure_stage="SOURCE_DIRTY")
+    untracked = command(["git", "ls-files", "--others", "--exclude-standard", "-z"],
+                        cwd=repo, failure_stage="SOURCE_UNTRACKED").stdout
+    if untracked:
+        reject("SOURCE_UNTRACKED")
+    return {"commit": actual, "tree": tree}
+
+
 def run_acceptance(repo, environment, lane=CAPTURE):
     lane = _spec(lane)
     run, attempt, state = context(environment, lane)
@@ -707,11 +750,15 @@ def run_acceptance(repo, environment, lane=CAPTURE):
     state.mkdir(mode=0o700)
     result = {"schemaVersion": 1, "status": "FAILED", "stage": "INITIALIZE",
               "cleanup": {"verified": False}}
-    if lane is REGISTRY:
+    if lane is not CAPTURE:
         result["acceptanceKind"] = lane.kind
-    write_result(repo, result, lane)
     stage = "INITIALIZE"
     try:
+        if lane is SOURCE:
+            stage = "SOURCE_REVISION"
+            result["sourceRevision"] = source_revision(repo, environment)
+        # The source revision must be checked before this untracked acceptance artifact exists.
+        write_result(repo, result, lane)
         stage = "CONTAINER"
         ownership = create_container(state, run, attempt, lane)
         result["imageDigest"] = ownership["image_digest"]
@@ -775,7 +822,7 @@ def always_cleanup(repo, environment, lane=CAPTURE):
     path = result_path(repo, lane)
     previous = load_json(path) if path.exists() else {
         "schemaVersion": 1, "status": "FAILED", "stage": "RUN_NOT_COMPLETED",
-        **({"acceptanceKind": lane.kind} if lane is REGISTRY else {})}
+        **({"acceptanceKind": lane.kind} if lane is not CAPTURE else {})}
     _result_lane(previous, lane)
     if not state.exists():
         if previous.get("cleanup", {}).get("verified") is True:
