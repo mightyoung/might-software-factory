@@ -13,6 +13,7 @@ import type { SessionAdapter } from "./adapters/sessionAdapter";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
+import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "./adapters/findingSubmit";
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
@@ -21,6 +22,8 @@ export interface FindingStore {
   submit: FindingSubmitAdapter;
   /** 流程命令；合成存储没有。 */
   commands?: FindingCommandAdapter;
+  /** 整改证据上传；合成存储没有。 */
+  evidence?: FindingEvidenceAdapter;
 }
 import type { FindingView } from "./adapters/findingLedger";
 
@@ -217,6 +220,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         adapter={findingStore.ledger}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
+        evidenceAdapter={findingStore.evidence}
         canReport={hasPermission(session, "safety.finding.report")}
         draftKey={draftOwnerKey(session.tenant.id, session.actor.id)}
         onUnauthenticated={expire}

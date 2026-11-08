@@ -1690,3 +1690,13 @@ select:focus-visible {
   font-size: 12px;
   font-weight: 580;
 }
+
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #1d4ed8;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

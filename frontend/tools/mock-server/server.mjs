@@ -53,6 +53,8 @@ export function createMockServer(options = {}) {
   let passwordFailures = 0; // 连续 5 次当前密码错误后 429，仅用于覆盖限流提示
   const findings = [];
   const receipts = new Map(); // Idempotency-Key -> { body, response }
+  const evidenceSets = new Map(); // Idempotency-Key -> { id, at }
+  const uploads = new Map(); // Idempotency-Key -> 上传意图
   const seqByDay = new Map();
 
   function addFinding(input, now = new Date()) {
@@ -65,7 +67,7 @@ export function createMockServer(options = {}) {
       id: randomUUID(), code: `YH-${day}-${String(seq).padStart(4, "0")}`, organizationId: org.id, organizationName: org.name,
       description: input.description, discoveredAt: discovered.toISOString(), sourceCategory: input.sourceCategory, urgency: input.urgency,
       location: input.location ?? null, interimMeasure: input.interimMeasure ?? null, backfill: now.getTime() - discovered.getTime() > 24 * 3600_000,
-      sourceEventId: null, riskId: null, relatedFindingId: null, [ASSIGNED]: (input.state ?? "PERSON_CONFIRM_PENDING") === "RECTIFYING", grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1,
+      sourceEventId: null, riskId: null, relatedFindingId: input.relatedFindingId ?? null, [ASSIGNED]: (input.state ?? "PERSON_CONFIRM_PENDING") === "RECTIFYING", grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1,
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     findings.unshift(row);
@@ -103,7 +105,7 @@ export function createMockServer(options = {}) {
 
   function validateCreate(b) {
     const errors = [];
-    const known = ["organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade", "sourceCategory", "urgency", "location", "interimMeasure"];
+    const known = ["organizationId", "description", "discoveredAt", "sourceEventId", "riskId", "grade", "sourceCategory", "urgency", "location", "interimMeasure", "relatedFindingId"];
     for (const k of Object.keys(b)) if (!known.includes(k)) errors.push({ field: k, reason: "UnknownProperty" });
     if (!ORGS.some((o) => o.id === b.organizationId)) errors.push({ field: "organizationId", reason: "NotInScope" });
     if (typeof b.description !== "string" || cp(b.description) < 1 || cp(b.description) > 20000) errors.push({ field: "description", reason: "Size" });
@@ -126,7 +128,7 @@ export function createMockServer(options = {}) {
 
     if (req.method === "GET" && path === "/api/v1/auth/csrf") return send(res, 204, undefined, { "Set-Cookie": newCsrf() });
 
-    if (req.method === "POST") {
+    if (req.method === "POST" || req.method === "PUT") {
       if (!csrfOk()) return err(res, 403, "ACTION_DENIED", "CSRF token missing or mismatched");
     }
 
@@ -194,6 +196,61 @@ export function createMockServer(options = {}) {
       const total = rows.length;
       return send(res, 200, { data: { items: rows.slice((number - 1) * size, number * size), page: { number, size, total, pageCount: Math.ceil(total / size) } }, meta: meta() });
     }
+    const upload = /^\/api\/v1\/findings\/([^/]+)\/remediation-rounds\/([1-9][0-9]*)\/evidence-(sets|uploads)(?:\/([^/]+)(?:\/(content|cancel))?)?$/.exec(path);
+    if (upload) {
+      const [, rawId, round, kind, intentId, action] = upload;
+      const row = findings.find((r) => r.id === decodeURIComponent(rawId));
+      if (!row || !session) return err(res, session ? 404 : 401, session ? "RESOURCE_NOT_VISIBLE" : "AUTH_REQUIRED", "Not visible");
+      if (row.state !== "RECTIFYING" || Number(round) !== row.roundNo) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const view = (u) => ({ data: { uploadIntentId: u.id, state: u.state, expiresAt: u.expiresAt, ...(u.cancel ? { cancelRequested: true } : {}) }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "2" } });
+      const key = req.headers["idempotency-key"];
+      if (kind === "sets" && req.method === "POST") {
+        if (typeof key !== "string" || !UUID_RE.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
+        const b = await readJson(req);
+        if (!b || Object.keys(b).join() !== "expectedFindingVersion" || b.expectedFindingVersion !== row.version) return err(res, b?.expectedFindingVersion === undefined ? 400 : 409, b?.expectedFindingVersion === undefined ? "INVALID_REQUEST" : "VERSION_CONFLICT", "Bad version", { currentVersion: row.version });
+        const prior = evidenceSets.get(key);
+        const set = prior ?? { id: randomUUID(), at: new Date().toISOString() };
+        evidenceSets.set(key, set);
+        return send(res, prior ? 200 : 201, { data: { evidenceSetId: set.id, state: "UPLOADING", initialEvidenceRevision: 0, createdAt: set.at }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "1" } }, { "Cache-Control": "no-store" });
+      }
+      if (kind === "uploads" && !intentId && req.method === "POST") {
+        if (typeof key !== "string" || !UUID_RE.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
+        const b = await readJson(req);
+        const ok = b && ["evidenceSetId", "expectedFindingVersion", "expectedEvidenceRevision", "filename", "declaredMediaType", "declaredSizeBytes"].every((k) => k in b) && Object.keys(b).length === 6;
+        if (!ok) return err(res, 400, "INVALID_REQUEST", "Declaration must have exactly six fields");
+        if (![...evidenceSets.values()].some((x) => x.id === b.evidenceSetId)) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        if (b.expectedFindingVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale", { currentVersion: row.version });
+        if (!["image/png", "image/jpeg"].includes(b.declaredMediaType)) return err(res, 415, "INVALID_REQUEST", "Media type not allowed");
+        if (!Number.isInteger(b.declaredSizeBytes) || b.declaredSizeBytes < 1 || b.declaredSizeBytes > 67108864) return err(res, 413, "INVALID_REQUEST", "Too large");
+        const prior = uploads.get(key);
+        const u = prior ?? { id: randomUUID(), state: "INTENT_CREATED", size: b.declaredSizeBytes, type: b.declaredMediaType, name: b.filename, expiresAt: new Date(Date.now() + 3600_000).toISOString(), polls: 0 };
+        uploads.set(key, u);
+        return send(res, prior ? 200 : 201, { ...view(u), data: { ...view(u).data, statusUrl: `${path}/${u.id}` } }, { "Cache-Control": "no-store", Location: `${path}/${u.id}` });
+      }
+      const intent = [...uploads.values()].find((u) => u.id === intentId?.toLowerCase());
+      if (kind === "uploads" && intentId && !intent) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      if (intent && action === "content" && req.method === "PUT") {
+        if (intent.received) return err(res, 409, "ALREADY_RECEIVED", "Already received", {}, { Location: `${path.replace(/\/content$/, "")}` });
+        if (req.headers["content-type"] !== intent.type) return err(res, 415, "INVALID_REQUEST", "Content-Type must equal the declared type");
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        if (Buffer.concat(chunks).length !== intent.size || Number(req.headers["content-length"]) !== intent.size) return err(res, 400, "INVALID_REQUEST", "Length differs from declaration");
+        intent.received = true;
+        intent.state = "QUARANTINED";
+        return send(res, 202, view(intent), { "Cache-Control": "no-store" });
+      }
+      if (intent && !action && req.method === "GET") {
+        // 每次查询推进一步，模拟异步扫描：QUARANTINED → SCANNING → 终态（文件名以 reject 开头则被拒绝）。
+        if (intent.received && intent.state === "QUARANTINED") intent.state = "SCANNING";
+        else if (intent.state === "SCANNING") intent.state = /^reject/i.test(intent.name) ? "REJECTED" : "VERIFIED_PENDING_FINALIZATION";
+        return send(res, 200, view(intent), { "Cache-Control": "no-store" });
+      }
+      if (intent && action === "cancel" && req.method === "POST") {
+        if (!["VERIFIED_PENDING_FINALIZATION", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"].includes(intent.state)) intent.cancel = true;
+        return send(res, 200, view(intent), { "Cache-Control": "no-store" });
+      }
+      return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+    }
     const candidates = /^\/api\/v1\/findings\/([^/]+)\/dispatch-candidates$/.exec(path);
     if (req.method === "GET" && candidates) {
       const row = findings.find((r) => r.id === decodeURIComponent(candidates[1]));
@@ -228,6 +285,11 @@ export function createMockServer(options = {}) {
       if (prior) return prior.body === canonical ? send(res, 200, prior.response) : err(res, 409, "IDEMPOTENCY_CONFLICT", "Same key, different request");
       const fieldErrors = validateCreate(b);
       if (fieldErrors.length) return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors });
+      if (b.relatedFindingId !== undefined) {
+        const parent = typeof b.relatedFindingId === "string" && UUID_RE.test(b.relatedFindingId) ? findings.find((r) => r.id === b.relatedFindingId.toLowerCase()) : undefined;
+        if (!parent) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        if (parent.state !== "NOT_ESTABLISHED") return err(res, 422, "WORKFLOW_RULE", "Parent must be NOT_ESTABLISHED");
+      }
       const row = addFinding(b);
       const response = { data: { findingId: row.id, code: row.code, state: row.state, roundNo: row.roundNo, version: row.version } };
       receipts.set(key, { body: canonical, response });

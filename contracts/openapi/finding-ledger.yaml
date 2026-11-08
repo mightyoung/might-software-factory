@@ -544,6 +544,25 @@ components:
       additionalProperties: false
       required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
       properties:
+        reporter:
+          description: Persisted reporting member identifier with the current same-tenant directory label; a missing label is null.
+          anyOf:
+            - $ref: '#/components/schemas/FindingMember'
+            - type: 'null'
+        responsible:
+          description: Assignee from the notice for this finding's current round only; null before that round is assigned.
+          anyOf:
+            - $ref: '#/components/schemas/FindingMember'
+            - type: 'null'
+        history:
+          description: Latest 200 immutable transition facts, ordered by increasing toVersion then id. Actor labels are current same-tenant labels, not historical snapshots.
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/FindingHistoryEntry'
+        historyTruncated:
+          type: boolean
+          description: True when older transitions were omitted by the bounded history window.
         id: { type: string, format: uuid }
         code: { type: string }
         organizationId: { type: string, format: uuid }
@@ -572,6 +591,26 @@ components:
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    FindingMember:
+      type: object
+      additionalProperties: false
+      required: [memberId, displayName]
+      properties:
+        memberId: { type: string, format: uuid }
+        displayName: { type: [string, 'null'] }
+    FindingHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, at, fromState, toState, fromVersion, toVersion, actorName, reason]
+      properties:
+        id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+        fromState: { type: [string, 'null'] }
+        toState: { type: string }
+        fromVersion: { type: integer, minimum: 0 }
+        toVersion: { type: integer, minimum: 1 }
+        actorName: { type: [string, 'null'] }
+        reason: { type: [string, 'null'] }
     FindingEntitySchemaResponse:
       type: object
       additionalProperties: false

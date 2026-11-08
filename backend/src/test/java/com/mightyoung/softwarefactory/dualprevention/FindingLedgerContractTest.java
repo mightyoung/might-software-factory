@@ -200,6 +200,31 @@ class FindingLedgerContractTest {
     }
 
     @Test
+    void validatesDirectoryLabelsAndPersistedHistoryWithoutRequiringMissingNames() throws IOException {
+        SchemaRegistry registry = schemaRegistry();
+        Schema member = registry.getSchema(SchemaLocation.of(
+                LEDGER_URI + "#/components/schemas/FindingMember"));
+        Schema history = registry.getSchema(SchemaLocation.of(
+                LEDGER_URI + "#/components/schemas/FindingHistoryEntry"));
+        assertValid(member, """
+                {"memberId":"00112233-4455-6677-8899-aabbccddeeff","displayName":null}
+                """);
+        assertInvalid(member, """
+                {"memberId":"00112233-4455-6677-8899-aabbccddeeff","accountId":"private"}
+                """);
+        assertValid(history, """
+                {"id":"00112233-4455-6677-8899-aabbccddeeff","at":"2026-10-30T10:00:00Z",
+                 "fromState":null,"toState":"PERSON_CONFIRM_PENDING","fromVersion":0,"toVersion":1,
+                 "actorName":null,"reason":null}
+                """);
+        assertInvalid(history, """
+                {"id":"00112233-4455-6677-8899-aabbccddeeff","at":"2026-10-30T10:00:00Z",
+                 "fromState":null,"toState":"PERSON_CONFIRM_PENDING","fromVersion":0,"toVersion":0,
+                 "actorName":null,"reason":null}
+                """);
+    }
+
+    @Test
     void documentsTheRemainingProductionAuthenticationAndDataScopeBlockers() throws IOException {
         String yaml = Files.readString(contractPath());
         assertThat(yaml).contains("no production login", "denies by default",

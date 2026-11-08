@@ -65,12 +65,16 @@ export interface FindingRecord {
   /** 乐观锁版本（契约的 version）；流程命令必须带它。合成数据没有。 */
   version?: number;
   history: readonly FindingHistoryEntry[];
+  /** 服务端详情只返回有界轨迹；为 true 时明确提示还有更早记录。 */
+  historyTruncated?: boolean;
   /** 以下字段只有通过上报表单创建的记录才有；发现时间与上报时间分开保存，补报不改写发现时间。 */
   foundAt?: string;
   source?: FindingSource;
   urgency?: FindingUrgency;
   interimMeasure?: string;
   backfill?: boolean;
+  /** 本记录是基于哪条“未成立”记录补充新证据创建的。 */
+  relatedFindingId?: string;
 }
 
 export interface FindingAction {

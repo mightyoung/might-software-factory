@@ -18,7 +18,7 @@ function fake(handlers: Record<string, () => unknown>): { client: HttpClient; ca
     if (result instanceof Error) throw result;
     return result;
   };
-  return { client: { get: run as HttpClient["get"], post: ((p: string) => run(p)) as HttpClient["post"] }, calls };
+  return { client: { get: run as HttpClient["get"], post: ((p: string) => run(p)) as HttpClient["post"], put: ((p: string) => run(p)) as HttpClient["put"] }, calls };
 }
 
 describe("createHttpSessionAdapter", () => {

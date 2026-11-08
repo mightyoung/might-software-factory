@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FindingCommandPanel } from "./FindingCommandPanel";
 import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
@@ -56,7 +56,8 @@ describe("流程命令面板", () => {
     const { run } = setup("PERSON_CONFIRM_PENDING");
     fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "  \u0085 " } });
-    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
+    expect(screen.queryByText("确认确认发现")).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
     expect(screen.getByText("请填写意见")).toBeInTheDocument();
     expect(run).not.toHaveBeenCalled();
   });
@@ -90,7 +91,7 @@ describe("流程命令面板", () => {
     setup("PERSON_CONFIRM_PENDING", run);
     fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
+    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("重试不会重复执行");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
@@ -101,14 +102,14 @@ describe("流程命令面板", () => {
     const conflict = setup("PERSON_CONFIRM_PENDING", async () => { throw new FindingCommandError("versionConflict"); });
     fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
+    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("刚被他人更新");
     expect(conflict.onChanged).toHaveBeenCalled();
     cleanup();
     const expired = setup("PERSON_CONFIRM_PENDING", async () => { throw new FindingCommandError("unauthenticated"); });
     fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
+    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
     await waitFor(() => expect(expired.onUnauthenticated).toHaveBeenCalled());
   });
 

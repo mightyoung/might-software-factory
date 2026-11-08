@@ -32,6 +32,29 @@ function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string
 const listBody = { data: { items: [item], page: { number: 2, size: 20, total: 41, pageCount: 3 } }, meta: {} };
 
 describe("createHttpFindingLedger", () => {
+  it("maps server-provided detail identities and chronological transitions", async () => {
+    const f = fake({ get: () => ({ data: {
+      ...item,
+      reporter: { memberId: "reporter-1", displayName: "上报人甲" },
+      responsible: { memberId: "worker-1", displayName: "整改人乙" },
+      history: [
+        { id: "h1", at: "2026-10-30T01:00:00Z", fromState: null, toState: "PERSON_CONFIRM_PENDING", fromVersion: null, toVersion: 1, actorName: "上报人甲", reason: null },
+        { id: "h2", at: "2026-10-30T02:00:00Z", fromState: "PERSON_CONFIRM_PENDING", toState: "SAFETY_CONFIRM_PENDING", fromVersion: 1, toVersion: 2, actorName: "确认人丙", reason: "已核实现场情况" },
+      ],
+      historyTruncated: false,
+    } }) });
+    const result = await createHttpFindingLedger(f.client).get(item.id);
+    expect(result).toMatchObject({ reporter: "上报人甲", responsible: "整改人乙", history: [
+      { at: "2026-10-30T01:00:00Z", title: "发现上报", note: "上报人甲" },
+      { at: "2026-10-30T02:00:00Z", title: "一人确认", note: "确认人丙 · 已核实现场情况" },
+    ] });
+  });
+
+  it("keeps missing identity names unknown and exposes truncated history", async () => {
+    const f = fake({ get: () => ({ data: { ...item, reporter: { memberId: "missing", displayName: null }, responsible: null, history: [], historyTruncated: true } }) });
+    expect(await createHttpFindingLedger(f.client).get(item.id)).toMatchObject({ reporter: "—", responsible: "—", history: [], historyTruncated: true });
+  });
+
   it("maps query, appends the view filter, maps records, and fetches the schema once", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);

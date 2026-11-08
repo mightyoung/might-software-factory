@@ -118,6 +118,7 @@ function CommandField(props: FieldProps) {
 function CommandForm(props: FormProps) {
   const uid = useId();
   const { action, busy, retry, onCancel, onSubmit } = props;
+  const submitLabel = action.label.startsWith("确认") ? action.label : `确认${action.label}`;
   return (
     <form className="report-form" onSubmit={onSubmit} noValidate aria-busy={busy} aria-label={action.label}>
       {action.fields.map((spec) => (
@@ -128,7 +129,7 @@ function CommandForm(props: FormProps) {
           取消
         </button>
         <button type="submit" className="button button-primary" disabled={busy}>
-          {busy ? "提交中…" : retry ? "重试" : `确认${action.label}`}
+          {busy ? "提交中…" : retry ? "重试" : submitLabel}
         </button>
       </div>
     </form>

@@ -45,7 +45,7 @@ export function useReportSubmit({ adapter, createKey, onSubmitted, onUnauthentic
   }
 
   /** 提交已通过本地校验的草稿。重复触发（已在提交中）直接忽略。 */
-  async function send(draft: FindingDraft, organizationId: string | undefined): Promise<SubmitOutcome> {
+  async function send(draft: FindingDraft, organizationId: string | undefined, relatedFindingId?: string): Promise<SubmitOutcome> {
     if (controller.current) return {};
     const abort = new AbortController();
     controller.current = abort;
@@ -53,8 +53,9 @@ export function useReportSubmit({ adapter, createKey, onSubmitted, onUnauthentic
     setPhase({ name: "submitting" });
     try {
       const result = await adapter.submit(draft, {
-        idempotencyKey: keyFor(JSON.stringify({ ...draft, organizationId })),
+        idempotencyKey: keyFor(JSON.stringify({ ...draft, organizationId, relatedFindingId })),
         ...(organizationId !== undefined ? { organizationId } : {}),
+        ...(relatedFindingId ? { relatedFindingId } : {}),
         signal: abort.signal,
       });
       if (!mounted.current) return {};

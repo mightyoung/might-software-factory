@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,8 @@ import static org.jooq.impl.DSL.table;
 /** jOOQ read repository with transaction-local tenant RLS and explicit organization scope predicates. */
 @Repository
 public final class JooqFindingRepository implements FindingRepository {
+
+    private static final int HISTORY_LIMIT = 200;
 
     private static final Table<?> FINDING = table(name("public", "finding")).as("finding");
     private static final Table<?> ORGANIZATION = table(name("public", "org_unit")).as("reportable_organization");
@@ -121,6 +124,60 @@ public final class JooqFindingRepository implements FindingRepository {
                     .where(scopeCondition(scope).and(ID.eq(findingId)))
                     .limit(1)
                     .fetchOptional(JooqFindingRepository::toRecord);
+        });
+    }
+
+    @Override
+    public Optional<FindingDetailContext> findDetailContext(FindingReadScope scope, UUID findingId) {
+        requireNonEmptyScope(scope);
+        return readTransaction.execute(status -> {
+            setLocalTenant(scope.tenantId());
+            UUID[] organizations = scope.organizationIds().toArray(UUID[]::new);
+            Record members = dsl.fetchOne("""
+                    select f.created_by_member_id as reporter_id, reporter.display_name as reporter_name,
+                           notice.assignee_id as responsible_id, responsible.display_name as responsible_name
+                      from public.finding f
+                      left join public.tenant_member reporter
+                        on reporter.tenant_id = f.tenant_id and reporter.id = f.created_by_member_id
+                      left join public.remediation_notice notice
+                        on notice.tenant_id = f.tenant_id and notice.finding_id = f.id
+                       and notice.round_no = f.round_no
+                      left join public.tenant_member responsible
+                        on responsible.tenant_id = notice.tenant_id and responsible.id = notice.assignee_id
+                     where f.tenant_id = cast(? as uuid) and f.id = cast(? as uuid)
+                       and f.organization_id = any(?)
+                    """, scope.tenantId(), findingId, organizations);
+            if (members == null) return Optional.empty();
+
+            List<FindingDetailContext.HistoryEntry> history = new ArrayList<>(dsl.fetch("""
+                    select transition.id, transition.occurred_at, transition.from_state,
+                           transition.to_state, transition.from_version, transition.to_version,
+                           actor.display_name as actor_name, transition.reason
+                      from public.finding_transition transition
+                      join public.finding f
+                        on f.tenant_id = transition.tenant_id and f.id = transition.finding_id
+                      left join public.principal principal on principal.id = transition.actor_id
+                      left join public.tenant_member actor
+                        on actor.tenant_id = transition.tenant_id and actor.account_id = principal.account_id
+                     where f.tenant_id = cast(? as uuid) and f.id = cast(? as uuid)
+                       and f.organization_id = any(?)
+                     order by transition.to_version desc, transition.id desc
+                     limit ?
+                    """, scope.tenantId(), findingId, organizations, HISTORY_LIMIT + 1)
+                    .map(row -> new FindingDetailContext.HistoryEntry(
+                            row.get("id", UUID.class), row.get("occurred_at", OffsetDateTime.class),
+                            row.get("from_state", String.class), row.get("to_state", String.class),
+                            row.get("from_version", Long.class), row.get("to_version", Long.class),
+                            row.get("actor_name", String.class), row.get("reason", String.class))));
+            boolean truncated = history.size() > HISTORY_LIMIT;
+            if (truncated) history.removeLast();
+            Collections.reverse(history);
+            UUID responsibleId = members.get("responsible_id", UUID.class);
+            return Optional.of(new FindingDetailContext(
+                    new FindingDetailContext.Member(members.get("reporter_id", UUID.class),
+                            members.get("reporter_name", String.class)),
+                    responsibleId == null ? null : new FindingDetailContext.Member(responsibleId,
+                            members.get("responsible_name", String.class)), history, truncated));
         });
     }
 

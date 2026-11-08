@@ -9,6 +9,8 @@ export interface FindingSubmitContext {
   idempotencyKey: string;
   /** 所属组织：仅当适配器提供 listOrganizations 时必填，来自当前会话有权上报的组织。 */
   organizationId?: string;
+  /** 基于一条“未成立”记录补充新证据时的关联父记录；服务端校验其状态与可见性。 */
+  relatedFindingId?: string;
   signal?: AbortSignal;
 }
 

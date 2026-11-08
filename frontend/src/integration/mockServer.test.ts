@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createMockServer, type MockServer, type MockNavigation } from "../../tools/mock-server/server.mjs";
 import { createHttpFindingCommands } from "../adapters/httpFindingCommands";
+import { createHttpFindingEvidence } from "../adapters/httpFindingEvidence";
 import { createHttpFindingLedger } from "../adapters/httpFindingLedger";
 import { createHttpFindingSubmit } from "../adapters/httpFindingSubmit";
 import { createHttpSessionAdapter } from "../adapters/httpSessionAdapter";
@@ -239,6 +240,54 @@ describe("HTTP adapters × 契约模拟服务", () => {
     await expect(commands.run(created.id, 2, { kind: "confirmPerson", reason: "属实" }, { idempotencyKey: KEY() })).rejects.toMatchObject({ kind: "stateConflict" });
     const filtered = await ledger.list({ query: { keyword: "", state: "NOT_ESTABLISHED", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
     expect(filtered.items.map((r) => r.id)).toContain(created.id);
+
+    // 基于未成立记录创建关联上报：父记录必须是 NOT_ESTABLISHED；关联后详情带 relatedFindingId，父记录不变
+    const org = orgs[0]!;
+    const related = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: org.id, relatedFindingId: created.id });
+    expect((await ledger.get(related.id))?.relatedFindingId).toBe(created.id);
+    expect((await ledger.get(created.id))?.state).toBe("NOT_ESTABLISHED");
+    const open = await submit.submit(draft, { idempotencyKey: KEY(), organizationId: org.id });
+    await expect(submit.submit(draft, { idempotencyKey: KEY(), organizationId: org.id, relatedFindingId: open.id })).rejects.toMatchObject({ kind: "workflow" });
+    await expect(submit.submit(draft, { idempotencyKey: KEY(), organizationId: org.id, relatedFindingId: crypto.randomUUID() })).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
+  it("整改证据上传：建空证据集 → 预约 → 传字节 → 扫描状态推进；重复上传 409；类型/大小/版本被拒；同键重放", async () => {
+    const c = await signIn();
+    const ledger = createHttpFindingLedger(c);
+    const evidence = createHttpFindingEvidence(c);
+    const rectifying = (await ledger.list({ query: { keyword: "", state: "RECTIFYING", reportedAt: { from: "", to: "" } }, page: { index: 1, size: 20 }, view: "all" })).items[0]!;
+    const detail = (await ledger.get(rectifying.id))!;
+    const scope = { findingId: detail.id, roundNo: detail.round };
+    const version = detail.version!;
+
+    const setKey = KEY();
+    const set = await evidence.initializeSet(scope, version, setKey);
+    expect(set.initialEvidenceRevision).toBe(0);
+    expect(await evidence.initializeSet(scope, version, setKey)).toEqual(set);
+    await expect(evidence.initializeSet(scope, version + 9, KEY())).rejects.toMatchObject({ kind: "conflict" });
+
+    // jsdom 的 Blob 不能被 Node 的 fetch 当字节发送，这里用 Node 自己的 Blob；浏览器里 File/Blob 原生可用。
+    // @ts-expect-error src 的 tsconfig 没启用 Node 类型；这里只在 vitest(Node) 里运行
+    const { Blob: NodeBlob } = (await import("node:buffer")) as { Blob: typeof Blob };
+    const nodeBlob = async (bytes: number[]) => new NodeBlob([new Uint8Array(bytes)], { type: "image/png" });
+    const png = await nodeBlob([137, 80, 78, 71, 1, 2, 3]);
+    const declaration = { evidenceSetId: set.evidenceSetId, expectedFindingVersion: version, expectedEvidenceRevision: 0, filename: "护栏.png", declaredMediaType: "image/png", declaredSizeBytes: png.size };
+    const key = KEY();
+    const reserved = await evidence.reserveUpload(scope, declaration, key);
+    expect(reserved.state).toBe("INTENT_CREATED");
+    expect((await evidence.reserveUpload(scope, declaration, key)).intentId).toBe(reserved.intentId);
+    await expect(evidence.reserveUpload(scope, { ...declaration, declaredMediaType: "text/html" }, KEY())).rejects.toMatchObject({ kind: "unsupportedMedia" });
+    await expect(evidence.reserveUpload(scope, { ...declaration, declaredSizeBytes: 67_108_865 }, KEY())).rejects.toMatchObject({ kind: "tooLarge" });
+    await expect(evidence.reserveUpload(scope, { ...declaration, expectedFindingVersion: version + 9 }, KEY())).rejects.toMatchObject({ kind: "conflict" });
+
+    // 声明的大小与实际字节不符 → 拒绝；符合 → 202 隔离
+    await expect(evidence.sendContent(scope, reserved.intentId, await nodeBlob([1]))).rejects.toMatchObject({ kind: "validation" });
+    expect((await evidence.sendContent(scope, reserved.intentId, png)).state).toBe("QUARANTINED");
+    await expect(evidence.sendContent(scope, reserved.intentId, png)).rejects.toMatchObject({ kind: "alreadyReceived" });
+
+    expect((await evidence.getStatus(scope, reserved.intentId)).state).toBe("SCANNING");
+    expect((await evidence.getStatus(scope, reserved.intentId)).state).toBe("VERIFIED_PENDING_FINALIZATION");
+    expect((await evidence.cancel(scope, reserved.intentId)).cancelRequested).toBe(false); // 已是终态，取消无效
   });
 
   // 本用例改变共享模拟服务的密码，必须放在本文件最后。

@@ -472,4 +472,19 @@ describe("所属组织选择", () => {
     expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
     expect(list).toHaveBeenCalledTimes(2);
   });
+
+  it("关联上报：说明父记录，并把 relatedFindingId 随提交带给适配器；不带父记录时不出现该字段", async () => {
+    const { submit } = setup(async () => RESULT, { relatedTo: { id: "11111111-1111-4111-8111-111111111111", code: "YH-20261108-0001" } });
+    expect(screen.getByText("YH-20261108-0001")).toBeInTheDocument();
+    fillValid();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(submit).toHaveBeenCalled());
+    expect(submit.mock.calls[0]![1]).toMatchObject({ relatedFindingId: "11111111-1111-4111-8111-111111111111" });
+    cleanup();
+    const plain = setup();
+    fillValid();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(plain.submit).toHaveBeenCalled());
+    expect(plain.submit.mock.calls[0]![1]).not.toHaveProperty("relatedFindingId");
+  });
 });

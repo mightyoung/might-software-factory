@@ -1,0 +1,161 @@
+openapi: 3.1.0
+info:
+  title: Finding empty evidence set initialization
+  version: 1.0.0
+  description: >-
+    Creates an empty server-owned editable evidence set for the currently authorized remediation
+    assignee. Ownership is derived from the verified session and revalidated by the service.
+    This operation does not require upload producer readiness and does not receive bytes,
+    create evidence items, advance the finding version, verify evidence or complete a workflow task.
+    Production persistence requires the approved schema and exact runtime grants. Mock HTTP
+    tests prove response mapping and filter behavior only, not an actual database commit.
+paths:
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-sets:
+    parameters:
+      - in: path
+        name: findingId
+        required: true
+        schema: {type: string, format: uuid}
+        description: Canonical hyphenated UUID, case insensitive.
+      - in: path
+        name: roundNo
+        required: true
+        schema: {type: integer, minimum: 1, maximum: 2147483647}
+        description: Positive decimal integer without sign or leading zero.
+    post:
+      operationId: initializeFindingEvidenceSet
+      security:
+        - session: []
+          csrf: []
+      description: >-
+        No query parameters. Exactly one canonical UUID Idempotency-Key and one Content-Type
+        application/json with optional UTF-8 charset, no other media parameters. The body is
+        at most 1024 UTF-8 bytes without BOM and contains exactly expectedFindingVersion as a
+        nonnegative decimal int64. Duplicate, unknown, identity, null, nested, coerced, fractional,
+        exponent, malformed UTF-8 and trailing values are rejected. Current action, notice and
+        actual task assignment are checked before replay. Same key/body recovers the same
+        initialization result; changed body conflicts. A matched replay ignores the old expected
+        finding version, but requires current ownership and an unsealed set.
+        The service owns an independent managed transaction and returns before HTTP success
+        only after commit. A 503 does not imply rollback; recover using the same key/body.
+        All endpoint responses use Cache-Control no-store.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InitializeRequest'}
+      responses:
+        '201':
+          description: New committed empty set. No Location, status URL or byte upload URL is advertised.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InitializationResponse'}
+        '200':
+          description: Stable authorized replay of immutable initialization facts.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InitializationResponse'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Denied'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/TooLarge'}
+        '415': {$ref: '#/components/responses/Media'}
+        '422': {$ref: '#/components/responses/Assignment'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    session: {type: apiKey, in: cookie, name: SESSION}
+    csrf: {type: apiKey, in: header, name: X-XSRF-TOKEN}
+  schemas:
+    InitializeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedFindingVersion]
+      properties:
+        expectedFindingVersion: {type: integer, minimum: 0, maximum: 9223372036854775807}
+    InitializationData:
+      type: object
+      additionalProperties: false
+      required: [evidenceSetId, state, initialEvidenceRevision, createdAt]
+      description: >-
+        Immutable creation facts. UPLOADING describes initialization state;
+        initialEvidenceRevision zero is not the set's current editable revision or current state.
+        No read/status/byte endpoint is provided by this contract.
+      properties:
+        evidenceSetId: {type: string, format: uuid}
+        state: {type: string, const: UPLOADING}
+        initialEvidenceRevision: {type: integer, const: 0}
+        createdAt: {type: string, format: date-time}
+    Meta:
+      type: object
+      additionalProperties: false
+      required: [requestId, traceId, schemaVersion]
+      properties:
+        requestId: {type: string, format: uuid}
+        traceId: {type: string, format: uuid}
+        schemaVersion: {type: string, const: '1'}
+    InitializationResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/InitializationData'}
+        meta: {$ref: '#/components/schemas/Meta'}
+    Error:
+      type: object
+      required: [code, message, traceId, retryable, fieldErrors]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        traceId: {type: string, format: uuid}
+        retryable: {type: boolean}
+        fieldErrors: {type: array, items: {type: object}}
+        currentVersion: {type: [integer, 'null']}
+  responses:
+    Invalid:
+      description: 400 INVALID_REQUEST, safe malformed input error.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthenticated:
+      description: 401 AUTH_REQUIRED.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Denied:
+      description: 403 ACTION_DENIED, including CSRF or current action denial.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Invisible:
+      description: 404 RESOURCE_NOT_VISIBLE for unavailable finding, round, ownership or current assignment context.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Conflict:
+      description: >-
+        409 IDEMPOTENCY_CONFLICT for a changed initialization body under the same key,
+        VERSION_CONFLICT for a stale expected finding version, or COMMAND_CONFLICT
+        when the current remediation workflow task context is missing or changed.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    TooLarge:
+      description: 413 INVALID_REQUEST when body exceeds 1024 bytes.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Media:
+      description: 415 INVALID_REQUEST for invalid request media contract.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Assignment:
+      description: 422 WORKFLOW_ASSIGNMENT_UNRESOLVED.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    RateLimited:
+      description: 429 RATE_LIMITED, retryable and subject to current open-set limits.
+      headers:
+        Retry-After: {schema: {type: integer, const: 1}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unavailable:
+      description: 503 DEPENDENCY_UNAVAILABLE, safe retryable error. Does not imply database rollback.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}

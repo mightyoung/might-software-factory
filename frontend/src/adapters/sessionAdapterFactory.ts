@@ -2,6 +2,7 @@ import { parseAppMode } from "../mode";
 import { createHttpClient } from "../api/httpClient";
 import type { FindingStore } from "../App";
 import { createHttpFindingCommands } from "./httpFindingCommands";
+import { createHttpFindingEvidence } from "./httpFindingEvidence";
 import { createHttpFindingLedger } from "./httpFindingLedger";
 import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpSessionAdapter } from "./httpSessionAdapter";
@@ -22,6 +23,7 @@ export function createFindingStoreFactory(mode: string | undefined): (() => Find
       ledger: createHttpFindingLedger(client),
       submit: createHttpFindingSubmit(client),
       commands: createHttpFindingCommands(client),
+      evidence: createHttpFindingEvidence(client),
     };
   };
 }

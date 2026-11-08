@@ -13,6 +13,8 @@ public interface FindingRepository {
 
     Optional<FindingRecord> findVisible(FindingReadScope scope, UUID findingId);
 
+    Optional<FindingDetailContext> findDetailContext(FindingReadScope scope, UUID findingId);
+
     record PageResult(List<FindingRecord> items, long total) {
         public PageResult {
             items = List.copyOf(items);

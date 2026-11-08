@@ -8,6 +8,7 @@ import {
 } from "../../adapters/findingLedger";
 import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
+import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetails } from "../../components/FindingDetails";
 import { FindingReportForm } from "../../components/FindingReportForm";
@@ -29,6 +30,7 @@ interface FindingsLedgerProps {
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
+  evidenceAdapter?: FindingEvidenceAdapter;
   canReport?: boolean;
   /** 当前登录者标识；传给上报表单用于登录失效后恢复草稿。 */
   draftKey?: string;
@@ -50,6 +52,7 @@ export function FindingsLedger({
   adapter = mockFindingLedger,
   submitAdapter,
   commandAdapter,
+  evidenceAdapter,
   canReport = false,
   draftKey,
   onUnauthenticated,
@@ -73,6 +76,7 @@ export function FindingsLedger({
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [reporting, setReporting] = useState(false);
+  const [relatedTo, setRelatedTo] = useState<{ id: string; code: string } | null>(null);
   const reportButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
   const showReport = canReport && submitAdapter !== undefined && view === "all";
@@ -151,9 +155,10 @@ export function FindingsLedger({
     }
   }, [reporting]);
 
-  function openReport() {
+  function openReport(related: { id: string; code: string } | null = null) {
     // 详情与上报共用右侧面板，打开上报时先关闭详情。
     if (selectedFindingId) navigate(path, true);
+    setRelatedTo(related);
     setReporting(true);
   }
 
@@ -213,7 +218,7 @@ export function FindingsLedger({
             <p>{description}</p>
           </div>
           {showReport && (
-            <button ref={reportButtonRef} type="button" className="button button-primary" onClick={openReport}>
+            <button ref={reportButtonRef} type="button" className="button button-primary" onClick={() => openReport()}>
               新建上报
             </button>
           )}
@@ -312,6 +317,7 @@ export function FindingsLedger({
           onOpenSubmitted={openSubmitted}
           onUnauthenticated={onUnauthenticated}
           draftKey={draftKey}
+          {...(relatedTo ? { relatedTo } : {})}
         />
       )}
 
@@ -323,6 +329,9 @@ export function FindingsLedger({
           onClose={() => navigate(path, true)}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}
+          evidenceAdapter={evidenceAdapter}
+          onOpenRelated={(id) => navigate(`${path}?caseId=${encodeURIComponent(id)}`)}
+          {...(submitAdapter ? { onCreateRelated: (record: FindingRecord) => openReport({ id: record.id, code: record.code }) } : {})}
           onCommandChanged={() => {
             setDetailRefreshKey((value) => value + 1);
             setRefreshKey((value) => value + 1);
