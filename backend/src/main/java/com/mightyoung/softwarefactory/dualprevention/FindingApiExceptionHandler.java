@@ -24,12 +24,18 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.NestedExceptionUtils;
+
+import java.sql.SQLException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 @RestControllerAdvice
 public final class FindingApiExceptionHandler {
+    private static final Logger LOG = LoggerFactory.getLogger(FindingApiExceptionHandler.class);
 
     @ExceptionHandler(FindingOrganizationReferenceRequestParser.RequestFailure.class)
     ResponseEntity<ErrorResponse> invalidOrganizationReference(FindingOrganizationReferenceRequestParser.RequestFailure failure) {
@@ -184,6 +190,15 @@ public final class FindingApiExceptionHandler {
             org.springframework.transaction.UnexpectedRollbackException.class,
             WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
             AuthorizationWriteGuardUnavailableException.class, FindingDefinitionUnavailableException.class})
+    ResponseEntity<ErrorResponse> unavailable(Exception failure) {
+        // 响应对外保持通用；运维需要的原因（异常类型、SQLSTATE）只进日志，不含 SQL 参数和业务值。
+        Throwable root = NestedExceptionUtils.getMostSpecificCause(failure);
+        String sqlState = root instanceof SQLException sql ? sql.getSQLState() : null;
+        LOG.warn("Finding command dependency unavailable: {} caused by {} sqlState={}",
+                failure.getClass().getName(), root.getClass().getName(), sqlState);
+        return unavailable();
+    }
+
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
                 "The finding command could not be completed safely", true, List.of());

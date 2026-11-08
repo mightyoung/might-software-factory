@@ -20,7 +20,7 @@ Grant only the listed operations to the runtime identity. `SELECT ... FOR UPDATE
 | `finding_command_receipt` | `SELECT`, `INSERT`, `UPDATE`; duplicate-command `FOR UPDATE` lock |
 | `finding_transition` | `INSERT` |
 | `finding_confirmation` | `INSERT` |
-| `remediation_round` | `INSERT`, `UPDATE` |
+| `remediation_round` | `SELECT`, `INSERT`, `UPDATE` (evidence-set initialization joins it with `remediation_notice` to check the round is open; without `SELECT` the endpoint returns `503 DEPENDENCY_UNAVAILABLE`) |
 | `remediation_notice` | `SELECT`, `INSERT`, `UPDATE` |
 | `evidence_set` | `SELECT`, column-level `UPDATE (evidence_revision, submission_sealed_at)`; evidence-item insert/update triggers increment the same parent revision, and submission sealing increments it and sets the one-way seal marker |
 | `evidence_item` | `SELECT` in the workflow; a future evidence writer may receive only its required `INSERT`/`UPDATE` privileges. Do not grant runtime `DELETE` or `TRUNCATE`; a database trigger rejects row deletion before touching the parent row, and the runtime role must not own the table |
