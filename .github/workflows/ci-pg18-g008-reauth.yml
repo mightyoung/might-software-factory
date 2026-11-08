@@ -1,0 +1,46 @@
+name: PostgreSQL 18 reauthentication issuer acceptance
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "pom.xml"
+      - "mvnw"
+      - ".mvn/**"
+      - "tools/ci_pg18/**"
+      - ".github/workflows/ci-pg18-g008-reauth.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pg18-reauth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify isolated target and evidence guards
+        run: python3 -B -m unittest discover -s tools/ci_pg18 -p 'test_*.py' -v
+      - name: Compile real database cases and verify target before credentials
+        run: ./mvnw --batch-mode --no-transfer-progress -Pci-pg18-g008-reauth -Dtest=CiPg18ReauthTargetTest test
+      - name: Verify issuer and consumer on isolated PostgreSQL 18
+        run: python3 -B tools/ci_pg18/risk_reauth.py run
+      - name: Clean only owned reauthentication resources
+        if: always()
+        run: python3 -B tools/ci_pg18/risk_reauth.py cleanup
+      - name: Upload bounded acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg18-reauth-evidence
+          path: artifacts/ci-pg18-g008-reauth/result.json
+          if-no-files-found: error
+          retention-days: 7

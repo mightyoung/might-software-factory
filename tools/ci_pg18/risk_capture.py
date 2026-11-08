@@ -105,6 +105,29 @@ SOURCE = _LaneSpec(
         "framework-schema", "source-schema", "runtime-role", "runtime-rights", "seed-identity",
         "seed-foundation", "native-graph", "closed", "unknown",
     )), guard_count=52)
+REAUTH = _LaneSpec(
+    kind="g008-reauth", database="msf_ci_g008_reauth", runtime_role="msf_ci_reauth_runtime",
+    ack="ephemeral-g008-reauth-only", profile="ci-pg18-g008-reauth",
+    state_prefix="msf-ci-pg18-g008-reauth-", artifact_directory="ci-pg18-g008-reauth",
+    it_class="com.mightyoung.softwarefactory.identity.CiPg18ReauthPostgresIT",
+    unit_class="com.mightyoung.softwarefactory.identity.CiPg18ReauthTargetTest",
+    scenarios=frozenset((
+        "originalSchemaPrivilegesAndActualGuardAreEnforced",
+        "actualIssuerFeedsActualActiveTargetRevoke",
+        "absentAuthorityTargetGetsDirectRevocationFence",
+        "issuanceAndConsumptionReceiptsReplayWithoutRedeliveringToken",
+        "explicitReissueAcrossRetainedKeysReplacesOnlyExactLiveProof",
+        "currentCredentialAndSourceChangesMeetBothGuardCommitOrders",
+        "lateActualAuditFailureRollsBackIssuanceAndTerminalization",
+        "deferredCommitConstraintFailureRollsBackTheWholeGraph",
+        "commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken",
+        "crossAccountSourceTargetAndTenantContextCannotBorrowTheProof",
+    )), schema_field="reauthSchemaVerified", evidence_file="ci-pg18-reauth-safe-evidence.json",
+    failure_file="ci-pg18-reauth-safe-failure.json", failure_phases=frozenset((
+        "open", "target-version", "target-marker", "empty-schema", "migrate", "history",
+        "framework-schema", "reauth-schema", "runtime-role", "runtime-rights", "seed-identity",
+        "activate-authority", "closed", "unknown",
+    )), guard_count=55)
 # Legacy capture constants and default call signatures remain the capture lane.
 DATABASE, IT_CLASS, UNIT_CLASS = CAPTURE.database, CAPTURE.it_class, CAPTURE.unit_class
 SCENARIOS, FAILURE_PHASES = CAPTURE.scenarios, CAPTURE.failure_phases
@@ -125,7 +148,7 @@ def reject(stage):
 
 
 def _spec(lane):
-    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE:
+    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE and lane is not REAUTH:
         reject("LANE")
     return lane
 
@@ -157,12 +180,13 @@ def _result_lane(result, lane):
                     or any(type(tests.get(key)) is not int or tests[key] != 0 for key in ("failures", "errors", "skipped"))
                     or tests.get("scenarios") != sorted(lane.scenarios)):
                 reject("RESULT_LANE")
-            if lane is SOURCE:
+            if lane is SOURCE or lane is REAUTH:
                 revision = result.get("sourceRevision")
                 if (not isinstance(revision, dict) or set(revision) != {"commit", "tree"}
                         or any(not isinstance(revision[key], str) or not re.fullmatch(r"[0-9a-f]{40}", revision[key])
                                for key in ("commit", "tree"))):
                     reject("RESULT_LANE")
+            if lane is SOURCE:
                 try:
                     validate_source_diagnostics(result.get("sourceDiagnostics"), require_complete=True)
                 except Rejected:
@@ -807,7 +831,7 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         result["acceptanceKind"] = lane.kind
     stage = "INITIALIZE"
     try:
-        if lane is SOURCE:
+        if lane is SOURCE or lane is REAUTH:
             stage = "SOURCE_REVISION"
             result["sourceRevision"] = source_revision(repo, environment)
         # The source revision must be checked before this untracked acceptance artifact exists.

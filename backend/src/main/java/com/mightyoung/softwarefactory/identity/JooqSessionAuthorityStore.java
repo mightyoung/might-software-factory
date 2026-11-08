@@ -276,7 +276,7 @@ public final class JooqSessionAuthorityStore implements SessionAuthorityStore {
         @Override public String toString(){return "OwnedSessionTarget[REDACTED]";}
     }
     private static String actionCanonical(CurrentTenantContext context,SessionHandle source,RevokeCommand command){
-        return context.accountId()+"|"+context.actorId()+"|"+source+"|"+context.credentialVersion()+"|"+command.target()+"|"+command.expected().version();
+        return SessionRevokeCanonical.action(context,source,command.target(),command.expected());
     }
     private static String commandCanonical(CurrentTenantContext context,SessionHandle source,RevokeCommand command){
         return actionCanonical(context,source,command)+"|"+command.proofId()+"|"+command.secret().digest();
