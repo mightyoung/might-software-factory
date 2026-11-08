@@ -11,6 +11,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -36,7 +37,8 @@ public final class CiPg18SourceSession implements AutoCloseable {
         Instant authenticated = Instant.now().minusSeconds(2).truncatedTo(ChronoUnit.MICROS);
         Instant created = authenticated.plusSeconds(1);
         var request = new MockHttpServletRequest();
-        var session = request.getSession();
+        var session = new MockHttpSession(request.getServletContext(), UUID.randomUUID().toString());
+        request.setSession(session);
         session.setAttribute(SessionLifetimePolicy.AUTHENTICATED_AT_ATTRIBUTE, authenticated);
         String primary = UUID.randomUUID().toString();
         UUID event = UUID.randomUUID();
