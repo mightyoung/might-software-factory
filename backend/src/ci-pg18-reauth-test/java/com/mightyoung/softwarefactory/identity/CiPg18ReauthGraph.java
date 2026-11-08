@@ -7,7 +7,7 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
-import org.springframework.jdbc.support.JdbcTransactionManager;
+import com.mightyoung.softwarefactory.authorization.SessionSensitiveJdbcTransactionManager;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -19,12 +19,12 @@ final class CiPg18ReauthGraph {
     final ReauthIssuerService issuer;
     CiPg18ReauthGraph(CiPg18ReauthFixture fixture,SessionSensitiveKeys keys){this(fixture,keys,PasswordEncoderFactories.createDelegatingPasswordEncoder());}
     CiPg18ReauthGraph(CiPg18ReauthFixture fixture,SessionSensitiveKeys keys,PasswordEncoder encoder){
-        var source=fixture.runtime();var manager=new JdbcTransactionManager(source);
+        var source=fixture.runtime();var manager=new SessionSensitiveJdbcTransactionManager(source);
         boundaries=new ManagedSessionSensitiveSecurityTransaction(source,manager,new PostgresAuthorizationWriteGuard(source));
         requests=new SessionSensitiveRequests(new SessionContextResolver(),Duration.ofHours(1));
         var audit=new JooqSessionSensitiveAudit(source,boundaries,manager);
         sessions=new SessionAuthorityService(requests,boundaries,new JooqSessionAuthorityStore(source,boundaries,keys),audit,new KnownLogoutRequests(serializer->serializer.setUseBase64Encoding(false)));
-        issuer=ReauthIssuerService.create(requests,source,boundaries,audit,encoder,keys,
+        issuer=ReauthIssuerService.create(requests,source,encoder,keys,
                 new LoginAttemptLimiter(LoginAttemptLimiter.Config.defaults(),System::nanoTime),new LoginAttemptLimiter(LoginAttemptLimiter.Config.defaults(),System::nanoTime),Clock.systemUTC(),fixture.random());
     }
     void register(CiPg18ReauthFixture.Actor actor,CiPg18ReauthFixture.Session session){
