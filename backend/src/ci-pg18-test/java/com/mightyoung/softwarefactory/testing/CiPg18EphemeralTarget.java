@@ -12,7 +12,8 @@ public final class CiPg18EphemeralTarget {
     public enum Lane {
         CAPTURE("msf_ci_risk_capture", "ephemeral-risk-capture-only", "msf_ci_capture_runtime"),
         REGISTRY("msf_ci_risk_registry", "ephemeral-risk-registry-only", "msf_ci_registry_runtime"),
-        SOURCE("msf_ci_risk_source", "ephemeral-risk-source-only", "msf_ci_source_runtime");
+        SOURCE("msf_ci_risk_source", "ephemeral-risk-source-only", "msf_ci_source_runtime"),
+        RECOVERY("msf_ci_risk_recovery", "ephemeral-risk-recovery-only", "msf_ci_recovery_runtime");
         private final String database, acknowledgment, runtime;
         Lane(String database, String acknowledgment, String runtime) {
             this.database = database; this.acknowledgment = acknowledgment; this.runtime = runtime;
@@ -25,12 +26,14 @@ public final class CiPg18EphemeralTarget {
             "MSF_CI_PG18_OWNERSHIP_FILE", "MSF_CI_PG18_ADMIN_PASSWORD_FILE", "MSF_CI_PG18_RUNTIME_PASSWORD_FILE");
     private final String jdbcUrl, adminPassword, runtimePassword, imageDigest, containerId;
     private final UUID instanceId;
+    private final String recoveryCapturePassword;
 
     private CiPg18EphemeralTarget(Lane lane, String jdbcUrl, String adminPassword, String runtimePassword,
-            String imageDigest, String containerId, UUID instanceId) {
+            String imageDigest, String containerId, UUID instanceId, String recoveryCapturePassword) {
         this.lane = lane;
         this.jdbcUrl = jdbcUrl; this.adminPassword = adminPassword; this.runtimePassword = runtimePassword;
         this.imageDigest = imageDigest; this.containerId = containerId; this.instanceId = instanceId;
+        this.recoveryCapturePassword = recoveryCapturePassword;
     }
 
     public static CiPg18EphemeralTarget from(Map<String, String> environment, Lane lane) {
@@ -42,7 +45,8 @@ public final class CiPg18EphemeralTarget {
                 String key = entry.getKey();
                 if ((key.startsWith("LAN_PG_") || key.startsWith("PG18_TUNNEL_"))
                         && entry.getValue() != null && !entry.getValue().isBlank()) throw rejected();
-                if (key.startsWith("MSF_CI_PG18_") && !KEYS.contains(key)) throw rejected();
+                if (key.startsWith("MSF_CI_PG18_") && !KEYS.contains(key)
+                        && !(lane == Lane.RECOVERY && key.equals("MSF_CI_PG18_CAPTURE_PASSWORD_FILE"))) throw rejected();
             }
             String run = required(environment, "GITHUB_RUN_ID"), attempt = required(environment, "GITHUB_RUN_ATTEMPT");
             if (!run.matches("[1-9][0-9]{0,19}") || !attempt.matches("[1-9][0-9]{0,9}")) throw rejected();
@@ -74,7 +78,12 @@ public final class CiPg18EphemeralTarget {
             String admin = readPrivate(environment, "MSF_CI_PG18_ADMIN_PASSWORD_FILE", root);
             String runtime = readPrivate(environment, "MSF_CI_PG18_RUNTIME_PASSWORD_FILE", root);
             if (!admin.matches("[0-9a-f]{64}") || !runtime.matches("[0-9a-f]{64}") || admin.equals(runtime)) throw rejected();
-            return new CiPg18EphemeralTarget(lane, url, admin, runtime, digest, container, instance);
+            String capture = null;
+            if (lane == Lane.RECOVERY) {
+                capture = readPrivate(environment, "MSF_CI_PG18_CAPTURE_PASSWORD_FILE", root);
+                if (!capture.matches("[0-9a-f]{64}") || capture.equals(admin) || capture.equals(runtime)) throw rejected();
+            }
+            return new CiPg18EphemeralTarget(lane, url, admin, runtime, digest, container, instance, capture);
         } catch (IOException | RuntimeException failure) {
             throw rejected();
         }
@@ -84,6 +93,11 @@ public final class CiPg18EphemeralTarget {
         String value = environment.get(name);
         if (value == null || value.isBlank()) throw rejected();
         return value;
+    }
+
+    public String recoveryCapturePassword() {
+        if (lane != Lane.RECOVERY || recoveryCapturePassword == null) throw rejected();
+        return recoveryCapturePassword;
     }
 
     private static String readPrivate(Map<String, String> environment, String name, Path root) throws IOException {
