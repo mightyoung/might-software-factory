@@ -27,6 +27,9 @@ final class CiPg18RecoveryProcess implements AutoCloseable {
     private final Instant start;
     private final Path executable;
     private final List<String> arguments;
+    private final Path argumentsFile;
+    private final byte[] argumentsDigest;
+    private final int argumentsLength;
     private final UUID caseId,marker;
     private final ArrayBlockingQueue<Map<String,Object>> messages=new ArrayBlockingQueue<>(8);
     private final Thread reader;
@@ -39,9 +42,19 @@ final class CiPg18RecoveryProcess implements AutoCloseable {
         executable=Path.of(System.getProperty("java.home"),"bin","java").toRealPath();
         if(Runtime.version().feature()!=21||!Files.isExecutable(executable))throw rejected();
         String classpath=System.getProperty("surefire.test.class.path",System.getProperty("java.class.path"));
-        if(classpath==null||classpath.isBlank()||classpath.length()>131072||classpath.contains("\n"))throw rejected();
-        arguments=List.of("-cp",classpath,CiPg18RecoveryWorkerMain.class.getName());
-        var builder=new ProcessBuilder(executable.toString(),arguments.get(0),arguments.get(1),arguments.get(2));
+        if(classpath==null||classpath.isBlank()||classpath.getBytes(StandardCharsets.UTF_8).length>131072
+                ||classpath.codePoints().anyMatch(Character::isISOControl))throw rejected();
+        argumentsFile=directory.resolve(marker+".java-args");
+        // Linux ProcessHandle intentionally omits arguments when /proc cmdline exceeds PAGE_SIZE.
+        // Keep the OS argv short and verify the exact private launch content independently.
+        byte[] launch=("-cp\n\""+classpath.replace("\\","\\\\").replace("\"","\\\"")+"\"\n"
+                +CiPg18RecoveryWorkerMain.class.getName()+"\n").getBytes(StandardCharsets.UTF_8);
+        argumentsLength=launch.length;
+        argumentsDigest=java.security.MessageDigest.getInstance("SHA-256").digest(launch);
+        privateWrite(argumentsFile,launch);
+        verifyArgumentFile();
+        arguments=List.of("@"+argumentsFile);
+        var builder=new ProcessBuilder(executable.toString(),arguments.getFirst());
         builder.redirectErrorStream(true);var env=builder.environment();env.clear();
         for(String key:Set.of("GITHUB_ACTIONS","CI","GITHUB_REPOSITORY","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT","RUNNER_TEMP","MSF_PG18_PROCESS_MARKER")){
             String value=System.getenv(key);if(value==null||value.isBlank())throw rejected();env.put(key,value);
@@ -102,11 +115,24 @@ final class CiPg18RecoveryProcess implements AutoCloseable {
         cleanupVerified=true;
     }
     private void verifyLive(){
+        verifyArgumentFile();
         var info=process.info();
         if(!process.isAlive()||!start.equals(info.startInstant().orElse(null))
                 ||!executable.toString().equals(info.command().orElse(null))
                 ||!Arrays.equals(arguments.toArray(String[]::new),info.arguments().orElse(null))
                 ||process.toHandle().descendants().findAny().isPresent())throw rejected();
+    }
+    private void verifyArgumentFile(){
+        try{
+            Path root=Path.of(System.getenv("RUNNER_TEMP")).toRealPath();
+            CiPg18RecoveryWorkerTarget.privatePath(argumentsFile.toString(),root);
+            if(!Files.getPosixFilePermissions(argumentsFile.getParent()).equals(PosixFilePermissions.fromString("rwx------"))
+                    ||!Files.getOwner(argumentsFile.getParent()).equals(Files.getOwner(root)))throw rejected();
+            byte[] bytes;
+            try(var input=Files.newInputStream(argumentsFile)){bytes=input.readNBytes(argumentsLength+1);}
+            if(bytes.length!=argumentsLength||!java.security.MessageDigest.isEqual(argumentsDigest,
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes)))throw rejected();
+        }catch(Exception failure){throw rejected();}
     }
     private void verify(Map<String,Object> value){
         if(!Set.of("READY","SOURCE_COMMITTED","DELIVERY_FINISHED","UNKNOWN_ACK","FAILED").contains(value.get("stage"))
