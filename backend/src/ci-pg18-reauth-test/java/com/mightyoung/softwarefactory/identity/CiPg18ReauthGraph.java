@@ -24,7 +24,7 @@ final class CiPg18ReauthGraph {
         requests=new SessionSensitiveRequests(new SessionContextResolver(),Duration.ofHours(1));
         var audit=new JooqSessionSensitiveAudit(source,boundaries,manager);
         sessions=new SessionAuthorityService(requests,boundaries,new JooqSessionAuthorityStore(source,boundaries,keys),audit,new KnownLogoutRequests(serializer->serializer.setUseBase64Encoding(false)));
-        issuer=ReauthIssuerService.create(requests,source,encoder,keys,
+        issuer=com.mightyoung.softwarefactory.ReauthIssuerFactory.create(requests,source,encoder,keys,
                 new LoginAttemptLimiter(LoginAttemptLimiter.Config.defaults(),System::nanoTime),new LoginAttemptLimiter(LoginAttemptLimiter.Config.defaults(),System::nanoTime),Clock.systemUTC(),fixture.random());
     }
     void register(CiPg18ReauthFixture.Actor actor,CiPg18ReauthFixture.Session session){

@@ -32,13 +32,12 @@ public final class ReauthIssuerService {
     private final SecureRandom random;
     private final Semaphore work=new Semaphore(8);
     private final ThreadLocal<VerifiedPreparation> active=new ThreadLocal<>();
-    /** Own the driver-to-framework privacy boundary; callers cannot inject an unsafe manager. */
-    public static ReauthIssuerService create(SessionSensitiveRequests requests,DataSource source,
-            PasswordEncoder encoder,SessionSensitiveKeys keys,LoginAttemptLimiter account,LoginAttemptLimiter network,Clock clock,SecureRandom random){
-        var manager=new com.mightyoung.softwarefactory.authorization.SessionSensitiveJdbcTransactionManager(source);
-        var boundaries=new com.mightyoung.softwarefactory.authorization.ManagedSessionSensitiveSecurityTransaction(source,manager,
-                new com.mightyoung.softwarefactory.authorization.PostgresAuthorizationWriteGuard(source));
-        var audit=new com.mightyoung.softwarefactory.auditops.JooqSessionSensitiveAudit(source,boundaries,manager);
+    /**
+     * Port-only seam for trusted application assembly. This is not a caller capability;
+     * production composition must supply the canonical managed transaction and audit ports.
+     */
+    public static ReauthIssuerService assembleTrusted(SessionSensitiveRequests requests,DataSource source,SessionSensitiveSecurityTransaction boundaries,
+            SessionSensitiveAudit audit,PasswordEncoder encoder,SessionSensitiveKeys keys,LoginAttemptLimiter account,LoginAttemptLimiter network,Clock clock,SecureRandom random){
         return new ReauthIssuerService(requests,source,boundaries,new JooqReauthIssuerStore(source,boundaries,keys),audit,encoder,account,network,clock,random);
     }
     ReauthIssuerService(SessionSensitiveRequests requests,DataSource source,SessionSensitiveSecurityTransaction boundaries,ReauthIssuerStore store,

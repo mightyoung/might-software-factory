@@ -95,7 +95,7 @@ class SessionSensitiveJdbcTransactionManagerTest {
     }
 
     @Test void publicIssuerFactoryOwnsItsTransactionAndAuditBoundary() {
-        var methods=java.util.Arrays.stream(com.mightyoung.softwarefactory.identity.ReauthIssuerService.class.getDeclaredMethods())
+        var methods=java.util.Arrays.stream(com.mightyoung.softwarefactory.ReauthIssuerFactory.class.getDeclaredMethods())
                 .filter(method->method.getName().equals("create")&&java.lang.reflect.Modifier.isPublic(method.getModifiers())).toList();
         assertThat(methods).hasSize(1);
         assertThat(methods.getFirst().getParameterTypes()).doesNotContain(
