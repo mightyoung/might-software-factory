@@ -1700,3 +1700,13 @@ select:focus-visible {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* 详情 / 新建上报在独立标签页整页展示：居中的单栏，覆盖窄屏下的侧滑定位。 */
+.ledger-layout.ledger-standalone .detail-panel {
+  position: static;
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: 26px 29px 24px;
+  border-left: 0;
+  box-shadow: none;
+}

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { openFindingReport } from "./findingForm";
+import { openFindingReport, openInTab } from "./findingForm";
 
 // 只读：不创建 / 修改数据（finding.e2e.ts 依赖种子记录数）。文件名排在 finding 之前、password 之前。
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -30,17 +30,17 @@ test("台账、详情、上报表单、改密对话框", async ({ page }) => {
   await signIn(page);
   await scan(page, "台账");
 
-  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
-  await expect(page.getByLabel("隐患详情面板")).toBeVisible();
-  await scan(page, "详情");
-  await page.getByRole("button", { name: "关闭详情" }).click();
+  const detailTab = await openInTab(page, () => page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click());
+  await expect(detailTab.getByLabel("隐患详情面板")).toBeVisible();
+  await scan(detailTab, "详情");
+  await detailTab.close();
 
   const report = await openFindingReport(page);
-  await scan(page, "上报表单");
+  await scan(report.page, "上报表单");
   await report.submit.click(); // 触发校验错误态
-  await expect(page.getByText("请选择所属组织")).toBeVisible();
-  await scan(page, "上报表单（校验错误态）");
-  await page.keyboard.press("Escape");
+  await expect(report.page.getByText("请选择所属组织")).toBeVisible();
+  await scan(report.page, "上报表单（校验错误态）");
+  await report.page.close();
 
   await page.getByRole("button", { name: /模拟用户/ }).click();
   await page.getByRole("button", { name: "修改密码" }).click();
@@ -52,14 +52,14 @@ test("流程命令表单（验收：退回整改）", async ({ page }) => {
   await signIn(page);
   await page.getByLabel("状态").selectOption("ACCEPTANCE_PENDING");
   await page.getByRole("button", { name: "查询" }).click();
-  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
-  const detail = page.getByLabel("隐患详情面板");
+  const tab = await openInTab(page, () => page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click());
+  const detail = tab.getByLabel("隐患详情面板");
   await detail.getByRole("button", { name: "退回整改" }).click();
   await expect(detail.getByLabel(/意见/)).toBeVisible();
-  await scan(page, "命令表单");
+  await scan(tab, "命令表单");
   await detail.getByRole("button", { name: "确认退回整改" }).click(); // 空意见 → 错误态
   await expect(detail.getByText("请填写意见")).toBeVisible();
-  await scan(page, "命令表单（校验错误态）");
+  await scan(tab, "命令表单（校验错误态）");
 });
 
 test("键盘：改密对话框的焦点陷阱在真实浏览器里成立，Esc 关闭后焦点回到头像菜单按钮", async ({ page }) => {

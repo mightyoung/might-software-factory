@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { openFindingReport, selectReportOrganization } from "./findingForm";
+import { openFindingReport, openInTab, selectReportOrganization } from "./findingForm";
 
 async function signIn(page: Page) {
   await page.goto("/");
@@ -39,29 +39,31 @@ test("登录后显示服务端台账，刷新页面会话仍在，退出后回�
 test("上报：选组织、填写、提交，得到服务端编号，台账随之增加", async ({ page }) => {
   await signIn(page);
   const creates: { body: Record<string, unknown>; key: string | undefined }[] = [];
-  page.on("request", (request) => {
+  page.context().on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/findings")
       creates.push({ body: request.postDataJSON(), key: request.headers()["idempotency-key"] });
   });
   const before = Number(/共 (\d+) 条/.exec((await page.getByText(/共 \d+ 条记录/).textContent()) ?? "")![1]);
   const report = await openFindingReport(page);
+  const tab = report.page;
 
   // 未选组织直接提交 → 前端拦截，不发请求
-  await page.getByLabel(/所在位置/).fill("端到端测试工位");
-  await page.getByLabel(/隐患描述/).fill("端到端：护栏连接件松动");
+  await tab.getByLabel(/所在位置/).fill("端到端测试工位");
+  await tab.getByLabel(/隐患描述/).fill("端到端：护栏连接件松动");
   await report.submit.click();
-  await expect(page.getByText("请选择所属组织")).toBeVisible();
+  await expect(tab.getByText("请选择所属组织")).toBeVisible();
   expect(creates).toHaveLength(0);
 
   await selectReportOrganization(report.organization, { id: "22222222-2222-4222-8222-222222222222", name: "二车间", code: "WS-B" });
   await report.submit.click();
-  await expect(page.getByRole("status").filter({ hasText: "已提交上报" })).toContainText(/YH-\d{8}-\d{4}/);
+  await expect(tab.getByRole("status").filter({ hasText: "已提交上报" })).toContainText(/YH-\d{8}-\d{4}/);
   expect(creates).toHaveLength(1);
   expect(creates[0]!.body).toMatchObject({ organizationId: "22222222-2222-4222-8222-222222222222", grade: "UNKNOWN" });
   expect(creates[0]!.key).toMatch(/^[0-9a-f-]{36}$/i);
   for (const field of ["tenantId", "actorId", "accountId", "memberId"]) expect(creates[0]!.body).not.toHaveProperty(field);
 
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await tab.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.reload(); // 台账在另一个标签页，回来刷新一下
   await expect(page.getByText(`共 ${before + 1} 条记录`)).toBeVisible();
 });
 
@@ -76,13 +78,14 @@ test("按编号查询只保留匹配的记录", async ({ page }) => {
 test("流程：新建上报 → 确认发现 → 安全确认（需选等级），状态与版本随服务端推进", async ({ page }) => {
   await signIn(page);
   const report = await openFindingReport(page);
+  const tab = report.page;
   await selectReportOrganization(report.organization, { id: "11111111-1111-4111-8111-111111111111", name: "一车间", code: "WS-A" });
-  await page.getByLabel(/所在位置/).fill("流程测试工位");
-  await page.getByLabel(/隐患描述/).fill("流程端到端：护栏松动");
+  await tab.getByLabel(/所在位置/).fill("流程测试工位");
+  await tab.getByLabel(/隐患描述/).fill("流程端到端：护栏松动");
   await report.submit.click();
-  await page.getByRole("button", { name: "查看详情" }).click();
+  await tab.getByRole("button", { name: "查看详情" }).click();
 
-  const detail = page.getByLabel("隐患详情面板");
+  const detail = tab.getByLabel("隐患详情面板");
   await expect(detail.locator(".status-current")).toHaveText("待责任人确认");
   await expect(detail.getByRole("button", { name: "分派整改" })).toHaveCount(0); // 当前节点不出现后续动作
 
@@ -109,7 +112,7 @@ test("流程：新建上报 → 确认发现 → 安全确认（需选等级）�
   await detail.getByLabel("李四").check();
   await expect(detail.getByText("已选：李四")).toBeVisible();
   // 分派表单（含候选列表）的无障碍扫描；其余界面见 a11y.e2e.ts
-  const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const axe = await new AxeBuilder({ page: tab }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(" | ")}`)).toEqual([]);
   await detail.getByRole("button", { name: "确认分派整改" }).click();
   await expect(detail.getByText("请填写整改期限")).toBeVisible();
@@ -125,13 +128,14 @@ test("流程：新建上报 → 确认发现 → 安全确认（需选等级）�
 test("不成立关闭：人员确认阶段填意见后终止，终态没有任何动作", async ({ page }) => {
   await signIn(page);
   const report = await openFindingReport(page);
+  const tab = report.page;
   await selectReportOrganization(report.organization, { id: "11111111-1111-4111-8111-111111111111", name: "一车间", code: "WS-A" });
-  await page.getByLabel(/所在位置/).fill("不成立测试工位");
-  await page.getByLabel(/隐患描述/).fill("不成立端到端：现场未发现");
+  await tab.getByLabel(/所在位置/).fill("不成立测试工位");
+  await tab.getByLabel(/隐患描述/).fill("不成立端到端：现场未发现");
   await report.submit.click();
-  await page.getByRole("button", { name: "查看详情" }).click();
+  await tab.getByRole("button", { name: "查看详情" }).click();
 
-  const detail = page.getByLabel("隐患详情面板");
+  const detail = tab.getByLabel("隐患详情面板");
   await detail.getByRole("button", { name: "判定未成立" }).click();
   await detail.getByRole("button", { name: "确认判定未成立" }).click();
   await expect(detail.getByText("请填写意见")).toBeVisible();
@@ -146,8 +150,8 @@ test("验收：退回必须填意见，退回后进入下一轮整改", async ({
   await signIn(page);
   await page.getByLabel("状态").selectOption("ACCEPTANCE_PENDING");
   await page.getByRole("button", { name: "查询" }).click();
-  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
-  const detail = page.getByLabel("隐患详情面板");
+  const tab = await openInTab(page, () => page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click());
+  const detail = tab.getByLabel("隐患详情面板");
   await expect(detail.locator(".status-current")).toHaveText("待验收");
   await detail.getByRole("button", { name: "退回整改" }).click();
   await detail.getByRole("button", { name: "确认退回整改" }).click();
@@ -202,13 +206,13 @@ test("真实模式：台账、详情、上报表单的文字都不称数据为�
   await signIn(page);
   const body = page.locator("body");
   await expect(body).not.toContainText(/演示|合成|示例对象/);
-  await page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click();
-  await expect(page.getByLabel("隐患详情面板").getByRole("heading", { name: "确认与补充记录" })).toBeVisible();
-  await expect(body).not.toContainText(/演示|合成|示例对象/);
-  await page.getByRole("button", { name: "关闭详情" }).click();
+  const detailTab = await openInTab(page, () => page.locator(".ledger-row").first().getByRole("button", { name: "详情" }).click());
+  await expect(detailTab.getByLabel("隐患详情面板").getByRole("heading", { name: "确认与补充记录" })).toBeVisible();
+  await expect(detailTab.locator("body")).not.toContainText(/演示|合成|示例对象/);
+  await detailTab.close();
   const report = await openFindingReport(page);
   await expect(report.organization).toBeVisible();
-  await expect(page.getByLabel("需立即处置")).toBeVisible();
-  await expect(page.getByLabel("紧急", { exact: true })).toHaveCount(0);
-  await expect(body).not.toContainText(/演示|合成|示例对象/);
+  await expect(report.page.getByLabel("需立即处置")).toBeVisible();
+  await expect(report.page.getByLabel("紧急", { exact: true })).toHaveCount(0);
+  await expect(report.page.locator("body")).not.toContainText(/演示|合成|示例对象/);
 });

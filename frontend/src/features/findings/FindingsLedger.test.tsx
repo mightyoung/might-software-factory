@@ -16,7 +16,7 @@ import {
 import type { FindingRecord } from "../../domain/finding";
 import { matchesQuery } from "../../domain/ledger";
 import { findingLedgerSchema } from "./schema";
-import { navigate } from "../../routing/router";
+import { navigate, setTabOpener } from "../../routing/router";
 import { findingDefinitionFixture } from "../../adapters/findingDefinition.fixtures";
 import { ModeProvider } from "../../mode";
 
@@ -58,15 +58,6 @@ function createDeferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
-}
-
-async function traverseHistory(direction: "back" | "forward") {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      window.addEventListener("popstate", () => resolve(), { once: true });
-      window.history[direction]();
-    });
-  });
 }
 
 beforeEach(resetRoute);
@@ -127,7 +118,9 @@ describe("隐患台账分页与详情", () => {
     expect(screen.getByText("已选 3 条（当前页）")).toBeInTheDocument();
   });
 
-  it("筛选打开的详情时回到第一页并清空选择与详情", async () => {
+  it("点详情在新标签页打开，台账的页码、勾选和筛选原样保留", async () => {
+    const opened: string[] = [];
+    setTabOpener((url) => { opened.push(url); });
     render(
       <FindingsLedger
         view="all"
@@ -140,24 +133,15 @@ describe("隐患台账分页与详情", () => {
     await screen.findByText("TEST-HZ-001");
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await screen.findByText("TEST-HZ-021");
-    expect(screen.getByText("2 / 2")).toBeInTheDocument();
-
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 TEST-HZ-021" }));
     fireEvent.click(screen.getAllByRole("button", { name: "详情" })[0]!);
-    const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
-    expect(await within(detail).findByText("TEST-HZ-021")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "隐患编号" }), {
-      target: { value: "TEST-HZ-023" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "查询" }));
-
-    await screen.findByText("共 1 条演示记录");
-    expect(screen.getByText("TEST-HZ-023")).toBeInTheDocument();
-    expect(screen.getByText("1 / 1")).toBeInTheDocument();
-    expect(screen.getByText("已选 0 条（当前页）")).toBeInTheDocument();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/\?tab=1&caseId=/);
     expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
     expect(window.location.search).toBe("");
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("已选 1 条（当前页）")).toBeInTheDocument();
   });
 
   it.each(findingStates)("状态 %s 的详情映射和业务动作保持受限", async (state) => {
@@ -226,37 +210,17 @@ describe("隐患台账分页与详情", () => {
     expect(within(detail).getByText(findingStateLabels[state])).toBeInTheDocument();
   });
 
-  it("关闭详情后浏览器后退不会重新打开已关闭面板", async () => {
+  it("独立标签页只展示详情，不带台账；关闭后回到台账地址", async () => {
+    window.history.replaceState(null, "", "/?tab=1&caseId=00000000-0000-4000-8000-000000000001");
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" />);
-    await screen.findByText("DEMO-HZ-001");
-    fireEvent.click(screen.getAllByRole("button", { name: "详情" })[0]!);
-    const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
+    const detail = await screen.findByRole("complementary", { name: "隐患详情面板" });
     expect(await within(detail).findByText("DEMO-HZ-001")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建上报" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
 
     fireEvent.click(within(detail).getByRole("button", { name: "关闭详情" }));
     await waitFor(() => expect(window.location.search).toBe(""));
-    expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
-
-    await traverseHistory("back");
-    expect(window.location.search).not.toContain("caseId=");
-    expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
-  });
-
-  it("浏览器后退与前进会关闭和重新打开详情", async () => {
-    render(<FindingsLedger view="all" title="隐患台账" description="合成样例" />);
-    await screen.findByText("DEMO-HZ-001");
-    fireEvent.click(screen.getAllByRole("button", { name: "详情" })[0]!);
-    const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
-    expect(await within(detail).findByText("DEMO-HZ-001")).toBeInTheDocument();
-
-    await traverseHistory("back");
-    await waitFor(() => expect(window.location.search).toBe(""));
-    expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
-
-    await traverseHistory("forward");
-    await waitFor(() => expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000001"));
-    expect(await within(screen.getByRole("complementary", { name: "隐患详情面板" })).findByText("DEMO-HZ-001"))
-      .toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument());
   });
 
   it("关闭详情时取消尚未完成的详情读取", async () => {
@@ -561,14 +525,10 @@ it("renders published list/detail labels and clears the old context before accep
   expect(screen.getByRole("columnheader", { name: "发布编号" })).toBeInTheDocument();
   expect(screen.queryByRole("columnheader", { name: "责任人" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("上报日期起")).toHaveAttribute("type", "datetime-local");
-  fireEvent.click(within(screen.getByText("PUBLISHED-A").closest("tr")!).getByRole("button", { name: "详情" }));
-  await screen.findByText("已授权内容");
-  expect(screen.getByText("发布描述")).toBeInTheDocument();
   const next = createDeferred<Awaited<ReturnType<FindingLedgerAdapter["list"]>>>();
   let nextReads = 0;
   const nextAdapter: FindingLedgerAdapter = { publishedDefinition: true, list: () => next.promise, get: async () => { ++nextReads; return null; } };
   view.rerender(<ModeProvider value="http"><FindingsLedger {...props} adapter={nextAdapter} /></ModeProvider>);
-  expect(screen.queryByText("已授权内容")).not.toBeInTheDocument();
   expect(screen.queryByText("PUBLISHED-A")).not.toBeInTheDocument();
   await act(async () => next.resolve({ items: [], page: { index: 1, size: 20 }, total: 0, pageCount: 1, definition }));
   await screen.findByText("共 0 条记录");

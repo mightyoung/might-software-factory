@@ -26,6 +26,25 @@ export function navigate(to: string, replace = false): void {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+let tabOpener: (url: string) => void = (url) => { window.open(url, "_blank", "noopener"); };
+
+/** 详情、新建上报、关联上报都在新标签页打开；测试可用 setTabOpener 换成原地跳转。 */
+export function openInNewTab(url: string): void {
+  tabOpener(url);
+}
+
+export function setTabOpener(opener: (url: string) => void, closer?: () => void): void {
+  tabOpener = opener;
+  if (closer) tabCloser = closer;
+}
+
+let tabCloser: () => void = () => window.close();
+
+/** 独立标签页里的“关闭”：脚本打开的标签页能直接关掉；其余浏览器会忽略，调用方随后退回台账。 */
+export function closeCurrentTab(): void {
+  tabCloser();
+}
+
 interface RouteLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   to: string;
   children: ReactNode;

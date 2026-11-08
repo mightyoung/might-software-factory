@@ -2,13 +2,22 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 const DEFINITION_PATH = "/api/v1/entities/finding/definition";
 
-/** Observe the form's own authorized CREATE response; labels are published contract data. */
-export async function openFindingReport(page: Page) {
-  const definitionRequest = page.waitForResponse((response) => {
+/** 详情、新建上报都在新标签页打开：点击后接住新页面，等它加载出来。 */
+export async function openInTab(page: Page, click: () => Promise<void>): Promise<Page> {
+  const opened = page.context().waitForEvent("page");
+  await click();
+  const tab = await opened;
+  await tab.waitForLoadState("domcontentloaded");
+  return tab;
+}
+
+/** Observe the form's own authorized CREATE response; labels are published contract data. Returns the report tab as `page`. */
+export async function openFindingReport(ledger: Page) {
+  const definitionRequest = ledger.context().waitForEvent("response", (response) => {
     const url = new URL(response.url());
     return response.request().method() === "GET" && url.pathname === DEFINITION_PATH && url.searchParams.get("use") === "CREATE";
   });
-  await page.getByRole("button", { name: "新建上报" }).click();
+  const page = await openInTab(ledger, () => ledger.getByRole("button", { name: "新建上报" }).click());
   const response = await definitionRequest;
   expect(response.status()).toBe(200);
   const body = await response.json();
@@ -31,7 +40,7 @@ export async function openFindingReport(page: Page) {
   await expect(organization).toBeVisible();
   await expect(organization).toBeEnabled();
   await expect(organization).toHaveValue(""); // A bounded reference page never silently selects a candidate.
-  return { panel, organization, submit: panel.getByRole("button", { name: action.label, exact: true }) };
+  return { page, panel, organization, submit: panel.getByRole("button", { name: action.label, exact: true }) };
 }
 
 export async function selectReportOrganization(organization: Locator, option: { id: string; name: string; code: string }) {
