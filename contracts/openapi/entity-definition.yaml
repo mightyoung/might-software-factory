@@ -1,0 +1,410 @@
+openapi: 3.1.0
+info:
+  title: Code-published entity definitions and scoped reference lookup
+  version: 1.0.0
+  description: >-
+    Public DTOs and exact Finding routes for the first G013 source batch. Business owners
+    authorize every request and project READ or CREATE data; a catalog entry, checksum or
+    cursor never grants authority. Query schema v5 and the existing create command stay unchanged.
+x-implementation-status: contract-only
+x-definition-version: '1'
+x-reference-body-limit-bytes: 2048
+x-current-authority: >-
+  Resolve current server session, account, member, tenant, app and data scope before all
+  conditional request handling and before SQL. CREATE maps only to finding.create;
+  READ maps only to finding.read. No caller-supplied permission, resource or SQL dispatch.
+x-cache-semantics: >-
+  Use W/"sha256" semantic ETags over the effective projection, READ/CREATE use and hashed
+  server-derived context/current authority versions. Per-request envelope IDs are excluded.
+  Authorize before If-None-Match including wildcard and list forms; weak comparison for GET.
+  A denial or unavailable authority cannot become 304. Weak validators are not If-Match
+  write proofs. Bodyless 304 retains ETag, Cache-Control and Vary. No shared cache.
+paths:
+  /api/v1/entities/finding/definition:
+    get:
+      operationId: getFindingDefinition
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - in: query
+          name: use
+          required: true
+          description: Exactly one case-sensitive value; missing, duplicate and unknown parameters are rejected.
+          schema:
+            type: string
+            enum: [READ, CREATE]
+        - in: header
+          name: If-None-Match
+          required: false
+          description: RFC weak GET comparison after current authorization, including lists and wildcard.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Currently authorized effective definition; full unpublished fields are absent.
+          headers:
+            ETag:
+              $ref: '#/components/headers/SemanticETag'
+            Cache-Control:
+              $ref: '#/components/headers/PrivateRevalidation'
+            Vary:
+              $ref: '#/components/headers/SessionVary'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefinitionResponse'
+        '304':
+          description: Authorized semantic representation unchanged; no body or fabricated envelope IDs.
+          headers:
+            ETag:
+              $ref: '#/components/headers/SemanticETag'
+            Cache-Control:
+              $ref: '#/components/headers/PrivateRevalidation'
+            Vary:
+              $ref: '#/components/headers/SessionVary'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Denied'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/entities/finding/references/report-organization/query:
+    post:
+      operationId: queryFindingReportOrganizations
+      description: >-
+        One top-level owner-pinned read-only RR snapshot covers current finding.create
+        authority and tenant/active/scope SQL predicates before keyset pagination. Search
+        is literal case-insensitive name/code matching with SQL wildcard characters escaped.
+        Results ascend by stable UUID; limit+1 detects a following page. Each page reauthorizes.
+        Changing query resets afterId. One item in a page does not prove one overall candidate.
+      security:
+        - sessionCookieAuth: []
+      parameters:
+        - in: header
+          name: X-XSRF-TOKEN
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: Strict UTF-8 JSON, at most 2048 bytes, duplicate and unknown properties rejected.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferenceRequest'
+      responses:
+        '200':
+          description: Minimal currently authorized page without a fabricated total.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Denied'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMedia'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+components:
+  securitySchemes:
+    sessionCookieAuth:
+      type: apiKey
+      in: cookie
+      name: SESSION
+  headers:
+    SemanticETag:
+      description: Weak context- and use-bound semantic SHA-256 validator, excluding random envelope metadata.
+      schema:
+        type: string
+        pattern: '^W/"[0-9a-f]{64}"$'
+    PrivateRevalidation:
+      schema:
+        type: string
+        const: private, no-cache
+    SessionVary:
+      schema:
+        type: string
+        const: Cookie
+  responses:
+    InvalidRequest:
+      description: 400 VALIDATION_ERROR; bounded safe field errors, never raw parsing failures.
+      content:
+        application/json:
+          schema:
+            $ref: './entity-query.yaml#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: 401 AUTH_REQUIRED; no definition, candidate or cache success.
+    Denied:
+      description: 403 ACTION_DENIED; current disabled app/tenant or missing action/scope is denied.
+    Unavailable:
+      description: 503 DEPENDENCY_UNAVAILABLE; never fall back to cached authorization or unscoped candidates.
+    BodyTooLarge:
+      description: 413 PAYLOAD_TOO_LARGE before unbounded body parsing.
+    UnsupportedMedia:
+      description: 415 UNSUPPORTED_MEDIA_TYPE for unsupported media or charset.
+  schemas:
+    DefinitionResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/EffectiveDefinition'
+        meta:
+          $ref: '#/components/schemas/Metadata'
+    Metadata:
+      type: object
+      additionalProperties: false
+      required: [requestId, traceId, schemaVersion]
+      properties:
+        requestId:
+          type: string
+        traceId:
+          type: string
+        schemaVersion:
+          type: string
+          const: '1'
+    EffectiveDefinition:
+      type: object
+      additionalProperties: false
+      required: [appKey, entityKey, definitionVersion, querySchemaVersion, use, title, publicationChecksum, fields, layout, actions, references]
+      properties:
+        appKey:
+          type: string
+        entityKey:
+          type: string
+          const: finding
+        definitionVersion:
+          type: string
+          const: '1'
+        querySchemaVersion:
+          type: string
+          const: '5'
+        use:
+          type: string
+          enum: [READ, CREATE]
+        title:
+          type: string
+        publicationChecksum:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Immutable code publication identity; not the context-bound ETag or authority.
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/EffectiveField'
+        layout:
+          $ref: '#/components/schemas/Layout'
+        actions:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Action'
+        references:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Reference'
+    EffectiveField:
+      type: object
+      additionalProperties: false
+      required: [query, presentation]
+      properties:
+        query:
+          $ref: './entity-query.yaml#/components/schemas/EntityFieldSchema'
+        presentation:
+          $ref: '#/components/schemas/FieldPresentation'
+    FieldPresentation:
+      type: object
+      additionalProperties: false
+      required: [label, uiKind, history, referenceKey, valueLabels, edit]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        uiKind:
+          type: string
+          enum: [TEXT, MULTILINE_TEXT, DATE_TIME, BOOLEAN, ENUM, REFERENCE, STATUS, NUMBER]
+        history:
+          type: string
+          enum: [CURRENT, SNAPSHOT]
+        referenceKey:
+          type: [string, 'null']
+        valueLabels:
+          type: object
+          additionalProperties:
+            type: string
+        edit:
+          oneOf:
+            - $ref: '#/components/schemas/EditHints'
+            - type: 'null'
+    EditHints:
+      type: object
+      description: >-
+        Constraints for accepted command input, including optional transport-only fields.
+        Presence of hints does not create a form control or grant write permission;
+        layout.create alone selects rendered controls, and the aggregate validates every input.
+      additionalProperties: false
+      required: [required, maxLength, lengthUnit, allowedValues]
+      properties:
+        required:
+          type: boolean
+        maxLength:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Zero means no metadata length constraint, not zero permitted characters.
+        lengthUnit:
+          type: string
+          enum: [UTF16_CODE_UNITS, UNICODE_CODE_POINTS]
+        allowedValues:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+          description: Create-specific enum subset; server aggregate validation remains authoritative.
+    Layout:
+      type: object
+      description: Ordered presentation fields. create is the desktop control subset, not the full accepted command payload.
+      additionalProperties: false
+      required: [list, detail, create, query]
+      properties:
+        list:
+          $ref: '#/components/schemas/FieldKeys'
+        detail:
+          $ref: '#/components/schemas/FieldKeys'
+        create:
+          $ref: '#/components/schemas/FieldKeys'
+        query:
+          $ref: '#/components/schemas/FieldKeys'
+    FieldKeys:
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+    Action:
+      type: object
+      additionalProperties: false
+      required: [label, position, binding, expectedVersionRequired, idempotencyKeyRequired, inputFields]
+      properties:
+        label:
+          type: string
+        position:
+          type: string
+          const: CREATE
+        binding:
+          $ref: '#/components/schemas/CommandBinding'
+        expectedVersionRequired:
+          type: boolean
+        idempotencyKeyRequired:
+          type: boolean
+          const: true
+        inputFields:
+          description: Exact accepted aggregate transport fields, including input-constrained fields not rendered in layout.create.
+          $ref: '#/components/schemas/FieldKeys'
+    CommandBinding:
+      type: object
+      additionalProperties: false
+      required: [method, permission, path]
+      properties:
+        method:
+          type: string
+          const: POST
+        permission:
+          type: string
+          const: finding.create
+        path:
+          type: string
+          const: /api/v1/findings
+    Reference:
+      type: object
+      additionalProperties: false
+      required: [binding, entityKey, history]
+      properties:
+        binding:
+          $ref: '#/components/schemas/ReferenceBinding'
+        entityKey:
+          type: string
+          const: organization
+        history:
+          type: string
+          enum: [CURRENT, SNAPSHOT]
+    ReferenceBinding:
+      type: object
+      additionalProperties: false
+      required: [resourceKey, method, permission, path]
+      properties:
+        resourceKey:
+          type: string
+          const: report-organization
+        method:
+          type: string
+          const: POST
+        permission:
+          type: string
+          const: finding.create
+        path:
+          type: string
+          const: /api/v1/entities/finding/references/report-organization/query
+    ReferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          maxLength: 100
+          description: At most 100 Unicode code points. Empty string searches the current scoped set.
+        afterId:
+          oneOf:
+            - type: string
+              format: uuid
+              pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            - type: 'null'
+        limit:
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 50
+    ReferenceResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ReferencePage'
+        meta:
+          $ref: '#/components/schemas/Metadata'
+    ReferencePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ReferenceItem'
+        nextAfterId:
+          type: string
+          format: uuid
+          description: Last returned UUID iff limit+1 found another row; omitted otherwise. Never a capability.
+    ReferenceItem:
+      type: object
+      additionalProperties: false
+      required: [id, code, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string

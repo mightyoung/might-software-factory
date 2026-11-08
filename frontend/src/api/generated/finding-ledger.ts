@@ -84,7 +84,7 @@ export interface components {
              * @description Monotonic version of this entity's fields and query defaults; it is not an authorization token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share entries across tenant or authorization scopes. When this value changes, discard the older cached schema and fetch this endpoint before validating requests or responses. Increment it when field shape, nullability, default projection, or default ordering changes.
              * @constant
              */
-            schemaVersion: "4";
+            schemaVersion: "5";
             /** @constant */
             idField: "id";
             /** @constant */
@@ -126,10 +126,47 @@ export interface components {
                 grade: components["schemas"]["FindingGradeField"];
                 state: components["schemas"]["FindingStateField"];
                 roundNo: components["schemas"]["NumberField"];
+                reviewCycle: components["schemas"]["ReviewCycleField"];
+                reviewProtocol: components["schemas"]["ReviewProtocolField"];
                 version: components["schemas"]["NumberField"];
                 createdAt: components["schemas"]["DateTimeField"];
                 updatedAt: components["schemas"]["DateTimeField"];
             };
+        };
+        ReviewCycleField: {
+            /** @constant */
+            type: "NUMBER";
+            /** @constant */
+            nullable: false;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            /** @constant */
+            operators: never[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: never[];
+        };
+        ReviewProtocolField: {
+            /** @constant */
+            type: "ENUM";
+            /** @constant */
+            nullable: false;
+            /** @constant */
+            selectable: true;
+            /** @constant */
+            sortable: false;
+            /** @constant */
+            operators: never[];
+            /** @constant */
+            maxLength: 0;
+            /** @constant */
+            enumValues: [
+                "LEGACY",
+                "CYCLE_V1"
+            ];
         };
         UuidField: {
             /** @constant */
@@ -364,6 +401,7 @@ export interface components {
                 "DISCOVERED",
                 "PERSON_CONFIRM_PENDING",
                 "SAFETY_CONFIRM_PENDING",
+                "REPORTER_SUPPLEMENT_PENDING",
                 "SAFETY_DISPATCH_PENDING",
                 "RECTIFYING",
                 "ACCEPTANCE_PENDING",
@@ -400,10 +438,13 @@ export interface components {
             /** @enum {unknown} */
             grade?: "UNKNOWN" | "GENERAL" | "MAJOR";
             /** @enum {unknown} */
-            state?: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
+            state?: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "REPORTER_SUPPLEMENT_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
             /** Format: uuid */
             relatedFindingId?: string | null;
             roundNo?: number;
+            readonly reviewCycle?: number;
+            /** @enum {unknown} */
+            readonly reviewProtocol?: "LEGACY" | "CYCLE_V1";
             version?: number;
             /** Format: date-time */
             createdAt?: string;
@@ -451,10 +492,13 @@ export interface components {
             /** @enum {unknown} */
             grade: "UNKNOWN" | "GENERAL" | "MAJOR";
             /** @enum {unknown} */
-            state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
+            state: "DISCOVERED" | "PERSON_CONFIRM_PENDING" | "SAFETY_CONFIRM_PENDING" | "REPORTER_SUPPLEMENT_PENDING" | "SAFETY_DISPATCH_PENDING" | "RECTIFYING" | "ACCEPTANCE_PENDING" | "NOT_ESTABLISHED" | "CLOSED";
             /** Format: uuid */
             relatedFindingId: string | null;
             roundNo: number;
+            readonly reviewCycle: number;
+            /** @enum {unknown} */
+            readonly reviewProtocol: "LEGACY" | "CYCLE_V1";
             version: number;
             /** Format: date-time */
             createdAt: string;

@@ -12,7 +12,7 @@ export default defineConfig({
   reporter: "list",
   use: { baseURL: APP, channel: "chrome", trace: "retain-on-failure" },
   webServer: [
-    { command: "node tools/mock-server/server.mjs", url: `${MOCK}/api/v1/auth/csrf`, env: { PORT: "18080" }, reuseExistingServer: false },
+    { command: "node tools/mock-server/server.mjs", url: `${MOCK}/api/v1/auth/csrf`, env: { PORT: "18080", MOCK_REVIEW_CYCLES: "1" }, reuseExistingServer: false },
     {
       command: "npm run dev -- --port 15173 --strictPort",
       url: APP,

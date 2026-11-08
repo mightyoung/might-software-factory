@@ -16,7 +16,10 @@ import type { FindingEvidenceAdapter } from "../adapters/findingEvidence";
 import { useAppMode } from "../mode";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
+import { displayPublishedValue, publishedFieldValue, type FindingDefinition } from "../adapters/findingDefinition";
+
 interface FindingDetailsProps {
+  definition?: FindingDefinition | null;
   finding: FindingRecord | null;
   loading: boolean;
   error: FindingLedgerReadFailureKind | null;
@@ -30,9 +33,10 @@ interface FindingDetailsProps {
   onOpenRelated?: (id: string) => void;
   onCommandChanged?: () => void;
   onUnauthenticated?: () => void;
+  onForbidden?: () => void;
 }
 
-export function FindingDetails({ finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated }: FindingDetailsProps) {
+export function FindingDetails({ definition, finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
   const demo = useAppMode() === "synthetic";
   const noun = demo ? "演示记录" : "记录";
   return (
@@ -61,7 +65,10 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
         <>
           <section className="detail-section">
             <h3>基本信息</h3>
-            <dl className="detail-list">
+            {definition ? <dl className="detail-list">{definition.layout.detail.map((key) => <div key={key}>
+              <dt>{definition.fields[key]!.presentation.label}</dt>
+              <dd>{displayPublishedValue(definition.fields[key]!, publishedFieldValue(finding, key))}</dd>
+            </div>)}</dl> : (            <dl className="detail-list">
               <div>
                 <dt>隐患摘要</dt>
                 <dd>{finding.description}</dd>
@@ -70,19 +77,6 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                 <dt>所在位置 / 设备</dt>
                 <dd>{finding.location}</dd>
               </div>
-              {finding.relatedFindingId && (
-                <div>
-                  <dt>关联记录</dt>
-                  <dd>
-                    由一条未成立记录补充新证据而来
-                    {onOpenRelated && (
-                      <button className="link-button" type="button" onClick={() => onOpenRelated(finding.relatedFindingId!)}>
-                        {" "}查看原记录
-                      </button>
-                    )}
-                  </dd>
-                </div>
-              )}
               <div>
                 <dt>上报时间</dt>
                 <dd>{formatDateTime(finding.reportedAt)}</dd>
@@ -122,17 +116,28 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                 <dt>整改责任人</dt>
                 <dd>{finding.responsible}</dd>
               </div>
-            </dl>
+            </dl>)}
+
+                      {finding.relatedFindingId && (
+              <p className="detail-related">
+                关联记录：由一条未成立记录补充新证据而来
+                {onOpenRelated && (
+                  <button className="link-button" type="button" onClick={() => onOpenRelated(finding.relatedFindingId!)}>
+                    {" "}查看原记录
+                  </button>
+                )}
+              </p>
+            )}
           </section>
 
           <section className="detail-section state-summary" aria-label="当前状态">
             <div>
               <span>当前状态</span>
-              <strong className="status-label status-current">{findingStateLabels[finding.state]}</strong>
+              <strong className="status-label status-current">{definition?.fields.state ? displayPublishedValue(definition.fields.state, publishedFieldValue(finding, "state")) : findingStateLabels[finding.state]}</strong>
             </div>
             <div>
               <span>风险等级</span>
-              <strong className="status-label status-muted">{finding.riskLabel}</strong>
+              <strong className="status-label status-muted">{definition?.fields.grade ? displayPublishedValue(definition.fields.grade, publishedFieldValue(finding, "grade")) : finding.riskLabel}</strong>
             </div>
             <p>
               {demo
@@ -144,9 +149,9 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
           <section className="detail-section workflow-section">
             <div className="section-title-row">
               <h3>流程进度</h3>
-              <span>第 {finding.round} 轮{demo ? " · 演示" : ""}</span>
+              <span>第 {finding.round} 轮整改{demo ? " · 演示" : ""}</span>
             </div>
-            <ol className="workflow-list" aria-label="隐患流程节点">
+            {finding.state === "REPORTER_SUPPLEMENT_PENDING" ? <p>确认已退回，等待原上报人补充说明。补充后重新完成两级确认。</p> : <ol className="workflow-list" aria-label="隐患流程节点">
               {workflowSteps.map((step, index) => {
                 const terminal = finding.state === "CLOSED" || finding.state === "NOT_ESTABLISHED";
                 const complete = finding.state === "CLOSED" ||
@@ -162,10 +167,10 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                   </li>
                 );
               })}
-            </ol>
+            </ol>}
           </section>
 
-          <section className="detail-section history-section">
+          {!commandAdapter?.history && <section className="detail-section history-section">
             <h3>{demo ? "演示轨迹" : "处理轨迹"}</h3>
             {!demo && finding.history.length === 0 && <p className="field-hint">后端暂未提供处理轨迹。</p>}
             {finding.historyTruncated && <p className="field-hint">仅显示最近 200 条处理轨迹。</p>}
@@ -180,7 +185,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
                 </li>
               ))}
             </ul>
-          </section>
+          </section>}
 
           {commandAdapter && evidenceAdapter && finding.state === "RECTIFYING" && finding.version !== undefined && (
             <EvidenceUploadPanel key={`${finding.id}:${finding.round}`} finding={finding} adapter={evidenceAdapter} onUnauthenticated={onUnauthenticated} />
@@ -194,16 +199,7 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </div>
           )}
 
-          {commandAdapter ? (
-            <FindingCommandPanel
-              key={finding.id}
-              finding={finding}
-              adapter={commandAdapter}
-              refreshing={loading}
-              onChanged={onCommandChanged ?? onRetry}
-              onUnauthenticated={onUnauthenticated}
-            />
-          ) : (
+          {!commandAdapter && (
             <>
               <p className="action-hint" role="note">
                 审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
@@ -220,6 +216,18 @@ export function FindingDetails({ finding, loading, error, onClose, onRetry, comm
             </>
           )}
         </>
+      )}
+      {finding && commandAdapter && (!error || error === "unknown") && (
+        <FindingCommandPanel
+          key={finding.id}
+          finding={finding}
+          adapter={commandAdapter}
+          onChanged={onCommandChanged ?? onRetry}
+          onUnauthenticated={onUnauthenticated}
+          refreshing={loading}
+          readBlocked={Boolean(error)}
+          onForbidden={onForbidden}
+        />
       )}
     </aside>
   );

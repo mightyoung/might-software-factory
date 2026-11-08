@@ -6,6 +6,7 @@ const expectedLabels: Record<FindingState, string> = {
   DISCOVERED: "已发现·待启动流程",
   PERSON_CONFIRM_PENDING: "待一人确认",
   SAFETY_CONFIRM_PENDING: "待安全确认",
+  REPORTER_SUPPLEMENT_PENDING: "待上报人补充",
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
   RECTIFYING: "整改中",
   ACCEPTANCE_PENDING: "待安全验收",
@@ -14,11 +15,12 @@ const expectedLabels: Record<FindingState, string> = {
 };
 
 describe("隐患流程状态映射", () => {
-  it("查询选项和领域标签完整覆盖契约里的全部八个状态", () => {
+  it("查询选项和领域标签完整覆盖契约里的全部状态", () => {
     expect(findingStates.map((state) => findingStateLabels[state])).toEqual([
       "已发现·待启动流程",
       "待一人确认",
       "待安全确认",
+      "待上报人补充",
       "待安全部门派单",
       "整改中",
       "待安全验收",
@@ -38,6 +40,7 @@ describe("隐患流程状态映射", () => {
       "DISCOVERED",
       "PERSON_CONFIRM_PENDING",
       "SAFETY_CONFIRM_PENDING",
+      "REPORTER_SUPPLEMENT_PENDING",
       "SAFETY_DISPATCH_PENDING",
       "RECTIFYING",
       "ACCEPTANCE_PENDING",
@@ -47,6 +50,6 @@ describe("隐患流程状态映射", () => {
   });
 
   it("每个状态映射到约定的工作流节点", () => {
-    expect(findingStates.map(workflowCurrentIndex)).toEqual([0, 1, 2, 3, 4, 5, 0, 5]);
+    expect(findingStates.map(workflowCurrentIndex)).toEqual([0, 1, 2, 0, 3, 4, 5, 0, 5]);
   });
 });

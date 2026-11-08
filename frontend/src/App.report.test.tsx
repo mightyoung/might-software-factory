@@ -170,6 +170,11 @@ describe("真实后端会话（非合成）", () => {
     const restore: typeof base.restore = async () => ({ ...(await base.restore())!, actor: { id: "u1", displayName: "张三" } });
     render(<App mode="http" sessionAdapter={{ ...base, restore, requiresTenantCode: true }} createFindingStore={() => ({ ledger, submit, commands: { run: vi.fn() } })} />);
     await screen.findByRole("heading", { name: "隐患台账" });
+    expect(screen.queryByText("合成演示")).not.toBeInTheDocument();
+    expect(screen.queryByText("前端合成数据")).not.toBeInTheDocument();
+    expect(screen.queryByText(/合成演示数据/)).not.toBeInTheDocument();
+    await waitFor(() => expect(ledger.list).toHaveBeenCalled());
+
     await screen.findByText("共 1 条记录");
     const noDemoWording = () => {
       const text = document.body.textContent ?? "";
@@ -196,6 +201,62 @@ describe("真实后端会话（非合成）", () => {
     render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} />);
     await screen.findByText(/共 \d+ 条演示记录/);
     expect(screen.getByText("合成演示")).toBeInTheDocument();
+  });
+});
+
+describe("READ and CREATE route projections", () => {
+  async function renderWithPermissions(permissions: string[]) {
+    const { createHttpFindingLedger } = await import("./adapters/httpFindingLedger");
+    const { createHttpFindingSubmit } = await import("./adapters/httpFindingSubmit");
+    const { definitionResponse } = await import("./adapters/findingDefinition.fixtures");
+    const base = createSyntheticSessionAdapter({ signedInAs: "demo.safety" });
+    const session = (await base.restore())!;
+    const gets: string[] = [], posts: string[] = [];
+    const orgId = "00000000-0000-4000-8000-000000000401";
+    const client = {
+      get: async (path: string) => { gets.push(path); return definitionResponse(path.endsWith("CREATE") ? "CREATE" : "READ"); },
+      post: async (path: string) => {
+        posts.push(path);
+        if (path.endsWith("report-organization/query")) return { data: { items: [{ id: orgId, code: "A", name: "当前车间" }] }, meta: { schemaVersion: "1" } };
+        if (path === "/api/v1/findings") return { data: { findingId: "00000000-0000-4000-8000-000000000402", code: "REPORT-ONLY-1", state: "PERSON_CONFIRM_PENDING" } };
+        return { data: { items: [], page: { number: 1, size: 20, total: 0, pageCount: 1 } } };
+      },
+    } as unknown as import("./api/httpClient").HttpClient;
+    setPath(`${T}/safety/findings${permissions.includes("safety.finding.read") ? "" : "?caseId=previous-record"}`);
+    render(<App mode="http" sessionAdapter={{ ...base, requiresTenantCode: true, restore: async () => ({ ...session, permissions }) }} findingStore={{ ledger: createHttpFindingLedger(client), submit: createHttpFindingSubmit(client) }} />);
+    return { gets, posts, orgId };
+  }
+
+  it("lets a CREATE-only member submit without any READ request or receipt-to-detail action", async () => {
+    const { gets, posts, orgId } = await renderWithPermissions(["safety.finding.report"]);
+    await screen.findByRole("heading", { name: "隐患上报" });
+    await screen.findByRole("option", { name: /当前车间/ });
+    fireEvent.change(screen.getByLabelText(/所属组织/), { target: { value: orgId } });
+    fireEvent.change(screen.getByLabelText(/隐患描述/), { target: { value: "现场情况" } });
+    fireEvent.change(screen.getByLabelText(/所在位置/), { target: { value: "作业点" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交上报" }));
+    await screen.findByText("REPORT-ONLY-1");
+    expect(screen.queryByRole("button", { name: "查看详情" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(gets).toEqual(["/api/v1/entities/finding/definition?use=CREATE", "/api/v1/entities/finding/definition?use=CREATE"]);
+    expect(posts).toEqual(["/api/v1/entities/finding/references/report-organization/query", "/api/v1/findings"]);
+    expect(window.location.search).not.toContain("caseId");
+  });
+
+  it("keeps a READ-only member out of the create projection", async () => {
+    const { gets, posts } = await renderWithPermissions(["safety.finding.read"]);
+    await screen.findByRole("heading", { name: "隐患台账" });
+    await screen.findByText("共 0 条记录");
+    expect(screen.queryByRole("button", { name: "新建上报" })).not.toBeInTheDocument();
+    expect(gets.every((path) => !path.includes("use=CREATE"))).toBe(true);
+    expect(posts).not.toContain("/api/v1/entities/finding/references/report-organization/query");
+  });
+
+  it("does not mount either projection when neither permission is present", async () => {
+    const { gets, posts } = await renderWithPermissions([]);
+    await screen.findByRole("heading", { name: "无权访问" });
+    expect(gets).toEqual([]); expect(posts).toEqual([]);
+    expect(screen.queryByRole("complementary", { name: "新建上报面板" })).not.toBeInTheDocument();
   });
 });
 

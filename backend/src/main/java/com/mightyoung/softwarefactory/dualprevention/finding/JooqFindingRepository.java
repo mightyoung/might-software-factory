@@ -75,6 +75,8 @@ public final class JooqFindingRepository implements FindingRepository {
     private static final Field<String> GRADE = field(name("finding", "grade"), String.class);
     private static final Field<String> STATE = field(name("finding", "state"), String.class);
     private static final Field<Integer> ROUND_NO = field(name("finding", "round_no"), Integer.class);
+    private static final Field<Integer> REVIEW_CYCLE = field(name("finding", "review_cycle"), Integer.class);
+    private static final Field<String> REVIEW_PROTOCOL = field(name("finding", "review_protocol"), String.class);
     private static final Field<Long> VERSION = field(name("finding", "version"), Long.class);
     private static final Field<OffsetDateTime> CREATED_AT = field(name("finding", "created_at"), OffsetDateTime.class);
     private static final Field<OffsetDateTime> UPDATED_AT = field(name("finding", "updated_at"), OffsetDateTime.class);
@@ -244,7 +246,7 @@ public final class JooqFindingRepository implements FindingRepository {
                 case DATETIME -> OffsetDateTime.parse(value.stringValue());
                 case DATE -> java.time.LocalDate.parse(value.stringValue());
                 case BOOLEAN -> value.booleanValue();
-                case NUMBER -> key.equals("roundNo")
+                case NUMBER -> (key.equals("roundNo") || key.equals("reviewCycle"))
                         ? value.decimalValue().intValueExact()
                         : value.decimalValue().longValueExact();
                 case MONEY -> new BigDecimal(value.numberValue().toString());
@@ -278,11 +280,11 @@ public final class JooqFindingRepository implements FindingRepository {
         return switch (key) {
             case "id", "organizationId", "sourceEventId", "riskId", "relatedFindingId" -> FieldType.UUID;
             case "code", "description", "organizationName" -> FieldType.TEXT;
-            case "grade", "state", "sourceCategory", "urgency" -> FieldType.ENUM;
+            case "grade", "state", "sourceCategory", "urgency", "reviewProtocol" -> FieldType.ENUM;
             case "location", "interimMeasure" -> FieldType.TEXT;
             case "backfill" -> FieldType.BOOLEAN;
             case "discoveredAt", "createdAt", "updatedAt" -> FieldType.DATETIME;
-            case "roundNo", "version" -> FieldType.NUMBER;
+            case "roundNo", "version", "reviewCycle" -> FieldType.NUMBER;
             default -> throw new IllegalArgumentException("Finding field is not registered");
         };
     }
@@ -296,7 +298,7 @@ public final class JooqFindingRepository implements FindingRepository {
                 selectedValue(row, ORGANIZATION_ID), selectedValue(row, ORGANIZATION_NAME),
                 selectedValue(row, SOURCE_CATEGORY), selectedValue(row, URGENCY), selectedValue(row, LOCATION),
                 selectedValue(row, INTERIM_MEASURE), selectedValue(row, BACKFILL),
-                selectedValue(row, RELATED_FINDING_ID));
+                selectedValue(row, RELATED_FINDING_ID), selectedValue(row, REVIEW_CYCLE), selectedValue(row, REVIEW_PROTOCOL));
     }
 
     private static <T> T selectedValue(Record row, Field<T> field) {
@@ -332,6 +334,8 @@ public final class JooqFindingRepository implements FindingRepository {
         fields.put("state", STATE);
         fields.put("roundNo", ROUND_NO);
         fields.put("version", VERSION);
+        fields.put("reviewCycle", REVIEW_CYCLE);
+        fields.put("reviewProtocol", REVIEW_PROTOCOL);
         fields.put("createdAt", CREATED_AT);
         fields.put("updatedAt", UPDATED_AT);
         return Map.copyOf(fields);

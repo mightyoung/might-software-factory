@@ -1,5 +1,6 @@
 // 文件名决定执行顺序：它会新增记录，必须排在依赖“共 3 条”的 finding.e2e.ts 之后、改密码的 password.e2e.ts 之前。
 import { expect, test } from "@playwright/test";
+import { openFindingReport, selectReportOrganization } from "./findingForm";
 
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
@@ -33,26 +34,27 @@ test("未成立的记录：基于此创建关联上报，新记录详情带关�
   await expect(page.locator(".ledger-row").first()).toBeVisible();
 
   // 先造一条并在人员确认阶段判不成立
-  await page.getByRole("button", { name: "新建上报" }).click();
-  await page.getByLabel(/所属组织/).selectOption({ label: "一车间" });
+  const first = await openFindingReport(page);
+  await selectReportOrganization(first.organization, { id: "11111111-1111-4111-8111-111111111111", name: "一车间", code: "WS-A" });
   await page.getByLabel(/所在位置/).fill("关联测试工位");
   await page.getByLabel(/隐患描述/).fill("关联测试：原记录");
-  await page.getByRole("button", { name: "提交上报" }).click();
+  await first.submit.click();
   await page.getByRole("button", { name: "查看详情" }).click();
   const detail = page.getByLabel("隐患详情面板");
-  await detail.getByRole("button", { name: "不成立" }).click();
+  await detail.getByRole("button", { name: "判定未成立" }).click();
   await detail.getByLabel(/意见/).fill("现场未发现");
-  await detail.getByRole("form", { name: "不成立" }).getByRole("button", { name: /不成立/ }).click();
-  await expect(detail.locator(".status-current")).toHaveText("未成立");
+  await detail.getByRole("button", { name: "确认判定未成立" }).click();
+  await expect(detail.locator(".status-current")).toHaveText("不成立");
 
   await detail.getByRole("button", { name: "基于此创建关联上报" }).click();
   await expect(page.getByText(/基于未成立记录/)).toBeVisible();
-  await page.getByLabel(/所属组织/).selectOption({ label: "一车间" });
+  const related = page.getByRole("complementary", { name: "新建上报面板" });
+  await related.getByRole("combobox").first().selectOption("11111111-1111-4111-8111-111111111111");
   await page.getByLabel(/所在位置/).fill("关联测试工位");
   await page.getByLabel(/隐患描述/).fill("关联测试：补充新证据");
-  await page.getByRole("button", { name: "提交上报" }).click();
+  await related.getByRole("button", { name: "提交上报" }).click();
   await page.getByRole("button", { name: "查看详情" }).click();
   await expect(page.getByLabel("隐患详情面板").getByText("由一条未成立记录补充新证据而来")).toBeVisible();
   await page.getByRole("button", { name: /查看原记录/ }).click();
-  await expect(page.getByLabel("隐患详情面板").locator(".status-current")).toHaveText("未成立");
+  await expect(page.getByLabel("隐患详情面板").locator(".status-current")).toHaveText("不成立");
 });

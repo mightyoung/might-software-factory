@@ -5,9 +5,11 @@ import type { FindingUrgency } from "../domain/finding";
 import { normalizeDraft, type FindingDraft, type FindingDraftErrors, type FindingDraftField } from "../domain/findingDraft";
 import { wallTimeToIso } from "../domain/time";
 import { FindingSubmitError, type FindingSubmitAdapter } from "./findingSubmit";
-import type { components as SessionComponents } from "../api/generated/session-api";
+import type { components as DefinitionComponents } from "../api/generated/entity-definition";
+import { loadFindingDefinition, REPORT_ORGANIZATION_QUERY } from "./findingDefinition";
 
 type CreateRequest = components["schemas"]["CreateFindingRequest"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 后端字段路径 → 表单字段。 */
 const FIELD_MAP: Readonly<Record<string, FindingDraftField>> = {
@@ -57,19 +59,32 @@ function toSubmitError(error: ApiError): FindingSubmitError {
 }
 
 /**
- * POST /api/v1/findings。organizationId 来自 GET /organizations/reportable 的选择（服务端创建时仍会复核）；
+ * POST /api/v1/findings。organizationId 来自有界、当前授权的组织引用查询（服务端创建时仍会复核）；
  * 请求体不含租户、上报人、编号或补报标记，这些全由服务端决定。
  */
 export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapter {
   return {
     // 与 URGENCY_MAP 一致：后端没有对应值的“紧急”档不提供。
     urgencies: (Object.keys(URGENCY_MAP) as FindingUrgency[]).filter((key) => URGENCY_MAP[key] !== null),
-    async listOrganizations(signal) {
+    async loadDefinition(signal) {
+      try { return await loadFindingDefinition(client, "CREATE", signal); }
+      catch (error) { if (error instanceof ApiError) throw toSubmitError(error); throw error; }
+    },
+    async queryOrganizations({ query, afterId, limit = 20 }, signal) {
       try {
-        const body = await client.get<SessionComponents["schemas"]["ReportableOrganizationsResponse"]>(
-          "/api/v1/organizations/reportable",
-          { signal },
+        if ([...query].length > 100 || query.includes("\0") || !Number.isInteger(limit) || limit < 1 || limit > 50
+          || (afterId !== undefined && !UUID.test(afterId))) throw new FindingSubmitError("validation");
+        const body = await client.post<DefinitionComponents["schemas"]["ReferenceResponse"]>(
+          REPORT_ORGANIZATION_QUERY,
+          { body: { query, ...(afterId ? { afterId } : {}), limit }, signal },
         );
+        signal?.throwIfAborted();
+        const page = body?.data;
+        if (body?.meta?.schemaVersion !== "1" || !page || !Array.isArray(page.items) || page.items.length > limit
+          || page.items.some((item) => !item || !UUID.test(item.id) || typeof item.name !== "string" || typeof item.code !== "string")
+          || new Set(page.items.map((item) => item.id)).size !== page.items.length
+          || (page.nextAfterId !== undefined && (!UUID.test(page.nextAfterId) || page.nextAfterId === afterId
+            || page.nextAfterId !== page.items.at(-1)?.id))) throw new FindingSubmitError("unavailable");
         return body.data;
       } catch (error) {
         if (error instanceof ApiError) throw toSubmitError(error);
@@ -96,6 +111,7 @@ export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapte
         ...(relatedFindingId ? { relatedFindingId } : {}),
       };
       try {
+        await loadFindingDefinition(client, "CREATE", signal);
         const response = await client.post<components["schemas"]["CommandResponse"]>("/api/v1/findings", {
           body,
           headers: { "Idempotency-Key": idempotencyKey },

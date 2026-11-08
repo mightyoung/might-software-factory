@@ -1,3 +1,4 @@
+import type { components as HistoryComponents } from "../api/generated/finding-review-history";
 import type { components } from "../api/generated/finding-workflow";
 import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
@@ -13,6 +14,14 @@ type Response = components["schemas"]["CommandResponse"];
 function endpoint(id: string, command: FindingCommand): { path: string; body: Record<string, unknown> } {
   const base = `/api/v1/findings/${encodeURIComponent(id)}`;
   switch (command.kind) {
+    case "reviewDecision": {
+      const { kind: _, ...body } = command;
+      return { path: `${base}/review-decisions`, body };
+    }
+    case "supplement":
+      return { path: `${base}/supplements`, body: { reviewCycle: command.reviewCycle, statement: command.statement } };
+    case "closeNotEstablished":
+      return { path: `${base}/close-not-established`, body: { stage: command.stage, reason: command.reason } };
     case "initialize":
       return { path: `${base}/workflow-initialization`, body: {} };
     case "confirmPerson":
@@ -80,16 +89,27 @@ export function createHttpFindingCommands(client: HttpClient): FindingCommandAda
         throw error;
       }
     },
+    async history(findingId, options) {
+      try {
+        const query = options?.cursor ? `&cursor=${encodeURIComponent(options.cursor)}` : "";
+        return (await client.get<HistoryComponents["schemas"]["HistoryResponse"]>(
+          `/api/v1/findings/${encodeURIComponent(findingId)}/review-history?pageSize=20${query}`, { signal: options?.signal },
+        )).data;
+      } catch (error) {
+        if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
+        throw error;
+      }
+    },
     async run(findingId, expectedVersion, command, { idempotencyKey, signal }) {
       const { path, body } = endpoint(findingId, command);
       try {
-        const response = await client.post<Response>(path, {
+        const response = await client.post<Response | components["schemas"]["ReviewCycleCommandResponse"]>(path, {
           body: { expectedVersion, ...body },
           headers: { "Idempotency-Key": idempotencyKey },
           signal,
         });
         const { state, roundNo, version } = response.data;
-        return { state, roundNo, version };
+        return { state, roundNo, version, ...("reviewCycle" in response.data ? { reviewCycle: response.data.reviewCycle } : {}) };
       } catch (error) {
         if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
         throw error;

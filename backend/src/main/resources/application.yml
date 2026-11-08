@@ -23,11 +23,18 @@ spring:
   modulith:
     events:
       jdbc:
+        # Use the legacy V1 projection: five insert fields plus completion_date.
+        # V5 also retains status columns, but this adapter does not use them.
+        use-legacy-structure: true
         schema-initialization:
           # The event publication registry is created by the versioned Flyway migration.
           enabled: false
 
 software-factory:
+  workflow:
+    finding-review:
+      initiation-enabled: false
+      tenant-pins: {}
   security:
     session:
       # Authentication age never slides with access; the separate idle timeout remains 30m.
@@ -49,6 +56,8 @@ server:
   forward-headers-strategy: none
 
 flowable:
+  # Process resources require explicit reviewed deployment; startup must not deploy them.
+  check-process-definitions: false
   database-schema-update: false
   async-executor-activate: false
   async-history-executor-activate: false

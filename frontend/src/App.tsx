@@ -1,6 +1,7 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedger } from "./features/findings/FindingsLedger";
+import { FindingReportForm } from "./components/FindingReportForm";
 import { LoginPage } from "./features/session/LoginPage";
 import { SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
@@ -140,6 +141,16 @@ function StatusPage({ title, description, note }: { title: string; description: 
   );
 }
 
+/** A create-only member never mounts the ledger or a detail-read action. */
+function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: FindingSubmitAdapter; draftKey: string; onUnauthenticated: () => void }) {
+  const [open, setOpen] = useState(true);
+  return <section className="ledger-main">
+    <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
+    <p>可上报你有权提交的隐患。</p>
+    {open && <FindingReportForm adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
+  </section>;
+}
+
 function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
   const { state, logout, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
@@ -147,7 +158,10 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
   // 按身份和租户重建：适配器可能缓存 schema，不得跨账号或租户复用。
-  const identityKey = session ? `${session.tenant.id}/${session.actor.id}` : "";
+  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId, [...session.permissions].sort(), session.applications.map((app) => [app.id, app.entryPath]).sort()]) : "";
+  const previousIdentity = useRef("");
+  const pendingSelectionReset = useRef(false);
+  if (identityKey && previousIdentity.current && previousIdentity.current !== identityKey) pendingSelectionReset.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const findingStore = useMemo(() => createFindingStore(), [identityKey]);
 
@@ -160,6 +174,23 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
     session && pathApplication && session.applications.some((app) => app.id === pathApplication) ? pathApplication : null;
   const shellApplication = redirect ? null : authorizedApplication;
   const menu = useAppMenu(shellApplication);
+  const canReadRoute = session !== null && route !== undefined && hasPermission(session, route.permission);
+  const canReportHere = session !== null && route?.rest === "safety/findings" && hasPermission(session, "safety.finding.report");
+  const reportOnly = canReportHere && !canReadRoute;
+  // Do not consume the reset at /login or an intermediate canonical redirect. Never
+  // mount a new identity's reader while a previous identity's URL selection remains.
+  const parameters = new URLSearchParams(splitLocation(location).search);
+  let selectionResetTarget: string | null = null;
+  if (session && !redirect && (pendingSelectionReset.current || reportOnly) && parameters.has("caseId")) {
+    parameters.delete("caseId");
+    const suffix = parameters.toString();
+    selectionResetTarget = `${pathname}${suffix ? `?${suffix}` : ""}`;
+  }
+  const resetInitialSelection = pendingSelectionReset.current;
+  useLayoutEffect(() => {
+    if (identityKey) previousIdentity.current = identityKey;
+    if (session && !redirect && selectionResetTarget === null) pendingSelectionReset.current = false;
+  }, [identityKey, session, redirect, selectionResetTarget]);
 
   useEffect(() => {
     if (state.status === "signedOut") {
@@ -167,8 +198,10 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       if (pathname !== LOGIN_PATH) navigate(target, true);
     } else if (redirect) {
       navigate(redirect, true);
+    } else if (selectionResetTarget) {
+      navigate(selectionResetTarget, true);
     }
-  }, [state, location, pathname, redirect]);
+  }, [state, location, pathname, redirect, selectionResetTarget]);
 
   if (state.status === "restoring") {
     return (
@@ -178,7 +211,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
     );
   }
   if (state.status === "signedOut") return <LoginPage notice={state.notice} />;
-  if (!session || redirect) return null;
+  if (!session || redirect || selectionResetTarget) return null;
 
   let title: string;
   let content: ReactNode;
@@ -200,7 +233,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       ) : (
         <StatusPage title="页面未开放" description="该路由不属于首批前端交付范围。" />
       );
-  } else if (!authorizedApplication || !hasPermission(session, route.permission)) {
+  } else if (!authorizedApplication || (!canReadRoute && !canReportHere)) {
     title = "无权访问";
     content = (
       <StatusPage
@@ -209,6 +242,9 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         note="导航和此提示仅用于界面呈现，不是授权凭据；实际访问权限由服务端校验。"
       />
     );
+  } else if (reportOnly) {
+    title = "隐患上报";
+    content = <FindingReportPage adapter={findingStore.submit} draftKey={draftOwnerKey(session.tenant.id, session.actor.id)} onUnauthenticated={expire} />;
   } else if (route.page.kind === "ledger") {
     title = route.page.title;
     content = (
@@ -218,6 +254,8 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         title={route.page.title}
         description={mode === "http" ? (route.page.liveDescription ?? route.page.description) : route.page.description}
         adapter={findingStore.ledger}
+        synthetic={mode === "synthetic"}
+        resetInitialSelection={resetInitialSelection}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
         evidenceAdapter={findingStore.evidence}
@@ -240,7 +278,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
   return (
     // 以身份为 key：切换账号后丢弃上一个身份的页面状态（筛选、选中、详情）。
     <AppShell
-      key={session.actor.id}
+      key={identityKey}
       session={session}
       application={authorizedApplication}
       currentRest={parsed.rest}

@@ -52,7 +52,8 @@ public final class NavigationService {
             Bootstrap current = load();
             if (current.applications().isEmpty()) throw denied();
             return new Menu(1, APPLICATION, "生产安全", List.of(new MenuNode(
-                    "findings", "隐患管理", ENTRY_PATH, "finding.read")), current.permissions(),
+                    "findings", "隐患管理", ENTRY_PATH, current.permissions().contains("finding.read")
+                            ? "finding.read" : "finding.create")), current.permissions(),
                     current.authorization());
         });
     }
@@ -73,12 +74,13 @@ public final class NavigationService {
             return new Bootstrap(1, identity, List.of(), List.of(), version);
         }
         var grant = reads.resolveEntityReadGrant(context, "finding").orElse(null);
-        if (grant == null || !context.tenantId().equals(grant.tenantId()) || grant.organizationIds().isEmpty()) {
-            return new Bootstrap(1, identity, List.of(), List.of(), version);
+        List<String> permissions = new ArrayList<>();
+        if (grant != null && context.tenantId().equals(grant.tenantId()) && !grant.organizationIds().isEmpty()) {
+            permissions.add("finding.read");
         }
-        List<String> permissions = new ArrayList<>(List.of("finding.read"));
         var create = actions.loadActionSnapshot(context, "finding.create", "create").orElse(null);
         if (effectiveAction(context, create)) permissions.add("finding.create");
+        if (permissions.isEmpty()) return new Bootstrap(1, identity, List.of(), List.of(), version);
         return new Bootstrap(1, identity, List.of(new ApplicationEntry(APPLICATION, "生产安全", ENTRY_PATH)),
                 List.copyOf(permissions), version);
     }

@@ -1,5 +1,6 @@
 import type { FindingState, FindingUrgency } from "../domain/finding";
 import type { FindingDraft, FindingDraftErrors } from "../domain/findingDraft";
+import type { FindingDefinition } from "./findingDefinition";
 
 export interface FindingSubmitContext {
   /**
@@ -7,7 +8,7 @@ export interface FindingSubmitContext {
    * 同键异参应被拒绝（conflict）。
    */
   idempotencyKey: string;
-  /** 所属组织：仅当适配器提供 listOrganizations 时必填，来自当前会话有权上报的组织。 */
+  /** 所属组织：仅当适配器提供组织引用查询或 listOrganizations 时必填，来自当前会话有权上报的组织。 */
   organizationId?: string;
   /** 基于一条“未成立”记录补充新证据时的关联父记录；服务端校验其状态与可见性。 */
   relatedFindingId?: string;
@@ -18,6 +19,16 @@ export interface ReportableOrganization {
   id: string;
   code: string;
   name: string;
+}
+
+export interface ReportableOrganizationQuery {
+  query: string;
+  afterId?: string;
+  limit?: number;
+}
+export interface ReportableOrganizationPage {
+  items: readonly ReportableOrganization[];
+  nextAfterId?: string;
 }
 
 export interface FindingSubmitResult {
@@ -31,13 +42,15 @@ export interface FindingSubmitResult {
 
 /**
  * 上报提交端口。请求不携带上报人、租户或角色：这些只能来自服务端验证过的会话。
- * 当前后端没有隐患上报端点契约，只有合成实现，没有 HTTP 适配器。
+ * HTTP 实现读取当前 CREATE 定义并使用分页组织引用；合成实现保持显式演示。
  */
 export interface FindingSubmitAdapter {
+  loadDefinition?(signal?: AbortSignal): Promise<FindingDefinition>;
+  queryOrganizations?(request: ReportableOrganizationQuery, signal?: AbortSignal): Promise<ReportableOrganizationPage>;
   submit(draft: FindingDraft, context: FindingSubmitContext): Promise<FindingSubmitResult>;
-  /** 有此方法时表单要求先选择组织；列表为空表示当前没有可上报的组织。失败抛 FindingSubmitError。 */
   /** 服务端接受的紧急程度；缺省为全部。表单只提供这些选项，避免用户选了必然被拒的档位。 */
   readonly urgencies?: readonly FindingUrgency[];
+  /** 合成或兼容端口；有此方法时表单要求选择组织，空列表表示无可上报组织。 */
   listOrganizations?(signal?: AbortSignal): Promise<readonly ReportableOrganization[]>;
 }
 

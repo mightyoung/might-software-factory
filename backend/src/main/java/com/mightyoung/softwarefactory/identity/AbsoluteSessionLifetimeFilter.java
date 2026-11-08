@@ -23,17 +23,42 @@ final class AbsoluteSessionLifetimeFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        boolean capability=IdentityCapabilityRoutePolicy.matches(request);
+        if(capability)IdentityCapabilityRoutePolicy.noStore(response);
+        Authentication authentication;
+        try {authentication=SecurityContextHolder.getContext().getAuthentication();}
+        catch(RuntimeException unavailable) {
+            if(!capability)throw unavailable;
+            SecurityContextHolder.clearContext();
+            IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+        }
         if (authentication != null && authentication.isAuthenticated()
                 && authentication.getPrincipal() instanceof VerifiedSessionPrincipal) {
-            HttpSession session = request.getSession(false);
-            if (lifetime.isExpired(session)) {
+            HttpSession session;
+            boolean expired;
+            try {session=request.getSession(false);expired=lifetime.isExpired(session);}
+            catch(RuntimeException unavailable) {
+                if(!capability)throw unavailable;
+                SecurityContextHolder.clearContext();
+                IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+            }
+            if (expired) {
                 try {
                     if (session != null) session.invalidate();
-                } catch (IllegalStateException alreadyInvalidated) {
+                } catch (RuntimeException unavailable) {
+                    if(capability) {
+                        SecurityContextHolder.clearContext();
+                        IdentityHttpResponses.writeError(request,response,503,"DEPENDENCY_UNAVAILABLE","Session validation is temporarily unavailable",true);return;
+                    }
+                    if(!(unavailable instanceof IllegalStateException))throw unavailable;
                     // Concurrent invalidation still requires this request to lose its authentication.
                 }
                 SecurityContextHolder.clearContext();
+                if(capability) {
+                    IdentityHttpResponses.clearSessionCookie(response);
+                    request.setAttribute(IdentityCapabilityRoutePolicy.ANONYMOUS_CLASSIFICATION,
+                            IdentityCapabilityRoutePolicy.AnonymousClassification.ABSOLUTE_LIFETIME_EXPIRED);
+                }
             }
         }
         chain.doFilter(request, response);

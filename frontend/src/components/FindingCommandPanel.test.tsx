@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FindingCommandPanel } from "./FindingCommandPanel";
 import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
@@ -11,7 +11,11 @@ const record = (state: FindingState, version: number | null = 4): FindingRecord 
 const okResult = { state: "SAFETY_CONFIRM_PENDING" as const, roundNo: 1, version: 5 };
 
 function setup(state: FindingState, run: FindingCommandAdapter["run"] = async () => okResult) {
-  const adapter: FindingCommandAdapter = { run: vi.fn(run) };
+  const adapter: FindingCommandAdapter = { run: vi.fn(run), history: async () => ({
+    entries: [], currentVersion: 4, currentState: state, reviewCycle: 1, reviewProtocol: "LEGACY", processDefinitionKey: "findingRemediationV2",
+    reviewStage: state === "PERSON_CONFIRM_PENDING" ? "PERSON" : state === "SAFETY_CONFIRM_PENDING" ? "SAFETY" : null,
+    availableReviewActions: ["APPROVE"], blockedReason: null, hasMore: false, nextCursor: null,
+  }) };
   const onChanged = vi.fn();
   const onUnauthenticated = vi.fn();
   render(<FindingCommandPanel finding={record(state)} adapter={adapter} onChanged={onChanged} onUnauthenticated={onUnauthenticated} />);
@@ -22,10 +26,8 @@ afterEach(cleanup);
 describe("流程命令面板", () => {
   it("按状态只显示契约已有的动作，其余禁用并写明原因", () => {
     setup("SAFETY_DISPATCH_PENDING");
-    // 适配器没有候选查询能力：按钮禁用并写明原因（不假装可用）
-    const dispatch = screen.getByRole("button", { name: "分派整改" });
-    expect(dispatch).toBeDisabled();
-    expect(dispatch).toHaveAttribute("title", expect.stringContaining("候选查询"));
+    expect(screen.getByRole("button", { name: "分派整改" })).toBeDisabled();
+    expect(screen.getAllByText(/候选查询能力/).length).toBeGreaterThan(0);
     cleanup();
     setup("RECTIFYING");
     expect(screen.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
@@ -46,25 +48,23 @@ describe("流程命令面板", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("没有版本号时不能执行", () => {
+  it("缺少服务端操作快照时不提供确认动作", () => {
     render(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING", null)} adapter={{ run: vi.fn() }} onChanged={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "确认发现" })).toBeDisabled();
-    expect(screen.getByText(/没有版本号/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认发现" })).not.toBeInTheDocument();
   });
 
-  it("必填意见为空或只有空白时拦截，不发请求", () => {
+  it("必填意见为空或只有空白时拦截，不发请求", async () => {
     const { run } = setup("PERSON_CONFIRM_PENDING");
-    fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "  \u0085 " } });
-    expect(screen.queryByText("确认确认发现")).not.toBeInTheDocument();
-    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
     expect(screen.getByText("请填写意见")).toBeInTheDocument();
     expect(run).not.toHaveBeenCalled();
   });
 
   it("安全确认必须选等级；带 expectedVersion 与 trim 后的意见提交，成功后通知刷新", async () => {
     const { run, onChanged } = setup("SAFETY_CONFIRM_PENDING");
-    fireEvent.click(screen.getByRole("button", { name: "安全确认" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安全确认" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "  属实  " } });
     fireEvent.click(screen.getByRole("button", { name: "确认安全确认" }));
     expect(await screen.findByText("请选择隐患等级")).toBeInTheDocument();
@@ -72,12 +72,13 @@ describe("流程命令面板", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认安全确认" }));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(run).toHaveBeenCalledWith("f1", 4, { kind: "confirmSafety", reason: "属实", grade: "MAJOR" }, expect.objectContaining({ idempotencyKey: expect.any(String) }));
-    expect(screen.getByRole("status")).toHaveTextContent("已完成“安全确认”");
+    expect(screen.getByText(/已完成“安全确认”/)).toBeInTheDocument();
   });
 
   it("验收：退回必须有意见，通过的意见选填", async () => {
     const { run } = setup("ACCEPTANCE_PENDING");
     fireEvent.click(screen.getByRole("button", { name: "退回整改" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认退回整改" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "确认退回整改" }));
     expect(screen.getByText("请填写意见")).toBeInTheDocument();
     expect(run).not.toHaveBeenCalled();
@@ -89,9 +90,9 @@ describe("流程命令面板", () => {
   it("可重试的失败复用同一个幂等键", async () => {
     const run = vi.fn().mockRejectedValueOnce(new FindingCommandError("unavailable")).mockResolvedValueOnce(okResult);
     setup("PERSON_CONFIRM_PENDING", run);
-    fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("重试不会重复执行");
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
@@ -100,50 +101,26 @@ describe("流程命令面板", () => {
 
   it("版本冲突提示并要求刷新；未登录通知应用", async () => {
     const conflict = setup("PERSON_CONFIRM_PENDING", async () => { throw new FindingCommandError("versionConflict"); });
-    fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("刚被他人更新");
     expect(conflict.onChanged).toHaveBeenCalled();
     cleanup();
     const expired = setup("PERSON_CONFIRM_PENDING", async () => { throw new FindingCommandError("unauthenticated"); });
-    fireEvent.click(screen.getByRole("button", { name: "确认发现" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发现" }));
     fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "属实" } });
-    fireEvent.click(within(screen.getByRole("form", { name: "确认发现" })).getByRole("button", { name: "确认发现" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认确认发现" }));
     await waitFor(() => expect(expired.onUnauthenticated).toHaveBeenCalled());
   });
 
   it("详情重新读取期间按钮不可用，避免带着过期版本号提交", () => {
     const adapter = { run: vi.fn() };
-    const { rerender } = render(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING")} adapter={adapter} onChanged={vi.fn()} refreshing />);
-    expect(screen.getByRole("button", { name: "确认发现" })).toBeDisabled();
+    const { rerender } = render(<FindingCommandPanel finding={record("DISCOVERED")} adapter={adapter} onChanged={vi.fn()} refreshing />);
+    expect(screen.getByRole("button", { name: "启动确认流程" })).toBeDisabled();
     expect(screen.getByText("正在重新读取最新状态…")).toBeInTheDocument();
-    rerender(<FindingCommandPanel finding={record("PERSON_CONFIRM_PENDING")} adapter={adapter} onChanged={vi.fn()} refreshing={false} />);
-    expect(screen.getByRole("button", { name: "确认发现" })).toBeEnabled();
-  });
-});
-
-describe("不成立关闭", () => {
-  it.each([
-    ["PERSON_CONFIRM_PENDING", "PERSON"],
-    ["SAFETY_CONFIRM_PENDING", "SAFETY"],
-  ] as const)("%s：意见必填，按当前阶段 %s 提交，不带等级", async (state, stage) => {
-    const { run, onChanged } = setup(state);
-    fireEvent.click(screen.getByRole("button", { name: "不成立" }));
-    expect(screen.queryByLabelText(/隐患等级/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认不成立" }));
-    expect(screen.getByText("请填写意见")).toBeInTheDocument();
-    expect(run).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText(/意见/), { target: { value: "  现场核查未发现  " } });
-    fireEvent.click(screen.getByRole("button", { name: "确认不成立" }));
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    expect(run).toHaveBeenCalledWith("f1", 4, { kind: "closeNotEstablished", stage, reason: "现场核查未发现" }, expect.anything());
-  });
-
-  it("NOT_ESTABLISHED 是终态：没有动作，提示新证据应创建关联记录", () => {
-    setup("NOT_ESTABLISHED");
-    expect(screen.queryByRole("button", { name: /确认|不成立|分派/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/新证据应创建关联记录/)).toBeInTheDocument();
+    rerender(<FindingCommandPanel finding={record("DISCOVERED")} adapter={adapter} onChanged={vi.fn()} refreshing={false} />);
+    expect(screen.getByRole("button", { name: "启动确认流程" })).toBeEnabled();
   });
 });
 

@@ -1,6 +1,7 @@
 import { matchesQuery, type PageRequest, type PageResult, type QueryValues } from "../domain/ledger";
 import { findingLedgerSchema } from "../features/findings/schema";
 import type { FindingRecord, FindingState } from "../domain/finding";
+import type { FindingDefinition } from "./findingDefinition";
 
 export type FindingView = "all" | "confirmation" | "acceptance";
 
@@ -30,10 +31,19 @@ export interface FindingListRequest {
   view: FindingView;
 }
 
+export interface FindingDetailSnapshot {
+  record: FindingRecord | null;
+  definition: FindingDefinition | null;
+}
+
 /** UI-facing seam only. No HTTP route or server payload is implied by this type. */
 export interface FindingLedgerAdapter {
-  list(input: FindingListRequest, options?: FindingReadOptions): Promise<PageResult<FindingRecord>>;
+  /** Present only for the real HTTP definition consumer, never inferred from failures. */
+  readonly publishedDefinition?: true;
+  list(input: FindingListRequest, options?: FindingReadOptions): Promise<PageResult<FindingRecord> & { definition?: FindingDefinition }>;
   get(id: string, options?: FindingReadOptions): Promise<FindingRecord | null>;
+  /** Published transports return the current detail definition with its record in one result. */
+  getDetailSnapshot?(id: string, options?: FindingReadOptions): Promise<FindingDetailSnapshot>;
 }
 
 /** 合成数据的内部标识，形态与契约的 UUID 一致，但明显是演示值。 */

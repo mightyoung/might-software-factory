@@ -19,6 +19,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -167,6 +168,23 @@ final class IdentityAcceptanceHttps implements AutoCloseable {
         Response postWithHeaders(String path, String body, String csrf, Map<String, String> headers)
                 throws Exception {
             return send("POST", path, body, csrf, headers);
+        }
+
+        /** Bounded raw wire fixture for UTF-8/media validation; only this owned HTTPS origin is reachable. */
+        Response postRaw(String path, byte[] body, String csrf, List<String> contentTypes) throws Exception {
+            if (body == null || body.length > 4096 || contentTypes == null || contentTypes.size() > 2)
+                throw new IllegalArgumentException("Invalid bounded raw HTTPS fixture");
+            URI target = origin.resolve(path);
+            if (!origin.getScheme().equals(target.getScheme()) || !origin.getHost().equals(target.getHost())
+                    || origin.getPort() != target.getPort() || target.getUserInfo() != null || target.getFragment() != null)
+                throw new IllegalArgumentException("Raw HTTPS fixture cannot leave its owned origin");
+            String trace = UUID.randomUUID().toString();
+            HttpRequest.Builder request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15))
+                    .header(TRACE_HEADER, trace);
+            contentTypes.forEach(type -> request.header("Content-Type", type));
+            if (csrf != null) request.header("X-XSRF-TOKEN", csrf);
+            request.POST(HttpRequest.BodyPublishers.ofByteArray(body.clone()));
+            return new Response(trace, client.send(request.build(), HttpResponse.BodyHandlers.ofString()));
         }
 
         private Response send(String method, String path, String body, String csrf) throws Exception {

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -63,6 +64,24 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
     private static final Field<OffsetDateTime> CURRENT_TIMESTAMP =
             DSL.field("current_timestamp", OffsetDateTime.class);
 
+    private static final String ACTION_SCOPES_AT_SQL = """
+                select distinct sr.id,sr.kind,so.org_id
+                  from public.role_grant rg
+                  join public.role r on r.tenant_id=rg.tenant_id and r.id=rg.role_id and r.active=true
+                  join public.role_permission rp on rp.tenant_id=rg.tenant_id and rp.role_id=rg.role_id
+                  join public.permission p on p.id=rp.permission_id and p.code=? and p.resource_type=? and p.action=?
+                  join public.scope_rule sr on sr.tenant_id=rp.tenant_id and sr.id=rp.scope_rule_id
+                  left join public.scope_org so on so.tenant_id=rp.tenant_id and so.scope_rule_id=sr.id
+                 where rg.tenant_id=cast(? as uuid) and rg.valid_from<=cast(? as timestamptz)
+                   and (rg.valid_to is null or rg.valid_to>cast(? as timestamptz))
+                   and ((rg.subject_kind='MEMBER' and rg.member_id=cast(? as uuid))
+                     or (rg.subject_kind='ORG' and rg.org_id=any(cast(? as uuid[])))
+                     or (rg.subject_kind='POSITION' and rg.position_id=any(cast(? as uuid[])))
+                     or (rg.subject_kind='GROUP' and rg.group_id=any(cast(? as uuid[]))))
+                """;
+
+    public static java.util.Map<String,Integer> commandReadSql() { return java.util.Map.of(ACTION_SCOPES_AT_SQL,10); }
+
     private final DSLContext dsl;
 
     public JooqRoleScopeReadRepository(DSLContext dsl) {
@@ -91,8 +110,32 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
             String resourceType,
             String action,
             String permissionCode) {
-        Condition currentGrant = GRANT_VALID_FROM.le(CURRENT_TIMESTAMP)
-                .and(GRANT_VALID_TO.isNull().or(GRANT_VALID_TO.gt(CURRENT_TIMESTAMP)));
+        return actionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
+                resourceType, action, permissionCode, CURRENT_TIMESTAMP);
+    }
+
+    @Override
+    public List<RoleScopeDescriptor> findActiveActionScopesAt(
+            UUID tenantId, UUID memberId, Set<UUID> organizationIds, Set<UUID> positionIds,
+            Set<UUID> groupIds, String resourceType, String action, String permissionCode,
+            OffsetDateTime evaluatedAt) {
+        Objects.requireNonNull(evaluatedAt, "Evaluation time is required");
+        return dsl.resultQuery(ACTION_SCOPES_AT_SQL,permissionCode,resourceType,action,tenantId,evaluatedAt,evaluatedAt,memberId,
+                uuidArray(organizationIds),uuidArray(positionIds),uuidArray(groupIds))
+                .coerce(field("id",UUID.class),field("kind",String.class),field("org_id",UUID.class))
+                .fetch(row->new RoleScopeDescriptor(row.get(0,UUID.class),row.get(1,String.class),row.get(2,UUID.class)));
+    }
+
+    private static String uuidArray(Set<UUID> ids) {
+        return ids.stream().map(UUID::toString).sorted().collect(java.util.stream.Collectors.joining(",","{","}"));
+    }
+
+    private List<RoleScopeDescriptor> actionScopes(
+            UUID tenantId, UUID memberId, Set<UUID> organizationIds, Set<UUID> positionIds,
+            Set<UUID> groupIds, String resourceType, String action, String permissionCode,
+            Field<OffsetDateTime> evaluatedAt) {
+        Condition currentGrant = GRANT_VALID_FROM.le(evaluatedAt)
+                .and(GRANT_VALID_TO.isNull().or(GRANT_VALID_TO.gt(evaluatedAt)));
         Condition subject = SUBJECT_KIND.eq("MEMBER").and(GRANT_MEMBER_ID.eq(memberId))
                 .or(SUBJECT_KIND.eq("ORG").and(GRANT_ORG_ID.in(organizationIds)))
                 .or(SUBJECT_KIND.eq("POSITION").and(GRANT_POSITION_ID.in(positionIds)))

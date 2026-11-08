@@ -216,7 +216,7 @@ components:
           const: finding
         schemaVersion:
           type: string
-          const: '4'
+          const: '5'
           description: >-
             Monotonic version of this entity's fields and query defaults; it is not an authorization
             token. Cache schema metadata by caller scope, key, and schemaVersion, and do not share
@@ -234,7 +234,7 @@ components:
         fields:
           type: object
           additionalProperties: false
-          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
+          required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, reviewCycle, reviewProtocol, createdAt, updatedAt]
           properties:
             id:
               $ref: '#/components/schemas/UuidField'
@@ -270,12 +270,40 @@ components:
               $ref: '#/components/schemas/FindingStateField'
             roundNo:
               $ref: '#/components/schemas/NumberField'
+            reviewCycle:
+              $ref: '#/components/schemas/ReviewCycleField'
+            reviewProtocol:
+              $ref: '#/components/schemas/ReviewProtocolField'
             version:
               $ref: '#/components/schemas/NumberField'
             createdAt:
               $ref: '#/components/schemas/DateTimeField'
             updatedAt:
               $ref: '#/components/schemas/DateTimeField'
+    ReviewCycleField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: NUMBER }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [] }
+    ReviewProtocolField:
+      type: object
+      additionalProperties: false
+      required: [type, nullable, selectable, sortable, operators, maxLength, enumValues]
+      properties:
+        type: { const: ENUM }
+        nullable: { const: false }
+        selectable: { const: true }
+        sortable: { const: false }
+        operators: { const: [] }
+        maxLength: { const: 0 }
+        enumValues: { const: [LEGACY, CYCLE_V1] }
     UuidField:
       type: object
       additionalProperties: false
@@ -468,7 +496,7 @@ components:
         maxLength: { const: 0 }
         enumValues:
           type: array
-          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
+          const: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED]
           items: { type: string }
     FindingListResponse:
       type: object
@@ -515,9 +543,11 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
         relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
+        reviewCycle: { type: integer, minimum: 1, readOnly: true }
+        reviewProtocol: { enum: [LEGACY, CYCLE_V1], readOnly: true }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -542,7 +572,7 @@ components:
     FindingDetail:
       type: object
       additionalProperties: false
-      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, createdAt, updatedAt]
+      required: [id, code, organizationId, organizationName, description, discoveredAt, sourceCategory, urgency, location, interimMeasure, backfill, sourceEventId, riskId, relatedFindingId, grade, state, roundNo, version, reviewCycle, reviewProtocol, createdAt, updatedAt]
       properties:
         reporter:
           description: Persisted reporting member identifier with the current same-tenant directory label; a missing label is null.
@@ -585,9 +615,11 @@ components:
         sourceEventId: { type: [string, 'null'], format: uuid }
         riskId: { type: [string, 'null'], format: uuid }
         grade: { enum: [UNKNOWN, GENERAL, MAJOR] }
-        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
+        state: { enum: [DISCOVERED, PERSON_CONFIRM_PENDING, SAFETY_CONFIRM_PENDING, REPORTER_SUPPLEMENT_PENDING, SAFETY_DISPATCH_PENDING, RECTIFYING, ACCEPTANCE_PENDING, NOT_ESTABLISHED, CLOSED] }
         relatedFindingId: { type: [string, 'null'], format: uuid }
         roundNo: { type: integer }
+        reviewCycle: { type: integer, minimum: 1, readOnly: true }
+        reviewProtocol: { enum: [LEGACY, CYCLE_V1], readOnly: true }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

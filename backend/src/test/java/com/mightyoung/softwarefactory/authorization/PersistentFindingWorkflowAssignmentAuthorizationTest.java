@@ -10,6 +10,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -22,6 +23,7 @@ import static org.jooq.impl.DSL.using;
 
 class PersistentFindingWorkflowAssignmentAuthorizationTest {
 
+    private static final OffsetDateTime AT = OffsetDateTime.parse("2026-11-03T10:15:30.123456Z");
     private static final UUID TENANT_ID = UUID.fromString("30000000-0000-0000-0000-000000000001");
     private static final UUID MEMBER_ID = UUID.fromString("20000000-0000-0000-0000-000000000004");
     private static final UUID ORG_ID = UUID.fromString("31000000-0000-0000-0000-000000000001");
@@ -33,10 +35,10 @@ class PersistentFindingWorkflowAssignmentAuthorizationTest {
                 TENANT_ID, ORG_ID, "finding.remediate", "A%_\\'", MEMBER_ID, 51);
 
         assertThat(members).containsExactly(new AssignableFindingMember(MEMBER_ID, "Alice"));
-        assertThat(fixture.statements).hasSize(2);
+        assertThat(fixture.statements).hasSize(3);
         assertThat(fixture.bindings.getFirst()).containsExactly("app.tenant_id", TENANT_ID.toString());
         assertThat(fixture.bindings.getLast()).containsExactly(
-                TENANT_ID, ORG_ID, "finding.remediate", "remediate", "A\\%\\_\\\\'%", MEMBER_ID, 51);
+                AT, TENANT_ID, ORG_ID, "finding.remediate", "remediate", "A\\%\\_\\\\'%", MEMBER_ID, 51);
         String sql = fixture.statements.getLast();
         assertThat(sql).contains("m.display_name like ? escape '\\'", "m.id > cast(? as uuid)")
                 .endsWith("order by m.id asc limit ?")
@@ -56,10 +58,11 @@ class PersistentFindingWorkflowAssignmentAuthorizationTest {
         String authority = fixture.statements.getLast();
         String predicate = candidate.substring(candidate.indexOf("  from public.tenant_member"),
                 candidate.indexOf(" order by"));
-        assertThat(authority).isEqualTo("select exists (select 1\n" + predicate
+        assertThat(authority).isEqualTo(candidate.substring(0, candidate.indexOf("select m.id"))
+                + "select exists (select 1\n" + predicate
                 + " and m.id = cast(? as uuid))");
         assertThat(fixture.bindings.getLast()).containsExactly(
-                TENANT_ID, ORG_ID, "finding.dispatch", "dispatch", MEMBER_ID);
+                AT, TENANT_ID, ORG_ID, "finding.dispatch", "dispatch", MEMBER_ID);
         assertThat(predicate).contains("a.status = 'ACTIVE'", "t.status = 'ACTIVE'", "m.status = 'ACTIVE'",
                 "p.kind = 'HUMAN'", "p.status = 'ACTIVE'", "target_org.active = true",
                 "target_membership.org_id = cast(? as uuid)", "r.active = true",
@@ -69,8 +72,8 @@ class PersistentFindingWorkflowAssignmentAuthorizationTest {
                 "sr.kind in ('DEPT', 'DEPT_TREE')", "sr.kind = 'EXPLICIT'",
                 "so.org_id = target_membership.org_id");
         for (String membership : List.of("target_membership", "rg", "mo", "mp", "gm")) {
-            assertThat(predicate).contains(membership + ".valid_from <= current_timestamp",
-                    membership + ".valid_to > current_timestamp");
+            assertThat(predicate).contains(membership + ".valid_from <= evaluation.evaluated_at",
+                    membership + ".valid_to > evaluation.evaluated_at");
         }
         // Subject membership uses the grant's organization rather than restricting to the target.
         assertThat(predicate).contains("mo.org_id = rg.org_id")
@@ -123,14 +126,22 @@ class PersistentFindingWorkflowAssignmentAuthorizationTest {
             DSLContext values = using(SQLDialect.POSTGRES);
             DSLContext dsl = using(new MockConnection(context -> {
                 statements.add(context.sql());
-                bindings.add(Arrays.asList(context.bindings()));
+                bindings.add(Arrays.stream(context.bindings()).map(PersistentFindingWorkflowAssignmentAuthorizationTest::temporalBinding).toList());
                 if (context.sql().contains("set_config")) {
                     var column = field("set_config", String.class);
                     var result = values.newResult(column);
                     result.add(values.newRecord(column).value1(TENANT_ID.toString()));
                     return new MockResult[] {new MockResult(1, result)};
                 }
-                if (context.sql().startsWith("select exists")) {
+                if (context.sql().contains("transaction_isolation")) {
+                    var isolation = field("isolation", String.class);
+                    var transactionAt = field("transaction_at", OffsetDateTime.class);
+                    var statementAt = field("statement_at", OffsetDateTime.class);
+                    var result = values.newResult(isolation, transactionAt, statementAt);
+                    result.add(values.newRecord(isolation, transactionAt, statementAt).values("repeatable read", AT, AT.plusHours(1)));
+                    return new MockResult[] {new MockResult(1, result)};
+                }
+                if (context.sql().contains("select exists")) {
                     var column = field("exists", Boolean.class);
                     var result = values.newResult(column);
                     result.add(values.newRecord(column).value1(authorized));
@@ -164,4 +175,13 @@ class PersistentFindingWorkflowAssignmentAuthorizationTest {
                     dsl, null, null, null, null, null, manager);
         }
     }
+    // PostgreSQL jOOQ may encode timestamptz as a bound JDBC String; compare its exact instant.
+    private static Object temporalBinding(Object value) {
+        if (value instanceof String encoded && encoded.matches("\\d{4}-\\d{2}-\\d{2} .*")) {
+            return OffsetDateTime.parse(encoded.replace(' ', 'T')).withOffsetSameInstant(java.time.ZoneOffset.UTC);
+        }
+        return value;
+    }
+
+
 }

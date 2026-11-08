@@ -14,6 +14,11 @@ const ctx = { idempotencyKey: "k" };
 
 describe("createHttpFindingCommands", () => {
   const cases: [FindingCommand, string, Record<string, unknown>][] = [
+    [{ kind: "reviewDecision", reviewCycle: 2, stage: "PERSON", decision: "RETURN_FOR_INFORMATION", reason: "more" }, "/api/v1/findings/a%2Fb/review-decisions", { expectedVersion: 2, reviewCycle: 2, stage: "PERSON", decision: "RETURN_FOR_INFORMATION", reason: "more" }],
+    [{ kind: "reviewDecision", reviewCycle: 3, stage: "SAFETY", decision: "APPROVE", reason: "yes", grade: "GENERAL" }, "/api/v1/findings/a%2Fb/review-decisions", { expectedVersion: 2, reviewCycle: 3, stage: "SAFETY", decision: "APPROVE", reason: "yes", grade: "GENERAL" }],
+    [{ kind: "reviewDecision", reviewCycle: 3, stage: "SAFETY", decision: "NOT_ESTABLISHED", reason: "no" }, "/api/v1/findings/a%2Fb/review-decisions", { expectedVersion: 2, reviewCycle: 3, stage: "SAFETY", decision: "NOT_ESTABLISHED", reason: "no" }],
+    [{ kind: "supplement", reviewCycle: 2, statement: "more" }, "/api/v1/findings/a%2Fb/supplements", { expectedVersion: 2, reviewCycle: 2, statement: "more" }],
+    [{ kind: "closeNotEstablished", stage: "PERSON", reason: "no" }, "/api/v1/findings/a%2Fb/close-not-established", { expectedVersion: 2, stage: "PERSON", reason: "no" }],
     [{ kind: "initialize" }, "/api/v1/findings/a%2Fb/workflow-initialization", { expectedVersion: 2 }],
     [{ kind: "confirmPerson", reason: "属实" }, "/api/v1/findings/a%2Fb/confirm/person", { expectedVersion: 2, reason: "属实" }],
     [{ kind: "confirmSafety", reason: "确认", grade: "MAJOR" }, "/api/v1/findings/a%2Fb/confirm/safety", { expectedVersion: 2, reason: "确认", grade: "MAJOR" }],
@@ -25,6 +30,16 @@ describe("createHttpFindingCommands", () => {
     const result = await createHttpFindingCommands(f.client).run("a/b", 2, command, ctx);
     expect(f.calls[0]).toMatchObject({ path, req: { body, headers: { "Idempotency-Key": "k" } } });
     expect(result).toEqual({ state: "SAFETY_CONFIRM_PENDING", roundNo: 1, version: 3 });
+  });
+
+  it("returns committed reviewCycle and reads paged history with opaque encoded cursor", async () => {
+    const calls: string[] = [];
+    const data = { entries: [], currentVersion: 4, reviewCycle: 2 };
+    const client = { get: async (path: string) => { calls.push(path); return { data }; }, post: async () => ({ data: { ...ok.data, reviewCycle: 2 } }) } as unknown as HttpClient;
+    const adapter = createHttpFindingCommands(client);
+    expect(await adapter.history!("a/b", { cursor: "a+b/=" })).toEqual(data);
+    expect(calls).toEqual(["/api/v1/findings/a%2Fb/review-history?pageSize=20&cursor=a%2Bb%2F%3D"]);
+    expect(await adapter.run("f", 2, { kind: "supplement", reviewCycle: 1, statement: "statement" }, ctx)).toMatchObject({ reviewCycle: 2 });
   });
 
   it("maps statuses and 409 sub-codes, keeping the traceId", async () => {

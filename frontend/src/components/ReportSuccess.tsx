@@ -12,7 +12,7 @@ export function ReportSuccess({
   result: FindingSubmitResult;
   live: boolean;
   onClose: () => void;
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   onStartAnother: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }) {
@@ -43,9 +43,9 @@ export function ReportSuccess({
         )}
       </section>
       <div className="report-actions">
-        <button type="button" className="button button-primary" onClick={() => onOpen(result.id)}>
+        {onOpen && <button type="button" className="button button-primary" onClick={() => onOpen(result.id)}>
           查看详情
-        </button>
+        </button>}
         <button type="button" className="button button-subtle" onClick={onStartAnother}>
           继续上报
         </button>

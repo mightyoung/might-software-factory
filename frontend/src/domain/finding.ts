@@ -3,6 +3,7 @@ export const findingStates = [
   "DISCOVERED",
   "PERSON_CONFIRM_PENDING",
   "SAFETY_CONFIRM_PENDING",
+  "REPORTER_SUPPLEMENT_PENDING",
   "SAFETY_DISPATCH_PENDING",
   "RECTIFYING",
   "ACCEPTANCE_PENDING",
@@ -16,6 +17,7 @@ export const findingStateLabels: Record<FindingState, string> = {
   DISCOVERED: "已发现·待启动流程",
   PERSON_CONFIRM_PENDING: "待一人确认",
   SAFETY_CONFIRM_PENDING: "待安全确认",
+  REPORTER_SUPPLEMENT_PENDING: "待上报人补充",
   SAFETY_DISPATCH_PENDING: "待安全部门派单",
   RECTIFYING: "整改中",
   ACCEPTANCE_PENDING: "待安全验收",
@@ -49,6 +51,8 @@ export interface FindingHistoryEntry {
 }
 
 export interface FindingRecord {
+  /** Authorized entity response values used by the published list/detail presentation. */
+  registeredValues?: Readonly<Record<string, string | number | boolean | null>>;
   /** 稳定的内部标识（契约里是 UUID）：用于路由、勾选和读取详情，不用于展示。 */
   id: string;
   /** 业务编号（契约里的 code）：展示给人看和按编号查询。 */
@@ -64,6 +68,8 @@ export interface FindingRecord {
   round: number;
   /** 乐观锁版本（契约的 version）；流程命令必须带它。合成数据没有。 */
   version?: number;
+  reviewCycle?: number;
+  reviewProtocol?: "LEGACY" | "CYCLE_V1";
   history: readonly FindingHistoryEntry[];
   /** 服务端详情只返回有界轨迹；为 true 时明确提示还有更早记录。 */
   historyTruncated?: boolean;
@@ -88,6 +94,7 @@ export function getFindingActions(state: FindingState): FindingAction[] {
     DISCOVERED: ["启动确认流程"],
     PERSON_CONFIRM_PENDING: ["确认发现", "退回补充"],
     SAFETY_CONFIRM_PENDING: ["安全确认", "退回第一确认"],
+    REPORTER_SUPPLEMENT_PENDING: ["补充说明"],
     SAFETY_DISPATCH_PENDING: ["分派整改"],
     RECTIFYING: ["提交整改证据"],
     ACCEPTANCE_PENDING: ["验收通过", "退回整改"],
@@ -106,6 +113,7 @@ export function workflowCurrentIndex(state: FindingState): number {
     DISCOVERED: 0,
     PERSON_CONFIRM_PENDING: 1,
     SAFETY_CONFIRM_PENDING: 2,
+    REPORTER_SUPPLEMENT_PENDING: 0,
     SAFETY_DISPATCH_PENDING: 3,
     RECTIFYING: 4,
     ACCEPTANCE_PENDING: 5,

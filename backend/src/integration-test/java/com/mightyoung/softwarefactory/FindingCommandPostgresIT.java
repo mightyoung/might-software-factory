@@ -530,8 +530,11 @@ class FindingCommandPostgresIT {
         @Bean @Primary FindingWorkflowCommandService productionCommandServiceWithCommandOnlyClock(
                 SessionContextResolver sessions,FindingWorkflowRepository repository,FindingWorkflowAccessPolicy access,
                 FindingWorkflowAssignmentResolver assignments,FindingWorkflowEvidencePolicy evidence,
-                WorkflowFacade workflow,FindingWorkflowEventPublisher publisher,CommandTime time) {
-            return new FindingWorkflowCommandService(sessions,repository,access,assignments,evidence,workflow,publisher,time.clock);
+                WorkflowFacade workflow,FindingWorkflowEventPublisher publisher,CommandTime time,
+                com.mightyoung.softwarefactory.workflow.FindingReviewDefinitionProperties reviewDefinitions,
+                com.mightyoung.softwarefactory.workflow.PinnedFindingReviewDefinitionResolver pins) {
+            return new FindingWorkflowCommandService(sessions,repository,access,assignments,evidence,workflow,publisher,time.clock,
+                    reviewDefinitions,pins);
         }
         @Bean @Primary FindingWorkflowRepository actualRepositoryWithBoundedFaults(
                 @Qualifier("jooqFindingWorkflowRepository") FindingWorkflowRepository real,
