@@ -24,7 +24,8 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 
 /** Private invocation routes for one native graph. No caller can issue a route or readiness assertion. */
 final class SharedNativePublicationRouting {
-    private enum Route { LEGACY_SOURCE, LEGACY_REGISTRY, RISK_SOURCE, RISK_REGISTRY, MIXED_READ }
+    private enum Route { LEGACY_SOURCE, LEGACY_REGISTRY, RISK_SOURCE, RISK_REGISTRY, MIXED_READ, RECOVERY, RECOVERY_NOOP }
+    private final NativeRiskRecovery recovery;
     private final DataSource canonical;
     private final org.springframework.context.support.AbstractApplicationContext context;
     private final RiskJdbcTransactionOwner owned;
@@ -54,6 +55,7 @@ final class SharedNativePublicationRouting {
         this.ownedTemplate = java.util.Objects.requireNonNull(ownedTemplate);
         this.original = original; this.ordinary = ordinary; this.inventory = inventory; this.catalog = catalog;
         this.registryClass = registryClass; this.repositoryClass = repositoryClass; this.publications = publications;
+        recovery=new NativeRiskRecovery(inventory);
         reads = new NativePublicationReadJdbc(canonical, ordinary, inventory, this::requireFrame);
         JdbcOperations closed = (JdbcOperations) Proxy.newProxyInstance(JdbcOperations.class.getClassLoader(), new Class<?>[]{JdbcOperations.class},
                 (proxy, method, arguments) -> {
@@ -68,6 +70,7 @@ final class SharedNativePublicationRouting {
                 });
         dispatcher = new NativePublicationDispatchTemplate(closed, this::rejectCurrent);
         context.addApplicationListener((org.springframework.context.ApplicationListener<org.springframework.context.event.ApplicationContextEvent>) event -> {
+            if(event.getApplicationContext()==context&&event instanceof org.springframework.context.event.ContextRefreshedEvent)recovery.bind(context);
             if (event.getApplicationContext() == context && (event instanceof org.springframework.context.event.ContextRefreshedEvent
                     || event instanceof org.springframework.context.event.ContextClosedEvent)) closeConfiguration();
         });
@@ -97,6 +100,13 @@ final class SharedNativePublicationRouting {
     private synchronized void closeConfiguration() { configurationClosed = true; }
 
     JdbcTemplate jdbcOperations() { return dispatcher; }
+    RiskScenarioExecutor riskExecutor(){return inventory.riskExecutor();}
+    void recoverRisk(){
+        try{recovery.recover();}
+        catch(Throwable failure){rejectCurrent();throw unavailable();}
+    }
+    boolean recoveryMethod(Method method){return recovery.active()&&(method.getName().equals("processIncompletePublications")||method.getName().equals("markResubmitted"));}
+    void materializeRecoveryRead(Object result){Frame frame=requireFrame();if(frame.parent!=null&&frame.parent.route==Route.RECOVERY&&frame.route==Route.MIXED_READ)recovery.materialize(result);}
     boolean active() { return current.get() != null; }
     void requireInvocation(MethodInvocation call) {
         Frame frame = requireFrame();
@@ -106,7 +116,7 @@ final class SharedNativePublicationRouting {
     void nativeReturned(MethodInvocation call) {
         requireInvocation(call);
         Frame frame = requireFrame();
-        if (frame.target.getClass() == repositoryClass && !Set.of("markProcessing", "markFailed").contains(frame.method.getName()) && !frame.sqlUsed)
+        if (frame.target.getClass() == repositoryClass && frame.route!=Route.RECOVERY_NOOP && !Set.of("markProcessing", "markFailed").contains(frame.method.getName()) && !frame.sqlUsed)
             throw reject(frame);
         frame.bodyReturned = true;
     }
@@ -132,6 +142,7 @@ final class SharedNativePublicationRouting {
                     manual = newRiskStatus(frame, owned.beginNative(definition));
                 }
                 result = call.proceed();
+                if(frame.parent!=null&&frame.parent.route==Route.RECOVERY&&frame.route==Route.MIXED_READ)recovery.readClosed();
                 if (manual != null) completeRisk(manual, true);
             }
             if (frame.rejected) throw unavailable();
@@ -192,10 +203,21 @@ final class SharedNativePublicationRouting {
     private Frame classify(Object target, Method method, Object[] args, TransactionAttribute attribute, Frame parent) {
         boolean registry = target.getClass() == registryClass;
         String name = method.getName();
+        if(registry&&name.equals("processIncompletePublications")){
+            if(parent!=null||attribute!=null||!recovery.process(args))throw unavailable();
+            return new Frame(target,method,null,Route.RECOVERY,null,null,null,null);
+        }
+        if(!registry&&name.equals("markResubmitted")){
+            if(parent==null||parent.route!=Route.RECOVERY||attribute!=null)throw unavailable();
+            recovery.resubmitted(args);return new Frame(target,method,null,Route.RECOVERY_NOOP,null,null,null,parent);
+        }
         if (mixed(method, registry)) {
             rejectSourceIfActive();
-            if (parent != null && (parent.route != Route.MIXED_READ || parent.target.getClass() != registryClass
-                    || !mixedChild(parent.method.getName(), name))) throw unavailable();
+            if(parent!=null){
+                if(parent.target.getClass()!=registryClass)throw unavailable();
+                if(parent.route==Route.RECOVERY){if(registry||!name.equals("findIncompletePublications"))throw unavailable();}
+                else if(parent.route!=Route.MIXED_READ||!mixedChild(parent.method.getName(),name))throw unavailable();
+            }
             return new Frame(target, method, attribute, Route.MIXED_READ, null, null, null, parent);
         }
         inventory.requireWritable();
@@ -318,7 +340,7 @@ final class SharedNativePublicationRouting {
             catch (InvocationTargetException failure) { throw failure.getCause(); }
         }
         if (kind != RiskPublicationSqlCatalog.Kind.UPDATE) return reads.query(operation, values,
-                (org.springframework.jdbc.core.ResultSetExtractor<?>) args[1]);
+                (org.springframework.jdbc.core.ResultSetExtractor<?>) args[1],frame.parent!=null&&frame.parent.route==Route.RECOVERY?recovery:null);
         try { return method.invoke(ordinary, args); }
         catch (InvocationTargetException failure) { throw failure.getCause(); }
     }
@@ -338,6 +360,7 @@ final class SharedNativePublicationRouting {
     }
     private void rejectSourceIfActive() { G014RiskNativeParticipation source = riskSource; if (source != null) source.rejectIfSourceActive(); }
     void rejectCurrent() {
+        recovery.fail();
         Frame frame = current.get();
         if (frame != null) reject(frame);
         else { owned.poisonIfActive(); rejectSourceIfActive(); }

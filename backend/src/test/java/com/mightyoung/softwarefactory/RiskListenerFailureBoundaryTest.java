@@ -255,7 +255,7 @@ class RiskListenerFailureBoundaryTest {
                 .withUserConfiguration(Graph.class)
                 .withBean(DataSource.class, f::source)
                 .withBean(Fixture.class, () -> f)
-                .withBean(Tasks.class, () -> tasks)
+                .withBean("riskScenarioExecutor", Tasks.class, () -> tasks)
                 .withBean(RiskChangeCaptureService.class, f::capture)
                 .withBean(EventSerializer.class, () -> serializer);
     }

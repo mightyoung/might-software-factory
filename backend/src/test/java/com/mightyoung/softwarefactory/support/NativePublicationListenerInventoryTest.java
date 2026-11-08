@@ -55,7 +55,10 @@ class NativePublicationListenerInventoryTest {
         assertThat(method.getParameterTypes()).containsExactly(binding.event());
         assertThat(method.getReturnType()).isEqualTo(void.class);
         assertThat(Modifier.isFinal(binding.listener().getModifiers())).isFalse();
-        assertThat(AnnotatedElementUtils.findMergedAnnotation(method, Async.class)).isNotNull();
+        var async = AnnotatedElementUtils.findMergedAnnotation(method, Async.class);
+        assertThat(async).isNotNull();
+        assertThat(async.value()).isEqualTo(binding.listener() == RiskScenarioDraftChangedListener.class
+                ? RiskScenarioExecutor.BEAN_NAME : "");
 
         var adapter = new TransactionalApplicationListenerMethodAdapter(binding.beanName(), binding.listener(), method);
         // The ID is discovered by Spring, not supplied as an adapter argument or derived by a hand-written formula.

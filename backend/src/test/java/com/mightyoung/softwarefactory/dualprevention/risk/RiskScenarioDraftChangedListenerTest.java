@@ -82,7 +82,7 @@ class RiskScenarioDraftChangedListenerTest {
         assertThat(listener.phase()).isEqualTo(TransactionPhase.AFTER_COMMIT);
         assertThat(listener.fallbackExecution()).isFalse();
         assertThat(listener.condition()).isEmpty();
-        assertThat(method.getDeclaredAnnotation(Async.class).value()).isEmpty();
+        assertThat(method.getDeclaredAnnotation(Async.class).value()).isEqualTo("riskScenarioExecutor");
         assertThat(Stream.of(type.getDeclaredMethods()).filter(candidate -> candidate.getReturnType() == void.class))
                 .containsExactly(method);
     }

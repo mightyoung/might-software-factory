@@ -78,7 +78,7 @@ public final class RiskNativePublicationTransactions {
                 requireInvocation(invocation);
                 try {
                     Object result = invocation.proceed();
-                    if (shared != null) shared.nativeReturned(invocation);
+                    if (shared != null) {shared.materializeRecoveryRead(result);shared.nativeReturned(invocation);}
                     return result;
                 }
                 catch (RiskJdbcTransactionOwner.Failure failure) { throw failure; }
@@ -106,6 +106,8 @@ public final class RiskNativePublicationTransactions {
     public RiskPublicationJdbcTemplate template() { if (shared != null) throw unavailable(); return template; }
     /** Bind only to the unique actual native repository constructor argument zero. Raw use has no route. */
     public org.springframework.jdbc.core.JdbcOperations jdbcOperations() { if (shared == null) throw unavailable(); return shared.jdbcOperations(); }
+    public RiskScenarioExecutor riskExecutor(){if(shared==null)throw unavailable();return shared.riskExecutor();}
+    public void recoverRiskPublications(){if(shared==null)throw unavailable();shared.recoverRisk();}
     public Advisor outerAdvisor() { return outer; }
     public Advisor sanitizingAdvisor() { return inner; }
     public TransactionManagementConfigurer transactionConfigurer() { return () -> router; }
@@ -179,7 +181,7 @@ public final class RiskNativePublicationTransactions {
                 || transactionIndex <= outerIndex || transactionIndex >= innerIndex
                 || !(advisors[transactionIndex] instanceof Ordered ordered) || ordered.getOrder() >= Ordered.LOWEST_PRECEDENCE) throw unavailable();
         Method method = AopUtils.getMostSpecificMethod(call.getMethod(), targetClass);
-        if (!(targetClass == registryClass ? registryMethods : repositoryMethods).contains(method)) throw unavailable();
+        if (!(targetClass == registryClass ? registryMethods : repositoryMethods).contains(method) && !(shared!=null&&shared.recoveryMethod(method))) throw unavailable();
         if (shared != null) return shared.around(call, method, attributes.getTransactionAttribute(method, targetClass));
         Invocation previous = current.get();
         Validation validation = validateArguments(method, call.getArguments(), previous);
