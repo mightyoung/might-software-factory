@@ -26,7 +26,7 @@ export const EVIDENCE_FAILURE_MESSAGE: Record<EvidenceFailureKind, string> = {
   unavailable: "服务暂时不可用，操作尚未确认成功。可以直接重试，重试不会重复执行。",
 };
 
-/** 证据集没有读取接口，页面刷新就找不回 evidenceSetId；这里只在内存里记，刷新后需要重新开始。 */
+/** 证据集与建集幂等键记在内存里；刷新页面后由 currentSet 读取接口找回证据集（适配器不支持时才需要重新开始）。 */
 const memory = new Map<string, { setKey: string; set: EvidenceSet | null }>();
 export function clearEvidenceMemory(): void {
   memory.clear();
@@ -88,6 +88,25 @@ export function useEvidenceUpload(
     },
     [adapter, scope],
   );
+
+  // 刷新页面后找回服务端保存的证据集；最近一次上传还没结束就接着轮询。
+  useEffect(() => {
+    if (!adapter.currentSet || memory.has(memoKey)) return;
+    const controller = new AbortController();
+    void adapter.currentSet(scope, controller.signal).then(async (current) => {
+      if (!current || controller.signal.aborted || memory.has(memoKey)) return;
+      memory.set(memoKey, { setKey: crypto.randomUUID(), set: { evidenceSetId: current.evidenceSetId, initialEvidenceRevision: current.evidenceRevision } });
+      const latest = current.uploads.at(-1);
+      if (!latest) return;
+      setStatus(latest);
+      if (TERMINAL_UPLOAD_STATES.includes(latest.state)) return;
+      const token = ++run.current;
+      abort.current = controller;
+      setPhase("polling");
+      await poll(latest.intentId, controller.signal, token);
+    }).catch(() => undefined); // 找不回就当没有；用户仍可重新上传
+    return () => controller.abort();
+  }, [adapter, memoKey, poll, scope]);
 
   const start = useCallback(
     (file: File) => {

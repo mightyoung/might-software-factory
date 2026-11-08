@@ -160,4 +160,31 @@ class FindingEvidenceUploadServiceTest {
         assertThat(service.status(findingId,2,intentId)).isEqualTo(new Status(intentId,State.EXPIRED,now));
         verifyNoInteractions(producer,repository); verify(access).requireOwnedContext(owner,finding,2,notice,set);
     }
+    @SuppressWarnings("unchecked") FindingEvidenceUploadReadRepository.Snapshot readSnapshot() {
+        var snap=mock(FindingEvidenceUploadReadRepository.Snapshot.class);
+        when(reads.inTenantReadSnapshot(eq(tenant),any())).thenAnswer(call -> ((Function<FindingEvidenceUploadReadRepository.Snapshot,Object>)call.getArgument(1)).apply(snap));
+        when(snap.finding(findingId)).thenReturn(Optional.of(finding)); when(snap.notice(findingId,2)).thenReturn(Optional.of(notice));
+        when(snap.now()).thenReturn(now);
+        return snap;
+    }
+    @Test void currentSetReturnsOwnSetRevisionAndExpiryAdjustedUploadStatuses() {
+        var snap=readSnapshot();
+        when(snap.openSetOf(findingId,2,member)).thenReturn(Optional.of(set));
+        var other=new Intent(UUID.randomUUID(),account,UUID.randomUUID(),member,findingId,2,noticeId,setId,"x",now,now.plusMinutes(5));
+        when(snap.intentsOf(setId)).thenReturn(java.util.List.of(intent(now), other));
+        var result=service.currentSet(findingId,2);
+        assertThat(result.evidenceSetId()).isEqualTo(setId); assertThat(result.evidenceRevision()).isEqualTo(3);
+        assertThat(result.uploads()).containsExactly(new Status(intentId,State.EXPIRED,now)); // 其他执行人的意图不外泄
+        verify(access).requireAction(owner,finding); verify(access).requireOwnedContext(owner,finding,2,notice,set);
+        verifyNoInteractions(producer,repository);
+    }
+    @Test void currentSetIsNotVisibleWithoutAnOpenSetOrAuthority() {
+        var snap=readSnapshot();
+        when(snap.openSetOf(findingId,2,member)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.currentSet(findingId,2)).isInstanceOf(FindingNotVisibleException.class);
+        when(snap.openSetOf(findingId,2,member)).thenReturn(Optional.of(set));
+        doThrow(new org.springframework.security.access.AccessDeniedException("no")).when(access).requireAction(owner,finding);
+        assertThatThrownBy(() -> service.currentSet(findingId,2)).isInstanceOf(FindingNotVisibleException.class);
+        verify(snap,never()).intentsOf(any());
+    }
 }

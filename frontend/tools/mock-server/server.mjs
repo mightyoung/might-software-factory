@@ -230,7 +230,7 @@ export function createMockServer(options = {}) {
       const total = rows.length;
       return send(res, 200, { data: { items: rows.slice((number - 1) * size, number * size), page: { number, size, total, pageCount: Math.ceil(total / size) } }, meta: meta() });
     }
-    const upload = /^\/api\/v1\/findings\/([^/]+)\/remediation-rounds\/([1-9][0-9]*)\/evidence-(sets|uploads)(?:\/([^/]+)(?:\/(content|cancel))?)?$/.exec(path);
+    const upload = /^\/api\/v1\/findings\/([^/]+)\/remediation-rounds\/([1-9][0-9]*)\/evidence-(sets?|uploads)(?:\/([^/]+)(?:\/(content|cancel))?)?$/.exec(path);
     if (upload) {
       const [, rawId, round, kind, intentId, action] = upload;
       const row = findings.find((r) => r.id === decodeURIComponent(rawId));
@@ -238,12 +238,19 @@ export function createMockServer(options = {}) {
       if (row.state !== "RECTIFYING" || Number(round) !== row.roundNo) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
       const view = (u) => ({ data: { uploadIntentId: u.id, state: u.state, expiresAt: u.expiresAt, ...(u.cancel ? { cancelRequested: true } : {}) }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "2" } });
       const key = req.headers["idempotency-key"];
+      if (kind === "set" && req.method === "GET") {
+        const set = [...evidenceSets.values()].filter((x) => x.findingId === row.id).at(-1);
+        if (!set) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        const statusUrl = (u) => `/api/v1/findings/${rawId}/remediation-rounds/${round}/evidence-uploads/${u.id}`;
+        const items = [...uploads.values()].filter((u) => u.setId === set.id).map((u) => ({ ...view(u).data, statusUrl: statusUrl(u) }));
+        return send(res, 200, { data: { evidenceSetId: set.id, evidenceRevision: 0, uploads: items }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "2" } }, { "Cache-Control": "no-store" });
+      }
       if (kind === "sets" && req.method === "POST") {
         if (typeof key !== "string" || !UUID_RE.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
         const b = await readJson(req);
         if (!b || Object.keys(b).join() !== "expectedFindingVersion" || b.expectedFindingVersion !== row.version) return err(res, b?.expectedFindingVersion === undefined ? 400 : 409, b?.expectedFindingVersion === undefined ? "INVALID_REQUEST" : "VERSION_CONFLICT", "Bad version", { currentVersion: row.version });
         const prior = evidenceSets.get(key);
-        const set = prior ?? { id: randomUUID(), at: new Date().toISOString() };
+        const set = prior ?? { id: randomUUID(), at: new Date().toISOString(), findingId: row.id };
         evidenceSets.set(key, set);
         return send(res, prior ? 200 : 201, { data: { evidenceSetId: set.id, state: "UPLOADING", initialEvidenceRevision: 0, createdAt: set.at }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "1" } }, { "Cache-Control": "no-store" });
       }
@@ -257,7 +264,7 @@ export function createMockServer(options = {}) {
         if (!["image/png", "image/jpeg"].includes(b.declaredMediaType)) return err(res, 415, "INVALID_REQUEST", "Media type not allowed");
         if (!Number.isInteger(b.declaredSizeBytes) || b.declaredSizeBytes < 1 || b.declaredSizeBytes > 67108864) return err(res, 413, "INVALID_REQUEST", "Too large");
         const prior = uploads.get(key);
-        const u = prior ?? { id: randomUUID(), state: "INTENT_CREATED", size: b.declaredSizeBytes, type: b.declaredMediaType, name: b.filename, expiresAt: new Date(Date.now() + 3600_000).toISOString(), polls: 0 };
+        const u = prior ?? { id: randomUUID(), state: "INTENT_CREATED", size: b.declaredSizeBytes, type: b.declaredMediaType, name: b.filename, setId: b.evidenceSetId, expiresAt: new Date(Date.now() + 3600_000).toISOString(), polls: 0 };
         uploads.set(key, u);
         return send(res, prior ? 200 : 201, { ...view(u), data: { ...view(u).data, statusUrl: `${path}/${u.id}` } }, { "Cache-Control": "no-store", Location: `${path}/${u.id}` });
       }

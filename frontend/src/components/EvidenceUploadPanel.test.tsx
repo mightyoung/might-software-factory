@@ -47,6 +47,35 @@ describe("整改证据上传面板", () => {
     expect(screen.getByText(/证据终结、提交整改要等后端的终结接口/)).toBeInTheDocument();
   });
 
+  it("刷新后从服务端找回证据集与最近一次上传：不用重新建集，进行中的接着轮询，之后新上传沿用该证据集和版本", async () => {
+    const adapter = fake({
+      currentSet: vi.fn(async () => ({ evidenceSetId: "s9", evidenceRevision: 4, uploads: [status("SCANNING")] })),
+    });
+    render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
+    expect(await screen.findByText(/扫描通过，等待终结确认/)).toBeInTheDocument(); // 接着轮询到终态
+    expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "i1", expect.anything());
+    await pick(png());
+    expect(adapter.initializeSet).not.toHaveBeenCalled();
+    expect(adapter.reserveUpload).toHaveBeenCalledWith(
+      { findingId: "f1", roundNo: 2 },
+      expect.objectContaining({ evidenceSetId: "s9", expectedEvidenceRevision: 4 }),
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("服务端没有可编辑证据集（null）或读取失败时，仍按原流程在第一次上传时建集", async () => {
+    for (const currentSet of [vi.fn(async () => null), vi.fn(async () => { throw new FindingEvidenceError("unavailable"); })]) {
+      clearEvidenceMemory();
+      cleanup();
+      const adapter = fake({ currentSet });
+      render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
+      await act(async () => {});
+      await pick(png());
+      expect(adapter.initializeSet).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("本地先拒绝非 PNG/JPEG、空文件与超大文件，不发请求", async () => {
     const adapter = fake();
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);

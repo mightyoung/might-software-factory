@@ -13,6 +13,10 @@ public interface FindingEvidenceUploadReadRepository {
         Optional<Notice> notice(UUID findingId, int roundNo);
         Optional<EvidenceSet> evidenceSet(UUID id);
         Optional<Intent> intent(UUID id);
+        /** 该成员在这一轮最近创建且尚未封存的证据集。 */
+        Optional<EvidenceSet> openSetOf(UUID findingId, int roundNo, UUID ownerMemberId);
+        /** 证据集下的上传意图，最早的在前；最多 100 条（证据集条目上限）。 */
+        java.util.List<Intent> intentsOf(UUID evidenceSetId);
         OffsetDateTime now();
     }
 }

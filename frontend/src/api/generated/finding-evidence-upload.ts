@@ -93,6 +93,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+            };
+            cookie?: never;
+        };
+        /** @description No query or body. Returns the caller's most recent unsealed evidence set for this round, its current evidenceRevision and the status of its upload intents, so a refreshed page can resume. Missing, cross-owner, cross-tenant, sealed and no-longer-authorized sets are uniformly invisible. No filename, storage path, digest or scan output is returned. */
+        get: operations["getCurrentFindingEvidenceSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -154,6 +175,17 @@ export interface components {
         };
         StatusResponse: {
             data: components["schemas"]["StatusData"];
+            meta: components["schemas"]["Meta"];
+        };
+        EvidenceSetData: {
+            /** Format: uuid */
+            evidenceSetId: string;
+            /** Format: int64 */
+            evidenceRevision: number;
+            uploads: components["schemas"]["ReservationData"][];
+        };
+        EvidenceSetResponse: {
+            data: components["schemas"]["EvidenceSetData"];
             meta: components["schemas"]["Meta"];
         };
         ReservationResponse: {
@@ -444,6 +476,37 @@ export interface operations {
             403: components["responses"]["Denied"];
             404: components["responses"]["Invisible"];
             409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getCurrentFindingEvidenceSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                findingId: components["parameters"]["FindingId"];
+                /** @description Canonical positive decimal integer, no leading zero or sign. */
+                roundNo: components["parameters"]["RoundNo"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's current editable evidence set. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceSetResponse"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["Invisible"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Assignment"];
             503: components["responses"]["Unavailable"];
         };
     };

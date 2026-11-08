@@ -48,7 +48,8 @@ class FindingEvidenceUploadRequestParserTest {
                 java.nio.file.Path.of("..", "contracts", "openapi", "finding-evidence-upload.yaml")));
         var paths = (java.util.Map<String,Object>) document.get("paths");
         String base="/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-uploads";
-        var expectedMethods=java.util.Map.of(base,"post",base+"/{intentId}","get",base+"/{intentId}/content","put",base+"/{intentId}/cancel","post");
+        var expectedMethods=java.util.Map.of(base,"post",base+"/{intentId}","get",base+"/{intentId}/content","put",base+"/{intentId}/cancel","post",
+                "/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-set","get");
         assertThat(paths).containsOnlyKeys(expectedMethods.keySet().toArray(String[]::new));
         for(var entry:expectedMethods.entrySet()){
             var path=(java.util.Map<String,Object>)paths.get(entry.getKey());

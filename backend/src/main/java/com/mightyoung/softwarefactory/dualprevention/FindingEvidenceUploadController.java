@@ -35,6 +35,18 @@ public final class FindingEvidenceUploadController {
         return ResponseEntity.status(result.replayed() ? 200 : 201).location(URI.create(url))
                 .cacheControl(CacheControl.noStore()).body(FindingEvidenceUploadApiModels.response(result.status(), url));
     }
+    @GetMapping("/api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-set")
+    public ResponseEntity<FindingEvidenceUploadApiModels.SetResponse> currentSet(@PathVariable String findingId,
+            @PathVariable String roundNo, HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store");
+        noQuery(request);
+        try { if (request.getInputStream().read() != -1) throw invalid(); }
+        catch (java.io.IOException failure) { throw invalid(); }
+        var finding = canonical(findingId);
+        int round = round(roundNo);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(FindingEvidenceUploadApiModels.setResponse(service.currentSet(finding, round), finding.toString(), round));
+    }
     @GetMapping(BASE + "/{intentId}")
     public ResponseEntity<FindingEvidenceUploadApiModels.Response> status(@PathVariable String findingId,
             @PathVariable String roundNo, @PathVariable String intentId, HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) {

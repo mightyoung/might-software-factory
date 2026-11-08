@@ -349,6 +349,10 @@ describe("HTTP adapters × 契约模拟服务", () => {
     expect((await evidence.getStatus(scope, reserved.intentId)).state).toBe("SCANNING");
     expect((await evidence.getStatus(scope, reserved.intentId)).state).toBe("VERIFIED_PENDING_FINALIZATION");
     expect((await evidence.cancel(scope, reserved.intentId)).cancelRequested).toBe(false); // 已是终态，取消无效
+    // 刷新页面后的找回：同一证据集、最新版本、这次上传的状态
+    const current = await evidence.currentSet!(scope);
+    expect(current).toMatchObject({ evidenceSetId: set.evidenceSetId, evidenceRevision: 0 });
+    expect(current!.uploads.map((u) => [u.intentId, u.state])).toContainEqual([reserved.intentId, "VERIFIED_PENDING_FINALIZATION"]);
   });
 
   // 本用例改变共享模拟服务的密码，必须放在本文件最后。

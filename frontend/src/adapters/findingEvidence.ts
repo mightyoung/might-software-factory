@@ -54,7 +54,16 @@ export interface UploadScope {
   roundNo: number;
 }
 
+/** 服务端当前保存的、属于当前用户的可编辑证据集；刷新页面后用它找回 evidenceSetId 与最新版本。 */
+export interface CurrentEvidenceSet {
+  evidenceSetId: string;
+  evidenceRevision: number;
+  uploads: readonly UploadStatus[];
+}
+
 export interface FindingEvidenceAdapter {
+  /** 没有可编辑证据集（404）返回 null；其他失败抛 FindingEvidenceError。 */
+  currentSet?(scope: UploadScope, signal?: AbortSignal): Promise<CurrentEvidenceSet | null>;
   initializeSet(scope: UploadScope, expectedFindingVersion: number, idempotencyKey: string, signal?: AbortSignal): Promise<EvidenceSet>;
   reserveUpload(scope: UploadScope, declaration: UploadDeclaration, idempotencyKey: string, signal?: AbortSignal): Promise<UploadStatus>;
   /** 字节必须与声明的大小、类型完全一致；服务端不续传、不覆盖。 */

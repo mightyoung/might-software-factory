@@ -16,7 +16,7 @@ function base({ findingId, roundNo }: UploadScope): string {
   return `/api/v1/findings/${encodeURIComponent(findingId)}/remediation-rounds/${roundNo}`;
 }
 
-function toStatus({ data }: StatusBody): UploadStatus {
+function toStatus({ data }: Pick<StatusBody, "data">): UploadStatus {
   return { intentId: data.uploadIntentId, state: data.state, expiresAt: data.expiresAt, cancelRequested: data.cancelRequested === true };
 }
 
@@ -53,6 +53,20 @@ async function guard<T>(run: () => Promise<T>): Promise<T> {
 
 export function createHttpFindingEvidence(client: HttpClient): FindingEvidenceAdapter {
   return {
+    currentSet: async (scope, signal) => {
+      try {
+        const { data } = await client.get<UploadComponents["schemas"]["EvidenceSetResponse"]>(`${base(scope)}/evidence-set`, { signal });
+        return {
+          evidenceSetId: data.evidenceSetId,
+          evidenceRevision: data.evidenceRevision,
+          uploads: data.uploads.map((upload) => toStatus({ data: upload })),
+        };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null; // 还没建过证据集，或看不到
+        if (error instanceof ApiError) throw new FindingEvidenceError(classify(error), error.traceId);
+        throw error;
+      }
+    },
     initializeSet: (scope, expectedFindingVersion, key, signal) =>
       guard(async () => {
         const response = await client.post<InitComponents["schemas"]["InitializationResponse"]>(`${base(scope)}/evidence-sets`, {
