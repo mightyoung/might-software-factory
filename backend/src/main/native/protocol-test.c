@@ -98,7 +98,18 @@ int main(void){
  assert(binding_encode(&original,binding_bytes,sizeof(binding_bytes),&binding_size)==0);struct binding binding_restored;assert(binding_decode(binding_bytes,binding_size,&binding_restored)==0);assert(binding_restored.challenge[31]==255);
  assert(binding_decode(binding_bytes,binding_size-1,&binding_restored)==-1);
  assert(relative_resource("usr/lib/libclamav.so.12"));assert(!relative_resource("usr/lib/../secret"));assert(!relative_resource("/usr/lib/libclamav.so"));assert(!relative_resource("scratch/code.so"));assert(identifier("scan.0:one"));
- struct profile policy_profile;memset(&policy_profile,0,sizeof(policy_profile));policy_profile.max_bytes=1024;effective_policy(&policy_profile,digest);fputs("policy-vector-1024=",stdout);for(size_t i=0;i<32;i++)printf("%02x",digest[i]);putchar('\n');
+ struct profile policy_profile;memset(&policy_profile,0,sizeof(policy_profile));policy_profile.max_bytes=1024;
+ char max_arg[48],scan_arg[48];char *closed_args[26];
+ assert(scanner_arguments(&policy_profile,max_arg,scan_arg,closed_args)==0);
+ assert(strcmp(closed_args[1],"--infected")==0&&closed_args[25]==NULL&&strcmp(closed_args[24],"-")==0);
+ for(size_t i=0;closed_args[i];i++)assert(strcmp(closed_args[i],"--quiet")!=0&&strcmp(closed_args[i],"--suppress-ok-results")!=0);
+ const unsigned char actual_detection[]="stdin: Eicar-Test-Signature FOUND\n";
+ const unsigned char clean_output[]="stdin: OK\n";
+ const unsigned char warning_output[]="WARNING: unexpected\nstdin: Eicar-Test-Signature FOUND\n";
+ assert(eicar_detection(actual_detection,sizeof(actual_detection)-1));
+ assert(!eicar_detection(clean_output,sizeof(clean_output)-1)&&!eicar_detection(warning_output,sizeof(warning_output)-1));
+ effective_policy(&policy_profile,digest);
+ unsigned char expected_policy[32];assert(hex_decode("57979520ac18c44cb593b450384e4877c3ba84626d02906edfb1941e3d3deaf2",32,expected_policy));assert(equal(digest,expected_policy,32));fputs("policy-vector-1024=",stdout);for(size_t i=0;i<32;i++)printf("%02x",digest[i]);putchar('\n');
  /* Ordinary-file fixtures exercise the same strict readback/parser, not cgroup support. */
  char swap_template[]="/tmp/msf-swap-policy-XXXXXX";char *swap_root=mkdtemp(swap_template);assert(swap_root);
  int swap_dir=open(swap_root,O_RDONLY|O_DIRECTORY|O_CLOEXEC);assert(swap_dir>=0);

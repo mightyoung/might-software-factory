@@ -72,9 +72,11 @@ class ClamScanProcessAdapterTest {
         assertThat(lease.isValidFor(plan)).isTrue();assertThat(lease.isValidFor(plan())).isFalse();lease.close();lease.close();assertThat(lease.isValidFor(plan)).isFalse();assertThat(stops.get()).isEqualTo(1);
     }
     @Test void policyHasOneStdinOperandAndExactBuiltInGenerationControls() {
-        var args=ClamScanProcessAdapter.policyArguments(properties());assertThat(args.stream().filter("-"::equals).count()).isEqualTo(1);
+        var args=ClamScanProcessAdapter.policyArguments(properties());
+        assertThat(args).startsWith("--infected","--stdout","--no-summary").doesNotContain("--quiet","--suppress-ok-results");
+        assertThat(args.stream().filter("-"::equals).count()).isEqualTo(1);
         // Independent canonical V2 vector; the native unprivileged gate compares its actual C encoding.
-        assertThat(ClamScanProcessAdapter.effectivePolicySha256(properties())).isEqualTo("0a570d8ff38703e1ac1da5d89c6d856f71977107a577d821cdc0cb89e84b5013");
+        assertThat(ClamScanProcessAdapter.effectivePolicySha256(properties())).isEqualTo("57979520ac18c44cb593b450384e4877c3ba84626d02906edfb1941e3d3deaf2");
         assertThat(args).contains("--official-db-only=yes","--bytecode-unsigned=no","--database=/definitions","--tempdir=/scratch");
         assertThat(ImmutableContainmentProfile.Probe.values()).contains(ImmutableContainmentProfile.Probe.CLEAN_CONTROL,ImmutableContainmentProfile.Probe.EICAR_CONTROL,ImmutableContainmentProfile.Probe.PIDS_RELEASE_ACCOUNTING,ImmutableContainmentProfile.Probe.ORPHAN_REAPER);
     }

@@ -1110,7 +1110,7 @@ static int scanner_arguments(const struct profile *p,char max[48],char scanmax[4
     if(n<0||n>=48)return -1;
     n=snprintf(scanmax,48,"--max-scansize=%llu",(unsigned long long)p->max_bytes);
     if(n<0||n>=48)return -1;
-    char *values[]={"/scanner/clamscan","--suppress-ok-results","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
+    char *values[]={"/scanner/clamscan","--infected","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
     _Static_assert(ARRAY_LEN(values)==26,"Closed scanner argv changed");
     memcpy(arguments,values,sizeof(values));
     return 0;
