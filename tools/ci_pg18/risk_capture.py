@@ -191,6 +191,11 @@ def _result_lane(result, lane):
                     validate_source_diagnostics(result.get("sourceDiagnostics"), require_complete=True)
                 except Rejected:
                     reject("RESULT_LANE")
+            if lane is REAUTH:
+                try:
+                    validate_reauth_commit_diagnostics(result.get("reauthCommitDiagnostics"), require_complete=True)
+                except Rejected:
+                    reject("RESULT_LANE")
 
 
 def bounded_bytes(path, maximum, stage):
@@ -316,6 +321,43 @@ def validate_source_diagnostics(value, require_complete=False):
     if require_complete and (found != SOURCE.scenarios or any(row["status"] != "PASSED" or row["issuerEntered"] == 0
                                                            for row in value["cases"])):
         reject("SOURCE_DIAGNOSTIC_NOT_PASS")
+    return value
+
+
+def validate_reauth_commit_diagnostics(value, require_complete=False):
+    """Fixed diagnostic phases only; no messages, identifiers, secrets or arbitrary values."""
+    case = "commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken"
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "database", "case", "iterations"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or value["database"] != REAUTH.database or value["case"] != case
+            or not isinstance(value["iterations"], list) or len(value["iterations"]) != 6):
+        reject("REAUTH_COMMIT_DIAGNOSTIC")
+    expected = [(level, fault) for level in ("INFO", "DEBUG")
+                for fault in ("COMMIT_SQL", "COMMIT_RUNTIME", "COMMIT_ERROR")]
+    phases = {"SETUP", "ACTION", "LOG_PASSWORD_DRIVER", "LOG_SECRET_CANARIES",
+              "DURABLE_GRAPH", "COMMIT_COUNT", "REPLAY", "REPLAY_GRAPH", "NOT_REACHED"}
+    terminal = False
+    for row, pair in zip(value["iterations"], expected):
+        if (not isinstance(row, dict) or set(row) != {"level", "fault", "phase", "status", "failureKind"}
+                or (row["level"], row["fault"]) != pair
+                or not isinstance(row["phase"], str) or row["phase"] not in phases
+                or not isinstance(row["status"], str) or row["status"] not in {"PASS", "FAIL", "NOT_REACHED"}
+                or row["failureKind"] is not None and not isinstance(row["failureKind"], str)
+                or row["failureKind"] not in {None, "ASSERTION", "SESSION_SENSITIVE", "OTHER"}):
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+        if row["status"] == "NOT_REACHED":
+            if not terminal or row["phase"] != "NOT_REACHED" or row["failureKind"] is not None:
+                reject("REAUTH_COMMIT_DIAGNOSTIC")
+        elif terminal:
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+        elif row["status"] == "FAIL":
+            if row["phase"] == "NOT_REACHED" or row["failureKind"] is None:
+                reject("REAUTH_COMMIT_DIAGNOSTIC")
+            terminal = True
+        elif row["phase"] != "REPLAY_GRAPH" or row["failureKind"] is not None:
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+    if require_complete and any(row["status"] != "PASS" for row in value["iterations"]):
+        reject("REAUTH_COMMIT_DIAGNOSTIC_NOT_PASS")
     return value
 
 
@@ -790,6 +832,8 @@ def public_diagnostics(result, lane=CAPTURE):
             output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest, lane)
     if lane is SOURCE and "sourceDiagnostics" in result:
         output["sourceDiagnostics"] = validate_source_diagnostics(result["sourceDiagnostics"])
+    if lane is REAUTH and "reauthCommitDiagnostics" in result:
+        output["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(result["reauthCommitDiagnostics"])
     migration = result.get("migrationDiagnostics", {})
     if isinstance(migration, dict):
         version = migration.get("lastMigrationVersion")
@@ -854,6 +898,17 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         stage = "MAVEN_VERIFY"
         maven_exit = run_maven(repo, state, child, lane)
         result["mavenExit"] = maven_exit
+        if lane is REAUTH:
+            stage = "REAUTH_COMMIT_DIAGNOSTICS"
+            diagnostics = repo / "backend" / "target" / "ci-pg18-reauth-commit-diagnostics.json"
+            if diagnostics.exists():
+                result["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(load_json(diagnostics), require_complete=not maven_exit)
+            elif not maven_exit:
+                reject("REAUTH_COMMIT_DIAGNOSTIC_MISSING")
+            evidence = repo / "backend" / "target" / lane.evidence_file
+            if evidence.exists():
+                result["databaseEvidence"] = validate_success_evidence(load_json(evidence), ownership["image_digest"], lane)
+            stage = "MAVEN_VERIFY"
         if lane is SOURCE:
             stage = "SOURCE_DIAGNOSTICS"
             diagnostics = repo / "backend" / "target" / "ci-pg18-source-case-diagnostics.json"

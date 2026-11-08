@@ -12,6 +12,9 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -167,13 +170,31 @@ class CiPg18ReauthPostgresIT {
     }
 
     @Test void commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken()throws Exception{
-        for(Level level:List.of(Level.INFO,Level.DEBUG))for(var fault:List.of(CiPg18ReauthFixture.Fault.COMMIT_SQL,CiPg18ReauthFixture.Fault.COMMIT_RUNTIME,CiPg18ReauthFixture.Fault.COMMIT_ERROR))try(var c=caseData()){
-            UUID key=UUID.randomUUID();int commits=fixture.issueCommits.get();
-            diagnostics(level,c.actor.password(),()->{fixture.fault.set(fault);assertThatThrownBy(()->c.issue(key)).isInstanceOf(SessionSensitiveException.class).hasMessage("UNAVAILABLE");});
-            assertThat(counts(c)).containsExactly(1,1,0,1);assertThat(fixture.issueCommits.get()-commits).isEqualTo(1);
-            try(var replay=c.issue(key)){assertThat(replay).isInstanceOf(Replay.class);assertThat(((Replay)replay).tokenDelivery()).isEqualTo("UNAVAILABLE_ON_REPLAY");}
-            assertThat(counts(c)).containsExactly(1,1,0,1);
+        var rows=new ArrayList<Map<String,Object>>();
+        for(Level level:List.of(Level.INFO,Level.DEBUG))for(var fault:List.of(CiPg18ReauthFixture.Fault.COMMIT_SQL,CiPg18ReauthFixture.Fault.COMMIT_RUNTIME,CiPg18ReauthFixture.Fault.COMMIT_ERROR))
+            rows.add(commitDiagnostic(level,fault,"NOT_REACHED","NOT_REACHED",null));
+        int index=0;
+        for(Level level:List.of(Level.INFO,Level.DEBUG))for(var fault:List.of(CiPg18ReauthFixture.Fault.COMMIT_SQL,CiPg18ReauthFixture.Fault.COMMIT_RUNTIME,CiPg18ReauthFixture.Fault.COMMIT_ERROR)){
+            String[] phase={"SETUP"};String failureKind=null;
+            try(var c=caseData()){
+                UUID key=UUID.randomUUID();int commits=fixture.issueCommits.get();
+                phase[0]="ACTION";
+                diagnostics(level,c.actor.password(),()->{fixture.fault.set(fault);assertThatThrownBy(()->c.issue(key)).isInstanceOf(SessionSensitiveException.class).hasMessage("UNAVAILABLE");},value->phase[0]=value);
+                phase[0]="DURABLE_GRAPH";assertThat(counts(c)).containsExactly(1,1,0,1);
+                phase[0]="COMMIT_COUNT";assertThat(fixture.issueCommits.get()-commits).isEqualTo(1);
+                phase[0]="REPLAY";
+                try(var replay=c.issue(key)){assertThat(replay).isInstanceOf(Replay.class);assertThat(((Replay)replay).tokenDelivery()).isEqualTo("UNAVAILABLE_ON_REPLAY");}
+                phase[0]="REPLAY_GRAPH";assertThat(counts(c)).containsExactly(1,1,0,1);
+            }catch(Exception|Error failure){failureKind=failure instanceof AssertionError?"ASSERTION":failure instanceof SessionSensitiveException?"SESSION_SENSITIVE":"OTHER";throw failure;}
+            finally{
+                rows.set(index++,commitDiagnostic(level,fault,phase[0],failureKind==null?"PASS":"FAIL",failureKind));
+                java.nio.file.Files.write(java.nio.file.Path.of("target/ci-pg18-reauth-commit-diagnostics.json"),
+                        tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsBytes(Map.of("schemaVersion",1,"database","msf_ci_g008_reauth","case","commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken","iterations",rows)));
+            }
         }
+    }
+    private Map<String,Object> commitDiagnostic(Level level,CiPg18ReauthFixture.Fault fault,String phase,String status,String failureKind){
+        Map<String,Object> row=new LinkedHashMap<>();row.put("level",level.toString());row.put("fault",fault.name());row.put("phase",phase);row.put("status",status);row.put("failureKind",failureKind);return row;
     }
 
     @Test void crossAccountSourceTargetAndTenantContextCannotBorrowTheProof()throws Exception{
@@ -274,14 +295,15 @@ class CiPg18ReauthPostgresIT {
         return false;
     }
     private static void await(CountDownLatch latch){try{if(!latch.await(5,TimeUnit.SECONDS))throw CiPg18ReauthFixture.rejected();}catch(InterruptedException failure){Thread.currentThread().interrupt();throw CiPg18ReauthFixture.rejected();}}
-    private void diagnostics(Level level,String password,Runnable action){
+    private void diagnostics(Level level,String password,Runnable action){diagnostics(level,password,action,ignored->{});}
+    private void diagnostics(Level level,String password,Runnable action,java.util.function.Consumer<String> phase){
         Logger logger=(Logger)LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);Level original=logger.getLevel();var appender=new ListAppender<ILoggingEvent>();appender.start();logger.addAppender(appender);logger.setLevel(level);
         PrintStream stdout=System.out,stderr=System.err;var bytes=new ByteArrayOutputStream();var stream=new PrintStream(bytes,true,StandardCharsets.UTF_8);
         try{System.setOut(stream);System.setErr(stream);action.run();}
         finally{System.setOut(stdout);System.setErr(stderr);logger.detachAppender(appender);logger.setLevel(original);stream.close();}
         StringBuilder text=new StringBuilder(bytes.toString(StandardCharsets.UTF_8));
         for(var event:appender.list){text.append(event.getFormattedMessage());for(var failure=event.getThrowableProxy();failure!=null;failure=failure.getCause())text.append(failure.getMessage());}
-        assertThat(text.toString()).doesNotContain(password,"PRIVATE_REAUTH_PG_DRIVER_SENTINEL");
-        for(String canary:fixture.privateCanaries())assertThat(text.toString()).doesNotContain(canary);
+        phase.accept("LOG_PASSWORD_DRIVER");assertThat(text.toString()).doesNotContain(password,"PRIVATE_REAUTH_PG_DRIVER_SENTINEL");
+        phase.accept("LOG_SECRET_CANARIES");for(String canary:fixture.privateCanaries())assertThat(text.toString()).doesNotContain(canary);
     }
 }

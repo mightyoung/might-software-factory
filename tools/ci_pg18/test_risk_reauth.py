@@ -99,13 +99,71 @@ class ReauthLaneTests(unittest.TestCase):
                   "acceptanceKind": self.lane.kind, "imageDigest": self.digest,
                   "databaseEvidence": self.evidence(self.lane),
                   "tests": subject.verify_reports(self.root, self.lane),
-                  "sourceRevision": {"commit": "a" * 40, "tree": "b" * 40}}
+                  "sourceRevision": {"commit": "a" * 40, "tree": "b" * 40},
+                  "reauthCommitDiagnostics": commit_diagnostics()}
         subject._result_lane(result, self.lane)
         for change in ({"sourceRevision": None}, {"sourceRevision": {"commit": "a" * 40}},
                        {"acceptanceKind": subject.SOURCE.kind},
                        {"databaseEvidence": self.evidence(subject.SOURCE)}):
             with self.subTest(change=change), self.assertRaises(subject.Rejected):
                 subject._result_lane(dict(result, **change), self.lane)
+
+
+def commit_diagnostics():
+    return {"schemaVersion": 1, "database": subject.REAUTH.database,
+            "case": "commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken",
+            "iterations": [{"level": level, "fault": fault, "phase": "REPLAY_GRAPH", "status": "PASS", "failureKind": None}
+                           for level in ("INFO", "DEBUG") for fault in ("COMMIT_SQL", "COMMIT_RUNTIME", "COMMIT_ERROR")]}
+
+
+class ReauthCommitDiagnosticTests(unittest.TestCase):
+    def test_complete_six_iterations_and_failed_prefix_are_preserved_without_claiming_pass(self):
+        value = commit_diagnostics()
+        self.assertEqual(subject.validate_reauth_commit_diagnostics(value, True), value)
+        value["iterations"][1].update(phase="LOG_SECRET_CANARIES", status="FAIL", failureKind="ASSERTION")
+        for row in value["iterations"][2:]:
+            row.update(phase="NOT_REACHED", status="NOT_REACHED", failureKind=None)
+        self.assertEqual(subject.validate_reauth_commit_diagnostics(value), value)
+        with self.assertRaisesRegex(subject.Rejected, "REAUTH_COMMIT_DIAGNOSTIC_NOT_PASS"):
+            subject.validate_reauth_commit_diagnostics(value, True)
+        output = subject.public_diagnostics({"status": "FAILED", "reauthCommitDiagnostics": value}, subject.REAUTH)
+        self.assertEqual(output["reauthCommitDiagnostics"], value)
+        self.assertEqual(output["status"], "FAILED")
+
+    def test_missing_extra_duplicate_and_reordered_iterations_are_rejected(self):
+        for mutation in (lambda x: x["iterations"].pop(), lambda x: x["iterations"].append(copy.deepcopy(x["iterations"][0])),
+                         lambda x: x["iterations"].__setitem__(1, copy.deepcopy(x["iterations"][0])),
+                         lambda x: x["iterations"].reverse()):
+            value = commit_diagnostics()
+            mutation(value)
+            with self.assertRaises(subject.Rejected):
+                subject.validate_reauth_commit_diagnostics(value)
+
+    def test_arbitrary_fields_values_or_raw_failure_text_are_rejected(self):
+        mutations = (lambda x: x.update(message="PRIVATE_SECRET"),
+                     lambda x: x["iterations"][0].update(message="PRIVATE_SECRET"),
+                     lambda x: x.update(database=subject.SOURCE.database),
+                     lambda x: x.update(schemaVersion=True),
+                     lambda x: x["iterations"][0].update(phase="PRIVATE_SECRET"),
+                     lambda x: x["iterations"][0].update(failureKind=["ASSERTION"]),
+                     lambda x: x["iterations"][0].update(status="FAILED"))
+        for mutation in mutations:
+            value = commit_diagnostics()
+            mutation(value)
+            with self.assertRaises(subject.Rejected):
+                subject.validate_reauth_commit_diagnostics(value)
+
+    def test_not_reached_and_pass_cannot_hide_or_continue_after_failure(self):
+        for phase, status, kind in (("NOT_REACHED", "NOT_REACHED", None), ("ACTION", "PASS", None),
+                                    ("ACTION", "FAIL", None), ("NOT_REACHED", "FAIL", "OTHER")):
+            value = commit_diagnostics()
+            value["iterations"][0].update(phase=phase, status=status, failureKind=kind)
+            with self.assertRaises(subject.Rejected):
+                subject.validate_reauth_commit_diagnostics(value)
+        value = commit_diagnostics()
+        value["iterations"][0].update(phase="ACTION", status="FAIL", failureKind="OTHER")
+        with self.assertRaises(subject.Rejected):
+            subject.validate_reauth_commit_diagnostics(value)
 
 
 if __name__ == "__main__":
