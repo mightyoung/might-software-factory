@@ -23,7 +23,9 @@ class ModuleArchitectureTest {
             "Audit and operations",
             "File evidence access",
             "Dual-prevention business sample",
-            "Platform administration"
+            "Platform administration",
+            "Entity ledger",
+            "Tooling catalog"
     );
 
     private static final Map<String, Set<String>> EXPECTED_ALLOWED_DEPENDENCIES = Map.ofEntries(
@@ -39,7 +41,9 @@ class ModuleArchitectureTest {
             Map.entry("Dual-prevention business sample", Set.of(
                     "Application registry", "Audit and operations", "Authorization", "Directory",
                     "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")),
-            Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication"))
+            Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication")),
+            Map.entry("Entity ledger", Set.of("Application registry", "Authorization", "Identity and authentication", "Audit and operations")),
+            Map.entry("Tooling catalog", Set.of("Entity ledger", "Authorization", "Identity and authentication", "Application registry"))
     );
 
     @Test

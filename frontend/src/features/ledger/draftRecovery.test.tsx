@@ -1,0 +1,75 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../api/httpClient";
+import { beginExpiry, clearAllDrafts, onSignedIn, peekEntityDraft, stashEntityDraft } from "../session/draftStash";
+import { EntityLedgerForm } from "./EntityLedgerForm";
+import { adapter, DEF, ID, OTHER_ID, RECORD } from "./testFixture";
+afterEach(() => { cleanup();clearAllDrafts(); });
+describe("owner-scoped transient ledger drafts", () => {
+  it.each(["refresh", "expiry"])("retries an unknown searched reference verbatim after %s, despite new defaults and definition", async recovery => {
+    const first = adapter();vi.mocked(first.create).mockRejectedValue(new ApiError(0, "NETWORK", null, true));
+    vi.mocked(first.reference).mockImplementation(async (_definition, _key, _use, search) => ({ options: [{ id: search ? OTHER_ID : ID, label: search ? "搜索范围" : "默认范围" }], hasMore: !search }));
+    const view = render(<EntityLedgerForm definition={DEF} use="CREATE" adapter={first} owner="t/a" draftKey="account/member/create" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={() => view.unmount()} />);
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "original" } });
+    fireEvent.change(screen.getByLabelText("数量"), { target: { value: "002" } });
+    fireEvent.change(screen.getByLabelText("检索管理范围"), { target: { value: "远端" } });
+    await screen.findByRole("option", { name: "搜索范围" });
+    fireEvent.change(screen.getByRole("combobox", { name: "管理范围" }), { target: { value: OTHER_ID } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/提交结果尚未确认/);
+    const original = vi.mocked(first.create).mock.calls[0]!;
+    expect(original[1]).toMatchObject({ code: "original", count: 2, scope: OTHER_ID });
+    expect(peekEntityDraft("t/a", "account/member/create")?.request?.values).toEqual(original[1]);
+    if (recovery === "refresh") fireEvent.click(screen.getByRole("button", { name: "刷新定义和记录核对" }));
+    else { beginExpiry();view.unmount();onSignedIn("t/a"); }
+    const second = adapter();vi.mocked(second.reference).mockResolvedValue({ options: [{ id: ID, label: "新默认范围" }], hasMore: true });
+    const isolated = render(<EntityLedgerForm definition={DEF} use="CREATE" adapter={second} owner="t/a" draftKey="other-account/other-member/create" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    expect(screen.getByLabelText("编号 *")).toHaveValue("");expect(screen.getByLabelText("编号 *")).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: "核对后重试原请求" })).not.toBeInTheDocument();isolated.unmount();
+    const changed = structuredClone(DEF);changed.definitionVersion = "2";changed.inputFields.code!.maxLength = 1;
+    const restored = render(<EntityLedgerForm definition={changed} use="CREATE" adapter={second} record={{ ...RECORD, values: { code: "new default", count: 99, scope: ID } }} owner="t/a" draftKey="account/member/create" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    await screen.findByRole("option", { name: "新默认范围" });
+    expect(screen.getByLabelText("编号 *")).toHaveValue("original");expect(screen.getByLabelText("编号 *")).toBeDisabled();
+    expect(screen.getByLabelText("数量")).toHaveValue("002");expect(screen.getByLabelText("检索管理范围")).toBeDisabled();
+    expect(second.create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
+    await waitFor(() => expect(second.create).toHaveBeenCalledTimes(1));
+    const retried = vi.mocked(second.create).mock.calls[0]!;
+    expect(retried[0].definitionVersion).toBe("1");expect(retried[1]).toEqual(original[1]);expect(retried[2]).toBe(original[2]);
+    restored.unmount();
+  });
+  it("still rejects an unverified restored reference before the first send", async () => {
+    stashEntityDraft("t/a", "create", { values: { code: "first", scope: OTHER_ID }, definitionVersion: "1", key: null, fingerprint: null, locked: false });
+    const a = adapter();vi.mocked(a.reference).mockResolvedValue({ options: [{ id: ID, label: "授权默认范围" }], hasMore: true });
+    render(<EntityLedgerForm definition={DEF} use="CREATE" adapter={a} owner="t/a" draftKey="create" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    await screen.findByRole("option", { name: "授权默认范围" });fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("请从当前授权候选重新选择。")).toBeInTheDocument();expect(a.create).not.toHaveBeenCalled();
+  });
+  it("ignores a late 401 from an unmounted owner after logout and another login", async () => {
+    let reject!: (error: unknown) => void;
+    const first = adapter();vi.mocked(first.update).mockImplementation(() => new Promise((_resolve, failure) => { reject = failure; }));
+    const expired = vi.fn(), success = vi.fn();
+    const view = render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={first} record={RECORD} owner="t/a" draftKey="account-a/member-a/edit" onSuccess={success} onUnauthenticated={expired} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));await waitFor(() => expect(first.update).toHaveBeenCalledTimes(1));
+    view.unmount();clearAllDrafts();onSignedIn("t/b");
+    render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={adapter()} record={RECORD} owner="t/b" draftKey="account-b/member-b/edit" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "owner-b" } });
+    reject(new ApiError(401, "AUTH_REQUIRED", null, false));
+    await waitFor(() => expect(screen.getByLabelText("编号 *")).toHaveValue("owner-b"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(expired).not.toHaveBeenCalled();expect(success).not.toHaveBeenCalled();
+    expect(peekEntityDraft("t/a", "account-a/member-a/edit")).toBeUndefined();expect(screen.getByLabelText("编号 *")).not.toBeDisabled();
+  });
+  it("401 preserves the exact request and restores only to the same owner", async () => {
+    const first = adapter();vi.mocked(first.update).mockRejectedValue(new ApiError(401, "AUTH_REQUIRED", null, false));
+    const expired = vi.fn(() => { beginExpiry(); view.unmount(); });
+    const view = render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={first} record={RECORD} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={expired} onRefresh={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "retained" } });fireEvent.click(screen.getByRole("button", { name: "保存" }));await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
+    expect(peekEntityDraft("t/a", "edit")?.values.code).toBe("retained");
+    const oldKey = vi.mocked(first.update).mock.calls[0]![3];expect(peekEntityDraft("t/a", "edit")?.key).toBe(oldKey);
+    onSignedIn("t/a");const second = adapter();vi.mocked(second.update).mockRejectedValue(new ApiError(0, "NETWORK", null, true));
+    const next = render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={second} record={RECORD} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    expect(screen.getByLabelText("编号 *")).toHaveValue("retained");fireEvent.click(screen.getByRole("button", { name: "保存" }));await waitFor(() => expect(second.update).toHaveBeenCalledTimes(1));expect(vi.mocked(second.update).mock.calls[0]![3]).toBe(oldKey);
+    next.unmount();onSignedIn("t/other");expect(peekEntityDraft("t/a", "edit")).toBeUndefined();
+  });
+});

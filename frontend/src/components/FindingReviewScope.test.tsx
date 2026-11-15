@@ -43,7 +43,7 @@ it.each(["member", "account", "tenant"])("clears draft and uncertain request whe
     await screen.findByRole("heading", { name: "无权访问" });
     expect(new URLSearchParams(window.location.search).has("caseId")).toBe(false);
     expect(nextGet).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("link", { name: "MIGHT 工厂安全首页" }));
+    fireEvent.click(screen.getByRole("link", { name: "MIGHT 工作台首页" }));
   }
   await screen.findByText("新身份可见摘要");
   expect(new URLSearchParams(window.location.search).has("caseId")).toBe(false);

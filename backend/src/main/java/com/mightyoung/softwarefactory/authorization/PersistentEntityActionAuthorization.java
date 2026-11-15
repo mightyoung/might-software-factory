@@ -13,7 +13,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Explicit construction requires real identity control/key-aware authority; no default-OFF implementation. */
-public final class PersistentEntityActionAuthorization implements EntityActionAuthorization {
+public final class PersistentEntityActionAuthorization implements EntityActionAuthorization, ApplicationActionAuthorization {
     private final Object issuer=new Object();
     private final DataSource source;
     private final HumanSessionAuthorityTransaction callers;
@@ -65,6 +65,10 @@ public final class PersistentEntityActionAuthorization implements EntityActionAu
         check.run(); return new FinalActionScopes(result,time);
     }
     private ActionScope resolve(CurrentTenantContext context, RegisteredEntityAction action, Instant time, Runnable check) {
+        Set<UUID> organizations=resolveOrganizations(context,"safety",action.resourceType(),action.action(),action.permissionCode(),time,check);
+        check.run(); return new ActionScope(issuer,check,context,action,time,organizations);
+    }
+    private Set<UUID> resolveOrganizations(CurrentTenantContext context,String appKey,String resourceType,String action,String permissionCode,Instant time,Runnable check) {
         check.run();
         var principal=principals.findByActorId(context.actorId()).orElseThrow(PersistentEntityActionAuthorization::denied);
         var account=accounts.findState(context.accountId()).orElseThrow(PersistentEntityActionAuthorization::denied);
@@ -75,11 +79,11 @@ public final class PersistentEntityActionAuthorization implements EntityActionAu
                 || account.credentialVersion()!=context.credentialVersion() || !"ACTIVE".equals(member.tenantStatus())
                 || !"ACTIVE".equals(member.memberStatus()) || member.tenantAuthEpoch()!=context.tenantAuthEpoch()
                 || member.memberAuthEpoch()!=context.memberAuthEpoch()
-                || applications.findCurrentInCaller(context.tenantId(),"safety").filter(TenantApplicationState::enabled).isEmpty()) throw denied();
+                || applications.findCurrentInCaller(context.tenantId(),appKey).filter(TenantApplicationState::enabled).isEmpty()) throw denied();
         var at=time.atOffset(ZoneOffset.UTC);
         var current=directory.findCurrentMembershipsAt(context.tenantId(),context.memberId(),at);
         var grants=roles.findActiveActionScopesAt(context.tenantId(),context.memberId(),current.organizationIds(),
-                current.positionIds(),current.groupIds(),action.resourceType(),action.action(),action.permissionCode(),at);
+                current.positionIds(),current.groupIds(),resourceType,action,permissionCode,at);
         Set<UUID> organizations=new LinkedHashSet<>(), explicit=new LinkedHashSet<>(); boolean tree=false;
         for(var grant:grants) switch(grant.kind()) {
             case "DEPT" -> organizations.addAll(current.organizationIds());
@@ -90,7 +94,30 @@ public final class PersistentEntityActionAuthorization implements EntityActionAu
         if(tree) organizations.addAll(directory.expandDepartmentTreeAt(context.tenantId(),context.memberId(),at));
         organizations.addAll(directory.findActiveOrganizationsInCaller(context.tenantId(),explicit));
         if(organizations.isEmpty()) throw denied();
-        check.run(); return new ActionScope(issuer,check,context,action,time,organizations);
+        check.run(); return Set.copyOf(organizations);
+    }
+    @Override public Decision requireRead(CapturedHumanRequest request,HumanSessionAuthorityTransaction.ReadBoundary boundary,ApplicationEntityAction action) {
+        Objects.requireNonNull(action);
+        var binding=binding();
+        Runnable check=()->{binding.require();callers.requireRead(request,boundary,source,binding.connection);};
+        check.run(); var checked=human.requireReadCheckedCurrent(request,boundary);
+        Instant time=checked.observedAt(request,boundary);
+        var organizations=resolveOrganizations(request.context(),action.appKey(),action.resourceType(),action.action(),action.permissionCode(),time,check);
+        return new Decision(issuer,check,request.context(),action,time,organizations);
+    }
+    @Override public Decision requireCommand(HumanSessionAuthorityTransaction.WriteScope scope,HumanSessionAuthorityTransaction.GuardedBoundary boundary,ApplicationEntityAction action) {
+        if(Objects.requireNonNull(action).action().equals("read")) throw denied();
+        var binding=binding();
+        Runnable check=()->{binding.require();callers.requireGuarded(scope,boundary,source,binding.connection);guard.requireBusinessCommand(scope.request().context().tenantId());};
+        check.run();var checked=human.requireGuardedCheckedCurrent(scope,boundary);
+        Instant time=checked.observedAt(scope,boundary);
+        var organizations=resolveOrganizations(scope.request().context(),action.appKey(),action.resourceType(),action.action(),action.permissionCode(),time,check);
+        return new Decision(issuer,check,scope.request().context(),action,time,organizations);
+    }
+    @Override public void requireSqlConnection(Decision decision,DataSource expected,Connection connection) {
+        if(decision==null || decision.issuer!=issuer) throw denied();
+        decision.validation.run();
+        if(expected!=source || binding().connection!=connection) throw denied();
     }
     @Override public void requireCurrent(ActionScope scope) {
         if(scope==null || scope.issuer!=issuer) throw denied();

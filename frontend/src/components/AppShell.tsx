@@ -147,10 +147,10 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         <RouteLink
           to={tenantPath(session.tenant.id, home?.entryPath ?? "")}
           className="brand"
-          aria-label="MIGHT 工厂安全首页"
+          aria-label="MIGHT 工作台首页"
         >
           <span className="brand-mark" aria-hidden="true" />
-          <span>MIGHT 工厂安全</span>
+          <span>MIGHT 工作台</span>
         </RouteLink>
         <nav className="application-switcher" aria-label="应用选择">
           {session.applications.map((app) => (

@@ -112,7 +112,7 @@ class IdentityLoginPostgresIT {
 
     enum RuntimePrivilegeProfile {
         IDENTITY_ONLY(false,false,false), BUSINESS_WORKFLOW(true,false,false), BUSINESS_PASSWORD_CHANGE(true,true,false),
-        BUSINESS_AUTHENTICATION_AUDIT(true,true,true), D0_APPLICATION(true,true,true);
+        BUSINESS_AUTHENTICATION_AUDIT(true,true,true), D0_APPLICATION(true,true,true), D1_APPLICATION(true,true,true);
         final boolean business;
         final boolean passwordChange;
         final boolean authenticationAudit;
@@ -122,12 +122,12 @@ class IdentityLoginPostgresIT {
         boolean permitsUpdate(String table,String column) {
             return passwordChange && ((table.equals("account") && column.equals("credential_version"))
                     || (table.equals("credential") && Set.of("secret_hash","changed_at").contains(column)))
-                    || (this == D0_APPLICATION && ((table.equals("tenant_member") && column.equals("auth_epoch"))
+                    || (hasD0Privileges() && ((table.equals("tenant_member") && column.equals("auth_epoch"))
                         || (table.equals("permission") && column.equals("label"))
                         || (table.equals("scope_rule") && column.equals("version_no"))));
         }
         boolean permitsInsert(String table,String column) {
-            return this == D0_APPLICATION && switch(table) {
+            return hasD0Privileges() && switch(table) {
                 case "account" -> Set.of("id","login_key","status","credential_version").contains(column);
                 case "principal" -> Set.of("id","kind","account_id","status").contains(column);
                 case "credential" -> Set.of("account_id","kind","secret_hash","changed_at").contains(column);
@@ -136,11 +136,21 @@ class IdentityLoginPostgresIT {
                 default -> false;
             };
         }
+        boolean hasD0Privileges() { return this == D0_APPLICATION || this == D1_APPLICATION; }
     }
 
     /** New writer scope requires both exact ACKs; either old scope remains identity-read-only. */
     static RuntimePrivilegeProfile validateRuntimePrivilegeProfile(Map<String,String> environment,String database) {
         String profile=environment.getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE","identity-only");
+        if ("d1-application".equals(profile)) {
+            if (!database.matches("msf_d0_d1_[a-z0-9_]+_test")
+                    || !("I_CONFIRM_D1_APPLICATION_PRIVILEGES:"+database).equals(environment.get("LAN_PG_D1_APPLICATION_ACCEPTANCE_ACK")))
+                throw new IllegalStateException("D1 application privilege profile requires an isolated database-specific D1 acknowledgement");
+            var base = new java.util.HashMap<>(environment);
+            base.put("LAN_PG_RUNTIME_PRIVILEGE_PROFILE", "d0-application");
+            validateRuntimePrivilegeProfile(base, database);
+            return RuntimePrivilegeProfile.D1_APPLICATION;
+        }
         if("identity-only".equals(profile)) return RuntimePrivilegeProfile.IDENTITY_ONLY;
         if(!Set.of("business-workflow","business-password-change","business-authentication-audit","d0-application").contains(profile)
                 || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
@@ -615,8 +625,9 @@ class IdentityLoginPostgresIT {
         RuntimePrivilegeProfile privilegeProfile=validateRuntimePrivilegeProfile(runtimeJdbc.queryForObject("select current_database()",String.class));
         assertThat(runtimeJdbc.queryForObject("select has_database_privilege(current_user,current_database(),'CREATE,TEMP')",Boolean.class))
                 .as("No runtime database CREATE/TEMP in any profile").isFalse();
-        if (privilegeProfile == RuntimePrivilegeProfile.D0_APPLICATION) {
-            D0RuntimePrivilegeAssertions.assertApplication(runtimeJdbc);
+        if (privilegeProfile.hasD0Privileges()) {
+            if (privilegeProfile == RuntimePrivilegeProfile.D1_APPLICATION) D1RuntimePrivilegeAssertions.assertApplication(runtimeJdbc);
+            else D0RuntimePrivilegeAssertions.assertApplication(runtimeJdbc);
             assertD0ParentMetadataPrivileges();
         }
         for (String table : IDENTITY_TABLES) {
@@ -630,7 +641,7 @@ class IdentityLoginPostgresIT {
                     """, Boolean.class, qualified)).as("Runtime must not own %s", table).isFalse();
             // PostgreSQL18 includes MAINTAIN; comma-separated privilege checks mean ANY privilege.
             for (String operation : List.of("INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER","MAINTAIN")) {
-                boolean expected = privilegeProfile == RuntimePrivilegeProfile.D0_APPLICATION && table.equals("role_permission") && operation.equals("DELETE");
+                boolean expected = privilegeProfile.hasD0Privileges() && table.equals("role_permission") && operation.equals("DELETE");
                 assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,cast(? as regclass),?)",Boolean.class,qualified,operation))
                         .as("Exact table %s on %s in %s",operation,table,privilegeProfile).isEqualTo(expected);
             }

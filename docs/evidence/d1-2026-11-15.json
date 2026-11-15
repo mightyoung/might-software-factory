@@ -1,0 +1,611 @@
+{
+  "stage": "D1 standard tooling catalog",
+  "verificationStatus": "PASS",
+  "independentReview": "CLEAR",
+  "observedAtUtc": "2026-11-15T04:12:35.507407+00:00",
+  "baseCommit": "c95455a32f96642f4ed59b7da10c19d65751a59d",
+  "branch": "codex/d1-standard-ledger-20261115",
+  "testedSource": {
+    "files": 1218,
+    "manifestSha256": "7a7d10d49426eb9e9837e1c296a4333585161a594db3a78a397ec169942df198",
+    "snapshotUnchanged": true,
+    "nonDocumentationFiles": 1137,
+    "nonDocumentationDrift": [],
+    "documentationChangesAfterSnapshot": [
+      "docs/architecture-proposal-2026-11-15.md",
+      "docs/d1-cleanup-report-2026-11-15.md",
+      "docs/d1-closure-verification-2026-11-15.md",
+      "docs/d1-implementation-plan-2026-11-15.md",
+      "docs/evidence/d1-2026-11-15.json",
+      "docs/software-factory-design-interview-2026-11-15.md",
+      "docs/software-factory-ledger-acceptance-2026-11-15.md"
+    ]
+  },
+  "backend": {
+    "stages": {
+      "offline": {
+        "counts": {
+          "tests": 2562,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 284,
+        "exactClasses": true,
+        "exitCode": 0,
+        "classResults": null
+      },
+      "core": {
+        "counts": {
+          "tests": 271,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 26,
+        "exactClasses": true,
+        "exitCode": 0,
+        "classResults": [
+          {
+            "class": "AuthenticationEventPostgresIT",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "AuthorizationConcurrencyPostgresIT",
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "AuthorizationTemporalClockPostgresIT",
+            "tests": 17,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "CredentialVersionSessionPostgresIT",
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingCommandPostgresIT",
+            "tests": 14,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingDefinitionPostgresIT",
+            "tests": 44,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingDispatchCandidatesPostgresIT",
+            "tests": 26,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingEvidenceIsolationPostgresIT",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingEvidenceSealConcurrencyPostgresIT",
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingEvidenceSetInitializationPostgresIT",
+            "tests": 15,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingEvidenceUploadHttpPostgresIT",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingEvidenceUploadIntentPostgresIT",
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingNotEstablishedPostgresIT",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingNumberSequencePostgresIT",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingPostgresReadIT",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingRemediationPostgresIT",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingRestartPostgresIT",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "FindingReviewCyclePostgresIT",
+            "tests": 25,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "IdentityLoginFailurePostgresIT",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "IdentityLoginPostgresIT",
+            "tests": 16,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "IdentitySessionLifecyclePostgresIT",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "NavigationPostgresIT",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "PasswordChangePostgresIT",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "ToolLedgerPostgresIT",
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "WorkflowBindingLockPostgresIT",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "class": "IngestionFinalizationPostgresIT",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      }
+    },
+    "targetGuards": [
+      {
+        "class": "LanPostgresRolePreflightTest",
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "IdentityAcceptanceTargetTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "LanPostgresDatabaseTargetTest",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "IdentityRuntimePrivilegeProfileTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "FixturePostgresTargetTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "D1RuntimePrivilegeProfileTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ],
+    "jarSha256": "5267fe3229ca018d7d01dd63d4013b6ebba0ae90c6b204240fea5e6398f0560c",
+    "servedJarMatches": true,
+    "containsV28": true
+  },
+  "frontend": {
+    "unit": {
+      "exitCode": 0,
+      "failed": 0,
+      "files": 45,
+      "passed": 474,
+      "skipped": 0
+    },
+    "contracts": {
+      "checked": 12,
+      "exitCode": 0
+    },
+    "typecheck": {
+      "exitCode": 0
+    },
+    "build": {
+      "exitCode": 0,
+      "mode": "http"
+    },
+    "bundle": {
+      "cssBudgetKiB": 12,
+      "cssGzipKiB": 5.3,
+      "exitCode": 0,
+      "jsBudgetKiB": 130,
+      "jsGzipKiB": 116.8
+    },
+    "e2e": {
+      "exitCode": 0,
+      "failed": 0,
+      "passed": 20,
+      "seconds": 52.6,
+      "skipped": 0
+    },
+    "sourceManifestSHA256": "d4d0c01a9f909294b26143908cda9b538f4c39e4385677498fa9017b07fd3733"
+  },
+  "servedFrontendArtifacts": [
+    {
+      "path": "assets/index-BkEsn4Fd.css",
+      "sha256": "a12ef4c67681482b798297c684bc43286910d1ccdafe71749c6f07d2bd691d19"
+    },
+    {
+      "path": "assets/index-CIY6KkJF.js",
+      "sha256": "128bf306edbf242fbafc75bc28780d6bedb442623d7295fe27ba1c8c3ef9317c"
+    },
+    {
+      "path": "index.html",
+      "sha256": "a7532a9456f63752fcff6412644b23c1adcc8f75774c095dda922732a71c8d22"
+    }
+  ],
+  "realBrowser": {
+    "status": "PASS",
+    "checks": [
+      "compiled frontend: real HTTPS login, create, persisted detail after reload",
+      "two real tabs: edit persists; stale version rejected and draft preserved",
+      "real commit with lost reply: locked draft, explicit same-key retry, original receipt without duplicate revision",
+      "ordinary reader needs no keeper; action permission without keeper cannot edit or write",
+      "create-only uses authorized candidates and minimal result; no list/detail read calls",
+      "other organization cannot read record or inject its custody reference",
+      "definition-driven query returns the persisted authorized record"
+    ],
+    "recordId": "38d4414f-b4a0-4822-846b-d8c3639233bb",
+    "finalVersion": 3,
+    "detailUrl": "https://127.0.0.1:15444/t/813a1326-b4bd-386e-ae7f-6c3622c71961/apps/tooling/entities/tool/records/38d4414f-b4a0-4822-846b-d8c3639233bb",
+    "browserVersion": "Google Chrome 157.0.8103.51",
+    "backendJarSha256": "5267fe3229ca018d7d01dd63d4013b6ebba0ae90c6b204240fea5e6398f0560c",
+    "recordSqlProof": {
+      "readOnly": true,
+      "rolledBack": true,
+      "version": 3,
+      "revisions": 3,
+      "receipts": 3,
+      "linkedSuccessfulAudits": 3,
+      "logSha256": "e7c823da6920d5258250b2c18aab3c5cf35d9603c66340fb3aa00667b01b60d7"
+    }
+  },
+  "disabledApplicationHttpsProbe": {
+    "status": "PASS",
+    "scope": "SF02 real HTTPS disabled tooling application; unique disposable tenant, no existing seed graphs changed",
+    "observed_at_utc": "2026-11-15T04:09:10.097731+00:00",
+    "backend_origin": "https://127.0.0.1:18444",
+    "database": "msf_d0_d1_browser_test",
+    "backend_jar_sha256": "5267fe3229ca018d7d01dd63d4013b6ebba0ae90c6b204240fea5e6398f0560c",
+    "root_final_source_manifest_sha256": "7a7d10d49426eb9e9837e1c296a4333585161a594db3a78a397ec169942df198",
+    "harness_source_sha256": "8c6b35389a007febf07a8efddf1e6c643ddb59321c3ee8bf54a2777cb6dfb83d",
+    "fixture_class_sha256": "f399e649cf53435b5039fe412ef8f13964b5ab40c5ef74289929dcada94b5069",
+    "enabled_baseline": {
+      "fresh_cookie_session": true,
+      "tooling_navigation_visible": true,
+      "tls_certificate_and_hostname_verified": true,
+      "statuses": {
+        "login": 204,
+        "bootstrap": 200,
+        "definition": 200,
+        "query": 200
+      },
+      "mode": "enabled",
+      "status": "PASS"
+    },
+    "disabled_fresh_session": {
+      "tls_certificate_and_hostname_verified": true,
+      "tooling_navigation_visible": false,
+      "fresh_cookie_session": true,
+      "status": "PASS",
+      "mode": "disabled",
+      "statuses": {
+        "login": 204,
+        "bootstrap": 200,
+        "definition": 403,
+        "query": 403,
+        "create": 403,
+        "menu": 403
+      }
+    },
+    "durable_counts_after_denials": {
+      "tool": 0,
+      "ledger_record_revision": 0,
+      "ledger_command_receipt": 0,
+      "ledger_success_audit": 0
+    },
+    "database_boundary": {
+      "real_docker_hostname": "d0-postgres",
+      "exact_browser_ack_and_d1_application_profile": true,
+      "migration_and_runtime_non_elevated_preflight": true,
+      "entitlement_disabled_under_existing_global_authorization_writer_guard": true,
+      "only_unique_owned_tenant_changed": true,
+      "epoch_reset": false,
+      "core_database_touched": false,
+      "d0_or_seed_tenants_touched": false
+    },
+    "cleanup": {
+      "http_clients_closed": true,
+      "cookie_jars_cleared": true,
+      "fixture_pools_closed": true,
+      "owned_server_sessions_deleted": true,
+      "owned_fixture_metadata_retained": true
+    },
+    "notes": [
+      "One initial private setup used unsupported bcrypt10 and login returned401; excluded from acceptance. A separate fresh fixture using production bcrypt12 was used for all successful positive/negative checks.",
+      "No production or repository source edits. No credentials, response bodies, XML, or fixture identity values copied into evidence."
+    ],
+    "logs": {
+      "setup.log": "57edcd9a3206fb810dc1bbb864e92d72452dbe6696849cec5fddcd7c946f9c42",
+      "enabled.log": "21b58c4ad5bddfe9a38d9c66d6fb2241fad39d192b732f7946e23c9ec3b6aa81",
+      "disable.log": "b2cec6e5628083365bd70b224076ef85cb518d29d9db2554d937ad19e066d637",
+      "disabled.log": "42f01e804ec0a5aa09d0323b258485e9915c2294712ad159932067884057924c",
+      "count.log": "eb81b31e261b93f8cc9185804fc8e1652554e73b4e2a5afc2c3bff3ed9adc296",
+      "cleanup.log": "2035c651165bf30e262f0eac2d41d5e9c699c99ee655957de1b462df60adf6d2"
+    }
+  },
+  "v28Upgrade": {
+    "cases": [
+      {
+        "scenario": "missing",
+        "status": "PASS",
+        "private_log": "missing-v28-upgrade-test.log",
+        "log_sha256": "69c7addd75d08d61922a63b2e01b812d1e5195b465098f41125965e86f64299a",
+        "real_flyway_v27_success": true,
+        "real_flyway_v28_success": true,
+        "v28_transactional_rejections": 0,
+        "asserted_by_current_harness": [
+          "canonical_catalog_metadata",
+          "no_new_grants"
+        ]
+      },
+      {
+        "scenario": "compatible",
+        "status": "PASS",
+        "private_log": "compatible-v28-upgrade-test.log",
+        "log_sha256": "edaca9ef44c871fb79b2c63a3d9e4ff1a5b7a0240f8ec8e49d2923dea251bf2c",
+        "real_flyway_v27_success": true,
+        "real_flyway_v28_success": true,
+        "v28_transactional_rejections": 0,
+        "asserted_by_current_harness": [
+          "existing_ids_and_role_associations_preserved",
+          "custom_label_and_sort_preserved",
+          "canonical_catalog_metadata",
+          "no_new_grants"
+        ]
+      },
+      {
+        "scenario": "incompatible",
+        "status": "PASS",
+        "private_log": "incompatible-v28-upgrade-test.log",
+        "log_sha256": "6cf59820ed28f72ce3c363ea25536f86c538684dcaf88d65c5894f369049dfcf",
+        "real_flyway_v27_success": true,
+        "real_flyway_v28_success": false,
+        "v28_transactional_rejections": 3,
+        "asserted_by_current_harness": [
+          "resource_action_application_each_rejected_23514",
+          "no_v28_history_after_failure",
+          "metadata_and_associations_unchanged",
+          "no_new_grants"
+        ]
+      }
+    ],
+    "migration_sha256": "9fdeab345ea28d412b091618fd2f8641d4e33f03387e3287a0479d56e3e7bed6",
+    "harness_sha256": "c1bd7d4d4345d52fc36b7367f0f33f1516c4b514067fb2eafb586b689804a88c",
+    "matches_tested_v28_manifest": true
+  },
+  "seedGraph": {
+    "status": "PASS",
+    "checks": 8,
+    "baseline_tenants": 2,
+    "rejected_drifts": [
+      "inactive_scope",
+      "expired_keeper",
+      "extra_role_grant",
+      "disabled_application",
+      "inactive_role",
+      "member_auth_epoch"
+    ],
+    "all_fixture_rows_rolled_back": true,
+    "private_log": "/private/tmp/msf-d1-tooling-it/seed-graph.log",
+    "log_sha256": "1216f0229bf61c39c80822908e0fd266d7671350a7ed4ececd7f95eae45e57b7",
+    "current_seed_java_sha256": "d9fb754ce7da6a33a79779a2f0e0d89cd77e96eeccef133b2ca85f4e4b05ef5c",
+    "seed_matches_toolit_snapshot": true,
+    "harness_matches_toolit_snapshot": true
+  },
+  "runtimeGrants": {
+    "status": "PASS",
+    "private_acl_log": "acl-probe.log",
+    "acl_log_sha256": "0a38d7d79ff3384c6ca192b17e0e96e9751bf14e7ef674d99ee4d573de24587e",
+    "tables": {
+      "tool": {
+        "table": [
+          "SELECT"
+        ],
+        "column_INSERT": [
+          "tenant_id",
+          "id",
+          "version",
+          "created_at",
+          "updated_at",
+          "created_by_actor_id",
+          "updated_by_actor_id",
+          "code",
+          "name",
+          "model",
+          "description",
+          "custody_scope_id",
+          "organization_id",
+          "item_state"
+        ],
+        "column_UPDATE": [
+          "name",
+          "model",
+          "description",
+          "version",
+          "updated_at",
+          "updated_by_actor_id"
+        ]
+      },
+      "tool_custody_scope": {
+        "table": [
+          "SELECT"
+        ]
+      },
+      "tool_custodian": {
+        "table": [
+          "SELECT"
+        ]
+      },
+      "ledger_record_revision": {
+        "table": [
+          "SELECT",
+          "INSERT"
+        ]
+      },
+      "ledger_command_receipt": {
+        "table": [
+          "SELECT",
+          "INSERT"
+        ]
+      }
+    },
+    "legacy_delta": {
+      "session_authority_activation": {
+        "column_SELECT": [
+          "activated_by_database_role"
+        ],
+        "effective_column_SELECT_count": 7,
+        "table_privileges": []
+      }
+    },
+    "new_direct_function_execute": false,
+    "all_five_tables_force_rls": true,
+    "no_runtime_ownership_or_ddl": true
+  },
+  "cleanup": {
+    "mode": "standard",
+    "changes": [
+      "one unused import removed",
+      "two unused private parameters and four call arguments removed"
+    ],
+    "behaviorChanged": false,
+    "postCleanupRegression": "PASS"
+  },
+  "limitations": [
+    "D2 borrowing and occupancy are not implemented",
+    "D3 frozen-core second-ledger cost and Q8 schema evolution remain unverified",
+    "D8 event delivery and recovery remain unverified",
+    "Spring transaction timeout is not proof of hard JDBC lock-wait timeout",
+    "Reference detail labels may be UUIDs",
+    "D0 NAS, production scanner, physical-file upgrade, audit-read identity and host-loss recovery boundaries remain"
+  ],
+  "excludedAttempts": [
+    {
+      "kind": "initial full core environment failure",
+      "cause": "snapshot lacked private Git metadata required by existing ignored-storage protection",
+      "exitCode": 143,
+      "action": "retained evidence; initialized private checkout; reran complete suite without changing product or fixture guard"
+    },
+    {
+      "kind": "disabled-application harness setup",
+      "cause": "initial private fixture used unsupported bcrypt10",
+      "action": "excluded; new independent bcrypt12 fixture used for positive and negative evidence"
+    }
+  ],
+  "privateEvidenceDirectories": [
+    "/private/tmp/msf-d1-final-verification",
+    "/private/tmp/msf-d1-frontend-final-postcleanup",
+    "/private/tmp/msf-d1-ledger",
+    "/private/tmp/msf-d1-disabled-app"
+  ],
+  "rawCredentialsLogsXmlCommitted": false,
+  "workflowState": {
+    "activeModes": [],
+    "cleanup": "No active OMX modes detected; no unrelated state removed"
+  }
+}

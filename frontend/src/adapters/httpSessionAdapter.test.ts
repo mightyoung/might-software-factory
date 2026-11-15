@@ -85,6 +85,19 @@ describe("createHttpSessionAdapter", () => {
     expect(await createHttpSessionAdapter(client).restore()).toMatchObject({ applications: [], permissions: [] });
   });
 
+  it("accepts a registered future application and preserves its canonical grants", async () => {
+    const app = { id: "inventory", name: "库存", entryPath: "apps/inventory/entities/widget" };
+    const f = fake({ "/api/v1/session/bootstrap": () => ({ data: { ...bootstrap.data, applications: [app], permissions: ["widget.read", "widget.create"] } }),
+      "/api/v1/applications/inventory/menu": () => ({ data: { ...menu.data, applicationId: "inventory", permissions: ["widget.read"], nodes: [
+        { id: "widgets", label: "物品", path: app.entryPath, permission: "widget.read" },
+        { id: "cross", label: "跨应用", path: "apps/other/entities/widget", permission: "widget.read" },
+        { id: "unsafe", label: "非法", path: "apps/inventory/entities/widget/../other", permission: "widget.read" },
+      ] } }) });
+    const adapter = createHttpSessionAdapter(f.client);
+    expect(await adapter.restore()).toMatchObject({ applications: [app], canonicalPermissions: ["widget.read", "widget.create"] });
+    expect((await adapter.loadMenu("inventory")).nodes).toHaveLength(1);
+  });
+
   it("reads revocation afresh instead of caching prior menu grants", async () => {
     let granted = true;
     const { client } = fake({ "/api/v1/applications/safety/menu": () => granted ? menu : { data: { ...menu.data, permissions: [] } } });
