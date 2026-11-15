@@ -283,7 +283,7 @@ class FindingDispatchCandidatesPostgresIT {
         @Bean ExecuteListenerProvider candidateQueryListener(Queries queries){return ()->new ExecuteListener(){
             @Override public void executeStart(ExecuteContext context){
                 String sql=context.sql();if(sql==null)return;queries.sql.add(sql);
-                if(!sql.startsWith("select m.id, m.display_name"))return;
+                if(!sql.contains("select m.id, m.display_name\n"))return;
                 // Raw JDBC avoids listener recursion; this is the actual candidate statement's connection.
                 try(var statement=context.connection().createStatement();var rows=statement.executeQuery("select current_setting('statement_timeout'),(select count(*) from pg_locks where pid=pg_backend_pid() and locktype='advisory' and granted)")){
                     if(!rows.next())throw new IllegalStateException("Missing candidate transaction probe");

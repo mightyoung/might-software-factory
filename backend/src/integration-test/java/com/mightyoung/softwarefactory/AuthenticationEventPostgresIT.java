@@ -52,7 +52,7 @@ class AuthenticationEventPostgresIT {
         if (!("I_CONFIRM_AUTHENTICATION_EVENT_FIXTURE_WRITES:" + accepted.databaseName())
                 .equals(System.getenv("LAN_PG_AUTHENTICATION_EVENT_ACCEPTANCE_ACK")))
             throw new IllegalStateException("Authentication event acceptance requires database-specific acknowledgement");
-        if (!"business-authentication-audit".equals(System.getenv("LAN_PG_RUNTIME_PRIVILEGE_PROFILE"))
+        if (!IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(System.getenv(), accepted.databaseName()).authenticationAudit
                 || !("I_CONFIRM_PASSWORD_CHANGE_FIXTURE_WRITES:" + accepted.databaseName())
                     .equals(System.getenv("LAN_PG_PASSWORD_CHANGE_ACCEPTANCE_ACK")))
             throw new IllegalStateException("Authentication audit runtime profile and exact password-change acknowledgement required");

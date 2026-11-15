@@ -49,7 +49,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FindingNumberSequencePostgresIT {
 
-    private static final String EXPECTED_DATABASE = "might_software_factory_pg18_test";
     private static final int CONCURRENT_ALLOCATIONS = 12;
     // Keep these exact allowlists: the second expression is the observed PG18.6 deparse;
     // no lossy normalization may erase an added predicate such as OR TRUE.
@@ -64,9 +63,7 @@ class FindingNumberSequencePostgresIT {
     void lowPrivilegeAllocatorIsTenantScopedConcurrentAndTransactional() throws Exception {
         // Reuse the compatibility suite's pre-connect target guard. It requires an explicit
         // disposable-database acknowledgement and an exact URL match for the app-role target.
-        LanPostgresCompatibilityIT.DatabaseTarget target =
-                LanPostgresCompatibilityIT.DatabaseTarget.preflightFromEnvironment(System.getenv());
-        assertThat(target.databaseName()).isEqualTo(EXPECTED_DATABASE);
+        FixturePostgresTarget.Target target = FixturePostgresTarget.preflightRepository(System.getenv());
 
         String migrationUser = required("LAN_PG_USERNAME");
         String migrationPassword = required("LAN_PG_PASSWORD");
@@ -92,8 +89,8 @@ class FindingNumberSequencePostgresIT {
         try {
             createTenantFixtures(target.jdbcUrl(), migrationUser, migrationPassword, tenants);
             try (HikariDataSource applicationDataSource = new HikariDataSource(poolConfig)) {
-                assertApplicationRoleBoundary(applicationDataSource, appUser);
-                assertFindingSelectPrivilege(applicationDataSource, appUser);
+                assertApplicationRoleBoundary(applicationDataSource, target.databaseName(), appUser);
+                assertFindingSelectPrivilege(applicationDataSource, target.databaseName(), appUser);
                 assertApplicationCanSeeFixtureTenant(applicationDataSource, tenants.tenantA());
                 assertApplicationCanSeeFixtureTenant(applicationDataSource, tenants.tenantB());
                 JooqFindingWorkflowRepository repository = repository(applicationDataSource);
@@ -280,7 +277,7 @@ class FindingNumberSequencePostgresIT {
         }
     }
 
-    private static void assertFindingSelectPrivilege(DataSource dataSource, String expectedRole)
+    private static void assertFindingSelectPrivilege(DataSource dataSource, String expectedDatabase, String expectedRole)
             throws SQLException {
         try (Connection connection = dataSource.getConnection();
                 Statement query = connection.createStatement();
@@ -289,13 +286,13 @@ class FindingNumberSequencePostgresIT {
                                has_table_privilege(current_user, 'public.finding', 'SELECT')
                         """)) {
             assertThat(row.next()).isTrue();
-            assertThat(row.getString(1)).isEqualTo(EXPECTED_DATABASE);
+            assertThat(row.getString(1)).isEqualTo(expectedDatabase);
             assertThat(row.getString(2)).isEqualTo(expectedRole);
             assertThat(row.getBoolean(3)).as("production allocator reads same-day existing finding codes").isTrue();
         }
     }
 
-    private static void assertApplicationRoleBoundary(DataSource dataSource, String expectedRole)
+    private static void assertApplicationRoleBoundary(DataSource dataSource, String expectedDatabase, String expectedRole)
             throws SQLException {
         try (Connection connection = dataSource.getConnection();
                 PreparedStatement query = connection.prepareStatement("""
@@ -341,7 +338,7 @@ class FindingNumberSequencePostgresIT {
                         """)) {
             try (ResultSet row = query.executeQuery()) {
                 assertThat(row.next()).isTrue();
-                assertThat(row.getString(1)).isEqualTo(EXPECTED_DATABASE);
+                assertThat(row.getString(1)).isEqualTo(expectedDatabase);
                 assertThat(row.getString(2)).isEqualTo(expectedRole);
                 assertThat(row.getString(3)).isEqualTo(expectedRole);
                 assertThat(row.getInt(4) / 10_000).isEqualTo(18);

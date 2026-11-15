@@ -1,5 +1,7 @@
 package com.mightyoung.softwarefactory.files;
 
+import com.mightyoung.softwarefactory.FixturePostgresTarget;
+
 import com.mightyoung.softwarefactory.authorization.PostgresAuthorizationWriteGuard;
 import com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.*;
 import java.time.*;
@@ -18,7 +20,7 @@ import static org.assertj.core.api.Assertions.*;
 
 /** Real PostgreSQL publication/rollback checks with synthetic signed checkpoints. No scanner acceptance. */
 class IngestionFinalizationPostgresIT {
-    static final String URL="jdbc:postgresql://192.168.1.2:54318/msf_upload_finalize_20261108_test";
+    String jdbcUrl;
     Values v;
     final UUID finding=UUID.randomUUID(),set=UUID.randomUUID(),notice=UUID.randomUUID(),account=UUID.randomUUID(),human=UUID.randomUUID(),service=UUID.randomUUID();
     DataSource source,adminSource;
@@ -29,11 +31,9 @@ class IngestionFinalizationPostgresIT {
     VerifiedCheckpoint checkpoint;
     UUID owner;
     @BeforeEach void setup(){
-        if(!URL.equals(System.getenv("LAN_PG_FINALIZE_TEST_JDBC_URL"))
-                ||!"I_CONFIRM_FINALIZE_FIXTURE_WRITES:msf_upload_finalize_20261108_test".equals(System.getenv("LAN_PG_FINALIZE_TEST_ACK")))
-            throw new IllegalStateException("Finalization fixtures require the exact disposable database and acknowledgement");
+        jdbcUrl=FixturePostgresTarget.preflightFinalization(System.getenv()).jdbcUrl();
         v=new Values();owner=v.allocation(AllocationKind.QUARANTINE,v.sourceAttempt,"quarantine").ownerMemberId();
-        source=dataSource("LAN_PG_APP_USERNAME","LAN_PG_APP_PASSWORD");adminSource=dataSource("MSF_MIGRATOR_USER","MSF_MIGRATOR_PASSWORD");
+        source=dataSource("LAN_PG_APP_USERNAME","LAN_PG_APP_PASSWORD");adminSource=dataSource("LAN_PG_USERNAME","LAN_PG_PASSWORD");
         jdbc=new JdbcTemplate(source);admin=new JdbcTemplate(adminSource);writes=transaction(source);seed=transaction(adminSource);
         var guard=new PostgresAuthorizationWriteGuard(source);var dsl=DSL.using(new TransactionAwareDataSourceProxy(source),SQLDialect.POSTGRES);
         files=new JooqFileIngestionLedger(dsl,source,v.codec);
@@ -57,8 +57,8 @@ class IngestionFinalizationPostgresIT {
     void insertIntent(JdbcTemplate db){
 db.update("insert into public.finding_evidence_upload_intent(tenant_id,id,owner_account_id,owner_actor_id,owner_member_id,operation,idempotency_key,fingerprint_version,payload_sha256,finding_id,round_no,notice_id,evidence_set_id,expected_finding_version,expected_evidence_revision,filename,declared_media_type,declared_size_bytes,producer_configuration_version,upload_policy_version,state,created_at,expires_at) values (?,?,?,?,?,'FINDING_REMEDIATION_UPLOAD_INTENT_V1',?,'upload-intent-v1',?,?,1,?,?,1,0,'proof.png','image/png',3,'config','policy-v1','INTENT_CREATED',current_timestamp,current_timestamp+interval '30 minutes')",v.tenant,v.intent,account,human,owner,UUID.randomUUID(),"f".repeat(64),finding,notice,set);
     }
-    static DataSource dataSource(String user,String password){
-        return new DriverManagerDataSource(URL,Objects.requireNonNull(System.getenv(user)),Objects.requireNonNull(System.getenv(password)));
+    DataSource dataSource(String user,String password){
+        return new DriverManagerDataSource(jdbcUrl,Objects.requireNonNull(System.getenv(user)),Objects.requireNonNull(System.getenv(password)));
     }
     static TransactionTemplate transaction(DataSource ds){var tx=new TransactionTemplate(new DataSourceTransactionManager(ds));tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);tx.setTimeout(10);return tx;}
     void tenant(){jdbc.queryForObject("select set_config('app.tenant_id',?,true)",String.class,v.tenant.toString());}

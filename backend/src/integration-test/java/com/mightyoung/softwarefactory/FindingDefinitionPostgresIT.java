@@ -8,6 +8,7 @@ import com.mightyoung.softwarefactory.applicationregistry.navigation.NavigationC
 import com.mightyoung.softwarefactory.applicationregistry.navigation.NavigationService;
 import com.mightyoung.softwarefactory.applicationregistry.reference.ReferenceQueryContract;
 import com.mightyoung.softwarefactory.authorization.PersistentEntityReadAccessPolicy;
+import com.mightyoung.softwarefactory.authorization.PersistentEffectivePermissions;
 import com.mightyoung.softwarefactory.authorization.PersistentFindingReadAuthorizationRepository;
 import com.mightyoung.softwarefactory.dualprevention.FindingDefinitionController;
 import com.mightyoung.softwarefactory.dualprevention.FindingDefinitionProvider;
@@ -507,7 +508,7 @@ class FindingDefinitionPostgresIT {
     @Configuration(proxyBeanMethods = false)
     @TestComponent
     @Import({IdentityLoginPostgresIT.IdentityWebConfiguration.class, NavigationController.class, NavigationService.class,
-            PersistentFindingReadAuthorizationRepository.class,
+            PersistentFindingReadAuthorizationRepository.class, PersistentEffectivePermissions.class,
             PersistentEntityReadAccessPolicy.class, FindingReadAuthorizer.class, FindingDefinitionProvider.class,
             FindingDefinitionController.class, FindingDefinitionService.class, FindingOrganizationReferenceRequestParser.class,
             JooqFindingDefinitionReadRepository.class})

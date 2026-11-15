@@ -162,6 +162,7 @@ class FindingEvidenceUploadIntentPostgresIT {
             var row=db.queryForMap("select * from public.finding_evidence_upload_intent where tenant_id=? and id=?",fixture.business.tenantId,first.status().intentId());
             row.put("id",expired);row.put("idempotency_key",key);
             row.put("created_at",java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(600)));
+            row.put("technical_updated_at",row.get("created_at"));
             row.put("expires_at",java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(300)));
             var columns=new ArrayList<>(row.keySet());
             return db.update("insert into public.finding_evidence_upload_intent("+String.join(",",columns)+") values ("+String.join(",",Collections.nCopies(columns.size(),"?"))+")",columns.stream().map(row::get).toArray());
