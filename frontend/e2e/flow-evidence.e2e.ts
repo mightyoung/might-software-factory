@@ -24,7 +24,7 @@ test("整改中的记录：选择 PNG → 隔离扫描 → 终结发布 → 提�
   await expect(tab.getByRole("status").filter({ hasText: "护栏.png" })).toContainText("已终结", { timeout: 15_000 });
   await tab.getByLabel("整改说明").fill("已加装护栏并复测");
   await tab.getByRole("button", { name: "提交整改" }).click();
-  await expect(tab.locator(".status-current")).toHaveText("待安全验收");
+  await expect(tab.locator(".status-current")).toHaveText("待验收");
 });
 
 test("未成立的记录：基于此创建关联上报，新记录详情带关联行，可回看原记录", async ({ page }) => {

@@ -33,7 +33,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   const actions = reviewState ? reviewActions(historyLoading || historyFailure ? null : history) : (ACTIONS[finding.state] ?? []).filter((action) => !action.dispatch || adapter.searchDispatchCandidates);
   // 派单需要适配器能查候选成员；没有此能力就不假装可用。
   const canSearchCandidates = Boolean(adapter.searchDispatchCandidates);
-  const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? (canSearchCandidates ? [] : [{ label: "分派整改", reason: "当前连接没有派单候选查询能力。" }]) : finding.state === "RECTIFYING" ? [{ label: "提交整改证据", reason: "提交整改需要先上传证据集，契约还没有证据上传接口。" }] : [];
+  const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? (canSearchCandidates ? [] : [{ label: "分派整改", reason: "当前连接没有派单候选查询能力。" }]) : [];
   const [activeId, setActiveId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [grade, setGrade] = useState<"" | "GENERAL" | "MAJOR">("");
