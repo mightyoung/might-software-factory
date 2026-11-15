@@ -132,6 +132,12 @@ NOT_RUN：需要真实数据库的 39 个后端测试；连接真实后端的浏
 ### 7.3 遗留问题
 
 1. **V23 不能用现有迁移账号执行。** 它要求执行身份对 `permission`、`scope_rule`、`role_permission`、`scope_org` 不受行级安全限制，而 `msf_dev_migrator_20261107` 是受 FORCE RLS 约束的表属主。本次在两个新库上用超级账号单独执行 V23，再把它建的 4 个函数的属主改回迁移账号。**已定（2026-11-15，用户确认）**：不给迁移账号 `BYPASSRLS`；V23 由超级账号单独执行，随后运行 `backend/src/main/resources/db/operator/V23-superuser-apply.sql` 把属主改回，步骤写在该文件开头。该脚本已在升级测试库上验证：能改回属主，重复执行无副作用。NAS 验收库升级照此办理，尚未执行。
-2. **新开发库还不能用。** 需要重写种子数据，并按 `db/operator/V25-runtime-grants.sql` 和此前各版本的做法给运行账号授权。旧开发库 `might_software_factory_dev` 没有改动。
+2. **新开发库已补齐到可启动（2026-11-15）。** `might_software_factory_dev_20261115` 上做了四件事，旧开发库 `might_software_factory_dev` 只读、没有改动：
+   - 流程引擎 32 张表和会话 2 张表：迁移脚本不建它们。用迁移账号按 Flowable 8.0.0 自带建表脚本（关闭 IDM 与事件注册表）和 Spring Session 的 `schema-postgresql.sql` 建出，表清单与旧库一致。
+   - 运行账号授权：把旧库对同名表的 141 条表级、57 条列级授权照样授予。线 A 新增的 41 张表（含结构不同的 `hazard_source`、`risk_scenario`、`risk_hazard`）没有现成的最小授权清单，**暂时统一授了 SELECT、INSERT、UPDATE，只适用于开发库**；最小授权仍需按代码实际用到的操作核定。
+   - 种子数据：从旧库复制了 devtest 租户的身份、组织、角色、隐患及流程数据（共 40 张表）。导入期间用超级账号关闭了触发器。`role_permission` 按权限码重新对应到新库的权限行；`risk.read`、`inspection.read` 的授权没有带过来。
+   - `finding.read` 权限行：旧库里是手工录入的，任何迁移脚本都不建它，而隐患查看授权依赖它。已连同 4 条角色授权复制到新库。**从空库新建环境时仍会缺这一行，需要补进迁移或种子脚本。**
+
+   验证：后端以运行账号连新库启动成功；未登录访问返回 401；错误密码登录返回 401 并写入一条认证事件，日志无 SQL 权限错误。**登录后的页面和接口没有验证**（没有使用测试账号的密码）。
 3. **权限管理接口的响应没有 `data` 包裹**，与实体接口不一致。契约按已实现的形状写，是否统一留到 D1 定。
 4. 线 A 的 `findingCommands.ts` 里 `closeNotEstablished` 的类型和路由各重复了一遍，是线 A 原有的，没有动。
