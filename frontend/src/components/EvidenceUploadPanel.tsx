@@ -1,5 +1,7 @@
-import { useId, useRef } from "react";
-import { ACCEPTED_MEDIA_TYPES, type FindingEvidenceAdapter, type UploadState } from "../adapters/findingEvidence";
+import { useId, useRef, useState } from "react";
+import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
+import { newIdempotencyKey } from "../adapters/findingSubmit";
+import { ACCEPTED_MEDIA_TYPES, TERMINAL_UPLOAD_STATES, type FindingEvidenceAdapter, type UploadState } from "../adapters/findingEvidence";
 import type { FindingRecord } from "../domain/finding";
 import { useEvidenceUpload } from "../features/findings/useEvidenceUpload";
 
@@ -20,14 +22,24 @@ const STATE_TEXT: Record<UploadState, string> = {
 export interface EvidenceUploadPanelProps {
   finding: FindingRecord;
   adapter: FindingEvidenceAdapter;
+  /** 提供时，证据终结发布后可以提交整改。 */
+  commands?: FindingCommandAdapter;
+  onSubmitted?: () => void;
   onUnauthenticated?: () => void;
 }
 
-/** 只覆盖契约已有的上传环节；“终结证据 / 提交整改”契约尚无，所以到“扫描通过”为止，不提供提交。 */
-export function EvidenceUploadPanel({ finding, adapter, onUnauthenticated }: EvidenceUploadPanelProps) {
+const STATEMENT_MAX = 4000;
+
+/** 上传 → 隔离扫描 → 服务端终结发布（FINALIZED）后才允许提交整改；服务端会再次校验证据与身份。 */
+export function EvidenceUploadPanel({ finding, adapter, commands, onSubmitted, onUnauthenticated }: EvidenceUploadPanelProps) {
   const uid = useId();
   const input = useRef<HTMLInputElement>(null);
-  const { phase, status, filename, error, start, refresh, cancel } = useEvidenceUpload(
+  const [statement, setStatement] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  // 同一份内容的重试复用同一个幂等键；内容变了才换新键。
+  const attempt = useRef<{ payload: string; key: string } | null>(null);
+  const { phase, status, filename, error, evidenceSetId, start, refresh, cancel } = useEvidenceUpload(
     adapter,
     { findingId: finding.id, roundNo: finding.round },
     finding.version ?? 0,
@@ -35,6 +47,32 @@ export function EvidenceUploadPanel({ finding, adapter, onUnauthenticated }: Evi
   );
   const busy = phase === "working" || phase === "polling";
   const active = status && !["VERIFIED_PENDING_FINALIZATION", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "FINALIZED"].includes(status.state);
+
+  const ready = status?.state === "FINALIZED" && evidenceSetId !== null && finding.version !== undefined;
+  const text = statement.trim();
+
+  async function submit() {
+    if (!commands || !ready || submitting) return;
+    if (text === "" || [...text].length > STATEMENT_MAX) return setSubmitError(`请填写整改说明，最多 ${STATEMENT_MAX} 个字。`);
+    const command = { kind: "submitRemediation" as const, evidenceSetId: evidenceSetId!, statement: text };
+    const payload = JSON.stringify([finding.id, finding.version, command]);
+    if (attempt.current?.payload !== payload) attempt.current = { payload, key: newIdempotencyKey() };
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await commands.run(finding.id, finding.version!, command, { idempotencyKey: attempt.current.key });
+      onSubmitted?.();
+    } catch (failure) {
+      const kind = failure instanceof FindingCommandError ? failure.kind : null;
+      if (kind === "unauthenticated") return onUnauthenticated?.();
+      if (kind === "versionConflict" || kind === "stateConflict") onSubmitted?.();
+      setSubmitError(kind === "unavailable"
+        ? "提交结果尚未确认，可以直接重试，重试不会重复执行。"
+        : "整改没有提交成功，请刷新详情后再试。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <section className="evidence-upload" aria-labelledby={`${uid}-title`}>
@@ -70,7 +108,7 @@ export function EvidenceUploadPanel({ finding, adapter, onUnauthenticated }: Evi
         <p className="field-hint">状态长时间没有变化，可以稍后手动刷新。</p>
       )}
       <div className="detail-actions">
-        {status && !busy && active && (
+        {status && !busy && !TERMINAL_UPLOAD_STATES.includes(status.state) && (
           <button className="button" type="button" onClick={refresh}>
             刷新状态
           </button>
@@ -81,7 +119,25 @@ export function EvidenceUploadPanel({ finding, adapter, onUnauthenticated }: Evi
           </button>
         )}
       </div>
-      <p className="field-hint">上传只表示文件已进入隔离扫描；证据终结、提交整改要等后端的终结接口。页面刷新后需要重新上传。</p>
+      <p className="field-hint">文件经隔离、扫描并由服务端终结发布后，才能提交整改。</p>
+      {commands && (
+        <>
+          <div className="report-field">
+            <label htmlFor={`${uid}-statement`}>整改说明</label>
+            <textarea id={`${uid}-statement`} value={statement} disabled={submitting} onChange={(event) => setStatement(event.target.value)} />
+          </div>
+          {submitError && (
+            <p className="field-error" role="alert">
+              {submitError}
+            </p>
+          )}
+          <div className="detail-actions">
+            <button className="button button-primary" type="button" disabled={!ready || submitting} onClick={submit}>
+              {submitting ? "正在提交…" : "提交整改"}
+            </button>
+          </div>
+        </>
+      )}
     </section>
   );
 }

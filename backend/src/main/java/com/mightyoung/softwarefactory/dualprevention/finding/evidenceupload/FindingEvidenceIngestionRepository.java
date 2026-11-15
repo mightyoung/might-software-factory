@@ -16,6 +16,9 @@ public interface FindingEvidenceIngestionRepository {
         TechnicalIntent current();
         void assertOpen();
         TechnicalIntent compareAndSet(TechnicalIntent expected, Change change, UUID auditActor, String policyVersion);
+        default TechnicalIntent finalizeEvidence(TechnicalIntent expected,
+                com.mightyoung.softwarefactory.files.VerifiedContentCheckpoint verified,
+                UUID evidenceItemId, UUID fileLinkId, UUID auditActor) { throw conflict(); }
     }
     enum Phase {
         INTENT_CREATED, RECEIVING, QUARANTINED, SCANNING, VERIFIED_PENDING_FINALIZATION,

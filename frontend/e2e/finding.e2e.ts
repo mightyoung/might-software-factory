@@ -121,8 +121,8 @@ test("流程：新建上报 → 确认发现 → 安全确认（需选等级）�
   await detail.getByLabel(/整改要求/).fill("加装防护罩并复测");
   await detail.getByRole("button", { name: "确认分派整改" }).click();
   await expect(detail.locator(".status-current")).toHaveText("整改中");
-  // 当前轮已有责任人：不能再次分派，也没有“重新分派”之外的入口；提交整改证据仍缺上传接口
-  await expect(detail.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
+  // 当前轮已有责任人：证据终结发布前不能提交整改
+  await expect(detail.getByRole("button", { name: "提交整改" })).toBeDisabled();
 });
 
 test("不成立关闭：人员确认阶段填意见后终止，终态没有任何动作", async ({ page }) => {

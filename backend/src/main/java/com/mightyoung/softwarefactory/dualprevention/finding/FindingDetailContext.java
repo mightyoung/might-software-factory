@@ -8,9 +8,17 @@ import java.util.UUID;
 
 /** Persisted detail facts; member labels reflect the current same-tenant directory. */
 public record FindingDetailContext(Member reporter, Member responsible,
-                                   List<HistoryEntry> history, boolean historyTruncated) {
+                                   List<HistoryEntry> history, boolean historyTruncated,
+                                   List<SubmittedRemediation> submittedRemediations,
+                                   boolean submittedRemediationsTruncated) {
     public FindingDetailContext {
         history = List.copyOf(history);
+        submittedRemediations = List.copyOf(submittedRemediations);
+    }
+
+    public FindingDetailContext(Member reporter, Member responsible, List<HistoryEntry> history,
+                                boolean historyTruncated) {
+        this(reporter, responsible, history, historyTruncated, List.of(), false);
     }
 
     public Map<String, Object> toApiMap() {
@@ -19,6 +27,8 @@ public record FindingDetailContext(Member reporter, Member responsible,
         result.put("responsible", responsible);
         result.put("history", history);
         result.put("historyTruncated", historyTruncated);
+        result.put("submittedRemediations", submittedRemediations);
+        result.put("submittedRemediationsTruncated", submittedRemediationsTruncated);
         return result;
     }
 
@@ -26,4 +36,12 @@ public record FindingDetailContext(Member reporter, Member responsible,
 
     public record HistoryEntry(UUID id, OffsetDateTime at, String fromState, String toState,
                                long fromVersion, long toVersion, String actorName, String reason) { }
+
+    public record SubmittedRemediation(UUID id, int roundNo, String statement, OffsetDateTime submittedAt,
+                                       UUID submitterMemberId, String submitterName,
+                                       List<SubmittedEvidence> evidence) {
+        public SubmittedRemediation { evidence = List.copyOf(evidence); }
+    }
+
+    public record SubmittedEvidence(UUID itemId, UUID fileId, String sha256, String verificationLevel) { }
 }

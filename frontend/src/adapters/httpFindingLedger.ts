@@ -72,7 +72,9 @@ export function toFindingRecord(item: Item | Detail, definition: FindingDefiniti
 function historyTitle(entry: components["schemas"]["FindingHistoryEntry"]): string {
   if (entry.fromState === null) return "发现上报";
   switch (entry.toState) {
-    case "PERSON_CONFIRM_PENDING": return "启动确认流程";
+    case "PERSON_CONFIRM_PENDING":
+      return entry.fromState === "REPORTER_SUPPLEMENT_PENDING" ? "提交补充资料" : "启动确认流程";
+    case "REPORTER_SUPPLEMENT_PENDING": return "退回补充";
     case "SAFETY_CONFIRM_PENDING": return "一人确认";
     case "SAFETY_DISPATCH_PENDING": return "安全确认";
     case "RECTIFYING":
@@ -91,11 +93,27 @@ function toFindingDetailRecord(detail: Detail, definition: Parameters<typeof toF
     reporter: detail.reporter?.displayName ?? NOT_PROVIDED,
     responsible: detail.responsible?.displayName ?? NOT_PROVIDED,
     history: (detail.history ?? []).map((entry) => ({
+      id: entry.id,
       at: entry.at,
       title: historyTitle(entry),
       note: [entry.actorName, entry.reason].filter((value) => value != null && value !== "").join(" · "),
     })),
     ...(detail.historyTruncated === undefined ? {} : { historyTruncated: detail.historyTruncated }),
+    submittedRemediations: (detail.submittedRemediations ?? []).map((submission) => ({
+      id: submission.id,
+      roundNo: submission.roundNo,
+      statement: submission.statement,
+      submittedAt: submission.submittedAt,
+      submitterMemberId: submission.submitterMemberId,
+      submitterName: submission.submitterName,
+      evidence: submission.evidence.map((item) => ({
+        itemId: item.itemId,
+        fileId: item.fileId,
+        sha256: item.sha256,
+        verificationLevel: item.verificationLevel,
+      })),
+    })),
+    ...(detail.submittedRemediationsTruncated === undefined ? {} : { submittedRemediationsTruncated: detail.submittedRemediationsTruncated }),
   };
 }
 

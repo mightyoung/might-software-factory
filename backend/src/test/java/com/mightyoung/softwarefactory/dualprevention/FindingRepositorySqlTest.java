@@ -4,6 +4,7 @@ import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContr
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryValidator;
 import com.mightyoung.softwarefactory.dualprevention.finding.FindingReadScope;
 import com.mightyoung.softwarefactory.dualprevention.finding.JooqFindingRepository;
+import com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FindingRepositorySqlTest {
 
@@ -105,6 +107,7 @@ class FindingRepositorySqlTest {
                     singleValue(values, "set_config", String.class, TENANT.toString())};
             if (context.sql().contains("created_by_member_id")) return new MockResult[] {
                     detailMembers(values, reporter, "Reporter", responsible, "Assignee")};
+            if (context.sql().contains("from public.remediation_submission submission")) return new MockResult[] {emptySubmissions(values)};
             return new MockResult[] {historyRows(values, 2, true)};
         });
 
@@ -116,7 +119,7 @@ class FindingRepositorySqlTest {
         assertThat(detail.history()).extracting("toVersion").containsExactly(1L, 2L);
         assertThat(detail.history().getFirst().actorName()).isEqualTo("Actor");
         assertThat(detail.historyTruncated()).isFalse();
-        assertThat(statements).hasSize(3);
+        assertThat(statements).hasSize(4);
         assertThat(statements.get(1)).contains("notice.round_no = f.round_no",
                 "reporter.tenant_id = f.tenant_id", "responsible.tenant_id = notice.tenant_id");
         assertThat(statements.get(2)).contains("actor.tenant_id = transition.tenant_id",
@@ -140,6 +143,7 @@ class FindingRepositorySqlTest {
                     singleValue(values, "set_config", String.class, TENANT.toString())};
             if (context.sql().contains("created_by_member_id")) return new MockResult[] {
                     detailMembers(values, reporter, null, null, null)};
+            if (context.sql().contains("from public.remediation_submission submission")) return new MockResult[] {emptySubmissions(values)};
             return new MockResult[] {historyRows(values, 1, false)};
         });
 
@@ -176,6 +180,7 @@ class FindingRepositorySqlTest {
                     singleValue(values, "set_config", String.class, TENANT.toString())};
             if (context.sql().contains("created_by_member_id")) return new MockResult[] {
                     detailMembers(values, UUID.randomUUID(), "Reporter", null, null)};
+            if (context.sql().contains("from public.remediation_submission submission")) return new MockResult[] {emptySubmissions(values)};
             return new MockResult[] {historyRows(values, 201, true)};
         });
 
@@ -190,6 +195,129 @@ class FindingRepositorySqlTest {
     private static JooqFindingRepository detailRepository(MockDataProvider provider) {
         return new JooqFindingRepository(DSL.using(new MockConnection(provider), SQLDialect.POSTGRES),
                 new NoOpTransactionManager());
+    }
+
+    @Test
+    void readsOnlyPinnedSubmissionEvidenceWithSameTenantScopeAndNoPrivateStorageFields() {
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        List<String> statements = new ArrayList<>();
+        UUID submission = UUID.randomUUID(), item = UUID.randomUUID(), file = UUID.randomUUID();
+        JooqFindingRepository repository = submittedRepository(values, statements,
+                submissionRows(values, submission, 2, new UUID[] {item}, 1),
+                snapshotRows(values, submission, item, file));
+
+        var detail = repository.findDetailContext(scope(TENANT), UUID.randomUUID()).orElseThrow();
+
+        assertThat(detail.submittedRemediationsTruncated()).isFalse();
+        var submitted = detail.submittedRemediations().getFirst();
+        assertThat(submitted.id()).isEqualTo(submission);
+        assertThat(submitted.roundNo()).isEqualTo(2);
+        assertThat(submitted.statement()).isEqualTo("Persisted remediation statement");
+        assertThat(submitted.submitterName()).isNull();
+        assertThat(submitted.evidence().getFirst().itemId()).isEqualTo(item);
+        assertThat(submitted.evidence().getFirst().fileId()).isEqualTo(file);
+        assertThat(submitted.evidence().getFirst().verificationLevel()).isEqualTo("SCANNED_CONTENT_V2");
+        assertThat(statements).hasSize(5);
+        assertThat(statements.get(3)).contains("submitter.tenant_id = submission.tenant_id",
+                "order by submission.round_no desc, submission.id desc");
+        assertThat(statements.get(4)).contains("from public.remediation_submission_evidence pinned",
+                "pinned.tenant_id = submission.tenant_id", "pinned.finding_id = submission.finding_id",
+                "pinned.round_no = submission.round_no", "pinned.submitted_by = submission.submitted_by",
+                "pinned.evidence_item_id = any(submission.evidence_snapshot_manifest)", "limit 101", "limit 2001")
+                .doesNotContain("from public.evidence_item", "object_key", "storage_version", "receipt");
+        assertThat(statements.subList(3, 5)).allSatisfy(query -> assertThat(query).contains(
+                "f.tenant_id = cast(? as uuid)", "f.id = cast(? as uuid)", "f.organization_id = any("));
+    }
+
+    @Test
+    void missingPinnedItemsFailClosedInsteadOfShowingPartialSubmissionEvidence() {
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        UUID submission = UUID.randomUUID();
+        JooqFindingRepository repository = submittedRepository(values, new ArrayList<>(),
+                submissionRows(values, submission, 1, new UUID[] {UUID.randomUUID()}, 1),
+                emptySubmissions(values));
+        assertThatThrownBy(() -> repository.findDetailContext(scope(TENANT), UUID.randomUUID()))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
+    @Test
+    void oversizedSubmissionManifestFailsBeforeReadingEvidence() {
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        UUID[] items = java.util.stream.IntStream.range(0, 101).mapToObj(i -> UUID.randomUUID()).toArray(UUID[]::new);
+        List<String> statements = new ArrayList<>();
+        JooqFindingRepository repository = submittedRepository(values, statements,
+                submissionRows(values, UUID.randomUUID(), 1, items, 101), emptySubmissions(values));
+        assertThatThrownBy(() -> repository.findDetailContext(scope(TENANT), UUID.randomUUID()))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        assertThat(statements).hasSize(4);
+    }
+
+    @Test
+    void returnsOnlyTheLatestTwentySubmissionsChronologicallyAndFlagsTheOlderWindow() {
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        UUID submission = UUID.randomUUID(), item = UUID.randomUUID();
+        MockResult submissions = submissionRows(values, submission, 21, new UUID[] {item}, 1);
+        MockResult evidence = snapshotRows(values, submission, item, UUID.randomUUID());
+        for (int round = 20; round >= 1; round--) {
+            submission = UUID.randomUUID(); item = UUID.randomUUID();
+            appendRows(submissions, submissionRows(values, submission, round, new UUID[] {item}, 1));
+            if (round >= 2) appendRows(evidence, snapshotRows(values, submission, item, UUID.randomUUID()));
+        }
+        JooqFindingRepository repository = submittedRepository(values, new ArrayList<>(),
+                new MockResult(21, submissions.data), new MockResult(20, evidence.data));
+
+        var detail = repository.findDetailContext(scope(TENANT), UUID.randomUUID()).orElseThrow();
+
+        assertThat(detail.submittedRemediationsTruncated()).isTrue();
+        assertThat(detail.submittedRemediations()).hasSize(20);
+        assertThat(detail.submittedRemediations().getFirst().roundNo()).isEqualTo(2);
+        assertThat(detail.submittedRemediations().getLast().roundNo()).isEqualTo(21);
+    }
+
+    private static JooqFindingRepository submittedRepository(DSLContext values, List<String> statements,
+                                                            MockResult submissions, MockResult evidence) {
+        return detailRepository(context -> {
+            statements.add(context.sql());
+            if (context.sql().contains("set_config")) return new MockResult[] {
+                    singleValue(values, "set_config", String.class, TENANT.toString())};
+            if (context.sql().contains("created_by_member_id")) return new MockResult[] {
+                    detailMembers(values, UUID.randomUUID(), "Reporter", null, null)};
+            if (context.sql().contains("finding_transition")) return new MockResult[] {historyRows(values, 1, true)};
+            if (context.sql().contains("join lateral")) return new MockResult[] {evidence};
+            return new MockResult[] {submissions};
+        });
+    }
+
+    private static MockResult emptySubmissions(DSLContext values) {
+        return new MockResult(0, values.newResult(DSL.field("id", UUID.class)));
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void appendRows(MockResult target, MockResult source) {
+        ((org.jooq.Result) target.data).addAll(source.data);
+    }
+
+    private static MockResult submissionRows(DSLContext dsl, UUID submission, int round, UUID[] manifest, int count) {
+        List<Field<?>> fields = List.of(DSL.field("id", UUID.class), DSL.field("round_no", Integer.class),
+                DSL.field("statement", String.class), DSL.field("submitted_at", OffsetDateTime.class),
+                DSL.field("submitted_by", UUID.class), DSL.field("submitter_name", String.class),
+                DSL.field("evidence_snapshot_count", Integer.class), DSL.field("evidence_snapshot_manifest", UUID[].class),
+                DSL.field("evidence_snapshots_sealed_at", OffsetDateTime.class));
+        var result = dsl.newResult(fields); var row = dsl.newRecord(fields);
+        var now = OffsetDateTime.parse("2026-10-30T10:00:00Z");
+        List<Object> data = Arrays.asList(submission, round, "Persisted remediation statement", now,
+                UUID.randomUUID(), null, count, manifest, now);
+        for (int i = 0; i < fields.size(); i++) set(row, fields.get(i), data.get(i));
+        result.add(row); return new MockResult(1, result);
+    }
+
+    private static MockResult snapshotRows(DSLContext dsl, UUID submission, UUID item, UUID file) {
+        List<Field<?>> fields = List.of(DSL.field("submission_id", UUID.class), DSL.field("evidence_item_id", UUID.class),
+                DSL.field("file_id", UUID.class), DSL.field("sha256", String.class), DSL.field("verification_level", String.class));
+        var result = dsl.newResult(fields); var row = dsl.newRecord(fields);
+        List<Object> data = List.of(submission, item, file, "a".repeat(64), "SCANNED_CONTENT_V2");
+        for (int i = 0; i < fields.size(); i++) set(row, fields.get(i), data.get(i));
+        result.add(row); return new MockResult(1, result);
     }
 
     private static FindingReadScope scope(UUID tenant) {

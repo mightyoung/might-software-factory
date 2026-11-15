@@ -184,7 +184,11 @@ class FindingControllerHttpTest {
                 new FindingDetailContext.Member(MEMBER_ID, "上报人"), null,
                 List.of(new FindingDetailContext.HistoryEntry(UUID.randomUUID(),
                         OffsetDateTime.parse("2026-10-30T10:00:00Z"), null, "PERSON_CONFIRM_PENDING",
-                        0L, 1L, null, null)), false));
+                        0L, 1L, null, null)), false,
+                List.of(new FindingDetailContext.SubmittedRemediation(UUID.randomUUID(), 1, "整改说明",
+                        OffsetDateTime.parse("2026-10-30T10:00:00Z"), MEMBER_ID, null,
+                        List.of(new FindingDetailContext.SubmittedEvidence(UUID.randomUUID(), UUID.randomUUID(),
+                                "a".repeat(64), "SCANNED_CONTENT_V2")))), false));
 
         mvc.perform(get(DETAIL_PATH + synthetic.id()).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
@@ -203,6 +207,11 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.history[0].toVersion").value(1))
                 .andExpect(jsonPath("$.data.history[0].actorName").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.historyTruncated").value(false))
+                .andExpect(jsonPath("$.data.submittedRemediations[0].statement").value("整改说明"))
+                .andExpect(jsonPath("$.data.submittedRemediations[0].submitterName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.submittedRemediations[0].evidence[0].verificationLevel").value("SCANNED_CONTENT_V2"))
+                .andExpect(jsonPath("$.data.submittedRemediations[0].evidence[0].storageVersion").doesNotExist())
+                .andExpect(jsonPath("$.data.submittedRemediationsTruncated").value(false))
                 .andExpect(jsonPath("$.meta.schemaVersion").value("5"));
     }
 

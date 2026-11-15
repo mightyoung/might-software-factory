@@ -593,6 +593,15 @@ components:
         historyTruncated:
           type: boolean
           description: True when older transitions were omitted by the bounded history window.
+        submittedRemediations:
+          type: array
+          maxItems: 20
+          description: Latest 20 persisted remediation submissions, in increasing round order. Evidence is read only from each sealed submission's immutable snapshot manifest, never the current evidence set. Missing, unsealed or oversized snapshots fail closed with 503 instead of returning incomplete evidence. Submitter labels are current same-tenant directory labels.
+          items:
+            $ref: '#/components/schemas/SubmittedRemediation'
+        submittedRemediationsTruncated:
+          type: boolean
+          description: True only when older submissions were omitted by the latest-20 window; evidence within a returned submission is never silently truncated.
         id: { type: string, format: uuid }
         code: { type: string }
         organizationId: { type: string, format: uuid }
@@ -643,6 +652,32 @@ components:
         toVersion: { type: integer, minimum: 1 }
         actorName: { type: [string, 'null'] }
         reason: { type: [string, 'null'] }
+    SubmittedRemediation:
+      type: object
+      additionalProperties: false
+      required: [id, roundNo, statement, submittedAt, submitterMemberId, submitterName, evidence]
+      properties:
+        id: { type: string, format: uuid }
+        roundNo: { type: integer, minimum: 1 }
+        statement: { type: string }
+        submittedAt: { type: string, format: date-time }
+        submitterMemberId: { type: string, format: uuid }
+        submitterName: { type: [string, 'null'] }
+        evidence:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SubmittedRemediationEvidence'
+    SubmittedRemediationEvidence:
+      type: object
+      additionalProperties: false
+      required: [itemId, fileId, sha256, verificationLevel]
+      properties:
+        itemId: { type: string, format: uuid }
+        fileId: { type: string, format: uuid }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        verificationLevel: { enum: [CONTENT, SCANNED_CONTENT_V2] }
     FindingEntitySchemaResponse:
       type: object
       additionalProperties: false

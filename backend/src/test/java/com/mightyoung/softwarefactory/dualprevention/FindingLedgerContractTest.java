@@ -237,6 +237,21 @@ class FindingLedgerContractTest {
     }
 
     @Test
+    void submittedEvidenceContractContainsOnlyPinnedPublicReferences() throws IOException {
+        Schema evidence = schemaRegistry().getSchema(SchemaLocation.of(
+                LEDGER_URI + "#/components/schemas/SubmittedRemediationEvidence"));
+        String reference = """
+                {"itemId":"00112233-4455-6677-8899-aabbccddeeff",
+                 "fileId":"11112233-4455-6677-8899-aabbccddeeff",
+                 "sha256":"%s","verificationLevel":"SCANNED_CONTENT_V2"}
+                """.formatted("a".repeat(64));
+        assertValid(evidence, reference);
+        assertValid(evidence, reference.replace("SCANNED_CONTENT_V2", "CONTENT"));
+        assertInvalid(evidence, reference.replace("SCANNED_CONTENT_V2", "UNVERIFIED"));
+        assertInvalid(evidence, reference.replace("\"itemId\":", "\"objectKey\":\"private-path\",\"itemId\":"));
+    }
+
+    @Test
     void documentsTheRemainingProductionAuthenticationAndDataScopeBlockers() throws IOException {
         String yaml = Files.readString(contractPath());
         assertThat(yaml).contains("no production login", "denies by default",

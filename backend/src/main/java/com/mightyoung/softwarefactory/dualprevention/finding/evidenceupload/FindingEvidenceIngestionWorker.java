@@ -17,6 +17,7 @@ import static com.mightyoung.softwarefactory.dualprevention.finding.evidenceuplo
 @Component
 @ConditionalOnProperty(name="software-factory.findings.evidence-ingestion.enabled",havingValue="true")
 public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
+    private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(FindingEvidenceIngestionWorker.class);
     private final FindingEvidenceIngestionRepository repository;
     private final FindingEvidenceTechnicalEligibilityPolicy eligibility;
     private final FindingEvidenceIngestionProperties properties;
@@ -32,7 +33,7 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
     private ScheduledExecutorService timer;
     private ThreadPoolExecutor workers;
     private record WorkKey(UUID tenant,UUID intent){}
-    private enum NextWork { NONE, SCAN, RECOVER }
+    private enum NextWork { NONE, SCAN, RECOVER, FINALIZE }
     private record Candidate(TechnicalIntent intent,QuarantinedObject source,RecordedAllocation scratch,
                              RecordedAllocation immutable,RecordedAllocation receipt,ScanPlan plan,boolean unused){}
     private record Claimed(TechnicalIntent intent,QuarantinedObject source,ScanAllocation scan,
@@ -59,7 +60,7 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
         // Interrupting a Java task never establishes native quiescence or discounts retained bytes.
     }
     @Override public boolean isRunning(){return running.get();}
-    private void pollSafely(){try{pollOnce();}catch(RuntimeException unavailable){/* Next bounded poll resolves persisted truth. */}}
+    private void pollSafely(){try{pollOnce();}catch(RuntimeException unavailable){reportFailure("DISCOVERY",null,null,unavailable);}}
     void pollOnce(){
         if(!properties.enabled()||workers==null||!running.get())return;
         int remaining=32;
@@ -74,12 +75,21 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
                 if(remaining--==0)return;
                 var key=new WorkKey(tenant,intent);
                 if(!submitted.add(key)){discoveryCursors.put(tenant,intent);continue;}
-                try{workers.execute(()->{try{process(tenant,intent);}catch(RuntimeException unavailable){
-                    // Durable state remains authoritative; raw scanner/resource details are never logged.
-                }finally{submitted.remove(key);}});discoveryCursors.put(tenant,intent);}
+                try{workers.execute(()->{try{processSafely(tenant,intent);}finally{submitted.remove(key);}});discoveryCursors.put(tenant,intent);}
                 catch(RejectedExecutionException busy){submitted.remove(key);return;}
             }
         }
+    }
+    void processSafely(UUID tenant,UUID intent){
+        try{process(tenant,intent);}catch(RuntimeException unavailable){reportFailure("PROCESS",tenant,intent,unavailable);}
+    }
+    private static void reportFailure(String stage,UUID tenant,UUID intent,RuntimeException failure){
+        String category=failure instanceof FileEvidenceTrustUnavailableException?"TRUST_UNAVAILABLE":
+                failure instanceof FindingNotVisibleException?"CONTEXT_REVOKED":
+                failure instanceof FindingEvidenceUploadException?"CONFLICT":
+                failure instanceof org.jooq.exception.DataAccessException||failure instanceof org.springframework.dao.DataAccessException?"PERSISTENCE":"INTERNAL";
+        // Never pass the exception object, message, scanner output, or filesystem paths to the logger.
+        LOG.warn("Evidence ingestion failure stage={} category={} tenant={} intent={}",stage,category,tenant,intent);
     }
     void process(UUID tenant,UUID intentId){
         FindingEvidenceUploadService.requireIndependentTransaction();
@@ -111,12 +121,22 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
                     tx.compareAndSet(i,inactive(i,Phase.FAILED,"ATTEMPTS_EXHAUSTED",null),actor,i.policyVersion());
                 return NextWork.RECOVER;
             }
+            if(i.phase()==Phase.VERIFIED_PENDING_FINALIZATION){eligibility.requireOwner(tx);return NextWork.FINALIZE;}
             if(!scanDue(i,now))return NextWork.RECOVER;
             eligibility.requireOwner(tx);return NextWork.SCAN;
         });
         if(next==NextWork.NONE)return;
         if(next==NextWork.RECOVER){recoverRetained(tenant,intentId);return;}
         var capability=readiness.requireReady();var resources=producer.currentResources();
+        if(next==NextWork.FINALIZE){
+            try{finalizePending(tenant,intentId,resources,capability);}
+            catch(FileEvidenceTrustUnavailableException stale){
+                reportFailure("FINALIZE",tenant,intentId,stale);
+                retryFinalization(tenant,intentId);
+            }
+            catch(RuntimeException failure){reportFailure("FINALIZE",tenant,intentId,failure);throw failure;}
+            return;
+        }
         for(ScanSlot slot:resources.scanSlots()){
             Candidate candidate=preflight(tenant,intentId,resources,slot,capability);
             if(candidate==null)return;
@@ -131,6 +151,33 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
                 return;
             }
         }
+    }
+    private void retryFinalization(UUID tenant,UUID intent){
+        repository.inIntentTransaction(tenant,intent,tx->{
+            UUID actor=eligibility.requireService(tx);var i=tx.current();var now=tx.now().toInstant();
+            if(i.phase()==Phase.VERIFIED_PENDING_FINALIZATION&&!i.cancelRequested()&&now.isBefore(i.declaration().expiresAt().toInstant()))
+                tx.compareAndSet(i,inactive(i,Phase.RETRY_WAIT,"SCANNER_UNAVAILABLE",now.plusSeconds(backoff(i.attemptNo()))),actor,i.policyVersion());
+            return null;
+        });
+    }
+    private void finalizePending(UUID tenant,UUID intentId,ProducerResources resources,UploadProducerReadiness.Capability capability){
+        repository.inIntentTransaction(tenant,intentId,tx->{
+            UUID actor=eligibility.requireService(tx);var i=tx.current();
+            if(i.phase()!=Phase.VERIFIED_PENDING_FINALIZATION||i.cancelRequested()
+                    ||!tx.now().toInstant().isBefore(i.declaration().expiresAt().toInstant()))return null;
+            eligibility.requireOwner(tx);requireCurrent(tx,i,resources,capability);
+            UUID item=publicationId("item",tenant,intentId),link=publicationId("link",tenant,intentId);
+            var request=new IngestionPublicationRequest(tenant,intentId,new VerifiedCheckpoint(i.scanProofId(),i.contentReceiptId(),i.immutableAllocationId()),
+                    i.declaration().findingId(),i.declaration().roundNo(),i.declaration().evidenceSetId(),item,link,
+                    i.declaration().ownerMemberId(),i.declaration().ownerActorId(),actor,i.technicalVersion(),i.expectedFindingVersion(),i.expectedEvidenceRevision());
+            return files.inCallerTransaction(tenant,f->{
+                var verified=files.publishVerified(f,request,resources.generation());
+                tx.finalizeEvidence(i,verified,item,link,actor);return null;
+            });
+        });
+    }
+    static UUID publicationId(String kind,UUID tenant,UUID intent){
+        return UUID.nameUUIDFromBytes(("finding-evidence-publication-v1:"+kind+":"+tenant+":"+intent).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private Candidate preflight(UUID tenant,UUID intent,ProducerResources resources,ScanSlot slot,
                                  UploadProducerReadiness.Capability capability){
@@ -282,7 +329,7 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
         WorkKey key=new WorkKey(tenant,intent);
         var page=repository.inIntentTransaction(tenant,intent,tx->{
             eligibility.requireService(tx);var i=tx.current();
-            if(!(i.phase()==Phase.RETRY_WAIT||i.phase().terminal())||i.phase()==Phase.FINALIZED)return null;
+            if(!(i.phase()==Phase.RETRY_WAIT||i.phase().terminal()))return null;
             return files.inCallerTransaction(tenant,f->files.retainedForIntent(f,intent,recoveryCursors.get(key),32));
         });
         if(page==null)return;
@@ -357,7 +404,7 @@ public final class FindingEvidenceIngestionWorker implements SmartLifecycle {
                 ||i.technicalVersion()!=binding.expectedCurrentTechnicalVersion()||i.leaseEpoch()!=binding.expectedIntentLeaseEpoch())throw conflict();
     }
     static RecoveryReason recoveryReason(TechnicalIntent i,RecordedAllocation allocation,Optional<RecordedExecution> execution){
-        if(i.phase()==Phase.FINALIZED||allocation.finalizedFileId()!=null)return null;
+        if(allocation.finalizedFileId()!=null)return null;
         if(i.phase().terminal())return RecoveryReason.TERMINAL;
         if(i.phase()!=Phase.RETRY_WAIT)return null;
         UUID id=allocation.request().allocationId(),attempt=allocation.request().attemptId();

@@ -284,10 +284,11 @@ export function createMockServer(options = {}) {
         // 每次查询推进一步，模拟异步扫描：QUARANTINED → SCANNING → 终态（文件名以 reject 开头则被拒绝）。
         if (intent.received && intent.state === "QUARANTINED") intent.state = "SCANNING";
         else if (intent.state === "SCANNING") intent.state = /^reject/i.test(intent.name) ? "REJECTED" : "VERIFIED_PENDING_FINALIZATION";
+        else if (intent.state === "VERIFIED_PENDING_FINALIZATION") intent.state = "FINALIZED";
         return send(res, 200, view(intent), { "Cache-Control": "no-store" });
       }
       if (intent && action === "cancel" && req.method === "POST") {
-        if (!["VERIFIED_PENDING_FINALIZATION", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"].includes(intent.state)) intent.cancel = true;
+        if (!["VERIFIED_PENDING_FINALIZATION", "FINALIZED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"].includes(intent.state)) intent.cancel = true;
         return send(res, 200, view(intent), { "Cache-Control": "no-store" });
       }
       return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
@@ -360,7 +361,7 @@ export function createMockServer(options = {}) {
       receipts.set(key, { body: canonical, response });
       return send(res, 200, response);
     }
-    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|close-not-established|dispatch|verifications)$/.exec(path);
+    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|close-not-established|dispatch|verifications|remediation-submissions)$/.exec(path);
     if (req.method === "POST" && command) {
       const key = req.headers["idempotency-key"];
       if (typeof key !== "string" || !/^[0-9a-f-]{36}$/i.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
@@ -392,6 +393,10 @@ export function createMockServer(options = {}) {
         if (typeof b.dueAt !== "string" || Number.isNaN(Date.parse(b.dueAt))) fieldErrors.push({ field: "dueAt", reason: "Pattern" });
         if (typeof b.requirements !== "string" || cp(b.requirements) > 4000 || b.requirements.trim().length === 0) fieldErrors.push({ field: "requirements", reason: "NotBlank" });
       }
+      if (op === "remediation-submissions") {
+        if (typeof b.evidenceSetId !== "string" || !b.evidenceSetId) fieldErrors.push({ field: "evidenceSetId", reason: "NotBlank" });
+        if (typeof b.statement !== "string" || cp(b.statement) > 4000 || b.statement.trim().length === 0) fieldErrors.push({ field: "statement", reason: "NotBlank" });
+      }
       if (op === "verifications") {
         if (!["PASS", "FAIL"].includes(b.decision)) fieldErrors.push({ field: "decision", reason: "Pattern" });
         else if (b.decision === "FAIL" && !reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
@@ -399,7 +404,7 @@ export function createMockServer(options = {}) {
       if (fieldErrors.length) return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors });
       if (b.expectedVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale version", { currentVersion: row.version });
 
-      const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING" }[op];
+      const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING", "remediation-submissions": "RECTIFYING" }[op];
       const stateOk =
         op === "close-not-established"
           ? row.state === (b.stage === "PERSON" ? "PERSON_CONFIRM_PENDING" : "SAFETY_CONFIRM_PENDING")
@@ -412,6 +417,7 @@ export function createMockServer(options = {}) {
       else if (op === "confirm/safety") { row.state = "SAFETY_DISPATCH_PENDING"; row.grade = b.grade; }
       else if (op === "close-not-established") row.state = "NOT_ESTABLISHED";
       else if (op === "dispatch") { row.state = "RECTIFYING"; row[ASSIGNED] = true; }
+      else if (op === "remediation-submissions") row.state = "ACCEPTANCE_PENDING";
       else if (b.decision === "PASS") row.state = "CLOSED";
       else { row.state = "RECTIFYING"; row.roundNo += 1; row[ASSIGNED] = false; }
       if (op === "confirm/person" || op === "confirm/safety") {

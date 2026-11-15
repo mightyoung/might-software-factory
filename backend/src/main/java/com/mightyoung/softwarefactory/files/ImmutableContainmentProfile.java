@@ -50,7 +50,7 @@ public final class ImmutableContainmentProfile {
         if(!Objects.equals(inventory.get("scanner/clamscan"),executable)||!inventory.keySet().containsAll(Set.of("definitions/main.cvd","definitions/daily.cvd","definitions/bytecode.cvd"))
                 ||inventory.keySet().stream().noneMatch(n->Path.of(n).getFileName().toString().startsWith("libclamav"))
                 ||inventory.keySet().stream().noneMatch(n->Path.of(n).getFileName().toString().startsWith("clamav-package")))throw unavailable();
-        if(memory>536870912||scratch>134217728||max>MAX_CONTENT_BYTES||scratch<max||cpu>90||pids>16||fds<3||fds>64||!fields.isEmpty())throw unavailable();
+        if(memory>2_147_483_648L||scratch>134217728||max>MAX_CONTENT_BYTES||scratch<max||cpu>90||pids>16||fds<3||fds>64||!fields.isEmpty())throw unavailable();
         if(candidate!=null){
             Path rootfs=slots.getFirst().hostScratch().getParent();var config=candidate.scanner();
             if(scratch!=candidate.limits().scratchBytes()||max!=candidate.limits().maxBytes()||cpu!=candidate.limits().scanTimeout().toSeconds()

@@ -18,9 +18,8 @@ export type UploadState =
   | "EXPIRED"
   | "FINALIZED";
 
-/** 不会再变化的状态：停止轮询。 */
+/** 不会再变化的状态：停止轮询。扫描通过后还要等服务端终结发布，所以它不算终态。 */
 export const TERMINAL_UPLOAD_STATES: readonly UploadState[] = [
-  "VERIFIED_PENDING_FINALIZATION",
   "FAILED",
   "REJECTED",
   "CANCELLED",

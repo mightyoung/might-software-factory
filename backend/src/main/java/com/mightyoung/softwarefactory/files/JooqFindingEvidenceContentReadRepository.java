@@ -98,7 +98,7 @@ public final class JooqFindingEvidenceContentReadRepository implements FindingEv
                    and fo.owner_actor_id = se.owner_actor_id
                    and fo.checksum = se.sha256
                    and fo.storage_version = se.storage_version
-                   and se.verification_level = 'CONTENT'
+                   and se.verification_level in ('CONTENT','SCANNED_CONTENT_V2')
                  for share of fl, fo
                 """, scope.tenantId(), findingId, roundNo, evidenceItemId,
                 scope.organizationIds().toArray(UUID[]::new));

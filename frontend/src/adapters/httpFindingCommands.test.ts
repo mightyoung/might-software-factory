@@ -22,6 +22,7 @@ describe("createHttpFindingCommands", () => {
     [{ kind: "initialize" }, "/api/v1/findings/a%2Fb/workflow-initialization", { expectedVersion: 2 }],
     [{ kind: "confirmPerson", reason: "属实" }, "/api/v1/findings/a%2Fb/confirm/person", { expectedVersion: 2, reason: "属实" }],
     [{ kind: "confirmSafety", reason: "确认", grade: "MAJOR" }, "/api/v1/findings/a%2Fb/confirm/safety", { expectedVersion: 2, reason: "确认", grade: "MAJOR" }],
+    [{ kind: "submitRemediation", evidenceSetId: "set-1", statement: "已完成整改" }, "/api/v1/findings/a%2Fb/remediation-submissions", { expectedVersion: 2, evidenceSetId: "set-1", statement: "已完成整改" }],
     [{ kind: "verify", decision: "PASS" }, "/api/v1/findings/a%2Fb/verifications", { expectedVersion: 2, decision: "PASS" }],
     [{ kind: "verify", decision: "FAIL", reason: "未整改" }, "/api/v1/findings/a%2Fb/verifications", { expectedVersion: 2, decision: "FAIL", reason: "未整改" }],
   ];

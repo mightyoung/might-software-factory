@@ -90,6 +90,33 @@ class IngestionProofCodecTest {
         assertThatThrownBy(()->later.verifyCurrentScan(proof,generation())).isInstanceOf(FileEvidenceTrustUnavailableException.class);
         assertThatThrownBy(()->later.verifyCurrentReceipt(receipt,proof)).isInstanceOf(FileEvidenceTrustUnavailableException.class);
     }
+    @Test void persistedSignedCheckpointsRoundTripWithoutExtendingFreshness(){
+        var originalProof=proof();var originalReceipt=receipt(originalProof);
+        var later=new IngestionProofCodec(Map.of("key1",key),"key1",Clock.fixed(NOW.plusSeconds(1000),ZoneOffset.UTC));
+        var reader=new IngestionSignedCheckpointReader(later);
+        var loadedProof=reader.scan(originalProof.canonicalPayload(),originalProof.signature());
+        var loadedReceipt=reader.receipt(originalReceipt.canonicalPayload(),originalReceipt.signature(),loadedProof);
+        assertThat(loadedProof).usingRecursiveComparison().isEqualTo(originalProof);
+        assertThat(loadedReceipt).usingRecursiveComparison().isEqualTo(originalReceipt);
+        assertThatThrownBy(()->later.verifyCurrentReceipt(loadedReceipt,loadedProof))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+    @Test void persistedCheckpointDecoderRejectsWrongDomainTruncationTrailingDataAndSignature(){
+        var proof=proof();var receipt=receipt(proof);var reader=new IngestionSignedCheckpointReader(codec);
+        assertThatThrownBy(()->reader.scan(receipt.canonicalPayload(),receipt.signature()))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        assertThatThrownBy(()->reader.receipt(proof.canonicalPayload(),proof.signature(),proof))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        for(byte[] payload:new byte[][]{new byte[0],Arrays.copyOf(proof.canonicalPayload(),10),
+                Arrays.copyOf(proof.canonicalPayload(),proof.canonicalPayload().length+1)}) {
+            assertThatThrownBy(()->reader.scan(payload,proof.signature())).isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        }
+        byte[] changed=receipt.signature();changed[0]^=1;
+        assertThatThrownBy(()->reader.receipt(receipt.canonicalPayload(),changed,proof))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        assertThatThrownBy(()->reader.receipt(receipt.canonicalPayload(),receipt.signature(),copy(proof,"fileId",UUID.randomUUID())))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
     @Test void canonicalObservationSurvivesDatabaseMicrosecondReloadAndRejectsProjectionMismatch() throws Exception {
         var a=allocation(AllocationKind.QUARANTINE,sourceAttempt,"quarantine");
         var highPrecision=new ObjectIdentity(a.rootGeneration(),a.serverObjectName(),a.storageVersion(),"store","inode-1",1,2,1,3,NOW.minusSeconds(1).plusNanos(123456789));

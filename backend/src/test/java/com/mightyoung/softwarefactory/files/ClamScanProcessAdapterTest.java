@@ -51,15 +51,32 @@ class ClamScanProcessAdapterTest {
         assertThat(newHash).isNotEqualTo(hash);assertThat(ImmutableContainmentProfile.retainedPath(hash)).isNotEqualTo(ImmutableContainmentProfile.retainedPath(newHash));
         assertThatThrownBy(()->ImmutableContainmentProfile.retainedPath("../profile")).isInstanceOf(IllegalArgumentException.class);
     }
+    @Test void fullProfilesAcceptTwoGiBButRejectAnythingAboveTheHardBound() {
+        UUID realm=UUID.randomUUID();
+        for(String memory:List.of("536870912","2147483648")) {
+            String content=profile(realm,1).replace("memory-bytes=536870912","memory-bytes="+memory);
+            String hash=ScannerGenerationManifest.sha256(content.getBytes(StandardCharsets.US_ASCII));
+            assertThat(ImmutableContainmentProfile.parseProfile(ImmutableContainmentProfile.retainedPath(hash),hash,realm,null,
+                    content.getBytes(StandardCharsets.US_ASCII)).slots()).hasSize(1);
+        }
+        for(String memory:List.of("2147483649","9223372036854775807","0")) {
+            String content=profile(realm,1).replace("memory-bytes=536870912","memory-bytes="+memory);
+            String hash=ScannerGenerationManifest.sha256(content.getBytes(StandardCharsets.US_ASCII));
+            assertThatThrownBy(()->ImmutableContainmentProfile.parseProfile(ImmutableContainmentProfile.retainedPath(hash),hash,realm,null,
+                    content.getBytes(StandardCharsets.US_ASCII))).isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        }
+    }
     @Test void leasePureValidityBindsEntirePlanAndCloseIsIrrevocable() {
         var plan=plan();var live=new java.util.concurrent.atomic.AtomicBoolean(true);var stops=new java.util.concurrent.atomic.AtomicInteger();
         var lease=new PreparedSlotLease(this,plan,new PreparedSlotLease.Session(){public boolean locallyLive(){return live.get();}public void stop(){stops.incrementAndGet();live.set(false);}});
         assertThat(lease.isValidFor(plan)).isTrue();assertThat(lease.isValidFor(plan())).isFalse();lease.close();lease.close();assertThat(lease.isValidFor(plan)).isFalse();assertThat(stops.get()).isEqualTo(1);
     }
     @Test void policyHasOneStdinOperandAndExactBuiltInGenerationControls() {
-        var args=ClamScanProcessAdapter.policyArguments(properties());assertThat(args.stream().filter("-"::equals).count()).isEqualTo(1);
+        var args=ClamScanProcessAdapter.policyArguments(properties());
+        assertThat(args).startsWith("--infected","--stdout","--no-summary").doesNotContain("--quiet","--suppress-ok-results");
+        assertThat(args.stream().filter("-"::equals).count()).isEqualTo(1);
         // Independent canonical V2 vector; the native unprivileged gate compares its actual C encoding.
-        assertThat(ClamScanProcessAdapter.effectivePolicySha256(properties())).isEqualTo("0a570d8ff38703e1ac1da5d89c6d856f71977107a577d821cdc0cb89e84b5013");
+        assertThat(ClamScanProcessAdapter.effectivePolicySha256(properties())).isEqualTo("57979520ac18c44cb593b450384e4877c3ba84626d02906edfb1941e3d3deaf2");
         assertThat(args).contains("--official-db-only=yes","--bytecode-unsigned=no","--database=/definitions","--tempdir=/scratch");
         assertThat(ImmutableContainmentProfile.Probe.values()).contains(ImmutableContainmentProfile.Probe.CLEAN_CONTROL,ImmutableContainmentProfile.Probe.EICAR_CONTROL,ImmutableContainmentProfile.Probe.PIDS_RELEASE_ACCOUNTING,ImmutableContainmentProfile.Probe.ORPHAN_REAPER);
     }

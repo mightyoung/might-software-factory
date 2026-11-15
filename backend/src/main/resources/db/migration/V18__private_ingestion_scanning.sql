@@ -491,7 +491,7 @@ begin
             and a.id is distinct from intent.immutable_allocation_id and a.attempt_id is distinct from intent.attempt_id
             and a.attempt_id is distinct from intent.reserved_scan_attempt_id)
        or (new.recovery_reason='EXPIRED_WORK' and intent.state='RETRY_WAIT' and intent.lease_token is null
-            and intent.lease_epoch>case when new.execution_id is null then a.reservation_lease_epoch else execution.claim_epoch end)) then
+            and intent.lease_epoch>(case when new.execution_id is null then a.reservation_lease_epoch else execution.claim_epoch end))) then
         raise exception 'File ingestion allocation is not recoverable or disposable' using errcode='23514';
     end if;
     if new.event_kind='RESIZE_CONFIRMED' then

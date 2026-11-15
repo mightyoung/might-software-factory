@@ -401,16 +401,10 @@ static bool relative_resource(const char *path){size_t n=strlen(path);
         for(size_t i=0;part[i];i++)if(!((part[i]>='A'&&part[i]<='Z')||(part[i]>='a'&&part[i]<='z')||(part[i]>='0'&&part[i]<='9')||part[i]=='_'||part[i]=='-'||part[i]=='+'||part[i]=='.'))return false;
     }return true;
 }
-static int load_profile(const char *id,const char *realm,const char *slot,struct profile *p){
+/* Parses a digest-bound candidate only. On-disk ownership and caller credentials remain load_profile fences. */
+static int parse_profile(unsigned char *data,size_t length,const char *id,const char *realm,const char *slot,struct profile *p){
     unsigned char expected_digest[32];
-    if(!hex_decode(id,32,expected_digest))return -1;
-    int root=secure_directory(PROFILE_ROOT);
-    if(root<0)return -1;
-    unsigned char data[FRAME_MAX];
-    size_t length;
-    int rc=read_file_at(root,id,data,sizeof(data)-1,&length);
-    close(root);
-    if(rc!=0||length==0||data[length-1]!='\n')return -1;
+    if(!hex_decode(id,32,expected_digest)||length==0||length>=FRAME_MAX||data[length-1]!='\n')return -1;
     hash_bytes(data,length,p->digest);
     if(!equal(expected_digest,p->digest,32))return -1;
     data[length]=0;
@@ -451,7 +445,7 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
     p->slot_count=(unsigned int)count;
     uint64_t n[10];
     for(size_t i=0;i<10;i++)if(decimal(values[i+3],&n[i])!=0)return -1;
-    if(n[0]==0||n[0]>UINT32_MAX||n[1]>UINT32_MAX||n[2]==0||n[2]>UINT32_MAX||n[3]==0||n[3]>UINT32_MAX||n[0]==n[2]||n[4]<1||n[4]>536870912||n[5]<1||n[5]>134217728||n[6]<1||n[6]>67108864||n[6]>n[5]||n[7]<1||n[7]>90||n[8]<1||n[8]>16||n[9]<3||n[9]>64||!hex_decode(values[13],32,p->scanner_digest))return -1;
+    if(n[0]==0||n[0]>UINT32_MAX||n[1]>UINT32_MAX||n[2]==0||n[2]>UINT32_MAX||n[3]==0||n[3]>UINT32_MAX||n[0]==n[2]||n[4]<1||n[4]>UINT64_C(2147483648)||n[5]<1||n[5]>134217728||n[6]<1||n[6]>67108864||n[6]>n[5]||n[7]<1||n[7]>90||n[8]<1||n[8]>16||n[9]<3||n[9]>64||!hex_decode(values[13],32,p->scanner_digest))return -1;
 
     uint64_t resource_count;
     if(decimal(values[16],&resource_count)!=0||resource_count<6||resource_count>64)return -1;
@@ -477,7 +471,6 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
         }
     }
     if(!executable||!main_db||!daily_db||!bytecode_db||!clamav_library||!package)return -1;
-    if(getuid()!=(uid_t)n[0]||getgid()!=(gid_t)n[1]||geteuid()!=0)return -1;
     p->caller_uid=(uid_t)n[0];
     p->caller_gid=(gid_t)n[1];
     p->scanner_uid=(uid_t)n[2];
@@ -491,6 +484,19 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
     memcpy(p->id,id,strlen(id)+1);
     memcpy(p->realm,realm,37);
     memcpy(p->slot,slot,strlen(slot)+1);
+    return 0;
+}
+static int load_profile(const char *id,const char *realm,const char *slot,struct profile *p){
+    unsigned char expected_digest[32];
+    if(!hex_decode(id,32,expected_digest))return -1;
+    int root=secure_directory(PROFILE_ROOT);
+    if(root<0)return -1;
+    unsigned char data[FRAME_MAX];
+    size_t length;
+    int rc=read_file_at(root,id,data,sizeof(data)-1,&length);
+    close(root);
+    if(rc!=0||parse_profile(data,length,id,realm,slot,p)!=0)return -1;
+    if(getuid()!=p->caller_uid||getgid()!=p->caller_gid||geteuid()!=0)return -1;
     return 0;
 }
 struct realm {int root,slot,control,lock;
@@ -1104,7 +1110,7 @@ static int scanner_arguments(const struct profile *p,char max[48],char scanmax[4
     if(n<0||n>=48)return -1;
     n=snprintf(scanmax,48,"--max-scansize=%llu",(unsigned long long)p->max_bytes);
     if(n<0||n>=48)return -1;
-    char *values[]={"/scanner/clamscan","--suppress-ok-results","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
+    char *values[]={"/scanner/clamscan","--infected","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
     _Static_assert(ARRAY_LEN(values)==26,"Closed scanner argv changed");
     memcpy(arguments,values,sizeof(values));
     return 0;

@@ -308,6 +308,87 @@ public final class JooqFileIngestionLedger implements FileIngestionLedger {
             return new VerifiedCheckpoint(proof.proofId(),receipt.receiptId(),immutable.allocationId());
         });
     }
+    @Override public VerifiedContentCheckpoint readVerified(FileIngestionTxContext tx,UUID intentId,VerifiedCheckpoint checkpoint){
+        return sql(tx,db->readVerifiedInSnapshot(db,tx.tenantId(),intentId,checkpoint));
+    }
+    /** Read-only bridge seam; caller must pin and validate its existing managed tenant snapshot. */
+    VerifiedContentCheckpoint readVerifiedInSnapshot(DSLContext db,UUID tenant,UUID intentId,VerifiedCheckpoint checkpoint){
+            required(intentId,checkpoint);
+            var persisted=new PersistedIngestionCheckpointReader(codec);
+            Record proofRow=db.fetchOptional("select * from public.file_ingestion_scan_proof where tenant_id=? and id=? and intent_id=?",
+                    tenant,checkpoint.proofId(),intentId).orElseThrow(JooqFileIngestionLedger::unavailable);
+            SignedScanProofV1 proof=persisted.scan(proofRow);
+            Record receiptRow=db.fetchOptional("select * from public.file_ingestion_content_receipt where tenant_id=? and id=? and intent_id=?",
+                    tenant,checkpoint.receiptId(),intentId).orElseThrow(JooqFileIngestionLedger::unavailable);
+            IngestionContentReceiptV2 receipt=persisted.receipt(receiptRow,proof);
+            if(!receipt.immutableAllocationId().equals(checkpoint.immutableAllocationId()))throw unavailable();
+            RecordedAllocation quarantine=loadState(db,tenant,proof.quarantineAllocationId()).allocation();
+            if(quarantine.request().kind()!=AllocationKind.QUARANTINE||quarantine.baseline()==null
+                    ||!quarantine.request().intentId().equals(intentId)||!quarantine.request().fileId().equals(proof.fileId())
+                    ||!quarantine.request().attemptId().equals(proof.sourceAttemptId())
+                    ||!quarantine.request().storageVersion().equals(proof.quarantineStorageVersion())
+                    ||!quarantine.baselineEventId().equals(proofRow.get("quarantine_observation_event_id",UUID.class))
+                    ||!quarantine.baseline().observationSha256().equals(proof.quarantineObservationSha256())
+                    ||!quarantine.baseline().sha256().equals(proof.sha256())||quarantine.baseline().sizeBytes()!=proof.sizeBytes()
+                    ||!quarantine.baseline().mediaType().equals(proof.detectedMediaType()))throw unavailable();
+            RecordedAllocation immutable=loadState(db,tenant,receipt.immutableAllocationId()).allocation();
+            UUID receiptAllocationId=db.fetchOptional("select id from public.file_ingestion_allocation where tenant_id=? and intent_id=? and attempt_id=? and kind=?",
+                    tenant,intentId,receipt.scanAttemptId(),"RECEIPT").map(row->row.get("id",UUID.class)).orElseThrow(JooqFileIngestionLedger::unavailable);
+            RecordedAllocation receiptAllocation=loadState(db,tenant,receiptAllocationId).allocation();
+            requireCheckpointAllocation(immutable,receipt,AllocationKind.IMMUTABLE);
+            requireCheckpointAllocation(receiptAllocation,receipt,AllocationKind.RECEIPT);
+            if(!immutable.baselineEventId().equals(receiptRow.get("immutable_observation_event_id",UUID.class))
+                    ||!immutable.baseline().observationSha256().equals(receipt.immutableObservationSha256())
+                    ||!immutable.baseline().sha256().equals(receipt.sha256())||immutable.baseline().sizeBytes()!=receipt.sizeBytes()
+                    ||!immutable.baseline().mediaType().equals(receipt.detectedMediaType())
+                    ||!immutable.request().storageVersion().equals(receipt.immutableStorageVersion())
+                    ||!receiptAllocation.baseline().sha256().equals(IngestionProofCodec.sha256(IngestionSignedCheckpointReader.receiptFileBytes(receipt)))
+                    ||receiptAllocation.baseline().sizeBytes()!=IngestionSignedCheckpointReader.receiptFileBytes(receipt).length)throw unavailable();
+            return new VerifiedContentCheckpoint(proof,receipt,immutable,receiptAllocation);
+    }
+    private static void requireCheckpointAllocation(RecordedAllocation a,IngestionContentReceiptV2 r,AllocationKind expected){
+        if(a.request().kind()!=expected||!a.request().tenantId().equals(r.tenantId())||!a.request().intentId().equals(r.intentId())
+                ||!a.request().fileId().equals(r.fileId())||!a.request().attemptId().equals(r.scanAttemptId())
+                ||a.disposalTombstoneId()!=null||a.baseline()==null||a.retainedBytes()<a.baseline().sizeBytes()
+                ||a.baseline().kind()!=(expected==AllocationKind.IMMUTABLE?ObservationKind.COMPLETE_IMMUTABLE:ObservationKind.RECEIPT))throw unavailable();
+    }
+    @Override public VerifiedContentCheckpoint publishVerified(FileIngestionTxContext tx,IngestionPublicationRequest request,AcceptedGeneration currentGeneration){
+        return sql(tx,db->{
+            required(request,currentGeneration);requireTenant(tx,request.tenantId());
+            var checkpoint=readVerified(tx,request.intentId(),request.checkpoint());var receipt=checkpoint.receipt();
+            codec.verifyCurrentScan(checkpoint.proof(),currentGeneration);codec.verifyCurrentReceipt(receipt,checkpoint.proof());
+            var immutable=checkpoint.immutableAllocation();var storedReceipt=checkpoint.receiptAllocation();
+            if(!request.ownerMemberId().equals(immutable.request().ownerMemberId())
+                    ||!request.ownerMemberId().equals(storedReceipt.request().ownerMemberId())
+                    ||immutable.finalizedFileId()!=null||storedReceipt.finalizedFileId()!=null)throw unavailable();
+            var anchor=new LinkedHashMap<String,Object>();
+            anchor.put("tenant_id",request.tenantId());anchor.put("intent_id",request.intentId());
+            anchor.put("file_id",receipt.fileId());anchor.put("file_link_id",request.fileLinkId());anchor.put("evidence_item_id",request.evidenceItemId());
+            anchor.put("finding_id",request.findingId());anchor.put("round_no",request.roundNo());anchor.put("evidence_set_id",request.evidenceSetId());
+            anchor.put("owner_member_id",request.ownerMemberId());anchor.put("owner_actor_id",request.ownerActorId());
+            anchor.put("publication_actor_id",request.publicationActorId());anchor.put("technical_version",request.technicalVersion());
+            anchor.put("finding_version",request.findingVersion());anchor.put("evidence_revision",request.evidenceRevision());
+            anchor.put("scan_proof_id",receipt.scanProofId());anchor.put("content_receipt_id",receipt.receiptId());
+            anchor.put("immutable_allocation_id",immutable.request().allocationId());anchor.put("receipt_allocation_id",storedReceipt.request().allocationId());
+            insert(db,"file_ingestion_publication",anchor,"");
+            var file=new LinkedHashMap<String,Object>();file.put("tenant_id",request.tenantId());file.put("id",receipt.fileId());
+            file.put("owner_member_id",request.ownerMemberId());file.put("owner_actor_id",request.ownerActorId());
+            file.put("object_key","ingestion/"+immutable.request().rootGeneration()+"/"+immutable.request().serverObjectName());
+            file.put("size_bytes",receipt.sizeBytes());file.put("mime",receipt.detectedMediaType());file.put("checksum",receipt.sha256());
+            file.put("state","READY");file.put("storage_version",receipt.immutableStorageVersion());
+            file.put("created_at",receipt.issuedAt());file.put("verified_at",receipt.issuedAt());insert(db,"file_object",file,"");
+            var link=new LinkedHashMap<String,Object>();link.put("tenant_id",request.tenantId());link.put("id",request.fileLinkId());
+            link.put("file_id",receipt.fileId());link.put("resource_type","FINDING_EVIDENCE_ITEM");link.put("resource_id",request.evidenceItemId());
+            link.put("purpose","REMEDIATION_EVIDENCE");link.put("linked_by_actor_id",request.publicationActorId());link.put("linked_at",receipt.issuedAt());
+            insert(db,"file_link",link,"");
+            for(var allocation:java.util.List.of(immutable,storedReceipt)) {
+                var state=loadState(db,tx.tenantId(),allocation.request().allocationId());
+                append(db,state,EventKind.TRANSFER_FINALIZED,allocation.retainedBytes(),allocation.baseline(),
+                        request.technicalVersion(),null,null,null,receipt.fileId());
+            }
+            return checkpoint;
+        });
+    }
     @Override public DisposalClaim claimDisposal(FileIngestionTxContext tx,DisposalEligibility eligibility,UUID allocationId,String expectedHash){
         return sql(tx,db->{
             requireTenant(tx,eligibility.tenantId());hash(expectedHash);AllocationState state=loadState(db,tx.tenantId(),allocationId);
@@ -400,9 +481,17 @@ public final class JooqFileIngestionLedger implements FileIngestionLedger {
                             ||retained!=0||current.presence()!=RecoveryPresence.ABSENT||!current.quiescent()
                             ||current.binding().targetEventNo()!=number-1||!Objects.equals(current.binding().targetEventSha256(),last.get("observation_sha256",String.class)))throw unavailable();
                     recovery=current;
-                }else throw unavailable(); // G025 publication is not enabled by this source slice.
-                if(kind!=EventKind.RETAIN&&kind!=EventKind.RESIZE_CONFIRMED&&kind!=EventKind.RECOVERY_OBSERVED&&kind!=EventKind.DISPOSAL_CLAIMED&&kind!=EventKind.DISPOSAL_CONFIRMED)throw unavailable();
-                if(event.get("finalized_file_id")!=null)throw unavailable();
+                }else if(kind==EventKind.TRANSFER_FINALIZED){
+                    DurableObservation transferred=observation(request,event);codec.validateObservation(transferred);
+                    if(tombstone!=null||baseline==null||retained!=charge
+                            ||request.kind()!=AllocationKind.IMMUTABLE&&request.kind()!=AllocationKind.RECEIPT
+                            ||event.get("disposal_token")!=null||event.get("disposal_epoch")!=null
+                            ||event.get("disposal_claim_technical_version")!=null||event.get("eligibility_policy_sha256")!=null
+                            ||!request.fileId().equals(event.get("finalized_file_id",UUID.class))
+                            ||!sameObservation(baseline,transferred))throw unavailable();
+                    finalized=request.fileId();
+                }else throw unavailable();
+                if(kind!=EventKind.TRANSFER_FINALIZED&&event.get("finalized_file_id")!=null)throw unavailable();
                 charge=retained;predecessor=event.get("id",UUID.class);last=event;
             }
         }
@@ -410,6 +499,10 @@ public final class JooqFileIngestionLedger implements FileIngestionLedger {
     }
     private UUID append(DSLContext db,AllocationState state,EventKind kind,long retained,DurableObservation observation,
                         long technicalVersion,UUID token,Long epoch,String policy){
+        return append(db,state,kind,retained,observation,technicalVersion,token,epoch,policy,null);
+    }
+    private UUID append(DSLContext db,AllocationState state,EventKind kind,long retained,DurableObservation observation,
+                        long technicalVersion,UUID token,Long epoch,String policy,UUID finalizedFileId){
         codec.validateObservation(observation);AllocationRequest a=state.allocation().request();
         if(!a.equals(observation.allocation()))throw unavailable();
         UUID id=UUID.randomUUID();Map<String,Object> row=new LinkedHashMap<>();
@@ -419,7 +512,7 @@ public final class JooqFileIngestionLedger implements FileIngestionLedger {
         row.put("canonical_observation",observation.canonicalObservation());row.put("observation_sha256",observation.observationSha256());
         row.put("baseline_event_id",state.baseline()==null?null:state.baseline().get("id",UUID.class));
         row.put("baseline_observation_sha256",state.baseline()==null?null:state.allocation().baseline().observationSha256());
-        row.put("disposal_token",token);row.put("disposal_epoch",epoch);row.put("finalized_file_id",null);
+        row.put("disposal_token",token);row.put("disposal_epoch",epoch);row.put("finalized_file_id",finalizedFileId);
         row.put("technical_version",technicalVersion);row.put("eligibility_policy_sha256",policy);
         row.put("intent_id",a.intentId());row.put("file_id",a.fileId());row.put("attempt_id",a.attemptId());row.put("allocation_kind",a.kind().name());
         row.put("reservation_lease_epoch",a.reservationLeaseEpoch());row.put("observation_kind",observation.kind().name());
@@ -666,8 +759,13 @@ public final class JooqFileIngestionLedger implements FileIngestionLedger {
                 &&Objects.equals(a.sha256(),b.sha256())&&Objects.equals(a.sizeBytes(),b.sizeBytes())&&Objects.equals(a.mediaType(),b.mediaType());
     }
     private static void insert(DSLContext db,String table,Map<String,Object> row,String suffix){
-        if(!java.util.Set.of("file_ingestion_execution","file_ingestion_allocation","file_ingestion_allocation_event","file_scanner_generation","file_ingestion_scan_proof","file_ingestion_content_receipt").contains(table))throw new IllegalArgumentException("Invalid files table");
-        String placeholders=String.join(",",java.util.Collections.nCopies(row.size(),"?"));
+        if(!java.util.Set.of("file_object","file_link","file_ingestion_publication","file_ingestion_execution","file_ingestion_allocation","file_ingestion_allocation_event","file_scanner_generation","file_ingestion_scan_proof","file_ingestion_content_receipt").contains(table))throw new IllegalArgumentException("Invalid files table");
+        // Plain-SQL jOOQ bindings may encode OffsetDateTime as VARCHAR. Cast every temporal
+        // column explicitly, including nullable observations; PostgreSQL then resolves the real type.
+        var temporal=java.util.Set.of("created_at","observed_at","validated_at","valid_until","started_at","completed_at",
+                "issued_at","not_before","expires_at","durability_completed_at","absence_durable_at",
+                "writer_quiescence_observed_at","kernel_observed_at","verified_at","linked_at");
+        String placeholders=String.join(",",row.keySet().stream().map(name->temporal.contains(name)?"cast(? as timestamptz)":"?").toList());
         Object[] values=row.values().stream().map(value->value instanceof Instant time?OffsetDateTime.ofInstant(time,ZoneOffset.UTC):value).toArray();
         db.execute("insert into public."+table+" ("+String.join(",",row.keySet())+") values ("+placeholders+")"+suffix,values);
     }

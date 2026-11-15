@@ -39,6 +39,8 @@ export interface EvidenceUploadModel {
   status: UploadStatus | null;
   filename: string | null;
   error: string | null;
+  /** 当前证据集；上传终结后用它提交整改。 */
+  evidenceSetId: string | null;
   start: (file: File) => void;
   refresh: () => void;
   cancel: () => void;
@@ -174,5 +176,5 @@ export function useEvidenceUpload(
     adapter.cancel(scope, status.intentId).then(setStatus, fail);
   }, [adapter, fail, scope, status]);
 
-  return { phase, status, filename, error, start, refresh, cancel };
+  return { phase, status, filename, error, evidenceSetId: memory.get(memoKey)?.set?.evidenceSetId ?? null, start, refresh, cancel };
 }

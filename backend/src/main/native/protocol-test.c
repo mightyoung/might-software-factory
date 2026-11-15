@@ -42,7 +42,30 @@ static void setup_timer_fixture(unsigned int mode){pid_t child=fork();assert(chi
  if(waited==0){(void)kill(child,SIGKILL);(void)waitpid(child,&status,0);assert(!"fixture deadline exceeded");}
  assert(waited==child&&WIFEXITED(status)&&WEXITSTATUS(status)==(mode==3?126:0));
 }
+/* Full candidate parsing only: these fixtures never establish privileged resource acceptance. */
+static int memory_profile_fixture(uint64_t memory,struct profile *parsed){
+ const char *realm="00000000-0000-0000-0000-000000000001";
+ const char *paths[]={"scanner/clamscan","definitions/main.cvd","definitions/daily.cvd","definitions/bytecode.cvd","usr/lib/libclamav.so.12","scanner/clamav-package.manifest"};
+ const char *hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+ unsigned char data[FRAME_MAX];
+ int n=snprintf((char *)data,sizeof(data),"format=MSF_SCANNER_BROKER_PROFILE_V1\nrealm-id=%s\nslot-count=1\ncaller-uid=1000\ncaller-gid=1000\nscanner-uid=2000\nscanner-gid=2000\nmemory-bytes=%llu\nscratch-bytes=134217728\nmax-bytes=1024\ncpu-seconds=3\nmax-pids=16\nmax-fds=64\nscanner-sha256=%s\nslot.0.id=scan-0\nresource-count=6\n",realm,(unsigned long long)memory,hash);
+ assert(n>0&&(size_t)n<sizeof(data));size_t length=(size_t)n;
+ for(size_t i=0;i<ARRAY_LEN(paths);i++){
+  n=snprintf((char *)data+length,sizeof(data)-length,"resource.%zu.path=%s\nresource.%zu.sha256=%s\n",i,paths[i],i,hash);
+  assert(n>0&&(size_t)n<sizeof(data)-length);length+=(size_t)n;
+ }
+ unsigned char digest[32];hash_bytes(data,length,digest);char id[65];
+ for(size_t i=0;i<32;i++){n=snprintf(id+i*2,3,"%02x",digest[i]);assert(n==2);}id[64]=0;
+ memset(parsed,0,sizeof(*parsed));return parse_profile(data,length,id,realm,"scan-0",parsed);
+}
 int main(void){
+ struct profile memory_profile;
+ assert(memory_profile_fixture(UINT64_C(536870912),&memory_profile)==0&&memory_profile.memory==UINT64_C(536870912));
+ assert(memory_profile_fixture(UINT64_C(2147483648),&memory_profile)==0&&memory_profile.memory==UINT64_C(2147483648));
+ assert(memory_profile_fixture(UINT64_C(2147483649),&memory_profile)==-1);
+ assert(memory_profile_fixture(UINT64_MAX,&memory_profile)==-1);
+ assert(memory_profile_fixture(0,&memory_profile)==-1);
+
  struct __user_cap_data_struct caps[2];memset(caps,0,sizeof(caps));assert(!has_effective_kill_capability(caps));
  caps[0].permitted=UINT32_C(1)<<CAP_KILL;caps[0].inheritable=UINT32_C(1)<<CAP_KILL;assert(!has_effective_kill_capability(caps));
  caps[0].effective=UINT32_C(1)<<CAP_CHOWN;caps[1].effective=UINT32_C(1)<<CAP_KILL;assert(!has_effective_kill_capability(caps));
@@ -75,7 +98,18 @@ int main(void){
  assert(binding_encode(&original,binding_bytes,sizeof(binding_bytes),&binding_size)==0);struct binding binding_restored;assert(binding_decode(binding_bytes,binding_size,&binding_restored)==0);assert(binding_restored.challenge[31]==255);
  assert(binding_decode(binding_bytes,binding_size-1,&binding_restored)==-1);
  assert(relative_resource("usr/lib/libclamav.so.12"));assert(!relative_resource("usr/lib/../secret"));assert(!relative_resource("/usr/lib/libclamav.so"));assert(!relative_resource("scratch/code.so"));assert(identifier("scan.0:one"));
- struct profile policy_profile;memset(&policy_profile,0,sizeof(policy_profile));policy_profile.max_bytes=1024;effective_policy(&policy_profile,digest);fputs("policy-vector-1024=",stdout);for(size_t i=0;i<32;i++)printf("%02x",digest[i]);putchar('\n');
+ struct profile policy_profile;memset(&policy_profile,0,sizeof(policy_profile));policy_profile.max_bytes=1024;
+ char max_arg[48],scan_arg[48];char *closed_args[26];
+ assert(scanner_arguments(&policy_profile,max_arg,scan_arg,closed_args)==0);
+ assert(strcmp(closed_args[1],"--infected")==0&&closed_args[25]==NULL&&strcmp(closed_args[24],"-")==0);
+ for(size_t i=0;closed_args[i];i++)assert(strcmp(closed_args[i],"--quiet")!=0&&strcmp(closed_args[i],"--suppress-ok-results")!=0);
+ const unsigned char actual_detection[]="stdin: Eicar-Test-Signature FOUND\n";
+ const unsigned char clean_output[]="stdin: OK\n";
+ const unsigned char warning_output[]="WARNING: unexpected\nstdin: Eicar-Test-Signature FOUND\n";
+ assert(eicar_detection(actual_detection,sizeof(actual_detection)-1));
+ assert(!eicar_detection(clean_output,sizeof(clean_output)-1)&&!eicar_detection(warning_output,sizeof(warning_output)-1));
+ effective_policy(&policy_profile,digest);
+ unsigned char expected_policy[32];assert(hex_decode("57979520ac18c44cb593b450384e4877c3ba84626d02906edfb1941e3d3deaf2",32,expected_policy));assert(equal(digest,expected_policy,32));fputs("policy-vector-1024=",stdout);for(size_t i=0;i<32;i++)printf("%02x",digest[i]);putchar('\n');
  /* Ordinary-file fixtures exercise the same strict readback/parser, not cgroup support. */
  char swap_template[]="/tmp/msf-swap-policy-XXXXXX";char *swap_root=mkdtemp(swap_template);assert(swap_root);
  int swap_dir=open(swap_root,O_RDONLY|O_DIRECTORY|O_CLOEXEC);assert(swap_dir>=0);

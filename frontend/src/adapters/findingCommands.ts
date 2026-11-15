@@ -15,6 +15,8 @@ export type FindingCommand =
   | { kind: "confirmPerson"; reason: string }
   | { kind: "confirmSafety"; reason: string; grade: "GENERAL" | "MAJOR" }
   | { kind: "verify"; decision: "PASS" | "FAIL"; reason?: string }
+  /** 证据集内的上传必须已终结发布（FINALIZED），服务端会再次校验。 */
+  | { kind: "submitRemediation"; evidenceSetId: string; statement: string }
   /** 在当前确认阶段把隐患作为“不成立”终止；不带等级，保留已有等级。 */
   | { kind: "closeNotEstablished"; stage: "PERSON" | "SAFETY"; reason: string }
   /** dueAt 为带偏移的 ISO 时间；assigneeMemberId 必须来自派单候选。 */

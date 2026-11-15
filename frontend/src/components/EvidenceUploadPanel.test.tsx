@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceUploadPanel } from "./EvidenceUploadPanel";
+import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
 import { FindingEvidenceError, checkUploadFile, type FindingEvidenceAdapter, type UploadState, type UploadStatus } from "../adapters/findingEvidence";
 import { clearEvidenceMemory } from "../features/findings/useEvidenceUpload";
 import type { FindingRecord } from "../domain/finding";
@@ -17,7 +18,7 @@ function fake(overrides: Partial<FindingEvidenceAdapter> = {}): FindingEvidenceA
     initializeSet: vi.fn(async () => ({ evidenceSetId: "s1", initialEvidenceRevision: 0 })),
     reserveUpload: vi.fn(async () => status("INTENT_CREATED")),
     sendContent: vi.fn(async () => status("QUARANTINED")),
-    getStatus: vi.fn(async () => status("VERIFIED_PENDING_FINALIZATION")),
+    getStatus: vi.fn(async () => status("FINALIZED")),
     cancel: vi.fn(async () => ({ ...status("SCANNING"), cancelRequested: true })),
     ...overrides,
   };
@@ -32,7 +33,7 @@ beforeEach(() => { clearEvidenceMemory(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("整改证据上传面板", () => {
-  it("建证据集 → 预约（带当前版本与轮次）→ 传字节 → 轮询到扫描通过，并说明终结还没有接口", async () => {
+  it("建证据集 → 预约（带当前版本与轮次）→ 传字节 → 轮询到终结发布", async () => {
     const adapter = fake();
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
     await pick(png());
@@ -43,8 +44,25 @@ describe("整改证据上传面板", () => {
       expect.any(String),
       expect.anything(),
     );
-    expect(await screen.findByText(/扫描通过，等待终结确认/)).toBeInTheDocument();
-    expect(screen.getByText(/证据终结、提交整改要等后端的终结接口/)).toBeInTheDocument();
+    expect(await screen.findByText(/已终结/)).toBeInTheDocument();
+  });
+
+  it("终结发布前不能提交；发布后带证据集和说明提交整改，重试复用同一个幂等键", async () => {
+    const run = vi.fn().mockRejectedValueOnce(new FindingCommandError("unavailable")).mockResolvedValue({ state: "ACCEPTANCE_PENDING", roundNo: 2, version: 8 });
+    const onSubmitted = vi.fn();
+    render(<EvidenceUploadPanel finding={finding} adapter={fake()} commands={{ run } as unknown as FindingCommandAdapter} onSubmitted={onSubmitted} />);
+    const button = screen.getByRole("button", { name: "提交整改" });
+    expect(button).toBeDisabled();
+    await pick(png());
+    await screen.findByText(/已终结/);
+    fireEvent.change(screen.getByLabelText("整改说明"), { target: { value: " 已加装护栏 " } });
+    await act(async () => { fireEvent.click(button); });
+    expect(await screen.findByText(/提交结果尚未确认/)).toBeInTheDocument();
+    expect(onSubmitted).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(button); });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]).toEqual(["f1", 7, { kind: "submitRemediation", evidenceSetId: "s1", statement: "已加装护栏" }, { idempotencyKey: run.mock.calls[0][3].idempotencyKey }]);
+    expect(onSubmitted).toHaveBeenCalledTimes(1);
   });
 
   it("刷新后从服务端找回证据集与最近一次上传：不用重新建集，进行中的接着轮询，之后新上传沿用该证据集和版本", async () => {
@@ -52,7 +70,7 @@ describe("整改证据上传面板", () => {
       currentSet: vi.fn(async () => ({ evidenceSetId: "s9", evidenceRevision: 4, uploads: [status("SCANNING")] })),
     });
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
-    expect(await screen.findByText(/扫描通过，等待终结确认/)).toBeInTheDocument(); // 接着轮询到终态
+    expect(await screen.findByText(/已终结/)).toBeInTheDocument(); // 接着轮询到终态
     expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "i1", expect.anything());
     await pick(png());
     expect(adapter.initializeSet).not.toHaveBeenCalled();
@@ -91,7 +109,7 @@ describe("整改证据上传面板", () => {
     const adapter = fake({ sendContent: vi.fn(async () => { throw new FindingEvidenceError("unavailable"); }) });
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
     await pick(png());
-    expect(await screen.findByText(/扫描通过/)).toBeInTheDocument();
+    expect(await screen.findByText(/已终结/)).toBeInTheDocument();
     expect(adapter.sendContent).toHaveBeenCalledTimes(1);
     expect(adapter.getStatus).toHaveBeenCalled();
   });
@@ -115,9 +133,9 @@ describe("整改证据上传面板", () => {
     const adapter = fake();
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
     await pick(png());
-    await screen.findByText(/扫描通过/);
+    await screen.findByText(/已终结/);
     await pick(png());
-    await screen.findByText(/扫描通过/);
+    await screen.findByText(/已终结/);
     expect(adapter.initializeSet).toHaveBeenCalledTimes(1);
     expect(adapter.reserveUpload).toHaveBeenCalledTimes(2);
   });
