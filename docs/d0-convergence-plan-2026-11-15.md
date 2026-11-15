@@ -131,7 +131,7 @@ NOT_RUN：需要真实数据库的 39 个后端测试；连接真实后端的浏
 
 ### 7.3 遗留问题
 
-1. **V23 不能用现有迁移账号执行。** 它要求执行身份对 `permission`、`scope_rule`、`role_permission`、`scope_org` 不受行级安全限制，而 `msf_dev_migrator_20261107` 是受 FORCE RLS 约束的表属主。本次在两个新库上用超级账号单独执行 V23，再把它建的 4 个函数的属主改回迁移账号。正式做法需要定：给迁移账号 `BYPASSRLS`，或把"超级账号执行 V23 后改属主"写成操作规程。NAS 验收库升级前必须先定。
+1. **V23 不能用现有迁移账号执行。** 它要求执行身份对 `permission`、`scope_rule`、`role_permission`、`scope_org` 不受行级安全限制，而 `msf_dev_migrator_20261107` 是受 FORCE RLS 约束的表属主。本次在两个新库上用超级账号单独执行 V23，再把它建的 4 个函数的属主改回迁移账号。**已定（2026-11-15，用户确认）**：不给迁移账号 `BYPASSRLS`；V23 由超级账号单独执行，随后运行 `backend/src/main/resources/db/operator/V23-superuser-apply.sql` 把属主改回，步骤写在该文件开头。该脚本已在升级测试库上验证：能改回属主，重复执行无副作用。NAS 验收库升级照此办理，尚未执行。
 2. **新开发库还不能用。** 需要重写种子数据，并按 `db/operator/V25-runtime-grants.sql` 和此前各版本的做法给运行账号授权。旧开发库 `might_software_factory_dev` 没有改动。
 3. **权限管理接口的响应没有 `data` 包裹**，与实体接口不一致。契约按已实现的形状写，是否统一留到 D1 定。
 4. 线 A 的 `findingCommands.ts` 里 `closeNotEstablished` 的类型和路由各重复了一遍，是线 A 原有的，没有动。
