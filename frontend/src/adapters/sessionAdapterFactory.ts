@@ -1,3 +1,5 @@
+import { createHttpPermissionAdmin } from "./httpPermissionAdmin";
+import type { PermissionAdminAdapter } from "./permissionAdmin";
 import { parseAppMode } from "../mode";
 import { createHttpClient } from "../api/httpClient";
 import type { FindingStore } from "../App";
@@ -12,6 +14,12 @@ import { syntheticSessionAdapter, type SessionAdapter } from "./sessionAdapter";
 export function createSessionAdapter(mode: string | undefined): SessionAdapter {
   if (parseAppMode(mode) === "synthetic") return syntheticSessionAdapter;
   return createHttpSessionAdapter(createHttpClient());
+}
+
+/** http 模式下权限配置走服务端；演示模式返回 undefined，使用内存合成实现。 */
+export function createPermissionAdminFactory(mode: string | undefined): (() => PermissionAdminAdapter) | undefined {
+  if (parseAppMode(mode) === "synthetic") return undefined;
+  return () => createHttpPermissionAdmin(createHttpClient());
 }
 
 /** http 模式的台账、上报及流程命令均走服务端；每个登录身份新建 store，避免跨账号复用 schema 缓存。 */

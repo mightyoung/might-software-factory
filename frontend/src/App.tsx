@@ -11,6 +11,9 @@ import { navigate, useLocation } from "./routing/router";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
+import { PermissionConfigPage } from "./features/platform/PermissionConfigPage";
+import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
+import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
@@ -43,13 +46,19 @@ interface PlaceholderPage {
   description: string;
 }
 
+interface PermissionsPage {
+  kind: "permissions";
+  title: string;
+  description: string;
+}
+
 interface RouteDef {
   /** 不含租户前缀的应用内路径。 */
   rest: string;
   application: ApplicationId;
   /** 仅用于界面呈现的权限摘要判断；服务端对每个请求仍须最终鉴权。 */
   permission: string;
-  page: LedgerPage | PlaceholderPage;
+  page: LedgerPage | PlaceholderPage | PermissionsPage;
 }
 
 const ROUTES: readonly RouteDef[] = [
@@ -90,10 +99,10 @@ const ROUTES: readonly RouteDef[] = [
     page: { kind: "placeholder", title: "设备管理", description: "首批只展示应用导航入口。" },
   },
   {
-    rest: "platform/overview",
+    rest: "platform/permissions",
     application: "platform",
-    permission: "platform.overview.read",
-    page: { kind: "placeholder", title: "综合管理", description: "首批只展示应用导航入口。" },
+    permission: "platform.permission.read",
+    page: { kind: "permissions", title: "权限配置", description: "按角色配置可使用的功能权限。" },
   },
 ];
 
@@ -151,7 +160,12 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: 
   </section>;
 }
 
-function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
+interface AppAdapterFactories {
+  createFindingStore: () => FindingStore;
+  createPermissionAdmin: () => PermissionAdminAdapter;
+}
+
+function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFactories) {
   const { state, logout, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
   const location = useLocation();
@@ -164,6 +178,8 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
   if (identityKey && previousIdentity.current && previousIdentity.current !== identityKey) pendingSelectionReset.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const findingStore = useMemo(() => createFindingStore(), [identityKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const permissionAdmin = useMemo(() => createPermissionAdmin(), [identityKey]);
 
   const parsed = parsePath(pathname);
   const redirect = session ? canonicalTarget(session, location) : null;
@@ -264,6 +280,15 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         onUnauthenticated={expire}
       />
     );
+  } else if (route.page.kind === "permissions") {
+    title = route.page.title;
+    content = (
+      <PermissionConfigPage
+        adapter={permissionAdmin}
+        canManage={hasPermission(session, "platform.permission.manage")}
+        onUnauthenticated={expire}
+      />
+    );
   } else {
     title = route.page.title;
     content = (
@@ -297,6 +322,7 @@ export function App({
   sessionAdapter,
   findingStore = syntheticFindingStore,
   createFindingStore,
+  createPermissionAdmin,
   mode = "synthetic",
 }: {
   sessionAdapter?: SessionAdapter;
@@ -304,13 +330,15 @@ export function App({
   findingStore?: FindingStore;
   /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
   createFindingStore?: () => FindingStore;
+  /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
+  createPermissionAdmin?: () => PermissionAdminAdapter;
   /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
   mode?: AppMode;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} />
+        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} />
       </SessionProvider>
     </ModeProvider>
   );

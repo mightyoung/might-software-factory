@@ -39,7 +39,7 @@ const TENANT = { id: "demo-tenant", name: "演示租户（合成）" } as const;
 const ALL_APPLICATIONS: Record<ApplicationId, ApplicationEntry> = {
   safety: { id: "safety", name: "生产安全", entryPath: "safety/findings" },
   equipment: { id: "equipment", name: "设备管理", entryPath: "equipment/overview" },
-  platform: { id: "platform", name: "综合管理", entryPath: "platform/overview" },
+  platform: { id: "platform", name: "系统设置", entryPath: "platform/permissions" },
 };
 
 interface DemoAccount {
@@ -83,7 +83,8 @@ export const DEMO_ACCOUNTS: Readonly<Record<string, DemoAccount>> = {
       "safety.risk.read",
       "safety.inspection.read",
       "equipment.overview.read",
-      "platform.overview.read",
+      "platform.permission.read",
+      "platform.permission.manage",
     ],
   },
 };
@@ -114,8 +115,8 @@ export const MENUS: Record<ApplicationId, AppMenu> = {
   },
   platform: {
     applicationId: "platform",
-    title: "综合管理",
-    nodes: [{ id: "overview", label: "综合概览", path: "platform/overview", permission: "platform.overview.read" }],
+    title: "系统设置",
+    nodes: [{ id: "permissions", label: "权限配置", path: "platform/permissions", permission: "platform.permission.read" }],
   },
 };
 
