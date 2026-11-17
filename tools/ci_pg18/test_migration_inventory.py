@@ -1,5 +1,6 @@
 """Keep fixed CI inventories aligned with the migrations shipped by this checkout."""
 import copy
+import json
 import re
 import unittest
 from pathlib import Path
@@ -16,6 +17,17 @@ VERSIONS = tuple(path.name[1:].split("__")[0].replace("_", ".") for path in MIGR
 
 
 class MigrationInventoryTests(unittest.TestCase):
+    def test_every_java_evidence_filename_guard_accepts_shipped_migrations(self):
+        guards = 0
+        for path in ROOT.glob("backend/src/ci-pg18*-test/java/**/CiPg18*Fixture.java"):
+            for encoded in re.findall(r'\.matches\("(V[^"\n]+)"\)', path.read_text()):
+                guards += 1
+                pattern = json.loads('"' + encoded + '"')
+                for migration in MIGRATIONS:
+                    with self.subTest(fixture=path.name, migration=migration.name):
+                        self.assertIsNotNone(re.fullmatch(pattern, migration.name))
+        self.assertEqual(guards, 3)
+
     def test_every_fixed_inventory_matches_the_shipped_migrations(self):
         self.assertEqual(subject.VERSIONS, VERSIONS)
         fixtures = list(ROOT.glob("backend/src/ci-pg18*-test/java/**/CiPg18*Fixture.java"))

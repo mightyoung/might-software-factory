@@ -290,7 +290,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private void writeEvidence() throws Exception {
         var migrations = new ArrayList<Map<String,Object>>();
         for (var migration : flyway.info().applied()) {
-            if (!migration.getScript().matches("V[0-9]+__[A-Za-z0-9_]+\\.sql")) throw rejected();
+            if (!migration.getScript().matches("V[0-9]+(?:_[0-9]+)*__[A-Za-z0-9_]+\\.sql")) throw rejected();
             migrations.add(Map.of("version",migration.getVersion().getVersion(),"script",migration.getScript(),"checksum",migration.getChecksum()));
         }
         var value=Map.of("schemaVersion",1,"postgresMajor",18,"database",target.databaseName(),
