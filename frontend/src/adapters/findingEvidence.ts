@@ -1,6 +1,6 @@
 /** 整改证据上传（契约 finding-evidence-set-initialization / finding-evidence-upload）。
  *  只覆盖契约已有的部分：建空证据集、预约、上传字节、查状态、取消。
- *  “封存 / 终结证据”（G025）契约尚无，所以上传到 VERIFIED_PENDING_FINALIZATION 就是前端能走到的终点。 */
+ *  前端轮询到服务端终结发布 FINALIZED；版本通过 currentSet 读取，不从上传状态推算。 */
 
 export const ACCEPTED_MEDIA_TYPES = ["image/png", "image/jpeg"] as const;
 export const MAX_UPLOAD_BYTES = 67_108_864;
@@ -36,6 +36,7 @@ export interface UploadStatus {
 
 export interface EvidenceSet {
   evidenceSetId: string;
+  /** 不可变创建事实，不能用作后续预约的当前版本。 */
   initialEvidenceRevision: number;
 }
 

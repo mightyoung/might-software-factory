@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Locator, type Page, type Response } from "@playwright/test";
 
 const DEFINITION_PATH = "/api/v1/entities/finding/definition";
 
@@ -11,16 +11,27 @@ export async function openInTab(page: Page, click: () => Promise<void>): Promise
   return tab;
 }
 
+/** Read the popup's response body at the event, before waiting for later page navigation. */
+export async function captureFindingCreateDefinition(context: BrowserContext, opened: Promise<Page>) {
+  let body: Awaited<ReturnType<Response["json"]>>;
+  const response = await context.waitForEvent("response", async response => {
+    const url = new URL(response.url());
+    if (response.request().method() !== "GET" || url.pathname !== DEFINITION_PATH || url.searchParams.get("use") !== "CREATE") return false;
+    if (response.frame().page() !== await opened) return false;
+    body = await response.json();
+    return true;
+  });
+  return { response, body };
+}
+
 /** Observe the form's own authorized CREATE response; labels are published contract data. Returns the report tab as `page`. */
 export async function openFindingReport(ledger: Page) {
-  const definitionRequest = ledger.context().waitForEvent("response", (response) => {
-    const url = new URL(response.url());
-    return response.request().method() === "GET" && url.pathname === DEFINITION_PATH && url.searchParams.get("use") === "CREATE";
-  });
-  const page = await openInTab(ledger, () => ledger.getByRole("button", { name: "新建上报" }).click());
-  const response = await definitionRequest;
+  const opened = ledger.waitForEvent("popup");
+  const definition = captureFindingCreateDefinition(ledger.context(), opened);
+  await ledger.getByRole("button", { name: "新建上报" }).click();
+  const [page, { response, body }] = await Promise.all([opened, definition]);
   expect(response.status()).toBe(200);
-  const body = await response.json();
+  await page.waitForLoadState("domcontentloaded");
   expect(body.meta.schemaVersion).toBe("1");
   expect(body.data.use).toBe("CREATE");
   const action = body.data.actions["finding.create"];

@@ -25,7 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Fixed owned CI fixture. Bootstrap is not a human producer; SERVICE attach has no HUMAN state. */
 public final class CiPg18RecoveryFixture implements AutoCloseable {
     static final String DATABASE="msf_ci_risk_recovery",CANONICAL="msf_ci_recovery_runtime",CAPTURE="msf_ci_recovery_capture_runtime";
-    private static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","19","20","21","22","23","24");
+    private static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26");
     private static final String EXTRA="/ci-pg18-recovery/canonical-extra-grants.sql",CAPTURE_GRANTS="/ci-pg18-recovery/capture-grants.sql";
     private final DataSource canonical,capture,admin;
     private final String imageDigest;
@@ -213,7 +213,7 @@ public final class CiPg18RecoveryFixture implements AutoCloseable {
     private static List<Map<String,Object>> verifyHistory(Connection connection)throws Exception{
         var expected=new HashMap<String,Integer>();
         for(var resource:new PathMatchingResourcePatternResolver().getResources("classpath*:db/migration/V*__*.sql")){
-            String name=resource.getFilename();if(name==null||!name.matches("V[0-9]+__[A-Za-z0-9_]+\\.sql"))throw rejected();
+            String name=resource.getFilename();if(name==null||!name.matches("V[0-9]+(?:_[0-9]+)*__[A-Za-z0-9_]+\\.sql"))throw rejected();
             try(var input=resource.getInputStream()){
                 int checksum=ChecksumCalculator.calculate(new StringResource(new String(input.readAllBytes(),StandardCharsets.UTF_8)));
                 if(expected.put(name,checksum)!=null)throw rejected();
@@ -224,7 +224,7 @@ public final class CiPg18RecoveryFixture implements AutoCloseable {
         try(var statement=connection.createStatement();var rows=statement.executeQuery("select version,script,checksum,success from public.flyway_schema_history_app order by installed_rank")){
             while(rows.next()){
                 String version=rows.getString(1),script=rows.getString(2);int checksum=rows.getInt(3);
-                if(rows.wasNull()||!rows.getBoolean(4)||!Objects.equals(expected.get(script),checksum)||!script.startsWith("V"+version+"__"))throw rejected();
+                if(rows.wasNull()||!rows.getBoolean(4)||!Objects.equals(expected.get(script),checksum)||!script.startsWith("V"+version.replace('.','_')+"__"))throw rejected();
                 versions.add(version);evidence.add(Map.of("version",version,"script",script,"checksum",checksum));
             }
         }

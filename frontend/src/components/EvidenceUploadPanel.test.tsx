@@ -24,6 +24,30 @@ function fake(overrides: Partial<FindingEvidenceAdapter> = {}): FindingEvidenceA
   };
 }
 
+
+// 每次发布推进版本，预约拒绝旧版本；重复查状态不重复推进。
+function revisionEnforcingFake(initialRevision = 0, restoring = false): FindingEvidenceAdapter {
+  let initialized = restoring;
+  let revision = initialRevision;
+  const uploads = new Map<string, UploadStatus>(restoring ? [["restored", { ...status("SCANNING"), intentId: "restored" }]] : []);
+  return fake({
+    currentSet: vi.fn(async () => initialized ? { evidenceSetId: "s1", evidenceRevision: revision, uploads: [...uploads.values()] } : null),
+    initializeSet: vi.fn(async () => { initialized = true; return { evidenceSetId: "s1", initialEvidenceRevision: 0 }; }),
+    reserveUpload: vi.fn(async (_scope, declaration) => {
+      if (declaration.expectedEvidenceRevision !== revision) throw new FindingEvidenceError("conflict");
+      const next = { ...status("INTENT_CREATED"), intentId: `i${uploads.size + 1}` };
+      uploads.set(next.intentId, next);
+      return next;
+    }),
+    sendContent: vi.fn(async (_scope, intentId) => ({ ...status("QUARANTINED"), intentId })),
+    getStatus: vi.fn(async (_scope, intentId) => {
+      const current = uploads.get(intentId)!;
+      if (current.state !== "FINALIZED") { revision++; uploads.set(intentId, { ...current, state: "FINALIZED" }); }
+      return uploads.get(intentId)!;
+    }),
+  });
+}
+
 async function pick(file: File) {
   const input = screen.getByLabelText(/选择图片/);
   await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
@@ -65,21 +89,18 @@ describe("整改证据上传面板", () => {
     expect(onSubmitted).toHaveBeenCalledTimes(1);
   });
 
-  it("刷新后从服务端找回证据集与最近一次上传：不用重新建集，进行中的接着轮询，之后新上传沿用该证据集和版本", async () => {
-    const adapter = fake({
-      currentSet: vi.fn(async () => ({ evidenceSetId: "s9", evidenceRevision: 4, uploads: [status("SCANNING")] })),
-    });
+  it("恢复进行中的上传发布后，再次预约读取推进后的当前版本", async () => {
+    const adapter = revisionEnforcingFake(4, true);
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
-    expect(await screen.findByText(/已终结/)).toBeInTheDocument(); // 接着轮询到终态
-    expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "i1", expect.anything());
-    await pick(png());
+    expect(await screen.findByText(/已终结/)).toBeInTheDocument();
+    expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "restored", expect.anything());
+    await pick(png()); await screen.findByText(/已终结/);
     expect(adapter.initializeSet).not.toHaveBeenCalled();
     expect(adapter.reserveUpload).toHaveBeenCalledWith(
-      { findingId: "f1", roundNo: 2 },
-      expect.objectContaining({ evidenceSetId: "s9", expectedEvidenceRevision: 4 }),
-      expect.any(String),
-      expect.anything(),
+      { findingId: "f1", roundNo: 2 }, expect.objectContaining({ evidenceSetId: "s1", expectedEvidenceRevision: 5 }),
+      expect.any(String), expect.anything(),
     );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("服务端没有可编辑证据集（null）或读取失败时，仍按原流程在第一次上传时建集", async () => {
@@ -106,12 +127,17 @@ describe("整改证据上传面板", () => {
   });
 
   it("字节上传失败（503）不自动重发，改查状态确认", async () => {
-    const adapter = fake({ sendContent: vi.fn(async () => { throw new FindingEvidenceError("unavailable"); }) });
+    const adapter = revisionEnforcingFake();
+    vi.mocked(adapter.sendContent).mockRejectedValueOnce(new FindingEvidenceError("unavailable"));
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
     await pick(png());
     expect(await screen.findByText(/已终结/)).toBeInTheDocument();
     expect(adapter.sendContent).toHaveBeenCalledTimes(1);
-    expect(adapter.getStatus).toHaveBeenCalled();
+    const firstIntent = vi.mocked(adapter.reserveUpload).mock.results[0];
+    expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, (await firstIntent.value).intentId, expect.anything());
+    await pick(png()); await screen.findByText(/已终结/);
+    expect(adapter.sendContent).toHaveBeenCalledTimes(2); // 每个独立预约只传一次，不重发未知结果的旧请求。
+    expect(vi.mocked(adapter.reserveUpload).mock.calls.map((call) => call[1].expectedEvidenceRevision)).toEqual([0, 1]);
   });
 
   it("非整改责任人（403）看到明确原因；登录失效回调上层", async () => {
@@ -129,15 +155,62 @@ describe("整改证据上传面板", () => {
     expect(onUnauthenticated).toHaveBeenCalledTimes(1);
   });
 
-  it("同一条记录重试复用证据集：第二个文件不再建集", async () => {
-    const adapter = fake();
+  it("连续发布两张图片复用证据集，第二次预约使用发布后版本与独立幂等键", async () => {
+    const adapter = revisionEnforcingFake();
     render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
-    await pick(png());
-    await screen.findByText(/已终结/);
-    await pick(png());
-    await screen.findByText(/已终结/);
+    await pick(png()); await screen.findByText(/已终结/);
+    await pick(png()); await screen.findByText(/已终结/);
     expect(adapter.initializeSet).toHaveBeenCalledTimes(1);
     expect(adapter.reserveUpload).toHaveBeenCalledTimes(2);
+    const reservations = vi.mocked(adapter.reserveUpload).mock.calls;
+    expect(reservations.map((call) => call[1].expectedEvidenceRevision)).toEqual([0, 1]);
+    expect(reservations[0][2]).not.toEqual(reservations[1][2]);
+    expect(adapter.sendContent).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("初始化响应丢失后复用原键重放，预约使用其他页面发布后的当前版本", async () => {
+    // 创建响应始终是 revision0；服务端在客户端收到重放前已有其他页面发布到 revision3。
+    const adapter = revisionEnforcingFake(3);
+    const initialize = vi.mocked(adapter.initializeSet).getMockImplementation()!;
+    let lost = true;
+    vi.mocked(adapter.initializeSet).mockImplementation(async (...args) => {
+      const result = await initialize(...args);
+      if (lost) { lost = false; throw new FindingEvidenceError("unavailable"); }
+      return result;
+    });
+    render(<EvidenceUploadPanel finding={finding} adapter={adapter} />);
+    await pick(png()); await screen.findByRole("alert");
+    expect(adapter.reserveUpload).not.toHaveBeenCalled();
+    await pick(png()); await screen.findByText(/已终结/);
+    const initializations = vi.mocked(adapter.initializeSet).mock.calls;
+    expect(initializations).toHaveLength(2);
+    expect(initializations[0][2]).toEqual(initializations[1][2]);
+    expect(adapter.reserveUpload).toHaveBeenCalledTimes(1);
+    expect(adapter.reserveUpload).toHaveBeenCalledWith(
+      { findingId: "f1", roundNo: 2 }, expect.objectContaining({ evidenceSetId: "s1", expectedEvidenceRevision: 3 }),
+      expect.any(String), expect.anything(),
+    );
+    expect(adapter.sendContent).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("发布后当前证据集读取失败或不可见时，不使用旧版本继续预约或重新建集", async () => {
+    for (const failure of ["forbidden", "unauthenticated", "unavailable", null] as const) {
+      clearEvidenceMemory(); cleanup();
+      const adapter = revisionEnforcingFake(); const onUnauthenticated = vi.fn();
+      render(<EvidenceUploadPanel finding={finding} adapter={adapter} onUnauthenticated={onUnauthenticated} />);
+      await pick(png()); await screen.findByText(/已终结/);
+      vi.mocked(adapter.currentSet!).mockImplementation(async () => {
+        if (failure) throw new FindingEvidenceError(failure);
+        return null;
+      });
+      await pick(png()); await screen.findByRole("alert");
+      expect(adapter.reserveUpload).toHaveBeenCalledTimes(1);
+      expect(adapter.initializeSet).toHaveBeenCalledTimes(1);
+      expect(adapter.sendContent).toHaveBeenCalledTimes(1);
+      expect(onUnauthenticated).toHaveBeenCalledTimes(failure === "unauthenticated" ? 1 : 0);
+    }
   });
 
   it("扫描中可以取消，已请求取消的状态会显示", async () => {

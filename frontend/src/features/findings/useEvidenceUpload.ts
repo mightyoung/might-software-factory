@@ -4,7 +4,6 @@ import {
   TERMINAL_UPLOAD_STATES,
   checkUploadFile,
   type EvidenceFailureKind,
-  type EvidenceSet,
   type FindingEvidenceAdapter,
   type UploadScope,
   type UploadStatus,
@@ -27,7 +26,11 @@ export const EVIDENCE_FAILURE_MESSAGE: Record<EvidenceFailureKind, string> = {
 };
 
 /** 证据集与建集幂等键记在内存里；刷新页面后由 currentSet 读取接口找回证据集（适配器不支持时才需要重新开始）。 */
-const memory = new Map<string, { setKey: string; set: EvidenceSet | null }>();
+interface EditableEvidenceSet {
+  evidenceSetId: string;
+  evidenceRevision: number;
+}
+const memory = new Map<string, { setKey: string; set: EditableEvidenceSet | null }>();
 export function clearEvidenceMemory(): void {
   memory.clear();
 }
@@ -97,7 +100,7 @@ export function useEvidenceUpload(
     const controller = new AbortController();
     void adapter.currentSet(scope, controller.signal).then(async (current) => {
       if (!current || controller.signal.aborted || memory.has(memoKey)) return;
-      memory.set(memoKey, { setKey: crypto.randomUUID(), set: { evidenceSetId: current.evidenceSetId, initialEvidenceRevision: current.evidenceRevision } });
+      memory.set(memoKey, { setKey: crypto.randomUUID(), set: { evidenceSetId: current.evidenceSetId, evidenceRevision: current.evidenceRevision } });
       const latest = current.uploads.at(-1);
       if (!latest) return;
       setStatus(latest);
@@ -126,14 +129,25 @@ export function useEvidenceUpload(
         try {
           const entry = memory.get(memoKey) ?? { setKey: crypto.randomUUID(), set: null };
           memory.set(memoKey, entry);
-          const set = entry.set ?? (await adapter.initializeSet(scope, findingVersion, entry.setKey, controller.signal));
+          let set = entry.set;
+          if (!set) {
+            const created = await adapter.initializeSet(scope, findingVersion, entry.setKey, controller.signal);
+            set = { evidenceSetId: created.evidenceSetId, evidenceRevision: created.initialEvidenceRevision };
+          }
+          if (adapter.currentSet) {
+            // 初始化重放仍返回创建事实；其他页面也可能已发布，每次新预约前均读取当前可编辑版本。
+            const current = await adapter.currentSet(scope, controller.signal);
+            if (!current) throw new FindingEvidenceError("conflict");
+            set = { evidenceSetId: current.evidenceSetId, evidenceRevision: current.evidenceRevision };
+          }
+          if (run.current !== token || controller.signal.aborted) return;
           memory.set(memoKey, { ...entry, set });
           const reserved = await adapter.reserveUpload(
             scope,
             {
               evidenceSetId: set.evidenceSetId,
               expectedFindingVersion: findingVersion,
-              expectedEvidenceRevision: set.initialEvidenceRevision,
+              expectedEvidenceRevision: set.evidenceRevision,
               filename: file.name,
               declaredMediaType: file.type,
               declaredSizeBytes: file.size,
