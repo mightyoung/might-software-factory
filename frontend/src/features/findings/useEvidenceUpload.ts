@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FindingEvidenceError,
   TERMINAL_UPLOAD_STATES,
@@ -51,19 +51,21 @@ export interface EvidenceUploadModel {
 
 export function useEvidenceUpload(
   adapter: FindingEvidenceAdapter,
-  scope: UploadScope,
+  requestedScope: UploadScope,
   findingVersion: number,
   onUnauthenticated?: () => void,
 ): EvidenceUploadModel {
+  const scope = useMemo(() => ({ findingId: requestedScope.findingId, roundNo: requestedScope.roundNo }), [requestedScope.findingId, requestedScope.roundNo]);
+  const memoKey = `${scope.findingId}:${scope.roundNo}`;
+  const [stateOwner, setStateOwner] = useState({ adapter, memoKey });
+  const [evidenceSetId, setEvidenceSetId] = useState<string | null>(null);
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [status, setStatus] = useState<UploadStatus | null>(null);
   const [filename, setFilename] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const run = useRef(0);
-  const memoKey = `${scope.findingId}:${scope.roundNo}`;
-
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => () => { abort.current?.abort(); run.current++; }, []);
 
   const fail = useCallback(
     (cause: unknown) => {
@@ -83,7 +85,7 @@ export function useEvidenceUpload(
     async (intentId: string, signal: AbortSignal, token: number) => {
       for (let i = 0; i < MAX_POLLS; i++) {
         const next = await adapter.getStatus(scope, intentId, signal);
-        if (run.current !== token) return;
+        if (signal.aborted || run.current !== token) return;
         setStatus(next);
         if (TERMINAL_UPLOAD_STATES.includes(next.state)) return setPhase("idle");
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -94,22 +96,32 @@ export function useEvidenceUpload(
     [adapter, scope],
   );
 
-  // 刷新页面后找回服务端保存的证据集；最近一次上传还没结束就接着轮询。
+  // 每次挂载/切换作用域均向服务端恢复；模块缓存不能证明当前身份仍能使用旧证据集。
   useEffect(() => {
-    if (!adapter.currentSet || memory.has(memoKey)) return;
+    abort.current?.abort();
     const controller = new AbortController();
-    void adapter.currentSet(scope, controller.signal).then(async (current) => {
-      if (!current || controller.signal.aborted || memory.has(memoKey)) return;
-      memory.set(memoKey, { setKey: crypto.randomUUID(), set: { evidenceSetId: current.evidenceSetId, evidenceRevision: current.evidenceRevision } });
-      const latest = current.uploads.at(-1);
-      if (!latest) return;
-      setStatus(latest);
-      if (TERMINAL_UPLOAD_STATES.includes(latest.state)) return;
-      const token = ++run.current;
-      abort.current = controller;
-      setPhase("polling");
-      await poll(latest.intentId, controller.signal, token);
-    }).catch(() => undefined); // 找不回就当没有；用户仍可重新上传
+    abort.current = controller;
+    const token = ++run.current;
+    setStateOwner({ adapter, memoKey });
+    setEvidenceSetId(null); setStatus(null); setFilename(null); setError(null); setPhase("idle");
+    if (adapter.currentSet) {
+      void adapter.currentSet(scope, controller.signal).then(async (current) => {
+        if (controller.signal.aborted || run.current !== token) return;
+        if (!current) {
+          if (memory.get(memoKey)?.set) memory.delete(memoKey);
+          return;
+        }
+        const previous = memory.get(memoKey);
+        memory.set(memoKey, { setKey: previous?.setKey ?? crypto.randomUUID(), set: { evidenceSetId: current.evidenceSetId, evidenceRevision: current.evidenceRevision } });
+        setEvidenceSetId(current.evidenceSetId);
+        const latest = current.uploads.at(-1);
+        if (!latest) return;
+        setStatus(latest);
+        if (TERMINAL_UPLOAD_STATES.includes(latest.state)) return;
+        setPhase("polling");
+        await poll(latest.intentId, controller.signal, token);
+      }).catch(() => undefined); // 读取失败不恢复发布状态；用户发起上传时仍需通过服务端检查。
+    }
     return () => controller.abort();
   }, [adapter, memoKey, poll, scope]);
 
@@ -142,6 +154,7 @@ export function useEvidenceUpload(
           }
           if (run.current !== token || controller.signal.aborted) return;
           memory.set(memoKey, { ...entry, set });
+          setEvidenceSetId(set.evidenceSetId);
           const reserved = await adapter.reserveUpload(
             scope,
             {
@@ -187,8 +200,15 @@ export function useEvidenceUpload(
 
   const cancel = useCallback(() => {
     if (!status) return;
-    adapter.cancel(scope, status.intentId).then(setStatus, fail);
+    const token = run.current;
+    adapter.cancel(scope, status.intentId).then(
+      (next) => { if (run.current === token) setStatus(next); },
+      (cause) => { if (run.current === token) fail(cause); },
+    );
   }, [adapter, fail, scope, status]);
 
-  return { phase, status, filename, error, evidenceSetId: memory.get(memoKey)?.set?.evidenceSetId ?? null, start, refresh, cancel };
+  // 作用域变化的首帧也不能显示上个身份/轮次的发布状态；effect 随后恢复权威数据。
+  const currentOwner = stateOwner.adapter === adapter && stateOwner.memoKey === memoKey;
+  return { phase: currentOwner ? phase : "idle", status: currentOwner ? status : null, filename: currentOwner ? filename : null,
+    error: currentOwner ? error : null, evidenceSetId: currentOwner ? evidenceSetId : null, start, refresh, cancel };
 }

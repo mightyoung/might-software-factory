@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceUploadPanel } from "./EvidenceUploadPanel";
 import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
-import { FindingEvidenceError, checkUploadFile, type FindingEvidenceAdapter, type UploadState, type UploadStatus } from "../adapters/findingEvidence";
+import { FindingEvidenceError, checkUploadFile, type CurrentEvidenceSet, type FindingEvidenceAdapter, type UploadState, type UploadStatus } from "../adapters/findingEvidence";
 import { clearEvidenceMemory } from "../features/findings/useEvidenceUpload";
 import type { FindingRecord } from "../domain/finding";
 
@@ -48,6 +48,12 @@ function revisionEnforcingFake(initialRevision = 0, restoring = false): FindingE
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => { resolve = accept; });
+  return { promise, resolve };
+}
+
 async function pick(file: File) {
   const input = screen.getByLabelText(/选择图片/);
   await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
@@ -87,6 +93,100 @@ describe("整改证据上传面板", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]).toEqual(["f1", 7, { kind: "submitRemediation", evidenceSetId: "s1", statement: "已加装护栏" }, { idempotencyKey: run.mock.calls[0][3].idempotencyKey }]);
     expect(onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("同一 SPA 保留模块缓存离开再返回后，从服务端恢复已发布状态并允许提交", async () => {
+    const adapter = revisionEnforcingFake(); const run = vi.fn().mockResolvedValue({ state: "ACCEPTANCE_PENDING", roundNo: 2, version: 8 });
+    const view = render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    await pick(png()); await screen.findByText(/已终结/); view.unmount();
+    const reads = vi.mocked(adapter.currentSet!).mock.calls.length;
+    render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+    await screen.findByText(/已终结/);
+    expect(adapter.currentSet).toHaveBeenCalledTimes(reads + 1);
+    fireEvent.change(screen.getByLabelText("整改说明"), { target: { value: "已整改" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "提交整改" })); });
+    expect(run).toHaveBeenCalledWith("f1", 7, { kind: "submitRemediation", evidenceSetId: "s1", statement: "已整改" }, expect.anything());
+    expect(adapter.initializeSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("保留模块缓存重挂载时，当前身份读取失败或没有证据集不能恢复成已发布", async () => {
+    for (const failure of ["forbidden", "unauthenticated", "unavailable", null] as const) {
+      clearEvidenceMemory(); cleanup();
+      const first = revisionEnforcingFake(); const view = render(<EvidenceUploadPanel finding={finding} adapter={first} />);
+      await pick(png()); await screen.findByText(/已终结/); view.unmount();
+      const second = fake({ currentSet: vi.fn(async () => { if (failure) throw new FindingEvidenceError(failure); return null; }) });
+      const run = vi.fn(); render(<EvidenceUploadPanel finding={finding} adapter={second} commands={{ run } as unknown as FindingCommandAdapter} />);
+      await act(async () => {});
+      expect(second.currentSet).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+      expect(screen.queryByText(/已终结/)).not.toBeInTheDocument();
+      expect(second.getStatus).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["FAILED", "SCANNING"] as const)("已有发布但最新上传为 %s 时，不凭旧发布或非零版本启用提交", async latest => {
+    const adapter = fake({
+      currentSet: vi.fn(async () => ({ evidenceSetId: "s1", evidenceRevision: 9, uploads: [status("FINALIZED"), { ...status(latest), intentId: "latest" }] })),
+      getStatus: vi.fn(() => new Promise<UploadStatus>(() => {})),
+    });
+    const run = vi.fn(); const view = render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    await screen.findByText(latest === "FAILED" ? /处理失败/ : /正在扫描/);
+    expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+    expect(run).not.toHaveBeenCalled();
+    if (latest === "SCANNING") expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "latest", expect.anything());
+    else expect(adapter.getStatus).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("切换身份适配器时立即隐藏旧发布状态，不能在权威读取完成前提交", async () => {
+    const first = revisionEnforcingFake(); const run = vi.fn();
+    const props = { finding, commands: { run } as unknown as FindingCommandAdapter };
+    const view = render(<EvidenceUploadPanel {...props} adapter={first} />);
+    await pick(png()); await screen.findByText(/已终结/);
+    const read = deferred<CurrentEvidenceSet | null>();
+    const second = fake({ currentSet: vi.fn(() => read.promise) });
+    view.rerender(<EvidenceUploadPanel {...props} adapter={second} />);
+    expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+    expect(screen.queryByText(/已终结/)).not.toBeInTheDocument();
+    await act(async () => { read.resolve(null); });
+    expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+    expect(second.getStatus).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled();
+  });
+
+  it("上一轮迟到的恢复响应不能覆盖当前轮次的权威证据集", async () => {
+    const old = deferred<CurrentEvidenceSet | null>(); const run = vi.fn();
+    const adapter = fake({ currentSet: vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue({ evidenceSetId: "round3", evidenceRevision: 8, uploads: [{ ...status("FINALIZED"), intentId: "round3-intent" }] }) });
+    const view = render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    view.rerender(<EvidenceUploadPanel finding={{ ...finding, round: 3 }} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    await screen.findByText(/已终结/);
+    await act(async () => { old.resolve({ evidenceSetId: "round2", evidenceRevision: 1, uploads: [status("CANCELLED")] }); });
+    expect(screen.queryByText(/已取消/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("整改说明"), { target: { value: "第三轮完成" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "提交整改" })); });
+    expect(run).toHaveBeenCalledWith("f1", 7, { kind: "submitRemediation", evidenceSetId: "round3", statement: "第三轮完成" }, expect.anything());
+    expect(adapter.currentSet).toHaveBeenLastCalledWith({ findingId: "f1", roundNo: 3 }, expect.anything());
+  });
+
+  it("迟到的挂载恢复不能覆盖用户已开始的新上传或提前启用提交", async () => {
+    const old = deferred<CurrentEvidenceSet | null>(); const reservation = deferred<UploadStatus>();
+    const adapter = fake({
+      currentSet: vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue({ evidenceSetId: "new-set", evidenceRevision: 2, uploads: [] }),
+      reserveUpload: vi.fn(() => reservation.promise),
+      sendContent: vi.fn(async (_scope, intentId) => ({ ...status("QUARANTINED"), intentId })),
+      getStatus: vi.fn(async () => ({ ...status("FINALIZED"), intentId: "new-intent" })),
+    });
+    const run = vi.fn(); render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);
+    await pick(png());
+    await act(async () => { old.resolve({ evidenceSetId: "old-set", evidenceRevision: 1, uploads: [status("FINALIZED")] }); });
+    expect(screen.getByRole("button", { name: "提交整改" })).toBeDisabled();
+    expect(screen.queryByText(/已终结/)).not.toBeInTheDocument();
+    await act(async () => { reservation.resolve({ ...status("INTENT_CREATED"), intentId: "new-intent" }); });
+    await screen.findByText(/已终结/);
+    expect(adapter.getStatus).toHaveBeenCalledWith({ findingId: "f1", roundNo: 2 }, "new-intent", expect.anything());
+    fireEvent.change(screen.getByLabelText("整改说明"), { target: { value: "本次上传完成" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "提交整改" })); });
+    expect(run).toHaveBeenCalledWith("f1", 7, { kind: "submitRemediation", evidenceSetId: "new-set", statement: "本次上传完成" }, expect.anything());
   });
 
   it("恢复进行中的上传发布后，再次预约读取推进后的当前版本", async () => {
