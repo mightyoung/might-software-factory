@@ -19,7 +19,7 @@ from pathlib import Path
 REPOSITORY = "mightyoung/might-software-factory"
 IMAGE_TAG = "docker.io/library/postgres:18-bookworm"
 ADMIN = "msf_ci_bootstrap"
-VERSIONS = tuple(map(str, (*range(2, 9), *range(11, 25))))
+VERSIONS = (*map(str, range(2, 9)), *map(str, range(11, 19)), "18.1", "18.2", "18.3", *map(str, range(19, 27)))
 
 
 @dataclass(frozen=True)
@@ -250,7 +250,7 @@ def validate_success_evidence(value, digest, lane=CAPTURE):
         version, script, checksum = row["version"], row["script"], row["checksum"]
         if (not isinstance(version, str) or version not in VERSIONS or version in found
                 or not isinstance(script, str)
-                or not re.fullmatch(r"V" + re.escape(version) + r"__[A-Za-z0-9_]+\.sql", script)
+                or not re.fullmatch(r"V" + re.escape(version).replace(r"\.", "[._]") + r"__[A-Za-z0-9_]+\.sql", script)
                 or type(checksum) is not int or not -(2**31) <= checksum < 2**31):
             reject("MIGRATION_EVIDENCE")
         found[version] = {"version": version, "script": script, "checksum": checksum}
