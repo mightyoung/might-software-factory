@@ -38,6 +38,40 @@ describe("owner-scoped transient ledger drafts", () => {
     expect(retried[0].definitionVersion).toBe("1");expect(retried[1]).toEqual(original[1]);expect(retried[2]).toBe(original[2]);
     restored.unmount();
   });
+  it("reconciles a definitively rejected uncertain update only after explicit refresh and a new submission", async () => {
+    const first = adapter();vi.mocked(first.update).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true)).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));
+    const view = render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={first} record={RECORD} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={() => view.unmount()} />);
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "retained edit" } });fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/提交结果尚未确认/);fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
+    await screen.findByText(/记录已被其他人修改/);
+    const calls = vi.mocked(first.update).mock.calls;expect(calls).toHaveLength(2);expect(calls[1]![3]).toBe(calls[0]![3]);expect(calls[1]![2]).toEqual(calls[0]![2]);
+    expect(screen.getByLabelText("编号 *")).toHaveValue("retained edit");expect(screen.getByLabelText("编号 *")).not.toBeDisabled();
+    expect(peekEntityDraft("t/a", "edit")?.locked).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "刷新定义和记录核对" }));
+    const next = adapter();render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={next} record={{ ...RECORD, version: 2, values: { ...RECORD.values, code: "other writer" } }} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    expect(screen.getByLabelText("编号 *")).toHaveValue("retained edit");expect(next.update).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "已核对，开始新提交" }));expect(next.update).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));await waitFor(() => expect(next.update).toHaveBeenCalledTimes(1));
+    const sent = vi.mocked(next.update).mock.calls[0]!;expect(sent[1].version).toBe(2);expect(sent[2]).toEqual(calls[0]![2]);expect(sent[3]).not.toBe(calls[0]![3]);
+  });
+  it.each([[0, "NETWORK"], [503, "DEPENDENCY_UNAVAILABLE"], [401, "AUTH_REQUIRED"], [403, "ACCESS_DENIED"], [409, "IDEMPOTENCY_CONFLICT"], [409, "DEFINITION_CONFLICT"], [400, "VERSION_CONFLICT"]] as const)("retains the unknown update lock after retry returns %s/%s", async (status, code) => {
+    const a = adapter();vi.mocked(a.update).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true)).mockRejectedValueOnce(new ApiError(status, code, null, false));
+    render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={a} record={RECORD} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));await screen.findByText(/提交结果尚未确认/);
+    fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));await waitFor(() => expect(a.update).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "核对后重试原请求" })).not.toBeDisabled());
+    expect(screen.getByLabelText("编号 *")).toBeDisabled();expect(screen.queryByRole("button", { name: "已核对，开始新提交" })).not.toBeInTheDocument();
+    const calls = vi.mocked(a.update).mock.calls;expect(calls[1]![3]).toBe(calls[0]![3]);expect(calls[1]![2]).toEqual(calls[0]![2]);expect(peekEntityDraft("t/a", "edit")?.locked).toBe(true);
+  });
+  it("does not treat a CREATE version-conflict response as proof an uncertain create did not commit", async () => {
+    const a = adapter();vi.mocked(a.create).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true)).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));
+    render(<EntityLedgerForm definition={DEF} use="CREATE" adapter={a} owner="t/a" draftKey="create" onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "uncertain create" } });await screen.findByRole("option", { name: "一号范围" });
+    fireEvent.change(screen.getByRole("combobox", { name: "管理范围" }), { target: { value: OTHER_ID } });fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/提交结果尚未确认/);fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
+    await screen.findByText(/记录已被其他人修改/);expect(screen.getByLabelText("编号 *")).toBeDisabled();expect(peekEntityDraft("t/a", "create")?.locked).toBe(true);
+    expect(screen.queryByRole("button", { name: "已核对，开始新提交" })).not.toBeInTheDocument();expect(a.create).toHaveBeenCalledTimes(2);
+  });
   it("still rejects an unverified restored reference before the first send", async () => {
     stashEntityDraft("t/a", "create", { values: { code: "first", scope: OTHER_ID }, definitionVersion: "1", key: null, fingerprint: null, locked: false });
     const a = adapter();vi.mocked(a.reference).mockResolvedValue({ options: [{ id: ID, label: "授权默认范围" }], hasMore: true });

@@ -67,7 +67,10 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
       saved.current = true; setDirty(false); discardEntityDraft(owner, draftKey); onSuccess(result);
     } catch (failure) {
       if (lifetime.current !== generation) return;
-      const unknown = locked || !(failure instanceof ApiError) || failure.status === 0 || failure.status >= 500;
+      // UPDATE checks the original receipt before its version guard. This exact
+      // rejection confirms no commit for that request; all other uncertain outcomes stay locked.
+      const versionRejected = use === "EDIT" && failure instanceof ApiError && failure.status === 409 && failure.code === "VERSION_CONFLICT";
+      const unknown = !versionRejected && (locked || !(failure instanceof ApiError) || failure.status === 0 || failure.status >= 500);
       setLocked(unknown); latest.current = { draft, pending: request, locked: unknown }; setError(ledgerFailure(failure));
       stashEntityDraft(owner, draftKey, { request, values: draft, definitionVersion: definition.definitionVersion, key: request.key, fingerprint: request.fingerprint, locked: unknown, expectedVersion: request.expectedVersion });
       if (failure instanceof ApiError && failure.status === 401) {
@@ -97,7 +100,7 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
     <div className="form-actions">
       <button type="submit" className="button button-primary" disabled={busy || (!reviewed && !locked)}>{busy ? "提交中…" : locked ? "核对后重试原请求" : "保存"}</button>
       {error && <button type="button" className="button button-subtle" disabled={busy} onClick={() => { stashEntityDraft(owner, draftKey, { request: pending ?? undefined, values: draft, definitionVersion: definition.definitionVersion, key: pending?.key ?? null, fingerprint: pending?.fingerprint ?? null, locked, expectedVersion: expectedVersion.current }); onRefresh(); }}>刷新定义和记录核对</button>}
-      {error && pending && !locked && <button type="button" disabled={busy} onClick={() => { discardEntityDraft(owner, draftKey); setPending(null); setError(""); expectedVersion.current = record?.version; }}>已核对，开始新提交</button>}
+      {pending && !locked && <button type="button" disabled={busy} onClick={() => { discardEntityDraft(owner, draftKey); setPending(null); setError(""); expectedVersion.current = record?.version; }}>已核对，开始新提交</button>}
     </div>
   </form>;
 }
