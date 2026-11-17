@@ -182,7 +182,7 @@ final class CiPg18RegistryFixture implements AutoCloseable {
     private void writeEvidence() throws Exception {
         StringBuilder migrations = new StringBuilder();
         for (var migration : flyway.info().applied()) {
-            if (!migration.getScript().matches("V[0-9]+__[A-Za-z0-9_]+\\.sql")) throw new IllegalStateException();
+            if (!migration.getScript().matches("V[0-9]+(?:_[0-9]+)*__[A-Za-z0-9_]+\\.sql")) throw new IllegalStateException();
             if (!migrations.isEmpty()) migrations.append(',');
             migrations.append("{\"version\":\"").append(migration.getVersion().getVersion()).append("\",\"script\":\"")
                     .append(migration.getScript()).append("\",\"checksum\":").append(migration.getChecksum()).append('}');
