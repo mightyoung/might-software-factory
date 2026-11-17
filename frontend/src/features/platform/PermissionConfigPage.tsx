@@ -87,6 +87,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
   const dirty = diff.added.length + diff.removed.length > 0;
 
   function select(role: RoleView) {
+    if (saving) return;
     if (dirty && !window.confirm("当前角色有未保存的修改，切换后将丢弃，继续吗？")) return;
     setSelectedId(role.id);
     setDraft(new Set(role.permissionCodes));
@@ -153,6 +154,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
               type="button"
               className={`perm-role ${role.id === selectedId ? "perm-role-current" : ""}`}
               aria-current={role.id === selectedId ? "true" : undefined}
+              disabled={saving}
               onClick={() => select(role)}
             >
               <span>{role.name}</span>
