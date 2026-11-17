@@ -15,6 +15,8 @@ export interface SessionContextValue {
   /** 当前适配器登录是否需要租户码。 */
   requiresTenantCode: boolean;
   logout(): Promise<void>;
+  /** Revalidate this identity after an authorization change; stale results never replace another session. */
+  refresh(): Promise<void>;
   /** 当前适配器是否支持自助改密。 */
   canChangePassword: boolean;
   /** 成功后本地登录态清除并回到登录页（服务端已使所有旧会话失效）；失败抛 SessionError。 */
@@ -56,7 +58,7 @@ export function SessionProvider({
         const denied = error instanceof SessionError && error.kind === "forbidden";
         setState({ status: "signedOut", notice: denied ? "forbidden" : "unavailable" });
       });
-    return () => controller.abort();
+    return () => { controller.abort();generation.current += 1; };
   }, [adapter]);
 
   const login = useCallback(
@@ -87,6 +89,28 @@ export function SessionProvider({
     setState({ status: "signedOut", notice: "expired" });
   }, []);
 
+  const sessionGeneration = generation.current;
+  const refresh = useCallback(async () => {
+    if (generation.current !== sessionGeneration) throw new DOMException("Stale session refresh", "AbortError");
+    if (state.status !== "signedIn") throw new SessionError("unauthenticated", false);
+    const before = state.session;
+    const identity = (session: SessionBootstrap) => JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId]);
+    const mine = ++generation.current;
+    try {
+      const session = await adapter.restore();
+      if (mine !== generation.current) throw new DOMException("Stale session refresh", "AbortError");
+      if (!session || identity(session) !== identity(before)) throw new SessionError("unauthenticated", false);
+      // A new bootstrap also changes loadMenu below, aborting and invalidating the old menu.
+      setState({ status: "signedIn", session });
+    } catch (error) {
+      if (mine !== generation.current) throw new DOMException("Stale session refresh", "AbortError");
+      const kind = error instanceof SessionError ? error.kind : "unavailable";
+      if (kind === "unauthenticated") expire();
+      else setState({ status: "signedOut", notice: kind === "forbidden" ? "forbidden" : "unavailable" });
+      throw error;
+    }
+  }, [adapter, state, sessionGeneration, expire]);
+
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string) => {
       if (!adapter.changePassword) throw new SessionError("unavailable", false);
@@ -106,22 +130,26 @@ export function SessionProvider({
 
   const loadMenu = useCallback(
     async (applicationId: ApplicationId, signal?: AbortSignal) => {
+      if (generation.current !== sessionGeneration || state.status !== "signedIn") throw new DOMException("Stale menu", "AbortError");
+      const mine = generation.current;
       try {
-        return await adapter.loadMenu(applicationId, signal);
+        const menu = await adapter.loadMenu(applicationId, signal);
+        if (mine !== generation.current || signal?.aborted) throw new DOMException("Stale menu", "AbortError");
+        return menu;
       } catch (error) {
         // 服务端判定未登录（会话过期/被撤销）：回到登录页并提示，而不是停在受保护页面上报错。
-        if (error instanceof SessionError && error.kind === "unauthenticated") expire();
+        if (mine === generation.current && !signal?.aborted && error instanceof SessionError && error.kind === "unauthenticated") expire();
         throw error;
       }
     },
-    [adapter, expire],
+    [adapter, expire, state, sessionGeneration],
   );
 
   const requiresTenantCode = adapter.requiresTenantCode === true;
   const canChangePassword = adapter.changePassword !== undefined;
   const value = useMemo(
-    () => ({ state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword }),
-    [state, login, logout, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword],
+    () => ({ state, login, logout, refresh, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword }),
+    [state, login, logout, refresh, expire, loadMenu, requiresTenantCode, canChangePassword, changePassword],
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

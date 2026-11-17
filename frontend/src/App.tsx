@@ -166,7 +166,7 @@ interface AppAdapterFactories {
 }
 
 function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFactories) {
-  const { state, logout, expire, canChangePassword, changePassword } = useSession();
+  const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
   const location = useLocation();
   const { pathname } = splitLocation(location);
@@ -285,6 +285,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFact
     content = (
       <PermissionConfigPage
         adapter={permissionAdmin}
+        onPermissionsChanged={refresh}
         canManage={hasPermission(session, "platform.permission.manage")}
         onUnauthenticated={expire}
       />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PermissionAdminError,
   type PermissionAdminAdapter,
@@ -35,9 +35,12 @@ interface Props {
   adapter: PermissionAdminAdapter;
   canManage: boolean;
   onUnauthenticated: () => void;
+  onPermissionsChanged?: () => Promise<void>;
 }
 
-export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: Props) {
+export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: Props) {
+  const lifetime = useRef(0);
+  useEffect(() => { lifetime.current += 1;return () => { lifetime.current += 1; }; }, [adapter]);
   const [data, setData] = useState<PermissionAdminData | null>(null);
   const [loadError, setLoadError] = useState<PermissionAdminFailure | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -47,9 +50,10 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
 
   const reload = useCallback(
     async (signal?: AbortSignal, keepSelection?: string | null) => {
+      const mine = lifetime.current;
       try {
         const next = await adapter.load(signal);
-        if (signal?.aborted) return;
+        if (signal?.aborted || mine !== lifetime.current) return;
         setData(next);
         setLoadError(null);
         const wanted = keepSelection ?? null;
@@ -57,7 +61,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
         setSelectedId(selected?.id ?? null);
         setDraft(new Set(selected?.permissionCodes ?? []));
       } catch (error) {
-        if (signal?.aborted) return;
+        if (signal?.aborted || mine !== lifetime.current) return;
         const kind = failureOf(error);
         if (kind === "unauthenticated") onUnauthenticated();
         else setLoadError(kind);
@@ -107,16 +111,24 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
 
   async function save() {
     if (!selected || !dirty || saving) return;
+    const mine = lifetime.current;
+    let persisted = false;
     setSaving(true);
     setNotice(null);
     try {
       const updated = await adapter.saveRolePermissions(selected.id, [...draft].sort(), selected.version);
+      if (mine !== lifetime.current) return;
+      persisted = true;
       setData((current) =>
         current ? { ...current, roles: current.roles.map((role) => (role.id === updated.id ? updated : role)) } : current,
       );
       setDraft(new Set(updated.permissionCodes));
+      await onPermissionsChanged?.();
+      if (mine !== lifetime.current) return;
       setNotice({ tone: "ok", text: "已保存，权限即时生效。" });
     } catch (error) {
+      if (mine !== lifetime.current) return;
+      if (persisted) { setNotice({ tone: "error", text: "权限已保存，但当前会话尚未同步。请重新登录后确认。" });return; }
       const kind = failureOf(error);
       if (kind === "unauthenticated") {
         onUnauthenticated();
@@ -125,7 +137,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated }: 
       setNotice({ tone: "error", text: FAILURE_MESSAGE[kind] });
       if (kind === "conflict") await reload(undefined, selected.id);
     } finally {
-      setSaving(false);
+      if (mine === lifetime.current) setSaving(false);
     }
   }
 

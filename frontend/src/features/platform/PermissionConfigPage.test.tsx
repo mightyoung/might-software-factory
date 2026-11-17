@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSyntheticPermissionAdmin } from "../../adapters/syntheticPermissionAdmin";
 import { PermissionAdminError, type PermissionAdminAdapter, type RoleView } from "../../adapters/permissionAdmin";
@@ -43,6 +43,28 @@ describe("PermissionConfigPage", () => {
     expect(screen.getByLabelText(/查看风险管控/)).not.toBeChecked();
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
     expect(saveRolePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not claim synchronization or resend a saved PUT when bootstrap refresh fails", async () => {
+    const base = createSyntheticPermissionAdmin(), saveRolePermissions = vi.fn(base.saveRolePermissions);
+    const refresh = vi.fn(async () => { throw new Error("bootstrap unavailable"); });
+    render(<PermissionConfigPage adapter={{ load: base.load, saveRolePermissions }} canManage onUnauthenticated={vi.fn()} onPermissionsChanged={refresh} />);
+    fireEvent.click(await screen.findByLabelText(/查看风险管控/));fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("权限已保存，但当前会话尚未同步");
+    expect(screen.queryByText("已保存，权限即时生效。")).not.toBeInTheDocument();expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));expect(saveRolePermissions).toHaveBeenCalledTimes(1);expect(refresh).toHaveBeenCalledTimes(1);
+  });
+  it("ignores a late save completion after its identity page is replaced", async () => {
+    const base = createSyntheticPermissionAdmin(), before = (await base.load()).roles[0]!;
+    let complete!: (role: RoleView) => void;
+    const saved = vi.fn<PermissionAdminAdapter["saveRolePermissions"]>(() => new Promise(resolve => { complete = resolve; }));
+    const oldRefresh = vi.fn(), expired = vi.fn();
+    const view = render(<PermissionConfigPage adapter={{ load: base.load, saveRolePermissions: saved }} canManage onUnauthenticated={expired} onPermissionsChanged={oldRefresh} />);
+    fireEvent.click(await screen.findByLabelText(/查看风险管控/));fireEvent.click(screen.getByRole("button", { name: "保存" }));view.unmount();
+    const nextRefresh = vi.fn();render(<PermissionConfigPage adapter={createSyntheticPermissionAdmin()} canManage onUnauthenticated={vi.fn()} onPermissionsChanged={nextRefresh} />);
+    await screen.findByLabelText(/查看风险管控/);await act(async () => { complete({ ...before, version: "2", permissionCodes: [...before.permissionCodes, "risk.read"] }); });
+    expect(oldRefresh).not.toHaveBeenCalled();expect(nextRefresh).not.toHaveBeenCalled();expect(expired).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/查看风险管控/)).not.toBeChecked();
   });
 
   it("is read-only without manage permission", async () => {
