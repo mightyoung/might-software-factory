@@ -9,6 +9,10 @@ info:
     role's permission set. Every route requires an authenticated tenant session; reads require
     platform.permission.read and the replace requires platform.permission.manage. The server re-checks
     authority on every request and records each replace in an append-only change log.
+    Role permissionCodes include permissions outside this configurable catalog. A replacement must retain
+    those existing codes unchanged; adding or removing an uncatalogued code is rejected as UNKNOWN_PERMISSION.
+    Removing a role's management permission also requires another active human member whose remaining role
+    grants resolve the management permission to a nonempty active organization scope.
 paths:
   /api/v1/admin/permissions:
     get:

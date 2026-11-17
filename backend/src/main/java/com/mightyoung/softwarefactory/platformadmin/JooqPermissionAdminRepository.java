@@ -78,8 +78,14 @@ public final class JooqPermissionAdminRepository implements PermissionAdminRepos
             if (r.get(2, String.class) != null) catalog.put(r.get(0, String.class), r.get(1, UUID.class));
         }
         for (String code : desiredCodes) {
-            if (!catalog.containsKey(code)) {
+            if (!catalog.containsKey(code) && !rows.containsKey(code)) {
                 throw new PermissionAdminException(Reason.UNKNOWN_PERMISSION, "Unknown permission " + code);
+            }
+        }
+        // The full-set API exposes these codes, but this catalog editor cannot grant or revoke them.
+        for (String code : rows.keySet()) {
+            if (!catalog.containsKey(code) && !desiredCodes.contains(code)) {
+                throw new PermissionAdminException(Reason.UNKNOWN_PERMISSION, "Permission is not configurable " + code);
             }
         }
         Set<String> added = new TreeSet<>(desiredCodes);
@@ -93,8 +99,11 @@ public final class JooqPermissionAdminRepository implements PermissionAdminRepos
             }
             UUID scopeRule = null;
             if (!added.isEmpty()) {
-                Set<UUID> scopes = new TreeSet<>(rows.values());
-                if (scopes.size() != 1) {
+                Set<UUID> scopes = new java.util.HashSet<>();
+                rows.forEach((code, existingScope) -> {
+                    if (catalog.containsKey(code)) scopes.add(existingScope);
+                });
+                if (scopes.size() != 1 || scopes.contains(null)) {
                     throw new PermissionAdminException(Reason.ROLE_HAS_NO_SCOPE, "No single scope rule to inherit");
                 }
                 scopeRule = scopes.iterator().next();
@@ -116,12 +125,58 @@ public final class JooqPermissionAdminRepository implements PermissionAdminRepos
     }
 
     private boolean otherManagerExists(UUID tenantId, UUID excludedRoleId) {
-        return !dsl.fetch("select 1 from public.role_permission rp "
-                + "join public.permission p on p.id = rp.permission_id and p.code = ? "
-                + "join public.\"role\" r on r.tenant_id = rp.tenant_id and r.id = rp.role_id and r.active "
-                + "join public.role_grant g on g.tenant_id = rp.tenant_id and g.role_id = rp.role_id "
-                + "and g.valid_from <= current_timestamp and (g.valid_to is null or g.valid_to > current_timestamp) "
-                + "where rp.tenant_id = ? and rp.role_id <> ? limit 1", PermissionAdminService.MANAGE, tenantId, excludedRoleId).isEmpty();
+        // DEPT_TREE includes its active department roots, so its scope is nonempty exactly when DEPT is.
+        // Subject and scope checks mirror the directory/role resolver used by EffectivePermissions.
+        return !dsl.fetch("""
+                with active_members as (
+                    select m.tenant_id,m.id
+                      from public.tenant_member m
+                      join public.tenant t on t.id=m.tenant_id and t.status='ACTIVE'
+                      join public.account a on a.id=m.account_id and a.status='ACTIVE'
+                      join public.principal actor on actor.account_id=a.id and actor.kind='HUMAN' and actor.status='ACTIVE'
+                     where m.tenant_id=? and m.status='ACTIVE'
+                ), member_organizations as (
+                    select mo.tenant_id,mo.member_id,mo.org_id
+                      from public.member_org mo
+                      join active_members m on m.tenant_id=mo.tenant_id and m.id=mo.member_id
+                      join public.org_unit o on o.tenant_id=mo.tenant_id and o.id=mo.org_id and o.active
+                     where mo.valid_from<=current_timestamp and (mo.valid_to is null or mo.valid_to>current_timestamp)
+                ), member_positions as (
+                    select mp.tenant_id,mp.member_id,mp.position_id
+                      from public.member_position mp
+                      join active_members m on m.tenant_id=mp.tenant_id and m.id=mp.member_id
+                      join public.position pos on pos.tenant_id=mp.tenant_id and pos.id=mp.position_id and pos.active
+                     where mp.valid_from<=current_timestamp and (mp.valid_to is null or mp.valid_to>current_timestamp)
+                ), member_groups as (
+                    select gm.tenant_id,gm.member_id,gm.group_id
+                      from public.group_member gm
+                      join active_members m on m.tenant_id=gm.tenant_id and m.id=gm.member_id
+                      join public.user_group grp on grp.tenant_id=gm.tenant_id and grp.id=gm.group_id and grp.active
+                     where gm.valid_from<=current_timestamp and (gm.valid_to is null or gm.valid_to>current_timestamp)
+                )
+                select 1 from public.role_permission rp
+                  join public.permission p on p.id=rp.permission_id and p.code=?
+                       and p.resource_type='platform' and p.action='permission.manage'
+                  join public."role" r on r.tenant_id=rp.tenant_id and r.id=rp.role_id and r.active
+                  join public.scope_rule sr on sr.tenant_id=rp.tenant_id and sr.id=rp.scope_rule_id
+                  join public.role_grant g on g.tenant_id=rp.tenant_id and g.role_id=rp.role_id
+                       and g.valid_from<=current_timestamp and (g.valid_to is null or g.valid_to>current_timestamp)
+                  join active_members m on m.tenant_id=g.tenant_id and (
+                       (g.subject_kind='MEMBER' and g.member_id=m.id)
+                    or (g.subject_kind='ORG' and exists(select 1 from member_organizations mo
+                         where mo.tenant_id=m.tenant_id and mo.member_id=m.id and mo.org_id=g.org_id))
+                    or (g.subject_kind='POSITION' and exists(select 1 from member_positions mp
+                         where mp.tenant_id=m.tenant_id and mp.member_id=m.id and mp.position_id=g.position_id))
+                    or (g.subject_kind='GROUP' and exists(select 1 from member_groups gm
+                         where gm.tenant_id=m.tenant_id and gm.member_id=m.id and gm.group_id=g.group_id)))
+                 where rp.tenant_id=? and rp.role_id<>? and (
+                       (sr.kind in ('DEPT','DEPT_TREE') and exists(select 1 from member_organizations mo
+                         where mo.tenant_id=m.tenant_id and mo.member_id=m.id))
+                    or (sr.kind='EXPLICIT' and exists(select 1 from public.scope_org so
+                         join public.org_unit o on o.tenant_id=so.tenant_id and o.id=so.org_id and o.active
+                         where so.tenant_id=sr.tenant_id and so.scope_rule_id=sr.id)))
+                 limit 1
+                """, tenantId, PermissionAdminService.MANAGE, tenantId, excludedRoleId).isEmpty();
     }
 
     private List<RoleView> loadRoles(UUID tenantId, UUID onlyRole) {
