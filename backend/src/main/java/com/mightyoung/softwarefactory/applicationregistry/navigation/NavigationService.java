@@ -26,7 +26,9 @@ import java.util.Set;
 @Service
 public final class NavigationService {
     private record AppDef(String id, String name) {}
-    private record NodeDef(String application, String id, String label, String path, String permission) {}
+    private record NodeDef(String application, String id, String label, String path, List<String> permissions) {
+        NodeDef(String application,String id,String label,String path,String permission) {this(application,id,label,path,List.of(permission));}
+    }
     /** Capability permissions surfaced for presentation only (e.g. enabling edit controls). */
     private static final String FINDING_CREATE = "finding.create";
     private static final List<String> PLATFORM_EXTRAS = List.of("platform.permission.manage");
@@ -38,6 +40,8 @@ public final class NavigationService {
             new NodeDef("safety", "findings", "隐患管理", "safety/findings", "finding.read"),
             new NodeDef("equipment", "overview", "设备管理", "equipment/overview", "equipment.read"),
             new NodeDef("platform", "permissions", "权限配置", "platform/permissions", "platform.permission.read"));
+    private final List<AppDef> apps;
+    private final List<NodeDef> nodes;
     private final SessionContextResolver resolver;
     private final CurrentSessionService sessions;
     private final TenantApplicationReadRepository applications;
@@ -50,6 +54,24 @@ public final class NavigationService {
             TenantApplicationReadRepository applications, EntityReadAccessPolicy reads,
             FindingWorkflowAuthorizationRepository actions, EffectivePermissions permissions,
             PlatformTransactionManager manager) {
+        this(resolver,sessions,applications,reads,actions,permissions,manager,List.of());
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public NavigationService(SessionContextResolver resolver, CurrentSessionService sessions,
+            TenantApplicationReadRepository applications, EntityReadAccessPolicy reads,
+            FindingWorkflowAuthorizationRepository actions, EffectivePermissions permissions,
+            PlatformTransactionManager manager,List<ApplicationContribution> contributions) {
+        var allApps=new ArrayList<>(APPS);var allNodes=new ArrayList<>(NODES);
+        for(var contribution:contributions) {
+            if(allApps.stream().anyMatch(app->app.id().equals(contribution.appKey())))throw new IllegalArgumentException("Duplicate application contribution");
+            allApps.add(new AppDef(contribution.appKey(),contribution.label()));
+            Set<String> ids=new LinkedHashSet<>();
+            for(var node:contribution.nodes()) {
+                if(!ids.add(node.id()))throw new IllegalArgumentException("Duplicate navigation node");
+                allNodes.add(new NodeDef(contribution.appKey(),node.id(),node.label(),node.path(),node.permissions()));
+            }
+        }
+        apps=List.copyOf(allApps);nodes=List.copyOf(allNodes);
         this.resolver = resolver;
         this.sessions = sessions;
         this.applications = applications;
@@ -66,13 +88,13 @@ public final class NavigationService {
     }
 
     public Menu menu(String applicationId) {
-        AppDef app = APPS.stream().filter(candidate -> candidate.id().equals(applicationId)).findFirst()
+        AppDef app = apps.stream().filter(candidate -> candidate.id().equals(applicationId)).findFirst()
                 .orElseThrow(NavigationService::denied);
         return transaction.execute(status -> {
             Bootstrap current = load();
             ApplicationEntry entry = current.applications().stream()
                     .filter(candidate -> candidate.id().equals(app.id())).findFirst().orElseThrow(NavigationService::denied);
-            List<MenuNode> nodes = NODES.stream().filter(node -> node.application().equals(app.id()))
+            List<MenuNode> nodes = this.nodes.stream().filter(node -> node.application().equals(app.id()))
                     .map(node -> new MenuNode(node.id(), node.label(), node.path(), menuPermission(node, current.permissions())))
                     .filter(node -> node.permission() != null).toList();
             return new Menu(1, app.id(), entry.name(), nodes, current.permissions(), current.authorization());
@@ -91,14 +113,15 @@ public final class NavigationService {
         boolean canCreate = false;
         Set<String> granted = new LinkedHashSet<>();
         Map<String, AppDef> visible = new LinkedHashMap<>();
-        for (AppDef app : APPS) {
+        for (AppDef app : apps) {
             var entitlement = applications.findCurrent(context.tenantId(), app.id()).orElse(null);
             if ("safety".equals(app.id()) && entitlement != null) safetyVersion = entitlement.version();
             if (entitlement == null || !entitlement.enabled()) continue;
-            for (NodeDef node : NODES) {
-                if (node.application().equals(app.id()) && hasNodePermission(context, node.permission())) {
-                    granted.add(node.permission());
-                    visible.putIfAbsent(app.id(), app);
+            for (NodeDef node : nodes) {
+                if (node.application().equals(app.id())) {
+                    for(String permission:node.permissions()) if(hasNodePermission(context,permission)) {
+                        granted.add(permission);visible.putIfAbsent(app.id(),app);
+                    }
                 }
             }
             if ("safety".equals(app.id())) {
@@ -125,14 +148,14 @@ public final class NavigationService {
         List<String> codes = new ArrayList<>(granted);
         if (canCreate) codes.add(FINDING_CREATE);
         List<ApplicationEntry> entries = visible.values().stream().map(app -> new ApplicationEntry(app.id(), app.name(),
-                NODES.stream().filter(node -> node.application().equals(app.id())
+                nodes.stream().filter(node -> node.application().equals(app.id())
                         && menuPermission(node, codes) != null).findFirst().orElseThrow().path())).toList();
         return new Bootstrap(1, identity, entries, List.copyOf(codes), version);
     }
 
     /** The permission a node is shown under, or null when hidden. Findings also opens for create-only members. */
     private static String menuPermission(NodeDef node, List<String> held) {
-        if (held.contains(node.permission())) return node.permission();
+        for(String permission:node.permissions())if(held.contains(permission))return permission;
         return "findings".equals(node.id()) && held.contains(FINDING_CREATE) ? FINDING_CREATE : null;
     }
 

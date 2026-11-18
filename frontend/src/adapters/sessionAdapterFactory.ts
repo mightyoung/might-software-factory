@@ -1,3 +1,5 @@
+import { createHttpEntityLedger } from "../features/ledger/httpEntityLedger";
+import type { EntityLedgerFactory } from "../features/ledger/model";
 import { createHttpPermissionAdmin } from "./httpPermissionAdmin";
 import type { PermissionAdminAdapter } from "./permissionAdmin";
 import { parseAppMode } from "../mode";
@@ -34,4 +36,10 @@ export function createFindingStoreFactory(mode: string | undefined): (() => Find
       evidence: createHttpFindingEvidence(client),
     };
   };
+}
+
+/** One standard adapter serves every server-registered entity, isolated by the app identity boundary. */
+export function createEntityLedgerFactory(mode: string | undefined): EntityLedgerFactory | undefined {
+  if (parseAppMode(mode) === "synthetic") return undefined;
+  return (app, entity) => createHttpEntityLedger(createHttpClient(), app, entity);
 }

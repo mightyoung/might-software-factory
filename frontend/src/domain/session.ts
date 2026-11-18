@@ -1,4 +1,8 @@
-export type ApplicationId = "safety" | "equipment" | "platform";
+import { parseEntityRoute } from "../routing/entityPaths";
+
+/** Server-registered identifiers; synthetic applications remain a finite local catalog. */
+export type ApplicationId = string;
+export type DemoApplicationId = "safety" | "equipment" | "platform";
 
 /** 应用切换器只需要轻量的 ID/名称/入口，不携带菜单树。入口为不含租户前缀的相对路径。 */
 export interface ApplicationEntry {
@@ -37,6 +41,8 @@ export interface SessionBootstrap {
   applications: readonly ApplicationEntry[];
   /** 权限摘要仅用于界面呈现；不得据此放行任何业务操作。 */
   permissions: readonly string[];
+  /** Canonical server grants for registered generic applications; never legacy UI aliases. */
+  canonicalPermissions?: readonly string[];
 }
 
 export type SessionFailureKind =
@@ -74,14 +80,15 @@ export function hasPermission(session: Pick<SessionBootstrap, "permissions">, pe
 /** 过滤掉无权限的叶子；分组在没有任何可见子项时一并隐藏。 */
 export function visibleMenuNodes(
   nodes: readonly MenuNode[],
-  session: Pick<SessionBootstrap, "permissions">,
+  session: Pick<SessionBootstrap, "permissions" | "canonicalPermissions">,
 ): MenuNode[] {
   const result: MenuNode[] = [];
   for (const node of nodes) {
     if (node.children) {
       const children = visibleMenuNodes(node.children, session);
       if (children.length > 0) result.push({ ...node, children });
-    } else if (node.permission && hasPermission(session, node.permission)) {
+    } else if (node.permission && (hasPermission(session, node.permission)
+      || (node.path && parseEntityRoute(node.path)?.page === "entry" && session.canonicalPermissions?.includes(node.permission)))) {
       result.push(node);
     }
   }

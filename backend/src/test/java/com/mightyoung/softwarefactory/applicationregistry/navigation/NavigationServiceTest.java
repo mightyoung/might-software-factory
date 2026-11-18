@@ -168,6 +168,21 @@ class NavigationServiceTest {
         verifyNoInteractions(applications,resolver,sessions);
     }
 
+    @Test void contributedApplicationsExposeActualCapabilitiesAndCreateOnlyEntryWithoutRead() {
+        var context=session();
+        var contribution=new ApplicationContribution("tooling","工装",List.of(new ApplicationContribution.Node(
+                "tools","工装台账","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update"))));
+        var dynamic=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"tool.create")).thenReturn(true);
+        assertThat(dynamic.bootstrap().permissions()).containsExactly("tool.create");
+        assertThat(dynamic.menu("tooling").nodes()).containsExactly(new NavigationService.MenuNode("tools","工装台账","apps/tooling/entities/tool","tool.create"));
+        when(permissions.has(context,"tool.read")).thenReturn(true);when(permissions.has(context,"tool.update")).thenReturn(true);
+        assertThat(dynamic.bootstrap().permissions()).containsExactly("tool.read","tool.create","tool.update");
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(false,2)));
+        assertThat(dynamic.bootstrap().applications()).isEmpty();
+    }
+
     private FindingReadAuthorizationSnapshot snapshot(CurrentTenantContext c, Set<UUID> scope,long memberEpoch) {
         return new FindingReadAuthorizationSnapshot(c.actorId(),c.accountId(),"HUMAN","ACTIVE","ACTIVE","ACTIVE","ACTIVE",2,memberEpoch,scope);
     }

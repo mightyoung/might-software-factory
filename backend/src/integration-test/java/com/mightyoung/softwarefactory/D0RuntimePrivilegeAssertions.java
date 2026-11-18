@@ -30,9 +30,19 @@ final class D0RuntimePrivilegeAssertions {
     }
 
     static void assertApplication(JdbcTemplate jdbc) {
+        assertApplication(jdbc, Map.of(), Map.of());
+    }
+
+    static void assertApplication(JdbcTemplate jdbc, Map<String,Rights> additionalTables, Map<String,Set<String>> additionalReadColumns) {
         String delta=resource("/db/operator/d0-runtime-grants.sql");
         String legacy=resource("/db/operator/d0-legacy-runtime-grants.sql");
         Map<String,Rights> expected=loadApplication(delta,legacy);
+        for (var entry : additionalTables.entrySet()) {
+            if (expected.putIfAbsent(entry.getKey(),entry.getValue()) != null)
+                throw new IllegalArgumentException("Additional profile must not override D0: " + entry.getKey());
+        }
+        for (var entry : additionalReadColumns.entrySet())
+            Objects.requireNonNull(expected.get(entry.getKey()),"Unknown read-column table").columns().get("SELECT").addAll(entry.getValue());
         assertThat(jdbc.queryForObject("select rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication from pg_roles where rolname=current_user",Boolean.class)).isFalse();
         assertThat(jdbc.queryForObject("select count(*) from pg_auth_members where member=(select oid from pg_roles where rolname=current_user)",Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select has_schema_privilege(current_user,'public','CREATE') or has_database_privilege(current_user,current_database(),'CREATE,TEMP')",Boolean.class)).isFalse();

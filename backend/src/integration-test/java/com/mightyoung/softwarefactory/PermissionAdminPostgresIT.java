@@ -75,7 +75,7 @@ class PermissionAdminPostgresIT {
     }
     private static void run(Consumer<Fixture> test) throws Exception {
         var environment=System.getenv();var target=IdentityAcceptanceTarget.preflightFromEnvironment(environment);
-        assertThat(IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,target.databaseName())).isEqualTo(IdentityLoginPostgresIT.RuntimePrivilegeProfile.D0_APPLICATION);
+        assertThat(IdentityLoginPostgresIT.validateRuntimePrivilegeProfile(environment,target.databaseName())).isIn(IdentityLoginPostgresIT.RuntimePrivilegeProfile.D0_APPLICATION, IdentityLoginPostgresIT.RuntimePrivilegeProfile.D1_APPLICATION);
         try(var connection=DriverManager.getConnection(target.jdbcUrl(),required("LAN_PG_USERNAME"),required("LAN_PG_PASSWORD"))) {
             var source=new SingleConnectionDataSource(connection,true);var manager=new DataSourceTransactionManager(source);
             new TransactionTemplate(manager).executeWithoutResult(status->{

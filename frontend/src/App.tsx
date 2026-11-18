@@ -19,6 +19,9 @@ import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "./adapters/findingSubmit";
+import { parseEntityRoute } from "./routing/entityPaths";
+import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
+import type { EntityLedgerFactory } from "./features/ledger/model";
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -106,11 +109,11 @@ const ROUTES: readonly RouteDef[] = [
   },
 ];
 
-const APPLICATION_IDS: readonly string[] = ["safety", "equipment", "platform"];
-
 function applicationOfPath(rest: string): ApplicationId | null {
+  const entity = parseEntityRoute(rest);
+  if (entity) return entity.appKey;
   const first = rest.split("/")[0] ?? "";
-  return APPLICATION_IDS.includes(first) ? (first as ApplicationId) : null;
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(first) ? first : null;
 }
 
 function splitLocation(location: string): { pathname: string; search: string } {
@@ -163,16 +166,17 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: 
 interface AppAdapterFactories {
   createFindingStore: () => FindingStore;
   createPermissionAdmin: () => PermissionAdminAdapter;
+  createEntityLedger?: EntityLedgerFactory;
 }
 
-function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFactories) {
+function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger }: AppAdapterFactories) {
   const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
   // 按身份和租户重建：适配器可能缓存 schema，不得跨账号或租户复用。
-  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId, [...session.permissions].sort(), session.applications.map((app) => [app.id, app.entryPath]).sort()]) : "";
+  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId, [...session.permissions].sort(), [...(session.canonicalPermissions ?? [])].sort(), session.applications.map((app) => [app.id, app.entryPath]).sort()]) : "";
   const previousIdentity = useRef("");
   const pendingSelectionReset = useRef(false);
   if (identityKey && previousIdentity.current && previousIdentity.current !== identityKey) pendingSelectionReset.current = true;
@@ -182,6 +186,9 @@ function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFact
   const permissionAdmin = useMemo(() => createPermissionAdmin(), [identityKey]);
 
   const parsed = parsePath(pathname);
+  const entityRoute = parseEntityRoute(parsed.rest);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
   const redirect = session ? canonicalTarget(session, location) : null;
   const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
   const route = tenantMatches ? ROUTES.find((candidate) => candidate.rest === parsed.rest) : undefined;
@@ -241,7 +248,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFact
         note="此提示仅用于界面呈现，实际访问权限由服务端校验。"
       />
     );
-  } else if (!route) {
+  } else if (!route && !entityRoute) {
     title = session.applications.length === 0 ? "没有可用应用" : "页面未开放";
     content =
       session.applications.length === 0 ? (
@@ -249,7 +256,12 @@ function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFact
       ) : (
         <StatusPage title="页面未开放" description="该路由不属于首批前端交付范围。" />
       );
-  } else if (!authorizedApplication || (!canReadRoute && !canReportHere)) {
+  } else if (entityRoute) {
+    title = "通用台账";
+    content = !authorizedApplication ? <StatusPage title="无权访问" description="当前账号没有此应用的访问权限。" />
+      : mode !== "http" || !entityAdapter ? <StatusPage title="需连接后端" description="此台账使用已发布的服务端定义，请连接后端后使用。" />
+        : <EntityLedgerPage key={JSON.stringify([identityKey, entityRoute.appKey, entityRoute.entityKey, entityRoute.page, entityRoute.id])} adapter={entityAdapter} route={entityRoute} tenantId={session.tenant.id} actorId={session.actor.id} identityScope={session.identityScope} permissions={session.canonicalPermissions ?? session.permissions} onUnauthenticated={expire} />;
+  } else if (!route || !authorizedApplication || (!canReadRoute && !canReportHere)) {
     title = "无权访问";
     content = (
       <StatusPage
@@ -307,7 +319,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin }: AppAdapterFact
       key={identityKey}
       session={session}
       application={authorizedApplication}
-      currentRest={parsed.rest}
+      currentRest={entityRoute?.base ?? parsed.rest}
       menu={menu.state}
       onRetryMenu={menu.retry}
       onLogout={logout}
@@ -324,6 +336,7 @@ export function App({
   findingStore = syntheticFindingStore,
   createFindingStore,
   createPermissionAdmin,
+  createEntityLedger,
   mode = "synthetic",
 }: {
   sessionAdapter?: SessionAdapter;
@@ -333,13 +346,14 @@ export function App({
   createFindingStore?: () => FindingStore;
   /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
   createPermissionAdmin?: () => PermissionAdminAdapter;
+  createEntityLedger?: EntityLedgerFactory;
   /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
   mode?: AppMode;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} />
+        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} />
       </SessionProvider>
     </ModeProvider>
   );
