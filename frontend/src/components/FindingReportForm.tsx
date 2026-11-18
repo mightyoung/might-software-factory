@@ -1,4 +1,6 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { FindingSubmitError } from "../adapters/findingSubmit";
+import { CREATE_DRAFT_FIELDS, validatePublishedFindingDraft, type FindingDefinition } from "../adapters/findingDefinition";
 import { useAppMode } from "../mode";
 import { OrganizationField, useReportableOrganizations } from "./OrganizationField";
 import { ReportDraftFields } from "./ReportDraftFields";
@@ -15,6 +17,7 @@ import {
   type FindingSubmitResult,
 } from "../adapters/findingSubmit";
 import {
+  DRAFT_FIELD_ORDER,
   createEmptyDraft,
   hasDraftErrors,
   normalizeDraft,
@@ -30,11 +33,13 @@ export interface FindingReportFormProps {
   onClose: () => void;
   /** 提交成功：用于让台账刷新列表。 */
   onSubmitted: (result: FindingSubmitResult) => void;
-  onOpenSubmitted: (id: string) => void;
+  onOpenSubmitted?: (id: string) => void;
   /** 服务端判定未登录（401）：由应用回到登录页。 */
   onUnauthenticated?: () => void;
   /** 当前登录者的标识；提供时，会话被动失效后未提交的内容会在同一个人重新登录后恢复。 */
   draftKey?: string;
+  /** 从“未成立”记录发起的关联上报：提交时带上父记录 id。 */
+  relatedTo?: { id: string; code: string };
   now?: () => Date;
   createKey?: () => string;
 }
@@ -48,13 +53,19 @@ const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   unavailable: "服务暂时不可用，上报尚未确认成功。可以直接重试，重试不会重复创建记录。",
 };
 
-export function FindingReportForm({
+export function FindingReportForm(props:FindingReportFormProps) {
+  const [scope,setScope]=useState({adapter:props.adapter,draftKey:props.draftKey,generation:0});
+  if(scope.adapter!==props.adapter||scope.draftKey!==props.draftKey){setScope({adapter:props.adapter,draftKey:props.draftKey,generation:scope.generation+1});return null;}
+  return <FindingReportFormBody key={scope.generation} {...props}/>;
+}
+function FindingReportFormBody({
   adapter,
   onClose,
   onSubmitted,
   onOpenSubmitted,
   onUnauthenticated,
   draftKey,
+  relatedTo,
   now = () => new Date(),
   createKey = newIdempotencyKey,
 }: FindingReportFormProps) {
@@ -67,8 +78,19 @@ export function FindingReportForm({
   const live = useAppMode() === "http";
 
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
-  const needsOrganization = adapter.listOrganizations !== undefined;
-  const orgs = useReportableOrganizations(adapter, onUnauthenticated, restored?.organizationId);
+  const needsOrganization = adapter.queryOrganizations !== undefined || adapter.listOrganizations !== undefined;
+  const published=adapter.loadDefinition!==undefined;
+  const [definitionState,setDefinitionState]=useState<{status:"loading"|"error"}|{status:"ready";value:FindingDefinition}>({status:"loading"});
+  const definition=definitionState.status==="ready"?definitionState.value:null;
+  const [definitionReload,setDefinitionReload]=useState(0);
+  const orgs = useReportableOrganizations(adapter, onUnauthenticated, restored?.organizationId,!published||definition!==null);
+  useEffect(()=>{
+    if(!adapter.loadDefinition)return;let current=true;const abort=new AbortController();setDefinitionState({status:"loading"});
+    adapter.loadDefinition(abort.signal).then(value=>{if(current&&!abort.signal.aborted)setDefinitionState({status:"ready",value});}).catch((error:unknown)=>{
+      if(!current||abort.signal.aborted)return;setDefinitionState({status:"error"});orgs.reset();
+      if(error instanceof FindingSubmitError&&error.kind==="unauthenticated")onUnauthenticated?.();
+    });return ()=>{current=false;abort.abort();};
+  },[adapter,definitionReload]);
   const organizationId = orgs.organizationId;
   const [orgError, setOrgError] = useState<string | null>(null);
   const orgRef = useRef<HTMLSelectElement | null>(null);
@@ -79,7 +101,8 @@ export function FindingReportForm({
 
   const submit = useReportSubmit({ adapter, createKey, onSubmitted, onUnauthenticated });
   const { phase, failure: submitFailure, submitting } = submit;
-  const focus = useFieldFocus(phase.name === "editing");
+  const fieldOrder=useMemo(()=>definition?definition.layout.create.map(key=>CREATE_DRAFT_FIELDS[key]).filter((key):key is FindingDraftField=>key!==undefined):DRAFT_FIELD_ORDER,[definition]);
+  const focus = useFieldFocus(phase.name === "editing",fieldOrder);
   const dirty = orgs.touched || JSON.stringify(normalizeDraft(draft)) !== JSON.stringify(normalizeDraft(initial));
   useUnsavedGuard(dirty && phase.name !== "submitted");
   useDraftStash({ draftKey, draft, organizationId, dirty, submitted: phase.name === "submitted", restored: restored !== undefined });
@@ -114,10 +137,10 @@ export function FindingReportForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting) return;
-    const found = validateFindingDraft(draft, now());
+    if (submitting || (published&&!definition)) return;
+    const found = definition?validatePublishedFindingDraft(draft,definition,now()):validateFindingDraft(draft, now());
     setErrors(found);
-    const orgMissing = needsOrganization && !organizationId;
+    const orgMissing = needsOrganization && (!organizationId||orgs.selected?.id!==organizationId);
     setOrgError(orgMissing ? "请选择所属组织" : null);
     if (orgMissing || hasDraftErrors(found)) {
       // 组织在表单最上方：缺它时先把焦点交给它，其余错误随后按顺序处理。
@@ -125,7 +148,7 @@ export function FindingReportForm({
       else focus.focusFirstError(found);
       return;
     }
-    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined);
+    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined, relatedTo?.id);
     if (outcome.fieldErrors) {
       setErrors(outcome.fieldErrors);
       focus.focusFirstError(outcome.fieldErrors);
@@ -138,6 +161,7 @@ export function FindingReportForm({
     setOrgError(null);
     setConfirmDiscard(false);
     submit.reset();
+    if(published){setDefinitionReload(value=>value+1);orgs.reset();}
     queueMicrotask(() => focus.focusNow("source"));
   }
 
@@ -166,6 +190,12 @@ export function FindingReportForm({
           ×
         </button>
       </div>
+
+      {relatedTo && (
+        <p className="report-banner" role="note">
+          这是基于未成立记录 <strong>{relatedTo.code}</strong> 补充新证据的关联上报；不会重新打开或修改原记录。
+        </p>
+      )}
 
       <p className="report-banner" role="note">
         {live ? (
@@ -196,32 +226,16 @@ export function FindingReportForm({
           </p>
         )}
 
-        {needsOrganization && (
-          <OrganizationField
-            id={`${uid}-org`}
-            orgs={orgs}
-            error={orgError ?? undefined}
-            disabled={submitting}
-            selectRef={orgRef}
-          />
-        )}
-
-        <ReportDraftFields
-          idPrefix={uid}
-          draft={draft}
-          errors={errors}
-          disabled={submitting}
-          live={live}
-          urgencies={adapter.urgencies}
-          now={now}
-          update={update}
-          fieldRef={focus.fieldRef}
-        />
+        {published&&definitionState.status==="loading"&&<p role="status">正在读取上报定义…</p>}
+        {published&&definitionState.status==="error"&&<p role="alert">上报定义读取失败，尚不能提交。<button type="button" onClick={()=>setDefinitionReload(value=>value+1)}>重试定义</button></p>}
+        {(!published||definition)&&<ReportDraftFields idPrefix={uid} draft={draft} errors={errors} disabled={submitting} live={live} urgencies={adapter.urgencies} definition={definition}
+          organization={needsOrganization?<OrganizationField id={`${uid}-org`} orgs={orgs} error={orgError??undefined} disabled={submitting} selectRef={orgRef} label={definition?.fields.organizationId?.presentation.label} required={definition?.fields.organizationId?.presentation.edit?.required??true}/>:null}
+          now={now} update={update} fieldRef={focus.fieldRef}/>}
 
         <div className="report-readonly">
           <div>
-            <span>隐患等级</span>
-            <strong className="status-label status-muted">待判定</strong>
+            <span>{definition?.fields.grade?.presentation.label??"隐患等级"}</span>
+            <strong className="status-label status-muted">{definition?.fields.grade?.presentation.valueLabels.UNKNOWN??"待判定"}</strong>
           </div>
           <p>由有权限人员依据适用规则确认，上报时不可选择。</p>
         </div>
@@ -247,9 +261,9 @@ export function FindingReportForm({
             <button
               type="submit"
               className="button button-primary"
-              disabled={submitting || (needsOrganization && orgs.noneAvailable)}
+              disabled={submitting || (published&&!definition) || (needsOrganization && (orgs.noneAvailable||(!orgs.selected&&orgs.state.status!=="ready")))}
             >
-              {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : "提交上报"}
+              {submitting ? "提交中…" : submitFailure === "unavailable" ? "重试提交" : definition?.actions["finding.create"]?.label??"提交上报"}
             </button>
           </div>
         )}

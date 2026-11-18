@@ -2,6 +2,8 @@ package com.mightyoung.softwarefactory;
 
 import com.mightyoung.softwarefactory.identity.SessionLifetimePolicy;
 import jakarta.servlet.Filter;
+import jakarta.servlet.ServletRequestEvent;
+import jakarta.servlet.ServletRequestListener;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
@@ -14,6 +16,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.ServletListenerRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.datasource.DelegatingDataSource;
@@ -33,6 +36,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
@@ -169,7 +173,13 @@ class IdentityLoginFailurePostgresIT {
 
     private IdentityAcceptanceHttps.Browser browser(){var b=https.browser(port);browsers.add(b);return b;}
     private IdentityAcceptanceHttps.Response post(IdentityAcceptanceHttps.Browser b,Fault fault)throws Exception {
-        return b.postWithHeaders(LOGIN,json.writeValueAsString(Map.of("loginKey",fixture.reporter.loginKey(),"password",fixture.reporter.password(),"tenantCode",fixture.tenantCode)),b.csrf(),fault==null?Map.of():Map.of(FAULT_HEADER,fault.token));
+        var response=b.postWithHeaders(LOGIN,json.writeValueAsString(Map.of("loginKey",fixture.reporter.loginKey(),"password",fixture.reporter.password(),"tenantCode",fixture.tenantCode)),b.csrf(),fault==null?Map.of():Map.of(FAULT_HEADER,fault.token));
+        if(fault!=null){
+            fault.scopeClosed.get(5,TimeUnit.SECONDS);
+            assertThat(fault.scopeEntries.get()).isEqualTo(1);assertThat(fault.scopeExits.get()).isEqualTo(1);
+            assertThat(fault.scopeExitThread.get()).isSameAs(fault.scopeThread.get());
+        }
+        return response;
     }
     private long ownedSessionCount(){return fixture.read(db->db.queryForObject("select count(*) from public.spring_session where principal_name=?",Long.class,fixture.reporter.accountId().toString()));}
     private Set<UUID> authenticationEventIds() throws SQLException {
@@ -222,6 +232,9 @@ class IdentityLoginFailurePostgresIT {
         final AtomicReference<String> sqlState=new AtomicReference<>();
         final AtomicBoolean readOnly=new AtomicBoolean(),injected=new AtomicBoolean();
         final AtomicBoolean earlyFlushTriggered=new AtomicBoolean();
+        final AtomicInteger scopeEntries=new AtomicInteger(),scopeExits=new AtomicInteger();
+        final AtomicReference<Thread> scopeThread=new AtomicReference<>(),scopeExitThread=new AtomicReference<>();
+        final CompletableFuture<Void> scopeClosed=new CompletableFuture<>();
         final AtomicReference<SessionProof> sessionProof=new AtomicReference<>();
         Fault(Mode mode,UUID account){this.mode=mode;this.account=account;}
     }
@@ -236,12 +249,29 @@ class IdentityLoginFailurePostgresIT {
         @Bean static BeanPostProcessor identityClosureDataSource(Faults faults){return new BeanPostProcessor(){
             @Override public Object postProcessAfterInitialization(Object bean,String name){return name.equals("dataSource")&&bean instanceof DataSource source?new InstrumentedDataSource(source,faults):bean;}
         };}
-        @Bean FilterRegistrationBean<Filter> identityClosureRequestScope(Faults faults){
-            Filter filter=(request,response,chain)->{var fault=faults.armed.get();
-                if(fault!=null&&fault.token.equals(((HttpServletRequest)request).getHeader(FAULT_HEADER)))faults.current.set(fault);
-                try{chain.doFilter(request,response);}finally{faults.current.remove();}
+        @Bean ServletListenerRegistrationBean<ServletRequestListener> identityClosureRequestScope(Faults faults){
+            // Passive servlet lifecycle instrumentation surrounds every synchronous filter unwind,
+            // including Session's final save. It is not part of the production filter topology.
+            final String attribute=IdentityLoginFailurePostgresIT.class.getName()+".requestFault";
+            ServletRequestListener listener=new ServletRequestListener(){
+                @Override public void requestInitialized(ServletRequestEvent event){
+                    faults.current.remove();
+                    var request=(HttpServletRequest)event.getServletRequest();var fault=faults.armed.get();
+                    if(fault!=null&&"POST".equals(request.getMethod())&&LOGIN.equals(request.getRequestURI())
+                            &&fault.token.equals(request.getHeader(FAULT_HEADER))){
+                        faults.current.set(fault);request.setAttribute(attribute,fault);
+                        fault.scopeThread.set(Thread.currentThread());fault.scopeEntries.incrementAndGet();
+                    }
+                }
+                @Override public void requestDestroyed(ServletRequestEvent event){
+                    faults.current.remove();
+                    if(event.getServletRequest().getAttribute(attribute) instanceof Fault fault){
+                        fault.scopeExitThread.set(Thread.currentThread());fault.scopeExits.incrementAndGet();
+                        fault.scopeClosed.complete(null);
+                    }
+                }
             };
-            var bean=new FilterRegistrationBean<>(filter);bean.setOrder(Integer.MIN_VALUE);return bean;
+            return new ServletListenerRegistrationBean<>(listener);
         }
         @Bean FilterRegistrationBean<Filter> identityClosureEarlySessionFlush(Faults faults){
             Filter filter=(request,response,chain)->{

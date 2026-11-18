@@ -10,6 +10,7 @@ import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWor
 import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingWorkflowContracts.WorkflowCommand;
 
 import java.util.Optional;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewCycleContracts.*;
 import java.time.LocalDate;
 import java.util.UUID;
 import java.util.function.Function;
@@ -28,7 +29,19 @@ public interface FindingWorkflowRepository {
 
         void updateFinding(FindingWorkflowCase finding, long expectedVersion);
 
+        /** Read-only receipt lookup for eligibility/participant checks before a replay is released. */
+        Optional<CommandResult> readCommand(WorkflowCommand command);
+
         CommandClaim claimCommand(WorkflowCommand command);
+
+        void appendReviewCycle(ReviewCycle cycle);
+        void appendReviewDecision(Decision decision);
+        Optional<Decision> findReviewDecision(UUID findingId, int reviewCycle, FindingWorkflowContracts.ConfirmationStage stage);
+        void appendSupplement(Supplement supplement);
+        Optional<Decision> findReturnDecision(UUID findingId, int reviewCycle);
+        void appendParticipant(CommandParticipant participant);
+        Optional<CommandParticipant> findParticipant(UUID commandId);
+        Optional<LegacyConfirmationProof> findLegacyConfirmation(UUID commandId);
 
         void completeCommand(UUID commandId, CommandResult result);
 

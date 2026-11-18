@@ -21,7 +21,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.boot.session.autoconfigure.DefaultCookieSerializerCustomizer;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import tools.jackson.databind.ObjectMapper;
@@ -43,7 +43,7 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            CookieCsrfTokenRepository csrfTokenRepository,
+            CsrfTokenRepository csrfTokenRepository,
             SecurityContextRepository securityContextRepository,
             LocalPasswordAuthenticationFilter loginFilter,
             SessionLifetimePolicy sessionLifetime,
@@ -59,13 +59,14 @@ public class SecurityConfiguration {
                         .csrfTokenRequestHandler(new EagerCookieCsrfTokenRequestHandler()))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/api/v1/auth/csrf", "/api/v1/auth/login").permitAll()
+                        .requestMatchers(IdentityCapabilityRoutePolicy::matches).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) -> IdentityHttpResponses.writeError(
-                                response, HttpServletResponse.SC_UNAUTHORIZED, "AUTH_REQUIRED",
+                                request, response, HttpServletResponse.SC_UNAUTHORIZED, "AUTH_REQUIRED",
                                 "A verified session is required", false))
                         .accessDeniedHandler((request, response, exception) -> IdentityHttpResponses.writeError(
-                                response, HttpServletResponse.SC_FORBIDDEN, "ACTION_DENIED",
+                                request, response, HttpServletResponse.SC_FORBIDDEN, "ACTION_DENIED",
                                 "The request is not allowed", false)))
                 .requestCache(cache -> cache.disable())
                 .securityContext(context -> context.securityContextRepository(securityContextRepository))
@@ -119,6 +120,18 @@ public class SecurityConfiguration {
     }
 
     @Bean
+    FilterRegistrationBean<IdentityLifecycleSessionPersistenceFilter> lifecycleSessionPersistenceFailureBoundary(
+            org.springframework.core.env.Environment environment) {
+        int sessionOrder=environment.getProperty("spring.session.servlet.filter-order",Integer.class,
+                org.springframework.session.web.http.SessionRepositoryFilter.DEFAULT_ORDER);
+        if(sessionOrder==Integer.MIN_VALUE)throw new IllegalStateException("Session filter order must allow a capability persistence boundary");
+        var registration=new FilterRegistrationBean<>(new IdentityLifecycleSessionPersistenceFilter());
+        registration.setOrder(sessionOrder-1);
+        registration.setDispatcherTypes(jakarta.servlet.DispatcherType.REQUEST);
+        return registration;
+    }
+
+    @Bean
     SecurityContextRepository securityContextRepository() {
         return new HttpSessionSecurityContextRepository();
     }
@@ -137,6 +150,21 @@ public class SecurityConfiguration {
     SessionLifetimePolicy sessionLifetimePolicy(ObjectProvider<Clock> clocks,
             @Value("${software-factory.security.session.absolute-timeout:12h}") Duration absoluteTimeout) {
         return new SessionLifetimePolicy(clocks.getIfAvailable(Clock::systemUTC), absoluteTimeout);
+    }
+
+    @Bean
+    SessionSensitiveRequests sessionSensitiveRequests(SessionContextResolver contexts,
+            @Value("${software-factory.security.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        return new SessionSensitiveRequests(contexts,absoluteTimeout);
+    }
+
+    @Bean
+    SessionSensitiveKeyProvider sessionSensitiveKeyProvider(ObjectProvider<SessionSensitiveKeys> material) {
+        return () -> {
+            var available=material.stream().limit(2).toList();
+            if(available.size()!=1)throw SessionSensitiveException.unavailable();
+            return available.getFirst();
+        };
     }
 
     @Bean
@@ -159,7 +187,7 @@ public class SecurityConfiguration {
             @Qualifier("localPasswordAuthenticationProvider") AuthenticationProvider provider,
             LoginRequestAuthenticationConverter converter,
             SecurityContextRepository securityContextRepository,
-            CookieCsrfTokenRepository csrfTokenRepository,
+            CsrfTokenRepository csrfTokenRepository,
             SessionLifetimePolicy sessionLifetime,
             LoginAttemptLimiter attempts) {
         return new LocalPasswordAuthenticationFilter(provider, converter, securityContextRepository,
@@ -175,11 +203,8 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    CookieCsrfTokenRepository csrfTokenRepository() {
-        CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
-        repository.setCookiePath("/");
-        repository.setCookieCustomizer(cookie -> cookie.secure(true).sameSite("Lax"));
-        return repository;
+    CsrfTokenRepository csrfTokenRepository() {
+        return new ExplicitHeaderCsrfTokenRepository();
     }
 
     /** Suppresses Spring Boot's generated in-memory development user. */

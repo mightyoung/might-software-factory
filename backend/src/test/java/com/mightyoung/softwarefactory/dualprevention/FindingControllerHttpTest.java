@@ -5,6 +5,7 @@ import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryValid
 import com.mightyoung.softwarefactory.authorization.EntityReadAccessPolicy;
 import com.mightyoung.softwarefactory.authorization.EntityReadGrant;
 import com.mightyoung.softwarefactory.dualprevention.finding.FindingReadScope;
+import com.mightyoung.softwarefactory.dualprevention.finding.FindingDetailContext;
 import com.mightyoung.softwarefactory.dualprevention.finding.FindingRecord;
 import com.mightyoung.softwarefactory.dualprevention.finding.FindingRepository;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
@@ -50,6 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         FindingReadAuthorizer.class,
         FindingReadService.class,
         FindingEntitySchema.class,
+        FindingDefinitionProvider.class,
         FindingApiExceptionHandler.class,
         com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryValidator.class,
         FindingControllerHttpTest.TestDependencies.class
@@ -161,7 +163,7 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.items[0].createdAt").exists())
                 .andExpect(jsonPath("$.data.page.total").value(11))
                 .andExpect(jsonPath("$.data.page.pageCount").value(1))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
+                .andExpect(jsonPath("$.meta.schemaVersion").value("5"));
 
         assertThat(repository.lastScope.tenantId()).isEqualTo(TENANT_A);
         assertThat(repository.lastScope.organizationIds()).containsExactly(ORG_A);
@@ -178,6 +180,11 @@ class FindingControllerHttpTest {
     void detailReturnsCreationFieldsAndReadableOrganizationName() throws Exception {
         FindingRecord synthetic = syntheticFinding();
         repository.visible = Optional.of(synthetic);
+        repository.detailContext = Optional.of(new FindingDetailContext(
+                new FindingDetailContext.Member(MEMBER_ID, "上报人"), null,
+                List.of(new FindingDetailContext.HistoryEntry(UUID.randomUUID(),
+                        OffsetDateTime.parse("2026-10-30T10:00:00Z"), null, "PERSON_CONFIRM_PENDING",
+                        0L, 1L, null, null)), false));
 
         mvc.perform(get(DETAIL_PATH + synthetic.id()).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
@@ -190,7 +197,13 @@ class FindingControllerHttpTest {
                 .andExpect(jsonPath("$.data.riskId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.grade").value(synthetic.grade()))
                 .andExpect(jsonPath("$.data.relatedFindingId").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.meta.schemaVersion").value("4"));
+                .andExpect(jsonPath("$.data.reporter.memberId").value(MEMBER_ID.toString()))
+                .andExpect(jsonPath("$.data.reporter.displayName").value("上报人"))
+                .andExpect(jsonPath("$.data.responsible").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.history[0].toVersion").value(1))
+                .andExpect(jsonPath("$.data.history[0].actorName").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.data.historyTruncated").value(false))
+                .andExpect(jsonPath("$.meta.schemaVersion").value("5"));
     }
 
     @Test
@@ -231,6 +244,7 @@ class FindingControllerHttpTest {
         assertThat(outsideScope).contains("The finding is not visible");
         assertThat(missing).contains("The finding is not visible");
         assertThat(repository.detailCalls).isEqualTo(2);
+        assertThat(repository.detailContextCalls).isZero();
         assertThat(repository.lastScope.tenantId()).isEqualTo(TENANT_A);
     }
 
@@ -239,7 +253,7 @@ class FindingControllerHttpTest {
         mvc.perform(get(SCHEMA_PATH).with(authenticationFor(TENANT_A)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.key").value("finding"))
-                .andExpect(jsonPath("$.data.schemaVersion").value("4"))
+                .andExpect(jsonPath("$.data.schemaVersion").value("5"))
                 .andExpect(jsonPath("$.data.fields.organization_id").doesNotExist())
                 .andExpect(jsonPath("$.data.fields.organizationId.type").value("UUID"))
                 .andExpect(jsonPath("$.data.fields.relatedFindingId.type").value("UUID"))
@@ -329,18 +343,23 @@ class FindingControllerHttpTest {
     static final class TestFindingRepository implements FindingRepository {
         private int pageCalls;
         private int detailCalls;
+        private int detailContextCalls;
         private FindingReadScope lastScope;
         private ValidatedQuery lastQuery;
         private PageResult pageResult = new PageResult(List.of(), 0);
         private Optional<FindingRecord> visible = Optional.empty();
+        private Optional<FindingDetailContext> detailContext = Optional.of(
+                new FindingDetailContext(null, null, List.of(), false));
 
         void reset() {
             pageCalls = 0;
             detailCalls = 0;
+            detailContextCalls = 0;
             lastScope = null;
             lastQuery = null;
             pageResult = new PageResult(List.of(), 0);
             visible = Optional.empty();
+            detailContext = Optional.of(new FindingDetailContext(null, null, List.of(), false));
         }
 
         @Override
@@ -356,6 +375,13 @@ class FindingControllerHttpTest {
             detailCalls++;
             lastScope = scope;
             return visible;
+        }
+
+        @Override
+        public Optional<FindingDetailContext> findDetailContext(FindingReadScope scope, UUID findingId) {
+            detailContextCalls++;
+            lastScope = scope;
+            return detailContext;
         }
     }
 

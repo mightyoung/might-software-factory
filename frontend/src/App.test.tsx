@@ -315,6 +315,43 @@ describe("真实后端登录（需要租户码）", () => {
   });
 });
 
+describe("security-context URL selection lifetime", () => {
+  it("retains reset through A expiry, B login and canonical redirect before mounting B's reader", async () => {
+    const { createSyntheticFindingStore } = await import("./adapters/syntheticFindingStore");
+    const { FindingLedgerAccessError } = await import("./adapters/findingLedger");
+    const base = createSyntheticSessionAdapter({ signedInAs: "demo.safety" });
+    const firstSession = (await base.restore())!;
+    const secondSession = { ...firstSession, actor: { id: "other-account", displayName: "另一个账号" }, identityScope: { accountId: "account-b", memberId: "member-b" } };
+    const first = createSyntheticFindingStore(), second = createSyntheticFindingStore();
+    first.ledger.get = vi.fn().mockRejectedValue(new FindingLedgerAccessError("unauthenticated"));
+    second.ledger.get = vi.fn(second.ledger.get);
+    let current = first;
+    const adapter: SessionAdapter = { ...base, restore: async () => firstSession, login: async () => { current = second; return secondSession; } };
+    setPath(`${T}/safety/findings?caseId=00000000-0000-4000-8000-000000000001`);
+    render(<App sessionAdapter={adapter} createFindingStore={() => current} />);
+    await screen.findByRole("heading", { name: "登录" });
+    await waitFor(() => expect(window.location.pathname).toBe("/login"));
+    expect(new URLSearchParams(window.location.search).get("next")).toContain("caseId");
+    fillAndSubmit("second", "password");
+    await screen.findByRole("heading", { name: "隐患台账" });
+    await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
+    expect(window.location.search).not.toContain("caseId");
+    expect(second.ledger.get).not.toHaveBeenCalled();
+    expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
+  });
+
+  it("preserves a cold authenticated deep link and performs its authorized detail read", async () => {
+    const { createSyntheticFindingStore } = await import("./adapters/syntheticFindingStore");
+    const store = createSyntheticFindingStore(); store.ledger.get = vi.fn(store.ledger.get);
+    const id = "00000000-0000-4000-8000-000000000001";
+    setPath(`/safety/findings?caseId=${id}`);
+    render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} findingStore={store} />);
+    await screen.findByRole("complementary", { name: "隐患详情面板" });
+    await waitFor(() => expect(store.ledger.get).toHaveBeenCalledWith(id, expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    expect(window.location.search).toBe(`?caseId=${id}`);
+  });
+});
+
 describe("修改密码", () => {
   const NEW = "a-new-long-password";
 

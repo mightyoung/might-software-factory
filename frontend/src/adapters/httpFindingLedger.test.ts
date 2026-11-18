@@ -4,17 +4,9 @@ import { findingUrgencyLabels } from "../domain/finding";
 import { createHttpFindingSubmit } from "./httpFindingSubmit";
 import { createHttpFindingLedger } from "./httpFindingLedger";
 
-const field = (type: string, operators: string[], extra = {}) => ({ type, nullable: false, selectable: true, sortable: true, operators, maxLength: 0, enumValues: [], ...extra });
-const schema = {
-  key: "finding", schemaVersion: "3", idField: "id", defaultFields: ["id"],
-  fields: {
-    id: field("UUID", ["EQ", "IN"]),
-    code: field("TEXT", ["EQ", "CONTAINS"], { maxLength: 64 }),
-    state: field("ENUM", ["EQ", "IN"], { enumValues: ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "ACCEPTANCE_PENDING", "CLOSED"] }),
-    createdAt: field("DATETIME", ["GTE", "LTE"]),
-  },
-};
-const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
+import { definitionResponse } from "./findingDefinition.fixtures";
+
+const item = { id: "i1", code: "YH-1", description: "d", state: "RECTIFYING", grade: "UNKNOWN", roundNo: 2, reviewCycle: 3, reviewProtocol: "CYCLE_V1", createdAt: "2026-10-30T01:00:00Z", discoveredAt: "2026-10-30T00:00:00Z", location: null, urgency: "URGENT", backfill: null };
 const q = { keyword: "", state: "", reportedAt: { from: "", to: "" } };
 
 function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string) => unknown }) {
@@ -22,7 +14,7 @@ function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string
   let schemaCalls = 0;
   const client = {
     get: async (path: string) => {
-      if (path.endsWith("/schema")) { schemaCalls++; return { data: schema }; }
+      if (path.includes("/definition?use=")) { schemaCalls++; return definitionResponse(path.endsWith("CREATE") ? "CREATE" : "READ"); }
       const r = handlers.get!(path); if (r instanceof Error) throw r; return r;
     },
     post: async (_p: string, req: { body: unknown }) => { posts.push(req.body); const r = handlers.post!(req.body); if (r instanceof Error) throw r; return r; },
@@ -32,12 +24,35 @@ function fake(handlers: { post?: (body: unknown) => unknown; get?: (path: string
 const listBody = { data: { items: [item], page: { number: 2, size: 20, total: 41, pageCount: 3 } }, meta: {} };
 
 describe("createHttpFindingLedger", () => {
-  it("maps query, appends the view filter, maps records, and fetches the schema once", async () => {
+  it("maps server-provided detail identities and chronological transitions", async () => {
+    const f = fake({ get: () => ({ data: {
+      ...item,
+      reporter: { memberId: "reporter-1", displayName: "上报人甲" },
+      responsible: { memberId: "worker-1", displayName: "整改人乙" },
+      history: [
+        { id: "h1", at: "2026-10-30T01:00:00Z", fromState: null, toState: "PERSON_CONFIRM_PENDING", fromVersion: null, toVersion: 1, actorName: "上报人甲", reason: null },
+        { id: "h2", at: "2026-10-30T02:00:00Z", fromState: "PERSON_CONFIRM_PENDING", toState: "SAFETY_CONFIRM_PENDING", fromVersion: 1, toVersion: 2, actorName: "确认人丙", reason: "已核实现场情况" },
+      ],
+      historyTruncated: false,
+    } }) });
+    const result = await createHttpFindingLedger(f.client).get(item.id);
+    expect(result).toMatchObject({ reporter: "上报人甲", responsible: "整改人乙", history: [
+      { at: "2026-10-30T01:00:00Z", title: "发现上报", note: "上报人甲" },
+      { at: "2026-10-30T02:00:00Z", title: "一人确认", note: "确认人丙 · 已核实现场情况" },
+    ] });
+  });
+
+  it("keeps missing identity names unknown and exposes truncated history", async () => {
+    const f = fake({ get: () => ({ data: { ...item, reporter: { memberId: "missing", displayName: null }, responsible: null, history: [], historyTruncated: true } }) });
+    expect(await createHttpFindingLedger(f.client).get(item.id)).toMatchObject({ reporter: "—", responsible: "—", history: [], historyTruncated: true });
+  });
+
+  it("maps query, appends the view filter, maps records, and revalidates the definition for every list read", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);
     const result = await ledger.list({ query: { ...q, keyword: "YH" }, page: { index: 2, size: 20 }, view: "confirmation" });
     await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
-    expect(f.schemaCalls()).toBe(1);
+    expect(f.schemaCalls()).toBe(2);
     expect(f.posts[0]).toMatchObject({
       page: { number: 2 }, size: 20,
       filterAST: { operator: "AND", conditions: [
@@ -47,7 +62,7 @@ describe("createHttpFindingLedger", () => {
     });
     expect(f.posts[1]).not.toHaveProperty("filterAST");
     expect(result).toMatchObject({ page: { index: 2, size: 20 }, total: 41, pageCount: 3 });
-    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "IMMEDIATE", riskLabel: "待专业评估", round: 2 });
+    expect(result.items[0]).toMatchObject({ id: "i1", code: "YH-1", location: "—", reportedAt: "2026-10-30T01:00:00Z", foundAt: "2026-10-30T00:00:00Z", urgency: "IMMEDIATE", riskLabel: "待专业评估", round: 2, reviewCycle: 3, reviewProtocol: "CYCLE_V1" });
     expect(result.items[0]).not.toHaveProperty("backfill");
   });
 
@@ -72,7 +87,7 @@ describe("createHttpFindingLedger", () => {
   it.each(["NORMAL", "IMMEDIATE"] as const)("preserves %s urgency through submit, list and detail", async (urgency) => {
     let persisted: typeof item | undefined;
     const client = {
-      get: async (path: string) => ({ data: path.endsWith("/schema") ? schema : persisted }),
+      get: async (path: string) => path.includes("/definition?use=") ? definitionResponse(path.endsWith("CREATE") ? "CREATE" : "READ") : ({ data: persisted }),
       post: async (path: string, request: { body: { urgency: string } }) => {
         if (path === "/api/v1/findings") {
           persisted = { ...item, urgency: request.body.urgency };
@@ -92,7 +107,19 @@ describe("createHttpFindingLedger", () => {
     expect((await ledger.get(created.id))?.urgency).toBe(urgency);
   });
 
-  it("a cancelled first call does not poison the shared schema request for the next call (StrictMode)", async () => {
+  it("uses the current published grade label while retaining required-field validation", async () => {
+    const response = definitionResponse();
+    const grade = response.data.fields.grade!;
+    const current = { ...response, data: { ...response.data, fields: { ...response.data.fields,
+      grade: { ...grade, presentation: { ...grade.presentation, valueLabels: { ...grade.presentation.valueLabels, UNKNOWN: "当前发布的待评估标签" } } },
+    } } };
+    const client = { get: async () => current, post: async () => listBody } as unknown as HttpClient;
+    const result = await createHttpFindingLedger(client).list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+    expect(result.items[0]?.riskLabel).toBe("当前发布的待评估标签");
+    expect(result.items[0]?.round).toBe(2);
+  });
+
+  it("a cancelled first call does not poison the next definition request for the next call (StrictMode)", async () => {
     const f = fake({ post: () => listBody });
     const ledger = createHttpFindingLedger(f.client);
     const first = new AbortController();
@@ -101,13 +128,13 @@ describe("createHttpFindingLedger", () => {
     first.abort();
     await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
     await expect(ledger.list(req, { signal: new AbortController().signal })).resolves.toMatchObject({ total: 41 });
-    expect(f.schemaCalls()).toBe(1);
+    expect(f.schemaCalls()).toBe(2);
   });
 
   it("refuses a report-date filter instead of silently ignoring it", async () => {
     const f = fake({ post: () => listBody });
     const call = createHttpFindingLedger(f.client).list({ query: { ...q, reportedAt: { from: "2026-10-01", to: "" } }, page: { index: 1, size: 20 }, view: "all" });
-    await expect(call).rejects.toThrow(/binding/);
+    await expect(call).rejects.toThrow(/schema|field/);
     expect(f.posts).toHaveLength(0);
   });
 
@@ -127,11 +154,21 @@ describe("createHttpFindingLedger", () => {
     expect(paths).toEqual(["/api/v1/entities/finding/a%2Fb"]);
   });
 
-  it("fails the read when a required field is missing instead of inventing one", async () => {
-    const { state: _state, ...withoutState } = item;
-    const f = fake({ post: () => ({ data: { items: [withoutState], page: { number: 1, size: 20, total: 1, pageCount: 1 } }, meta: {} }) });
+  it.each(["state", "grade", "roundNo"] as const)("fails the read when required %s is missing instead of inventing it", async (missing) => {
+    const incomplete = Object.fromEntries(Object.entries(item).filter(([field]) => field !== missing));
+    const f = fake({ post: () => ({ data: { items: [incomplete], page: { number: 1, size: 20, total: 1, pageCount: 1 } }, meta: {} }) });
     const call = createHttpFindingLedger(f.client).list({ query: q, page: { index: 1, size: 20 }, view: "all" });
     await expect(call).rejects.toMatchObject({ name: "MalformedFindingResponseError" });
     await expect(call).rejects.not.toMatchObject({ name: "FindingLedgerAccessError" }); // 通用失败，不是未登录/无权
   });
+});
+
+it("does not reuse a warm definition after current authorization is denied", async () => {
+  let denied = false, posts = 0;
+  const client = { get: async () => { if (denied) throw new ApiError(403, "FORBIDDEN", null, false); return definitionResponse(); }, post: async () => { ++posts; return listBody; } } as unknown as HttpClient;
+  const ledger = createHttpFindingLedger(client);
+  await ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" });
+  denied = true;
+  await expect(ledger.list({ query: q, page: { index: 1, size: 20 }, view: "all" })).rejects.toMatchObject({ kind: "forbidden" });
+  expect(posts).toBe(1);
 });

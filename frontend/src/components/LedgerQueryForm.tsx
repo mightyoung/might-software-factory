@@ -96,7 +96,7 @@ function QueryFieldControl<T>({
         <label>
           <span className="visually-hidden">{field.label}起</span>
           <input
-            type="date"
+            type={field.kind === "dateTimeRange" ? "datetime-local" : "date"}
             aria-label={`${field.label}起`}
             value={range.from}
             onChange={(event) => onChange(field.key, { ...range, from: event.currentTarget.value })}
@@ -108,13 +108,14 @@ function QueryFieldControl<T>({
         <label>
           <span className="visually-hidden">{field.label}止</span>
           <input
-            type="date"
+            type={field.kind === "dateTimeRange" ? "datetime-local" : "date"}
             aria-label={`${field.label}止`}
             value={range.to}
             onChange={(event) => onChange(field.key, { ...range, to: event.currentTarget.value })}
           />
         </label>
       </div>
+      {field.kind === "dateTimeRange" && <span className="field-hint">北京时间（Asia/Shanghai）</span>}
     </fieldset>
   );
 }

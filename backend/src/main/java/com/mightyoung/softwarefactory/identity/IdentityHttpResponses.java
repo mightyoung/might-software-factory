@@ -1,5 +1,6 @@
 package com.mightyoung.softwarefactory.identity;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
@@ -8,6 +9,13 @@ import java.util.UUID;
 final class IdentityHttpResponses {
 
     private IdentityHttpResponses() {
+    }
+
+    /** Reuses a server-issued request trace when an outer boundary has initialized one. */
+    static void writeError(HttpServletRequest request,HttpServletResponse response,int status,String code,
+            String message,boolean retryable) throws IOException {
+        UUID trace=IdentityRequestIds.existing(request).map(IdentityRequestIds.Ids::traceId).orElseGet(UUID::randomUUID);
+        writeError(response,status,code,message,retryable,trace);
     }
 
     static void writeError(HttpServletResponse response, int status, String code, String message,
@@ -32,6 +40,12 @@ final class IdentityHttpResponses {
                     .path("/").secure(true).httpOnly(name.equals("SESSION")).sameSite("Lax")
                     .maxAge(0).build().toString());
         }
+    }
+
+    /** Capability retry keeps its independently valid CSRF cookie/header. */
+    static void clearSessionCookie(HttpServletResponse response) {
+        response.addHeader("Set-Cookie", org.springframework.http.ResponseCookie.from("SESSION", "")
+                .path("/").secure(true).httpOnly(true).sameSite("Lax").maxAge(0).build().toString());
     }
 
     static void noContent(HttpServletResponse response) {

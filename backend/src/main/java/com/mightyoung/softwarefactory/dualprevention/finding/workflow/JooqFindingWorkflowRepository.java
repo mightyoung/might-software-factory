@@ -23,6 +23,7 @@ import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
+import com.mightyoung.softwarefactory.dualprevention.finding.workflow.FindingReviewCycleContracts.*;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -75,7 +76,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     select tenant_id, id, organization_id, code, description, discovered_at,
                            source_event_id, risk_id, grade, state, round_no, version,
                            created_by_member_id, updated_by_member_id,
-                           source_category, urgency, location, interim_measure, backfill, related_finding_id
+                           source_category, urgency, location, interim_measure, backfill, related_finding_id, review_cycle, review_protocol
                       from public.finding
                      where tenant_id = cast(? as uuid) and id = cast(? as uuid)
                      for update
@@ -93,17 +94,18 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                         (tenant_id, id, organization_id, code, description, discovered_at,
                          source_event_id, risk_id, grade, state, round_no, version,
                          created_at, updated_at, created_by_member_id, updated_by_member_id,
-                         source_category, urgency, location, interim_measure, backfill, related_finding_id)
+                         source_category, urgency, location, interim_measure, backfill, related_finding_id, review_cycle, review_protocol)
                     values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as timestamptz),
                             cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, current_timestamp,
-                            current_timestamp, cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, ?, cast(? as uuid))
+                            current_timestamp, cast(? as uuid), cast(? as uuid), ?, ?, ?, ?, ?, cast(? as uuid), ?, ?)
                     """, finding.tenantId(), finding.id(), finding.organizationId(), finding.code(),
                     finding.description(), finding.discoveredAt(), finding.sourceEventId(), finding.riskId(),
                     finding.grade(), finding.state().name(), finding.roundNo(), finding.version(),
                     finding.createdByMemberId(), finding.updatedByMemberId(),
                     finding.sourceCategory() == null ? null : finding.sourceCategory().name(),
                     finding.urgency() == null ? null : finding.urgency().name(), finding.location(),
-                    finding.interimMeasure(), finding.backfill(), finding.relatedFindingId());
+                    finding.interimMeasure(), finding.backfill(), finding.relatedFindingId(),
+                    finding.reviewCycle(), finding.reviewProtocol().name());
             if (inserted != 1) throw new IllegalStateException("Finding create did not insert one row");
         }
 
@@ -137,10 +139,10 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
             int updated = dsl.execute("""
                     update public.finding
                        set grade = ?, state = ?, round_no = ?, version = ?, updated_at = current_timestamp,
-                           updated_by_member_id = cast(? as uuid)
+                           updated_by_member_id = cast(? as uuid), review_cycle = ?, review_protocol = ?
                      where tenant_id = cast(? as uuid) and id = cast(? as uuid) and version = ?
                     """, finding.grade(), finding.state().name(), finding.roundNo(), finding.version(),
-                    finding.updatedByMemberId(), tenantId, finding.id(), expectedVersion);
+                    finding.updatedByMemberId(), finding.reviewCycle(), finding.reviewProtocol().name(), tenantId, finding.id(), expectedVersion);
             if (updated != 1) throw new FindingWorkflowVersionConflictException();
         }
 
@@ -154,19 +156,28 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     """, tenantId, command.commandId(), command.actorId(), command.action(), command.requestHash());
             if (inserted == 1) return CommandClaim.newClaim();
 
+            return CommandClaim.replay(readCommand(command, true).orElseThrow(
+                    () -> new IllegalStateException("Conflicting command receipt could not be read")));
+        }
+
+        @Override
+        public Optional<CommandResult> readCommand(WorkflowCommand command) {
+            return readCommand(command, false);
+        }
+
+        private Optional<CommandResult> readCommand(WorkflowCommand command, boolean lockReceipt) {
             Record prior = dsl.fetchOne("""
                     select receipt.actor_id, receipt.action, receipt.request_hash,
                            receipt.result_finding_id, finding.code as result_code,
-                           receipt.result_state, receipt.result_round_no, receipt.result_version
+                           receipt.result_state, receipt.result_round_no, receipt.result_version, receipt.result_review_cycle
                       from public.finding_command_receipt receipt
                       left join public.finding
                         on finding.tenant_id = receipt.tenant_id
                        and finding.id = receipt.result_finding_id
                      where receipt.tenant_id = cast(? as uuid)
                        and receipt.command_id = cast(? as uuid)
-                     for update of receipt
-                    """, tenantId, command.commandId());
-            if (prior == null) throw new IllegalStateException("Conflicting command receipt could not be read");
+                    """ + (lockReceipt ? " for update of receipt" : ""), tenantId, command.commandId());
+            if (prior == null) return Optional.empty();
             if (!command.actorId().equals(prior.get("actor_id", UUID.class))
                     || !command.action().equals(prior.get("action", String.class))
                     || !command.requestHash().equals(prior.get("request_hash", String.class))) {
@@ -180,10 +191,20 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
             if (resultCode == null || resultCode.isBlank()) {
                 throw new IllegalStateException("A completed finding command receipt has no visible finding code");
             }
-            return CommandClaim.replay(new CommandResult(resultFindingId,
+            Integer cycle = prior.get("result_review_cycle", Integer.class);
+            if (cycle == null) {
+                if (!java.util.Set.of("finding.create", "finding.workflow.initialize", "finding.confirm.person",
+                        "finding.confirm.safety", "finding.close-not-established", "finding.dispatch",
+                        "finding.remediate", "finding.verify").contains(command.action())) {
+                    throw new com.mightyoung.softwarefactory.workflow.WorkflowTaskStateConflictException();
+                }
+                // Historical completed receipts predate V17; never infer history from today's finding protocol.
+                cycle = 1;
+            }
+            return Optional.of(new CommandResult(resultFindingId,
                     resultCode,
                     FindingWorkflowState.valueOf(prior.get("result_state", String.class)),
-                    prior.get("result_round_no", Integer.class), prior.get("result_version", Long.class)));
+                    prior.get("result_round_no", Integer.class), prior.get("result_version", Long.class), cycle));
         }
 
         @Override
@@ -191,10 +212,10 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
             int updated = dsl.execute("""
                     update public.finding_command_receipt
                        set result_finding_id = cast(? as uuid), result_state = ?, result_round_no = ?,
-                           result_version = ?, completed_at = current_timestamp
+                           result_version = ?, result_review_cycle = ?, completed_at = current_timestamp
                      where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
                        and result_finding_id is null
-                    """, result.findingId(), result.state().name(), result.roundNo(), result.version(),
+                    """, result.findingId(), result.state().name(), result.roundNo(), result.version(), result.reviewCycle(),
                     tenantId, commandId);
             if (updated != 1) throw new IllegalStateException("Command receipt could not be completed");
         }
@@ -225,7 +246,13 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                                'fromVersion', cast(? as bigint),
                                'toVersion', cast(? as bigint),
                                'fromGrade', cast(? as text),
-                               'toGrade', cast(? as text)),
+                               'toGrade', cast(? as text),
+                               'fromReviewCycle', cast(? as integer),
+                               'toReviewCycle', cast(? as integer),
+                               'reviewStage', (select d.stage from public.finding_review_decision d
+                                   where d.tenant_id = receipt.tenant_id and d.command_id = receipt.command_id),
+                               'reviewDecision', (select d.decision from public.finding_review_decision d
+                                   where d.tenant_id = receipt.tenant_id and d.command_id = receipt.command_id)),
                            cast(? as varchar), 'finding-workflow-v1', cast(? as timestamptz)
                       from public.finding_command_receipt receipt
                      where receipt.tenant_id = cast(? as uuid)
@@ -234,7 +261,7 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     """, tenantId, UUID.randomUUID(), transition.actorId(), transition.findingId(),
                     transition.reason(), transition.fromState() == null ? null : transition.fromState().name(),
                     transition.toState().name(), transition.fromVersion(), transition.toVersion(),
-                    transition.fromGrade(), transition.toGrade(),
+                    transition.fromGrade(), transition.toGrade(), transition.fromReviewCycle(), transition.toReviewCycle(),
                     org.slf4j.MDC.get("traceId"), transition.occurredAt(), tenantId,
                     transition.commandId(), transition.actorId());
             if (audited != 1) throw new IllegalStateException("Finding audit event did not persist");
@@ -264,6 +291,93 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                     """, tenantId, findingId, stage);
             UUID actorMemberId = row == null ? null : row.get("actor_member_id", UUID.class);
             return Optional.ofNullable(actorMemberId);
+        }
+
+        @Override
+        public void appendReviewCycle(ReviewCycle cycle) {
+            requireInserted(dsl.execute("""
+                    insert into public.finding_review_cycle
+                        (tenant_id, finding_id, review_cycle, opened_by_command_id, opened_at)
+                    values (cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), cast(? as timestamptz))
+                    """, tenantId, cycle.findingId(), cycle.reviewCycle(), cycle.openedByCommandId(), cycle.openedAt()));
+        }
+
+        @Override
+        public void appendReviewDecision(Decision decision) {
+            requireInserted(dsl.execute("""
+                    insert into public.finding_review_decision
+                        (tenant_id, finding_id, review_cycle, stage, actor_member_id, decision, reason,
+                         confirmed_grade, expected_version, command_id, decided_at)
+                    values (cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid), ?, ?, ?, ?, cast(? as uuid), cast(? as timestamptz))
+                    """, tenantId, decision.findingId(), decision.reviewCycle(), decision.stage().name(),
+                    decision.actorMemberId(), decision.decision().name(), decision.reason(), decision.confirmedGrade(),
+                    decision.expectedVersion(), decision.commandId(), decision.decidedAt()));
+        }
+
+        @Override
+        public Optional<Decision> findReviewDecision(UUID findingId, int cycle, FindingWorkflowContracts.ConfirmationStage stage) {
+            return Optional.ofNullable(dsl.fetchOne("""
+                    select * from public.finding_review_decision where tenant_id = cast(? as uuid)
+                      and finding_id = cast(? as uuid) and review_cycle = ? and stage = ?
+                    """, tenantId, findingId, cycle, stage.name())).map(JooqFindingWorkflowRepository::toReviewDecision);
+        }
+
+        @Override
+        public Optional<Decision> findReturnDecision(UUID findingId, int cycle) {
+            var rows = dsl.fetch("""
+                    select * from public.finding_review_decision where tenant_id = cast(? as uuid)
+                      and finding_id = cast(? as uuid) and review_cycle = ? and decision = 'RETURN_FOR_INFORMATION'
+                    """, tenantId, findingId, cycle);
+            if (rows.size() > 1) throw new FindingWorkflowConfigurationException("More than one return in a review cycle");
+            return rows.isEmpty() ? Optional.empty() : Optional.of(toReviewDecision(rows.getFirst()));
+        }
+
+        @Override
+        public void appendSupplement(Supplement supplement) {
+            requireInserted(dsl.execute("""
+                    insert into public.finding_report_supplement
+                        (tenant_id, id, finding_id, review_cycle, next_review_cycle, return_command_id,
+                         reporter_member_id, statement, expected_version, command_id, submitted_at)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, ?, cast(? as uuid),
+                            cast(? as uuid), ?, ?, cast(? as uuid), cast(? as timestamptz))
+                    """, tenantId, supplement.id(), supplement.findingId(), supplement.reviewCycle(),
+                    supplement.nextReviewCycle(), supplement.returnCommandId(), supplement.reporterMemberId(),
+                    supplement.statement(), supplement.expectedVersion(), supplement.commandId(), supplement.submittedAt()));
+        }
+
+        @Override
+        public void appendParticipant(CommandParticipant participant) {
+            requireInserted(dsl.execute("""
+                    insert into public.finding_command_participant
+                        (tenant_id, command_id, finding_id, review_cycle, actor_member_id, stage,
+                         definition_id, process_instance_id, task_id, task_definition_key, recorded_at)
+                    values (cast(? as uuid), cast(? as uuid), cast(? as uuid), ?, cast(? as uuid), ?, ?, ?, ?, ?, cast(? as timestamptz))
+                    """, tenantId, participant.commandId(), participant.findingId(), participant.reviewCycle(),
+                    participant.actorMemberId(), participant.stage(), participant.definitionId(), participant.processInstanceId(),
+                    participant.taskId(), participant.taskDefinitionKey(), participant.recordedAt()));
+        }
+
+        @Override
+        public Optional<CommandParticipant> findParticipant(UUID commandId) {
+            Record row = dsl.fetchOne("""
+                    select * from public.finding_command_participant
+                     where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
+                    """, tenantId, commandId);
+            return Optional.ofNullable(row).map(r -> new CommandParticipant(commandId, r.get("finding_id", UUID.class),
+                    r.get("review_cycle", Integer.class), r.get("actor_member_id", UUID.class), r.get("stage", String.class),
+                    r.get("definition_id", String.class), r.get("process_instance_id", String.class), r.get("task_id", String.class),
+                    r.get("task_definition_key", String.class), r.get("recorded_at", OffsetDateTime.class)));
+        }
+
+        @Override
+        public Optional<LegacyConfirmationProof> findLegacyConfirmation(UUID commandId) {
+            Record row = dsl.fetchOne("""
+                    select finding_id, stage, actor_member_id, decision, reason, expected_version, command_id
+                      from public.finding_confirmation where tenant_id = cast(? as uuid) and command_id = cast(? as uuid)
+                    """, tenantId, commandId);
+            return Optional.ofNullable(row).map(r -> new LegacyConfirmationProof(r.get("finding_id", UUID.class),
+                    r.get("stage", String.class), r.get("actor_member_id", UUID.class), r.get("decision", String.class),
+                    r.get("reason", String.class), r.get("expected_version", Long.class), commandId));
         }
 
         @Override
@@ -461,7 +575,20 @@ public final class JooqFindingWorkflowRepository implements FindingWorkflowRepos
                 enumValue(row.get("source_category", String.class), FindingSourceCategory.class),
                 enumValue(row.get("urgency", String.class), FindingUrgency.class),
                 row.get("location", String.class), row.get("interim_measure", String.class),
-                row.get("backfill", Boolean.class), row.get("related_finding_id", UUID.class));
+                row.get("backfill", Boolean.class), row.get("related_finding_id", UUID.class),
+                row.get("review_cycle", Integer.class), FindingReviewProtocol.valueOf(row.get("review_protocol", String.class)));
+    }
+
+    private static void requireInserted(int count) {
+        if (count != 1) throw new IllegalStateException("Finding review history did not persist exactly one row");
+    }
+
+    private static Decision toReviewDecision(Record row) {
+        return new Decision(row.get("finding_id", UUID.class), row.get("review_cycle", Integer.class),
+                FindingWorkflowContracts.ConfirmationStage.valueOf(row.get("stage", String.class)),
+                row.get("actor_member_id", UUID.class), ReviewDecision.valueOf(row.get("decision", String.class)),
+                row.get("reason", String.class), row.get("confirmed_grade", String.class), row.get("expected_version", Long.class),
+                row.get("command_id", UUID.class), row.get("decided_at", OffsetDateTime.class));
     }
 
     private static <T extends Enum<T>> T enumValue(String value, Class<T> type) {

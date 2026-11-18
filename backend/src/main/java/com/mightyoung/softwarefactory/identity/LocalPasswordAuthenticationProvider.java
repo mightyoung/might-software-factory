@@ -18,10 +18,8 @@ import java.nio.CharBuffer;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.UUID;
@@ -99,8 +97,7 @@ public final class LocalPasswordAuthenticationProvider implements Authentication
 
     private Authentication authenticateWithinTransaction(
             LocalPasswordAuthenticationToken request, char[] submittedPassword) {
-        String loginKey = Normalizer.normalize(request.loginKey().strip(), Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT);
+        String loginKey = LocalLoginKey.normalize(request.loginKey());
         Optional<LocalPasswordCredential> found = credentials.findByLoginKey(loginKey);
         String hash = found.map(LocalPasswordCredential::secretHash).orElse(dummyPasswordHash);
         boolean passwordMatches = matchesPassword(submittedPassword, hash);

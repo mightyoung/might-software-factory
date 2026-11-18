@@ -11,7 +11,21 @@ import java.util.UUID;
  * A Spring savepoint rollback invalidates the guard and requires the entire transaction to roll back.
  */
 public interface AuthorizationWriteGuard {
+    /** Neutral entry point using the existing COMMAND lock family, never a new security scope. */
+    default void forBusinessCommand(UUID tenantId) { forFindingCommand(tenantId); }
+    /** Assertion only, with no lock acquisition or scope upgrade. */
+    default void requireBusinessCommand(UUID tenantId) { requireFindingCommand(tenantId); }
     void forFindingCommand(UUID tenantId);
+    /** Validates an existing command guard without acquiring or upgrading any lock. */
+    void requireFindingCommand(UUID tenantId);
     void forGlobalSecurityChange();
+    /** Global identity writes declare every affected tenant before any row access. */
+    default void forGlobalSecurityChange(Collection<UUID> tenantIds) {
+        throw new AuthorizationWriteGuardException("Declared global security scopes are not supported");
+    }
+    /** Assertion only: never acquires or upgrades a global scope. */
+    default void requireGlobalSecurityChange(Collection<UUID> tenantIds) {
+        throw new AuthorizationWriteGuardException("An existing declared global security scope is required");
+    }
     void forTenantSecurityChange(Collection<UUID> tenantIds);
 }

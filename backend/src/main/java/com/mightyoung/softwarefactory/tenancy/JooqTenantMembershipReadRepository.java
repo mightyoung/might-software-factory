@@ -23,6 +23,8 @@ public final class JooqTenantMembershipReadRepository implements TenantMembershi
                and tm.id = cast(? as uuid)
             """;
 
+    public static java.util.Map<String,Integer> commandReadSql() { return java.util.Map.of(MEMBERSHIP_SQL,3); }
+
     private final DSLContext dsl;
 
     public JooqTenantMembershipReadRepository(DSLContext dsl) {
@@ -31,7 +33,11 @@ public final class JooqTenantMembershipReadRepository implements TenantMembershi
 
     @Override
     public Optional<TenantMembershipState> findCurrentMembership(UUID tenantId, UUID accountId, UUID memberId) {
-        Record row = dsl.fetchOne(MEMBERSHIP_SQL, tenantId, accountId, memberId);
+        Record row = dsl.resultQuery(MEMBERSHIP_SQL, tenantId, accountId, memberId).coerce(
+                org.jooq.impl.DSL.field("tenant_status", String.class),
+                org.jooq.impl.DSL.field("member_status", String.class),
+                org.jooq.impl.DSL.field("tenant_auth_epoch", Long.class),
+                org.jooq.impl.DSL.field("member_auth_epoch", Long.class)).fetchOne();
         if (row == null) {
             return Optional.empty();
         }

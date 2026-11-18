@@ -4,6 +4,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import java.util.Base64;
 
 /** Supplies a denying verifier only when no trusted storage verifier has been configured. */
 @AutoConfiguration
+@Import(FileIngestionConfiguration.class)
 public class FileEvidenceVerificationAutoConfiguration {
 
     @Bean
@@ -33,6 +35,12 @@ public class FileEvidenceVerificationAutoConfiguration {
             throw new IllegalArgumentException("The local file trust configuration is invalid");
         }
         return new LocalPrivateFileStorageAdapter(root, key, verifierId, receiptKeyId, policyVersion, maxBytes);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(UploadProducerReadiness.class)
+    UploadProducerReadiness unconfiguredUploadProducerReadiness() {
+        return new UnconfiguredUploadProducerReadiness();
     }
 
     @Bean

@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory;
 
-import jakarta.servlet.Filter;
+import jakarta.servlet.ServletRequestEvent;
+import jakarta.servlet.ServletRequestListener;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.Execution;
@@ -9,7 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.*;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.ServletListenerRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.datasource.DelegatingDataSource;
@@ -24,6 +25,8 @@ import java.lang.reflect.Proxy;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -197,7 +200,14 @@ class AuthenticationEventPostgresIT {
     private IdentityAcceptanceHttps.Response login(IdentityAcceptanceHttps.Browser client,
                                                    Probe probe, String password) throws Exception {
         probes.armed.set(probe);
-        return client.postWithHeaders(LOGIN, body(password), client.csrf(), Map.of(PROBE_HEADER, probe.token));
+        var response=client.postWithHeaders(LOGIN, body(password), client.csrf(), Map.of(PROBE_HEADER, probe.token));
+        assertScopeClosed(probe);
+        return response;
+    }
+    private static void assertScopeClosed(Probe probe)throws Exception {
+        probe.scopeClosed.get(5,TimeUnit.SECONDS);
+        assertThat(probe.scopeEntries.get()).isEqualTo(1);assertThat(probe.scopeExits.get()).isEqualTo(1);
+        assertThat(probe.scopeExitThread.get()).isSameAs(probe.scopeThread.get());
     }
     private String body(String password) throws Exception {
         return json.writeValueAsString(Map.of("loginKey", fixture.reporter.loginKey(),
@@ -242,7 +252,8 @@ class AuthenticationEventPostgresIT {
         assertThat(probe.auditReadOnly.get()).isFalse();
         assertThat(probe.auditIsolation.get()).isEqualTo(Connection.TRANSACTION_READ_COMMITTED);
     }
-    private void assertNoAppend(Probe probe, long expected) {
+    private void assertNoAppend(Probe probe, long expected)throws Exception {
+        assertScopeClosed(probe);
         assertThat(probe.insertExecutions.get()).isZero();
         assertThat(probe.attemptId.get()).isNull();
         assertThat(allEvents()).isEqualTo(expected);
@@ -272,6 +283,9 @@ class AuthenticationEventPostgresIT {
         final AtomicReference<UUID> attemptId = new AtomicReference<>();
         final AtomicInteger insertExecutions = new AtomicInteger(), actualAuditCommits = new AtomicInteger();
         final AtomicInteger auditIsolation = new AtomicInteger();
+        final AtomicInteger scopeEntries=new AtomicInteger(),scopeExits=new AtomicInteger();
+        final AtomicReference<Thread> scopeThread=new AtomicReference<>(),scopeExitThread=new AtomicReference<>();
+        final CompletableFuture<Void> scopeClosed=new CompletableFuture<>();
         final AtomicBoolean injected = new AtomicBoolean(), authenticationReadExecuted = new AtomicBoolean();
         final AtomicBoolean auditAutoCommit = new AtomicBoolean(true), auditReadOnly = new AtomicBoolean(true);
         Probe(Mode mode) { this.mode = mode; }
@@ -293,17 +307,29 @@ class AuthenticationEventPostgresIT {
                 }
             };
         }
-        @Bean FilterRegistrationBean<Filter> authenticationEventProbeScope(Probes probes) {
-            Filter filter = (request, response, chain) -> {
-                Probe probe = probes.armed.get();
-                if (probe != null && probe.token.equals(((HttpServletRequest) request).getHeader(PROBE_HEADER)))
-                    probes.current.set(probe);
-                try { chain.doFilter(request, response); }
-                finally { probes.current.remove(); }
+        @Bean ServletListenerRegistrationBean<ServletRequestListener> authenticationEventProbeScope(Probes probes) {
+            // LoginAudit appends only after its inner chain returns. A request lifecycle listener
+            // keeps the probe bound through that append without competing for a filter order.
+            final String attribute=AuthenticationEventPostgresIT.class.getName()+".requestProbe";
+            ServletRequestListener listener=new ServletRequestListener(){
+                @Override public void requestInitialized(ServletRequestEvent event){
+                    probes.current.remove();
+                    var request=(HttpServletRequest)event.getServletRequest();var probe=probes.armed.get();
+                    if(probe!=null&&"POST".equals(request.getMethod())&&LOGIN.equals(request.getRequestURI())
+                            &&probe.token.equals(request.getHeader(PROBE_HEADER))){
+                        probes.current.set(probe);request.setAttribute(attribute,probe);
+                        probe.scopeThread.set(Thread.currentThread());probe.scopeEntries.incrementAndGet();
+                    }
+                }
+                @Override public void requestDestroyed(ServletRequestEvent event){
+                    probes.current.remove();
+                    if(event.getServletRequest().getAttribute(attribute) instanceof Probe probe){
+                        probe.scopeExitThread.set(Thread.currentThread());probe.scopeExits.incrementAndGet();
+                        probe.scopeClosed.complete(null);
+                    }
+                }
             };
-            var registration = new FilterRegistrationBean<>(filter);
-            registration.setOrder(Integer.MIN_VALUE);
-            return registration;
+            return new ServletListenerRegistrationBean<>(listener);
         }
     }
 

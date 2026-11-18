@@ -68,18 +68,22 @@ public final class FindingWorkflowContracts {
         NOT_ESTABLISHED
     }
 
-    public record CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version) {
+    public record CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version, @com.fasterxml.jackson.annotation.JsonIgnore int reviewCycle) {
+        public CommandResult(UUID findingId, String code, FindingWorkflowState state, int roundNo, long version) {
+            this(findingId, code, state, roundNo, version, 1);
+        }
+
         public CommandResult {
             Objects.requireNonNull(findingId, "findingId");
             Objects.requireNonNull(code, "code");
             Objects.requireNonNull(state, "state");
-            if (roundNo < 1 || version < 1) {
+            if (roundNo < 1 || version < 1 || reviewCycle < 1) {
                 throw new IllegalArgumentException("Finding round and version must be positive");
             }
         }
 
         public static CommandResult from(FindingWorkflowCase finding) {
-            return new CommandResult(finding.id(), finding.code(), finding.state(), finding.roundNo(), finding.version());
+            return new CommandResult(finding.id(), finding.code(), finding.state(), finding.roundNo(), finding.version(), finding.reviewCycle());
         }
     }
 
@@ -190,7 +194,15 @@ public final class FindingWorkflowContracts {
             long fromVersion,
             long toVersion,
             String fromGrade,
-            String toGrade) {
+            String toGrade,
+            int fromReviewCycle,
+            int toReviewCycle) {
+        public Transition(UUID findingId, FindingWorkflowState fromState, FindingWorkflowState toState,
+                          UUID commandId, UUID actorId, OffsetDateTime occurredAt, String reason,
+                          long fromVersion, long toVersion, String fromGrade, String toGrade) {
+            this(findingId, fromState, toState, commandId, actorId, occurredAt, reason, fromVersion, toVersion,
+                    fromGrade, toGrade, 1, 1);
+        }
         public Transition {
             Objects.requireNonNull(findingId, "findingId");
             Objects.requireNonNull(toState, "toState");

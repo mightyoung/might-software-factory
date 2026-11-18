@@ -24,12 +24,90 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.NestedExceptionUtils;
+
+import java.sql.SQLException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 @RestControllerAdvice
 public final class FindingApiExceptionHandler {
+    private static final Logger LOG = LoggerFactory.getLogger(FindingApiExceptionHandler.class);
+
+    @ExceptionHandler(FindingOrganizationReferenceRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidOrganizationReference(FindingOrganizationReferenceRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The organization reference request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(FindingReviewCycleRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidReviewCycle(FindingReviewCycleRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The finding review cycle request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(FindingEvidenceSetInitializationRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidEvidenceSetInitialization(FindingEvidenceSetInitializationRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The evidence set initialization request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceSetInitializationException.class)
+    ResponseEntity<ErrorResponse> evidenceSetInitializationFailure(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceSetInitializationException failure) {
+        return switch (failure.reason()) {
+            case IDEMPOTENCY_CONFLICT -> error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "The idempotency key conflicts with a prior initialization", false, List.of());
+            case VERSION_CONFLICT -> error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "The finding version is stale", false, List.of());
+            case ASSIGNMENT_UNRESOLVED -> error(HttpStatus.UNPROCESSABLE_ENTITY, "WORKFLOW_ASSIGNMENT_UNRESOLVED", "The remediation assignment is unresolved", false, List.of());
+            case UNAVAILABLE -> unavailable();
+            case QUOTA_EXCEEDED -> ResponseEntity.status(429).header("Retry-After", "1")
+                    .body(new ErrorResponse("RATE_LIMITED", "The evidence set initialization limit has been reached",
+                            UUID.randomUUID().toString(), true, List.of(), null));
+        };
+    }
+
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceReceiveService.AlreadyReceived.class)
+    ResponseEntity<ErrorResponse> contentAlreadyReceived(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceReceiveService.AlreadyReceived failure) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).header("Cache-Control","no-store").header("Location",failure.statusUrl())
+                .body(new ErrorResponse("ALREADY_RECEIVED","Upload content was already received; read its status",
+                        UUID.randomUUID().toString(),false,List.of(),null));
+    }
+    @ExceptionHandler(com.mightyoung.softwarefactory.files.FileIngestionPort.ContentRejected.class)
+    ResponseEntity<ErrorResponse> contentRejected(com.mightyoung.softwarefactory.files.FileIngestionPort.ContentRejected failure) {
+        return switch(failure.reason()) {
+            case INVALID_LENGTH,MALFORMED_CONTENT -> error(HttpStatus.BAD_REQUEST,"INVALID_REQUEST","The upload bytes are invalid",false,List.of());
+            case UNSUPPORTED_MEDIA -> error(HttpStatus.UNSUPPORTED_MEDIA_TYPE,"INVALID_REQUEST","The upload media is not allowed",false,List.of());
+            case SCANNER_REJECTED -> error(HttpStatus.UNPROCESSABLE_ENTITY,"CONTENT_REJECTED","The content policy rejected the upload",false,List.of());
+        };
+    }
+
+    @ExceptionHandler(FindingEvidenceUploadRequestParser.RequestFailure.class)
+    ResponseEntity<ErrorResponse> invalidUpload(FindingEvidenceUploadRequestParser.RequestFailure failure) {
+        return error(HttpStatus.valueOf(failure.status()), "INVALID_REQUEST",
+                "The evidence upload request is invalid", false, List.of());
+    }
+
+    @ExceptionHandler(com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceUploadException.class)
+    ResponseEntity<ErrorResponse> uploadFailure(
+            com.mightyoung.softwarefactory.dualprevention.finding.evidenceupload.FindingEvidenceUploadException failure) {
+        return switch (failure.reason()) {
+            case DECLARED_SIZE_EXCEEDED -> error(HttpStatus.PAYLOAD_TOO_LARGE, "INVALID_REQUEST", "The upload declaration exceeds the size limit", false, List.of());
+            case MEDIA_TYPE_NOT_ALLOWED -> error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "INVALID_REQUEST", "The upload media type is not allowed", false, List.of());
+            case IDEMPOTENCY_CONFLICT -> error(HttpStatus.CONFLICT, "IDEMPOTENCY_CONFLICT", "The idempotency key conflicts with a prior upload", false, List.of());
+            case VERSION_CONFLICT -> error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "The finding version is stale", false, List.of());
+            case EVIDENCE_REVISION_CONFLICT -> error(HttpStatus.CONFLICT, "EVIDENCE_REVISION_CONFLICT", "The evidence revision is stale", false, List.of());
+            case CONFLICT -> error(HttpStatus.CONFLICT, "COMMAND_CONFLICT", "The upload command conflicts with the current context", false, List.of());
+            case ASSIGNMENT_UNRESOLVED -> error(HttpStatus.UNPROCESSABLE_ENTITY, "WORKFLOW_ASSIGNMENT_UNRESOLVED", "The remediation assignment is unresolved", false, List.of());
+            case UNAVAILABLE -> unavailable();
+            case QUOTA_EXCEEDED -> ResponseEntity.status(429).header("Cache-Control", "no-store").header("Retry-After", "1")
+                    .body(new ErrorResponse("RATE_LIMITED", "The upload reservation limit has been reached",
+                            UUID.randomUUID().toString(), true, List.of(), null));
+        };
+    }
 
     @ExceptionHandler(UnauthenticatedSessionException.class)
     ResponseEntity<ErrorResponse> unauthenticated() {
@@ -98,10 +176,29 @@ public final class FindingApiExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, "INVALID_QUERY", "The finding request is invalid", false, List.of());
     }
 
+    @ExceptionHandler(com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException.class)
+    ResponseEntity<ErrorResponse> commandLifecycleFailure(
+            com.mightyoung.softwarefactory.support.G014JdbcTransactionManager.LifecycleException failure) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(G014LifecycleHttpResponses.error(failure, UUID.randomUUID()));
+    }
+
     @ExceptionHandler({DataAccessException.class, org.jooq.exception.DataAccessException.class,
             org.springframework.transaction.TransactionTimedOutException.class,
+            org.springframework.transaction.CannotCreateTransactionException.class,
+            org.springframework.transaction.TransactionSystemException.class,
+            org.springframework.transaction.UnexpectedRollbackException.class,
             WorkflowEngineUnavailableException.class, FileEvidenceTrustUnavailableException.class,
-            AuthorizationWriteGuardUnavailableException.class})
+            AuthorizationWriteGuardUnavailableException.class, FindingDefinitionUnavailableException.class})
+    ResponseEntity<ErrorResponse> unavailable(Exception failure) {
+        // 响应对外保持通用；运维需要的原因（异常类型、SQLSTATE）只进日志，不含 SQL 参数和业务值。
+        Throwable root = NestedExceptionUtils.getMostSpecificCause(failure);
+        String sqlState = root instanceof SQLException sql ? sql.getSQLState() : null;
+        LOG.warn("Finding command dependency unavailable: {} caused by {} sqlState={}",
+                failure.getClass().getName(), root.getClass().getName(), sqlState);
+        return unavailable();
+    }
+
     ResponseEntity<ErrorResponse> unavailable() {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
                 "The finding command could not be completed safely", true, List.of());

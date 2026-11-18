@@ -32,7 +32,7 @@ class ModuleArchitectureTest {
             "Authorization", Set.of("Identity and authentication", "Tenancy", "Directory"),
             "Application registry", Set.of("Authorization", "Tenancy", "Identity and authentication"),
             "Workflow", Set.of("Authorization", "Identity and authentication", "Tenancy"),
-            "Support services", Set.of("Authorization", "Tenancy"),
+            "Support services", Set.of("Authorization", "Tenancy", "Identity and authentication"),
             "Audit and operations", Set.of("Authorization", "Identity and authentication", "Tenancy"),
             "File evidence access", Set.of(),
             "Dual-prevention business sample", Set.of(

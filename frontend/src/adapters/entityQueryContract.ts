@@ -1,4 +1,5 @@
 import type { LedgerSchema, PageRequest, QueryValues } from "../domain/ledger";
+import { wallTimeToIso } from "../domain/time";
 
 /** This module mirrors only the shared OpenAPI component shape; it does not call an API. */
 export const ENTITY_QUERY_CONTRACT = {
@@ -193,6 +194,17 @@ export function mapLedgerQueryToEntityRequest<T>(input: {
 
     if (typeof value === "string") {
       throw new EntityQueryMappingError(`Date range query field "${field.key}" must contain a date range`);
+    }
+    if (field.kind === "dateTimeRange") {
+      requireType(wireField, wireFieldName, ["DATETIME"]);
+      const from = value.from ? wallTimeToIso(value.from) : null;
+      const to = value.to ? wallTimeToIso(value.to) : null;
+      if ((value.from && !from) || (value.to && !to) || (from && to && Date.parse(from) > Date.parse(to))) {
+        throw new EntityQueryMappingError(`Invalid DATETIME range for "${field.key}"`);
+      }
+      if (from) { requireOperator(wireField, wireFieldName, "GTE"); conditions.push(createEntityQueryFilter(wireFieldName, "GTE", from)); }
+      if (to) { requireOperator(wireField, wireFieldName, "LTE"); conditions.push(createEntityQueryFilter(wireFieldName, "LTE", to)); }
+      continue;
     }
     requireType(wireField, wireFieldName, ["DATE"]);
     const { from, to } = value;
