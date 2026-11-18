@@ -19,6 +19,8 @@ import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "./adapters/findingSubmit";
+import { LoanApplicationsPage } from "./features/toolLoans/LoanApplicationsPage";
+import type { LoanFactory } from "./features/toolLoans/model";
 import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
@@ -167,9 +169,10 @@ interface AppAdapterFactories {
   createFindingStore: () => FindingStore;
   createPermissionAdmin: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
+  createLoans?: LoanFactory;
 }
 
-function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger }: AppAdapterFactories) {
+function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans }: AppAdapterFactories) {
   const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
   const location = useLocation();
@@ -186,6 +189,8 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const permissionAdmin = useMemo(() => createPermissionAdmin(), [identityKey]);
 
   const parsed = parsePath(pathname);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
   const entityRoute = parseEntityRoute(parsed.rest);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
@@ -256,6 +261,13 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       ) : (
         <StatusPage title="页面未开放" description="该路由不属于首批前端交付范围。" />
       );
+  } else if (entityRoute?.appKey === "tooling" && entityRoute.entityKey === "tool_loan" && entityRoute.page === "entry") {
+    title = "工装借用申请";
+    const grants = session.canonicalPermissions ?? session.permissions;
+    content = !authorizedApplication || !grants.some(code => ["tool_loan.read", "tool_loan.create", "tool_loan.update"].includes(code))
+      ? <StatusPage title="无权访问" description="当前账号没有借用申请权限。" />
+      : !loanAdapter || mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用借用申请。" />
+        : <LoanApplicationsPage key={identityKey} adapter={loanAdapter} owner={draftOwnerKey(session.tenant.id, session.actor.id)} identityScope={session.identityScope} permissions={grants} onUnauthenticated={expire} />;
   } else if (entityRoute) {
     title = "通用台账";
     content = !authorizedApplication ? <StatusPage title="无权访问" description="当前账号没有此应用的访问权限。" />
@@ -337,6 +349,7 @@ export function App({
   createFindingStore,
   createPermissionAdmin,
   createEntityLedger,
+  createLoans,
   mode = "synthetic",
 }: {
   sessionAdapter?: SessionAdapter;
@@ -347,13 +360,14 @@ export function App({
   /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
   createPermissionAdmin?: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
+  createLoans?: LoanFactory;
   /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
   mode?: AppMode;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} />
+        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
       </SessionProvider>
     </ModeProvider>
   );
