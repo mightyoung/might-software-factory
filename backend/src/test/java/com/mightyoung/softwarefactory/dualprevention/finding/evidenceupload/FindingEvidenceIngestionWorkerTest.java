@@ -114,6 +114,77 @@ class FindingEvidenceIngestionWorkerTest {
         assertThat(current.get().attemptNo()).isZero();verify(files,never()).reserve(any(),any());verify(files,never()).recordExecution(any(),any());
         verify(tx,never()).compareAndSet(any(),any(),any(),any());verify(producer,never()).scan(any(),any(),any(),any(),any(),any(),any());
     }
+    @Test void pendingPublicationReauthorizesAndPassesStableIdsInsideTheSameTransaction(){
+        pending();resources();var verified=mock(VerifiedContentCheckpoint.class);
+        when(files.publishVerified(eq(fileTx),any(),eq(resources.generation()))).thenAnswer(a->{assertThat(inTx).isTrue();return verified;});
+        worker.process(tenant,intent);
+        var request=ArgumentCaptor.forClass(IngestionPublicationRequest.class);
+        var ordered=inOrder(files,tx);
+        ordered.verify(files).publishVerified(eq(fileTx),request.capture(),eq(resources.generation()));
+        UUID item=FindingEvidenceIngestionWorker.publicationId("item",tenant,intent),link=FindingEvidenceIngestionWorker.publicationId("link",tenant,intent);
+        ordered.verify(tx).finalizeEvidence(current.get(),verified,item,link,actor);
+        assertThat(request.getValue().evidenceItemId()).isEqualTo(item);assertThat(request.getValue().fileLinkId()).isEqualTo(link);
+        assertThat(item).isNotEqualTo(link);verify(eligibility,times(2)).requireOwner(tx);
+        verify(producer,never()).scan(any(),any(),any(),any(),any(),any(),any());
+        verify(producer,never()).prepareSlot(any(),any());
+    }
+    @Test void ownerRevokedBetweenDiscoveryAndPublicationCannotPublishAnyMetadata(){
+        pending();resources();doNothing().doThrow(new FindingNotVisibleException()).when(eligibility).requireOwner(tx);
+        assertThatThrownBy(()->worker.process(tenant,intent)).isInstanceOf(FindingNotVisibleException.class);
+        verify(files,never()).publishVerified(any(),any(),any());verify(tx,never()).finalizeEvidence(any(),any(),any(),any(),any());
+    }
+    @Test void staleEvidenceRevisionRejectsPendingPublicationBeforeFilesWrite(){
+        pending();resources();var i=current.get();
+        when(tx.evidenceSet(i.declaration().evidenceSetId())).thenReturn(Optional.of(new EvidenceSet(i.declaration().evidenceSetId(),
+                i.declaration().findingId(),1,i.declaration().ownerMemberId(),1,false)));
+        assertThatThrownBy(()->worker.process(tenant,intent)).isInstanceOf(FindingEvidenceUploadException.class);
+        verify(files,never()).publishVerified(any(),any(),any());
+    }
+    @Test void staleCheckpointTrustSchedulesFreshVerificationWithoutPublishingBusinessEvidence(){
+        pending();resources();when(files.publishVerified(eq(fileTx),any(),any())).thenThrow(new FileEvidenceTrustUnavailableException());
+        worker.process(tenant,intent);
+        assertThat(current.get().phase()).isEqualTo(Phase.RETRY_WAIT);assertThat(current.get().attemptNo()).isEqualTo(1);
+        assertThat(current.get().nextAttemptAt()).isEqualTo(now.plusSeconds(5));assertThat(current.get().lastErrorCode()).isEqualTo("SCANNER_UNAVAILABLE");
+        verify(tx,never()).finalizeEvidence(any(),any(),any(),any(),any());
+    }
+    @Test void finalizedIntentRecoversOnlyAllocationsThatWereNotTransferred(){
+        var finalized=state(Phase.FINALIZED,1,5,2,scanAttempt,null,null,null);
+        current.set(finalized);resources();
+        for(var allocation:List.of(quarantine,scratch,immutable,receipt))
+            assertThat(FindingEvidenceIngestionWorker.recoveryReason(finalized,allocation,Optional.empty())).isEqualTo(RecoveryReason.TERMINAL);
+        var transferred=new RecordedAllocation(immutable.request(),immutable.eventNo(),immutable.eventId(),immutable.eventSha256(),
+                immutable.retainedBytes(),immutable.baseline(),immutable.baselineEventId(),null,file,null);
+        assertThat(FindingEvidenceIngestionWorker.recoveryReason(finalized,transferred,Optional.empty())).isNull();
+    }
+    @Test void lateBusinessPublicationFailureEscapesTheFilesTransactionCallback(){
+        pending();resources();var verified=mock(VerifiedContentCheckpoint.class);
+        when(files.publishVerified(eq(fileTx),any(),any())).thenReturn(verified);
+        when(tx.finalizeEvidence(any(),eq(verified),any(),any(),any())).thenThrow(new IllegalStateException("late audit failure"));
+        assertThatThrownBy(()->worker.process(tenant,intent)).isInstanceOf(IllegalStateException.class).hasMessage("late audit failure");
+        verify(tx,never()).compareAndSet(any(),any(),any(),any());
+    }
+    @Test void schedulerBoundaryReportsSafeFinalizationCategoryAndCorrelationWithoutRawFailure(){
+        pending();resources();
+        when(files.publishVerified(eq(fileTx),any(),any())).thenThrow(new org.jooq.exception.DataAccessException("secret-token /private/scanner/raw-output"));
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(FindingEvidenceIngestionWorker.class);
+        var appender=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();appender.start();logger.addAppender(appender);
+        try{
+            assertThatCode(()->worker.processSafely(tenant,intent)).doesNotThrowAnyException();
+            assertThat(current.get().phase()).isEqualTo(Phase.VERIFIED_PENDING_FINALIZATION);
+            assertThat(appender.list).anySatisfy(event->{
+                assertThat(event.getFormattedMessage()).contains("stage=FINALIZE","category=PERSISTENCE",tenant.toString(),intent.toString());
+                assertThat(event.getThrowableProxy()).isNull();
+            });
+            assertThat(appender.list).allSatisfy(event->assertThat(event.getFormattedMessage()).doesNotContain("secret-token","/private","raw-output"));
+            verify(tx,never()).finalizeEvidence(any(),any(),any(),any(),any());
+        }finally{logger.detachAppender(appender);appender.stop();}
+    }
+    private void pending(){
+        var i=state(Phase.VERIFIED_PENDING_FINALIZATION,1,4,2,scanAttempt,null,null,null);
+        current.set(new TechnicalIntent(tenant,i.declaration(),i.mediaType(),i.sizeBytes(),i.expectedFindingVersion(),i.expectedEvidenceRevision(),
+                i.producerVersion(),i.policyVersion(),i.phase(),i.technicalVersion(),i.leaseEpoch(),i.attemptNo(),i.attemptId(),i.reservedScanAttemptId(),
+                null,null,null,null,qId,UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),"a".repeat(64),null,false,now,executionId));
+    }
     @Test void failedOrUnknownClaimCommitNeverStartsScannerAndClosesOutsideTransaction(){
         resources();var lease=mock(PreparedSlotLease.class);when(lease.isValidFor(any())).thenReturn(true);
         when(producer.prepareSlot(any(),any())).thenAnswer(a->{assertThat(inTx).isFalse();return lease;});

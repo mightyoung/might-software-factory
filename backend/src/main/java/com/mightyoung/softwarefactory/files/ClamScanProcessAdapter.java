@@ -96,7 +96,7 @@ final class ClamScanProcessAdapter implements AutoCloseable {
     static List<String> policyArguments(FileIngestionProperties properties) {
         long max=properties.limits().maxBytes();
         // This exact argv is part of the accepted generation and controls. There are no caller options.
-        return List.of("--suppress-ok-results","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes",
+        return List.of("--infected","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes",
                 "--bytecode-unsigned=no","--bytecode-timeout=10000","--max-filesize="+max,
                 "--max-scansize="+max,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes",
                 "--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no",

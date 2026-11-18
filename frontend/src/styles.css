@@ -1710,3 +1710,21 @@ select:focus-visible {
   border-left: 0;
   box-shadow: none;
 }
+/* 权限配置 */
+.perm-page { padding: 24px; max-width: 1040px; }
+.perm-lead { color: #5b6475; margin: 4px 0 16px; }
+.perm-layout { display: grid; grid-template-columns: 240px 1fr; gap: 20px; align-items: start; }
+.perm-roles { display: flex; flex-direction: column; gap: 6px; }
+.perm-role { text-align: left; background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.perm-role small { color: #6b7385; }
+.perm-role-current { border-color: #2a4bd6; background: #eef2ff; }
+.perm-detail { background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 16px 20px; }
+.perm-group { border: 1px solid #e6e9f0; border-radius: 8px; margin: 12px 0; padding: 8px 14px 12px; }
+.perm-group legend { font-weight: 600; padding: 0 6px; }
+.perm-item { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; padding: 5px 0; }
+.perm-item code { color: #7a8396; font-size: 12px; }
+.perm-diff { color: #8a5a00; }
+.perm-ok { color: #11693a; }
+.perm-error { color: #b42318; }
+.perm-actions { display: flex; gap: 10px; margin-top: 12px; }
+

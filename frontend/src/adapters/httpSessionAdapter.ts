@@ -9,6 +9,9 @@ type MenuResponse = components["schemas"]["ApplicationMenuResponse"];
 const UI_PERMISSIONS: Readonly<Record<string, string>> = {
   "finding.read": "safety.finding.read",
   "finding.create": "safety.finding.report",
+  "equipment.read": "equipment.overview.read",
+  "platform.permission.read": "platform.permission.read",
+  "platform.permission.manage": "platform.permission.manage",
 };
 const APPLICATIONS = new Set<string>(["safety", "equipment", "platform"]);
 function permission(value: string): string | undefined {

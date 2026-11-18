@@ -29,9 +29,6 @@ describe("流程命令面板", () => {
     expect(screen.getByRole("button", { name: "分派整改" })).toBeDisabled();
     expect(screen.getAllByText(/候选查询能力/).length).toBeGreaterThan(0);
     cleanup();
-    setup("RECTIFYING");
-    expect(screen.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
-    cleanup();
     setup("ACCEPTANCE_PENDING");
     expect(screen.getByRole("button", { name: "验收通过" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "退回整改" })).toBeEnabled();
@@ -200,6 +197,5 @@ describe("分派整改", () => {
   it("验收退回后的新一轮：RECTIFYING 提供“重新分派”", async () => {
     dispatchSetup(undefined, "RECTIFYING");
     expect(screen.getByRole("button", { name: "重新分派" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
   });
 });

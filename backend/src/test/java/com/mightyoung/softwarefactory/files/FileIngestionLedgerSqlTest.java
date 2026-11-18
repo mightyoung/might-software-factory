@@ -30,6 +30,7 @@ class FileIngestionLedgerSqlTest {
     @Test void reservationsReplayOnlyExactImmutableFieldsAndWrongPayloadMarksRollbackOnly(){
         var h=harness();var request=values.allocation(AllocationKind.QUARANTINE,values.sourceAttempt,"quarantine");
         var first=h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.reserve(tx,request));
+        assertThat(h.sql).anyMatch(sql->sql.startsWith("insert into public.file_ingestion_allocation ")&&sql.contains("cast(? as timestamptz)"));
         assertThat(first.retainedBytes()).isEqualTo(request.reservedBytes());assertThat(first.eventNo()).isZero();
         assertThat(h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.reserve(tx,request)).request()).isEqualTo(request);
         var changed=new AllocationRequest(request.tenantId(),request.intentId(),request.fileId(),request.ownerMemberId(),request.attemptId(),request.allocationId(),
@@ -286,6 +287,70 @@ class FileIngestionLedgerSqlTest {
     }
     TechnicalFence fence(){return new TechnicalFence(values.tenant,values.intent,values.sourceAttempt,UUID.randomUUID(),1,1);}
 
+    private VerifiedCheckpoint verifiedCheckpoint(Harness h){
+        var proof=values.proof();var receipt=values.receipt(proof);
+        var q=values.allocation(AllocationKind.QUARANTINE,values.sourceAttempt,"quarantine");
+        var copy=values.allocation(AllocationKind.IMMUTABLE,values.scanAttempt,"immutable");
+        var registration=values.allocation(AllocationKind.RECEIPT,values.scanAttempt,"receipt");
+        byte[] bytes=IngestionSignedCheckpointReader.receiptFileBytes(receipt);
+        var observation=values.codec.observe(registration,ObservationKind.RECEIPT,values.identity(registration,bytes.length),
+                IngestionProofCodec.sha256(bytes),(long)bytes.length,"application/vnd.msf.scanned-content-receipt");
+        return h.ledger.inCallerTransaction(values.tenant,tx->{
+            h.ledger.reserve(tx,q);h.ledger.recordQuarantine(tx,fence(),values.quarantine());
+            h.ledger.reserve(tx,values.allocation(AllocationKind.SCANNER_SCRATCH,values.scanAttempt,"scratch"));
+            h.ledger.recordExecution(tx,values.execution().descriptor());h.ledger.reserve(tx,copy);h.ledger.reserve(tx,registration);
+            var immutable=new ImmutableObject(values.tenant,values.intent,values.file,copy.allocationId(),values.sourceAttempt,values.scanAttempt,
+                    values.identity(copy,3),proof.sha256(),proof.detectedMediaType(),3,proof.quarantineObservationSha256());
+            return h.ledger.recordVerified(tx,values.scanFence(),values.quarantine(),
+                    new ImmutableObjectAndReceipt(immutable,proof,receipt,observation),values.generation(),values.outcome());
+        });
+    }
+    private IngestionPublicationRequest publication(VerifiedCheckpoint checkpoint){
+        return new IngestionPublicationRequest(values.tenant,values.intent,checkpoint,UUID.randomUUID(),1,UUID.randomUUID(),
+                UUID.randomUUID(),UUID.randomUUID(),values.allocation(AllocationKind.IMMUTABLE,values.scanAttempt,"immutable").ownerMemberId(),
+                UUID.randomUUID(),UUID.randomUUID(),3,1,0);
+    }
+    @Test void publicationTransfersBothAllocationsWithoutReducingEitherPhysicalCharge(){
+        var h=harness();var checkpoint=verifiedCheckpoint(h);var request=publication(checkpoint);
+        var verified=h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.publishVerified(tx,request,values.generation()));
+        assertThat(verified.receipt().receiptId()).isEqualTo(checkpoint.receiptId());
+        var transfers=h.events().stream().filter(e->e.get("event_kind").equals("TRANSFER_FINALIZED")).toList();
+        assertThat(transfers).hasSize(2);
+        assertThat(transfers).extracting(e->e.get("allocation_kind")).containsExactlyInAnyOrder("IMMUTABLE","RECEIPT");
+        for(var event:transfers){
+            assertThat(event.get("retained_bytes")).isEqualTo(65536L);assertThat(event.get("finalized_file_id")).isEqualTo(values.file);
+            var loaded=h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.load(tx,(UUID)event.get("allocation_id")));
+            assertThat(loaded.finalizedFileId()).isEqualTo(values.file);assertThat(loaded.retainedBytes()).isEqualTo(65536L);
+        }
+        assertThat(h.tables.get("file_object")).singleElement().satisfies(f->assertThat(f.get("state")).isEqualTo("READY"));
+        assertThat(h.tables.get("file_link")).singleElement().satisfies(l->assertThat(l.get("resource_id")).isEqualTo(request.evidenceItemId()));
+        assertThat(h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.readVerified(tx,values.intent,checkpoint)).receipt().receiptId())
+                .isEqualTo(checkpoint.receiptId());
+    }
+    @Test void latePublicationWriteFailureMarksTheCallerTransactionRollbackOnly(){
+        var h=harness();var request=publication(verifiedCheckpoint(h));h.failInsert="file_link";
+        assertThatThrownBy(()->h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.publishVerified(tx,request,values.generation())))
+                .isInstanceOf(org.jooq.exception.DataAccessException.class);
+        assertThat(h.holder.isRollbackOnly()).isTrue();
+        assertThat(h.events()).noneMatch(e->e.get("event_kind").equals("TRANSFER_FINALIZED"));
+        // The scripted JDBC connection cannot prove actual rollback. The isolated PostgreSQL gate must do so.
+    }
+    @Test void transferredObservationCannotChangeTypedAbsenceFlagsWhileReusingCanonicalBytes(){
+        var h=harness();var request=publication(verifiedCheckpoint(h));
+        h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.publishVerified(tx,request,values.generation()));
+        var transfer=h.events().stream().filter(e->e.get("event_kind").equals("TRANSFER_FINALIZED")).findFirst().orElseThrow();
+        transfer.put("object_absent",true);transfer.put("absence_durable_at",IngestionProofCodecTest.NOW.atOffset(ZoneOffset.UTC));
+        assertThatThrownBy(()->h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.load(tx,(UUID)transfer.get("allocation_id"))))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+    @Test void mismatchedSignedCheckpointHeaderFailsBeforeAnyPublicationWrite(){
+        var h=harness();var request=publication(verifiedCheckpoint(h));int before=h.sql.size();
+        h.tables.get("file_ingestion_content_receipt").getFirst().put("file_id",UUID.randomUUID());
+        assertThatThrownBy(()->h.ledger.inCallerTransaction(values.tenant,tx->h.ledger.publishVerified(tx,request,values.generation())))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+        assertThat(h.sql.subList(before,h.sql.size())).allMatch(q->q.startsWith("select "));assertThat(h.holder.isRollbackOnly()).isTrue();
+    }
+
     final class Harness implements AutoCloseable {
         final DataSource source=mock(DataSource.class);
         final Map<String,List<Map<String,Object>>> tables=new HashMap<>();
@@ -398,6 +463,10 @@ class FileIngestionLedgerSqlTest {
                 return rows(selected);
             }
             if(query.contains("as owner_pending"))return rows(List.of(row("owner_pending",charges[0],"tenant_pending",charges[1],"owner_finalized",charges[2],"tenant_finalized",charges[3])));
+            for(String table:List.of("file_ingestion_scan_proof","file_ingestion_content_receipt")){
+                if(query.contains("from public."+table+" "))return rows(tables.getOrDefault(table,List.of()).stream()
+                        .filter(r->r.get("tenant_id").equals(binds[0])&&r.get("id").equals(binds[1])&&r.get("intent_id").equals(binds[2])).toList());
+            }
             if(query.contains("from public.file_ingestion_execution"))return rows(tables.getOrDefault("file_ingestion_execution",List.of()).stream()
                     .filter(r->r.get("tenant_id").equals(binds[0])).filter(r->query.contains("scan_attempt_id=?")?
                         r.get("intent_id").equals(binds[1])&&r.get("scan_attempt_id").equals(binds[2])&&(binds.length<4||r.get("scratch_allocation_id").equals(binds[3])):r.get("execution_id").equals(binds[1])).toList());

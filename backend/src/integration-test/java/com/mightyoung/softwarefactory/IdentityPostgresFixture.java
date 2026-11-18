@@ -154,6 +154,26 @@ public final class IdentityPostgresFixture implements AutoCloseable {
                 """, tenant.id, tenant.grantId, tenant.roleId, tenant.memberId, tenant.sourceId, tenant.memberId);
     }
 
+    /** Canonical reserved catalog rows for D0 metadata rejection probes; grants remain unchanged.
+     * These definitions are intentionally retained because V19/V23 prohibit their deletion. */
+    void ensureReservedIdentityPermissionsForMetadataProbe() {
+        securityWrite(status -> {
+            for (String action : List.of("create", "revoke")) {
+                String code = "identity.invitation." + action;
+                jdbc.update("""
+                        insert into public.permission(id,code,resource_type,action)
+                        values (?,?,'account-invitation',?) on conflict(code) do nothing
+                        """, UUID.randomUUID(), code, action);
+                var existing = jdbc.queryForMap(
+                        "select resource_type,action from public.permission where code=?", code);
+                if (!"account-invitation".equals(existing.get("resource_type"))
+                        || !action.equals(existing.get("action"))) {
+                    throw new IllegalStateException("Existing reserved identity permission has an incompatible definition");
+                }
+            }
+        });
+    }
+
     /** Opt-in navigation fixture only: do not broaden the existing create-only identity cases. */
     public void enableNavigationReads() {
         if (navigationReadsEnabled) throw new IllegalStateException("Navigation reads already seeded");

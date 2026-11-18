@@ -105,7 +105,8 @@ export const FAILURE_MESSAGE: Record<FindingCommandFailureKind, string> = {
 export const REFRESH_ON: ReadonlySet<FindingCommandFailureKind> = new Set(["versionConflict", "stateConflict"]);
 
 
-export const UNAVAILABLE: Partial<Record<FindingState, readonly { label: string; reason: string }[]>> = { RECTIFYING: [{ label: "提交整改证据", reason: "提交整改需要先上传证据集，契约还没有证据上传接口。" }] };
+/** 提交整改在证据上传面板里办理（证据终结发布后可提交），这里不再放占位按钮。 */
+export const UNAVAILABLE: Partial<Record<FindingState, readonly { label: string; reason: string }[]>> = {};
 export interface CommandInputErrors {
   reason?: string;
   grade?: string;

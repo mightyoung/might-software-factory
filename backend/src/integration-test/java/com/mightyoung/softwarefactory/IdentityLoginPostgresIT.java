@@ -112,7 +112,7 @@ class IdentityLoginPostgresIT {
 
     enum RuntimePrivilegeProfile {
         IDENTITY_ONLY(false,false,false), BUSINESS_WORKFLOW(true,false,false), BUSINESS_PASSWORD_CHANGE(true,true,false),
-        BUSINESS_AUTHENTICATION_AUDIT(true,true,true);
+        BUSINESS_AUTHENTICATION_AUDIT(true,true,true), D0_APPLICATION(true,true,true);
         final boolean business;
         final boolean passwordChange;
         final boolean authenticationAudit;
@@ -121,7 +121,20 @@ class IdentityLoginPostgresIT {
         }
         boolean permitsUpdate(String table,String column) {
             return passwordChange && ((table.equals("account") && column.equals("credential_version"))
-                    || (table.equals("credential") && Set.of("secret_hash","changed_at").contains(column)));
+                    || (table.equals("credential") && Set.of("secret_hash","changed_at").contains(column)))
+                    || (this == D0_APPLICATION && ((table.equals("tenant_member") && column.equals("auth_epoch"))
+                        || (table.equals("permission") && column.equals("label"))
+                        || (table.equals("scope_rule") && column.equals("version_no"))));
+        }
+        boolean permitsInsert(String table,String column) {
+            return this == D0_APPLICATION && switch(table) {
+                case "account" -> Set.of("id","login_key","status","credential_version").contains(column);
+                case "principal" -> Set.of("id","kind","account_id","status").contains(column);
+                case "credential" -> Set.of("account_id","kind","secret_hash","changed_at").contains(column);
+                case "tenant_member" -> Set.of("tenant_id","id","account_id","status","auth_epoch","display_name").contains(column);
+                case "role_permission" -> Set.of("tenant_id","role_id","permission_id","scope_rule_id").contains(column);
+                default -> false;
+            };
         }
     }
 
@@ -129,16 +142,21 @@ class IdentityLoginPostgresIT {
     static RuntimePrivilegeProfile validateRuntimePrivilegeProfile(Map<String,String> environment,String database) {
         String profile=environment.getOrDefault("LAN_PG_RUNTIME_PRIVILEGE_PROFILE","identity-only");
         if("identity-only".equals(profile)) return RuntimePrivilegeProfile.IDENTITY_ONLY;
-        if(!Set.of("business-workflow","business-password-change","business-authentication-audit").contains(profile)
+        if(!Set.of("business-workflow","business-password-change","business-authentication-audit","d0-application").contains(profile)
                 || !("I_CONFIRM_BUSINESS_WORKFLOW_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_BUSINESS_ACCEPTANCE_ACK"))) {
             throw new IllegalStateException("Runtime privilege profile requires an explicit database-specific business acknowledgement");
         }
-        if("business-password-change".equals(profile) || "business-authentication-audit".equals(profile)) {
+        if("business-password-change".equals(profile) || "business-authentication-audit".equals(profile) || "d0-application".equals(profile)) {
             if(!("I_CONFIRM_PASSWORD_CHANGE_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_PASSWORD_CHANGE_ACCEPTANCE_ACK")))
                 throw new IllegalStateException("Password-change privilege profile requires an explicit database-specific password-change acknowledgement");
-            if("business-authentication-audit".equals(profile)) {
+            if("business-authentication-audit".equals(profile) || "d0-application".equals(profile)) {
                 if(!("I_CONFIRM_AUTHENTICATION_EVENT_FIXTURE_WRITES:"+database).equals(environment.get("LAN_PG_AUTHENTICATION_EVENT_ACCEPTANCE_ACK")))
                     throw new IllegalStateException("Authentication-event privilege profile requires an explicit database-specific authentication-event acknowledgement");
+                if ("d0-application".equals(profile)) {
+                    if (!database.matches("msf_d0_[a-z0-9_]+_test") || !("I_CONFIRM_D0_APPLICATION_PRIVILEGES:"+database).equals(environment.get("LAN_PG_D0_APPLICATION_ACCEPTANCE_ACK")))
+                        throw new IllegalStateException("D0 application privilege profile requires an isolated database-specific D0 acknowledgement");
+                    return RuntimePrivilegeProfile.D0_APPLICATION;
+                }
                 return RuntimePrivilegeProfile.BUSINESS_AUTHENTICATION_AUDIT;
             }
             return RuntimePrivilegeProfile.BUSINESS_PASSWORD_CHANGE;
@@ -597,6 +615,10 @@ class IdentityLoginPostgresIT {
         RuntimePrivilegeProfile privilegeProfile=validateRuntimePrivilegeProfile(runtimeJdbc.queryForObject("select current_database()",String.class));
         assertThat(runtimeJdbc.queryForObject("select has_database_privilege(current_user,current_database(),'CREATE,TEMP')",Boolean.class))
                 .as("No runtime database CREATE/TEMP in any profile").isFalse();
+        if (privilegeProfile == RuntimePrivilegeProfile.D0_APPLICATION) {
+            D0RuntimePrivilegeAssertions.assertApplication(runtimeJdbc);
+            assertD0ParentMetadataPrivileges();
+        }
         for (String table : IDENTITY_TABLES) {
             String qualified = "public." + table;
             assertThat(runtimeJdbc.queryForObject(
@@ -607,13 +629,15 @@ class IdentityLoginPostgresIT {
                     from pg_class where oid = cast(? as regclass)
                     """, Boolean.class, qualified)).as("Runtime must not own %s", table).isFalse();
             // PostgreSQL18 includes MAINTAIN; comma-separated privilege checks mean ANY privilege.
-            assertThat(runtimeJdbc.queryForObject("""
-                    select has_table_privilege(current_user, cast(? as regclass),
-                        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
-                    """, Boolean.class, qualified)).as("No table mutation/maintenance on %s", table).isFalse();
+            for (String operation : List.of("INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER","MAINTAIN")) {
+                boolean expected = privilegeProfile == RuntimePrivilegeProfile.D0_APPLICATION && table.equals("role_permission") && operation.equals("DELETE");
+                assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user,cast(? as regclass),?)",Boolean.class,qualified,operation))
+                        .as("Exact table %s on %s in %s",operation,table,privilegeProfile).isEqualTo(expected);
+            }
             for(String column:runtimeJdbc.queryForList("select attname from pg_attribute where attrelid=cast(? as regclass) and attnum>0 and not attisdropped",String.class,qualified)) {
                 for(String operation:List.of("SELECT","INSERT","UPDATE","REFERENCES")) {
-                    boolean expected=operation.equals("SELECT") || (operation.equals("UPDATE") && privilegeProfile.permitsUpdate(table,column));
+                    boolean expected=operation.equals("SELECT") || (operation.equals("UPDATE") && privilegeProfile.permitsUpdate(table,column))
+                            || (operation.equals("INSERT") && privilegeProfile.permitsInsert(table,column));
                     assertThat(runtimeJdbc.queryForObject("select has_column_privilege(current_user,cast(? as regclass),?,?)",Boolean.class,qualified,column,operation))
                             .as("Effective %s on %s.%s in %s",operation,table,column,privilegeProfile).isEqualTo(expected);
                 }
@@ -667,17 +691,7 @@ class IdentityLoginPostgresIT {
                 assertThat(runtimeJdbc.queryForObject("select has_table_privilege(current_user, 'public.event_publication', ?)",
                         Boolean.class, operation)).as("Actual publication registry %s", operation).isTrue();
             }
-            assertThat(runtimeJdbc.queryForObject("""
-                    select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'
-                      and left(relname, 4) in ('act_', 'flw_')
-                      and has_table_privilege(current_user, oid, 'SELECT')
-                    """, Integer.class)).as("Fixed Flowable8 schema read access").isEqualTo(45);
-            assertThat(runtimeJdbc.queryForObject("""
-                    select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'
-                      and left(relname, 4) in ('act_', 'flw_')
-                      and (pg_get_userbyid(relowner) = current_user or
-                           has_table_privilege(current_user, oid, 'TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'))
-                    """, Integer.class)).as("No engine ownership or maintenance").isZero();
+            D0RuntimePrivilegeAssertions.assertSelectedFlowable(runtimeJdbc);
             assertThat(runtimeJdbc.queryForObject("""
                     select has_table_privilege(current_user, 'public.audit_event', 'SELECT')
                        and has_table_privilege(current_user, 'public.audit_event', 'INSERT')
@@ -761,6 +775,40 @@ class IdentityLoginPostgresIT {
         assertThat(runtimeJdbc.queryForObject("select status from public.account where id = ?",
                 String.class, fixture.accountId())).isEqualTo(originalStatus).isEqualTo("ACTIVE");
         assertCleanConnection();
+    }
+
+    private void assertD0ParentMetadataPrivileges() {
+        fixture.ensureReservedIdentityPermissionsForMetadataProbe();
+        // Retain immutable catalog prerequisites above; roll back every metadata mutation probe below.
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            runtimeJdbc.queryForObject("select pg_advisory_xact_lock(1297303111,1)",Object.class);
+            runtimeJdbc.queryForObject("select set_config('app.tenant_id',?,true)",String.class,fixture.tenantAId().toString());
+            assertThat(runtimeJdbc.update("update public.permission set label=coalesce(label,'') || ' D0 ACL probe' where code='finding.read'")).isEqualTo(1);
+            assertThat(runtimeJdbc.update("update public.scope_rule set version_no=version_no+1 where tenant_id=? and kind='EXPLICIT'",fixture.tenantAId())).isEqualTo(1);
+            status.setRollbackOnly();
+        });
+        for(String column:List.of("id","code","resource_type","action")) {
+            assertD0SqlState("42501","update public.permission set "+column+"="+column+" where code='finding.read'");
+        }
+        for(String column:List.of("id","tenant_id","kind","definition")) {
+            assertD0SqlState("42501","update public.scope_rule set "+column+"="+column+" where tenant_id=? and kind='EXPLICIT'",fixture.tenantAId());
+        }
+        for(String code:List.of("audit_event.read","identity.invitation.create","identity.invitation.revoke")) {
+            assertThat(runtimeJdbc.queryForObject("select count(*) from public.permission where code=?",Integer.class,code)).isEqualTo(1);
+            assertD0SqlState("23514","update public.permission set label=coalesce(label,'') || ' D0 ACL probe' where code=?",code);
+        }
+    }
+
+    private void assertD0SqlState(String state,String sql,Object... values) {
+        Throwable failure=catchThrowable(()->new TransactionTemplate(transactions).executeWithoutResult(status->{
+            runtimeJdbc.queryForObject("select pg_advisory_xact_lock(1297303111,1)",Object.class);
+            runtimeJdbc.queryForObject("select set_config('app.tenant_id',?,true)",String.class,fixture.tenantAId().toString());
+            runtimeJdbc.update(sql,values);
+            status.setRollbackOnly();
+        }));
+        assertThat(failure).isInstanceOf(DataAccessException.class);
+        assertThat(((DataAccessException)failure).getMostSpecificCause()).isInstanceOfSatisfying(SQLException.class,
+                exception->assertThat(exception.getSQLState()).isEqualTo(state));
     }
 
     private void assertGenericAuthenticationFailure(IdentityAcceptanceHttps.Response response) throws Exception {

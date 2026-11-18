@@ -19,8 +19,9 @@ class NavigationServiceTest {
     private final TenantApplicationReadRepository applications = mock(TenantApplicationReadRepository.class);
     private final EntityReadAccessPolicy reads = mock(EntityReadAccessPolicy.class);
     private final FindingWorkflowAuthorizationRepository actions = mock(FindingWorkflowAuthorizationRepository.class);
+    private final com.mightyoung.softwarefactory.authorization.EffectivePermissions permissions = mock(com.mightyoung.softwarefactory.authorization.EffectivePermissions.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
-    private final NavigationService service = new NavigationService(resolver, sessions, applications, reads, actions, manager);
+    private final NavigationService service = new NavigationService(resolver, sessions, applications, reads, actions, permissions, manager);
 
     private CurrentTenantContext session() {
         CurrentTenantContext context = new CurrentTenantContext(UUID.randomUUID(), UUID.randomUUID(),
@@ -162,12 +163,26 @@ class NavigationServiceTest {
     }
 
     @Test void unknownApplicationsAreDeniedWithoutLookingUpAnyClientTenant() {
-        assertThatThrownBy(() -> service.menu("equipment")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.menu("unknown")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> service.menu(null)).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(applications,resolver,sessions);
     }
 
     private FindingReadAuthorizationSnapshot snapshot(CurrentTenantContext c, Set<UUID> scope,long memberEpoch) {
         return new FindingReadAuthorizationSnapshot(c.actorId(),c.accountId(),"HUMAN","ACTIVE","ACTIVE","ACTIVE","ACTIVE",2,memberEpoch,scope);
+    }
+
+    @Test void configurablePermissionsDriveApplicationsAndMenuNodes() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(),"safety")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(reads.resolveEntityReadGrant(context,"finding")).thenReturn(Optional.of(new EntityReadGrant(context.tenantId(),Set.of(organization))));
+        when(permissions.has(context,"platform.permission.read")).thenReturn(true);
+        var bootstrap = service.bootstrap();
+        assertThat(bootstrap.applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("safety","platform");
+        assertThat(bootstrap.permissions()).containsExactly("finding.read","platform.permission.read");
+        assertThat(service.menu("safety").nodes()).extracting(NavigationService.MenuNode::id).containsExactly("findings");
+        assertThat(service.menu("platform").nodes()).extracting(NavigationService.MenuNode::path).containsExactly("platform/permissions");
+        assertThatThrownBy(() -> service.menu("equipment")).isInstanceOf(AccessDeniedException.class);
     }
 }

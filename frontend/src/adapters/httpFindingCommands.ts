@@ -22,6 +22,8 @@ function endpoint(id: string, command: FindingCommand): { path: string; body: Re
       return { path: `${base}/supplements`, body: { reviewCycle: command.reviewCycle, statement: command.statement } };
     case "closeNotEstablished":
       return { path: `${base}/close-not-established`, body: { stage: command.stage, reason: command.reason } };
+    case "submitRemediation":
+      return { path: `${base}/remediation-submissions`, body: { evidenceSetId: command.evidenceSetId, statement: command.statement } };
     case "initialize":
       return { path: `${base}/workflow-initialization`, body: {} };
     case "confirmPerson":

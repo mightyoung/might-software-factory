@@ -21,6 +21,15 @@ public interface FileIngestionLedger {
     UUID recordGeneration(FileIngestionTxContext tx, AcceptedGeneration generation);
     VerifiedCheckpoint recordVerified(FileIngestionTxContext tx, TechnicalFence fence, QuarantinedObject source,
                                       ImmutableObjectAndReceipt verified, AcceptedGeneration generation, ScanOutcome outcome);
+    /** Authenticates persisted signatures and their allocation bindings without renewing proof freshness. */
+    default VerifiedContentCheckpoint readVerified(FileIngestionTxContext tx, UUID intentId, VerifiedCheckpoint checkpoint) {
+        throw new FileEvidenceTrustUnavailableException();
+    }
+    /** Publishes metadata and transfers both physical allocations; the business caller seals the intent atomically. */
+    default VerifiedContentCheckpoint publishVerified(FileIngestionTxContext tx, IngestionPublicationRequest request,
+                                                       AcceptedGeneration currentGeneration) {
+        throw new FileEvidenceTrustUnavailableException();
+    }
     DisposalClaim claimDisposal(FileIngestionTxContext tx, DisposalEligibility eligibility,
                                 UUID allocationId, String expectedObservationSha256);
     RecordedAllocation confirmDisposal(FileIngestionTxContext tx, DisposalClaim claim, DisposalObservation observation, long expectedTechnicalVersion);

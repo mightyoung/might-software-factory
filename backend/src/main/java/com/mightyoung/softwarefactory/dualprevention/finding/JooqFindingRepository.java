@@ -22,6 +22,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,8 @@ import static org.jooq.impl.DSL.table;
 public final class JooqFindingRepository implements FindingRepository {
 
     private static final int HISTORY_LIMIT = 200;
+    private static final int SUBMISSION_LIMIT = 20;
+    private static final int SUBMITTED_ITEM_LIMIT = 100;
 
     private static final Table<?> FINDING = table(name("public", "finding")).as("finding");
     private static final Table<?> ORGANIZATION = table(name("public", "org_unit")).as("reportable_organization");
@@ -174,13 +177,101 @@ public final class JooqFindingRepository implements FindingRepository {
             boolean truncated = history.size() > HISTORY_LIMIT;
             if (truncated) history.removeLast();
             Collections.reverse(history);
+            List<Record> submissions = new ArrayList<>(dsl.fetch("""
+                    select submission.id, submission.round_no, submission.statement, submission.submitted_at,
+                           submission.submitted_by, submitter.display_name as submitter_name,
+                           submission.evidence_snapshot_count, submission.evidence_snapshot_manifest,
+                           submission.evidence_snapshots_sealed_at
+                      from public.remediation_submission submission
+                      join public.finding f on f.tenant_id = submission.tenant_id and f.id = submission.finding_id
+                      left join public.tenant_member submitter
+                        on submitter.tenant_id = submission.tenant_id and submitter.id = submission.submitted_by
+                     where f.tenant_id = cast(? as uuid) and f.id = cast(? as uuid)
+                       and f.organization_id = any(?)
+                     order by submission.round_no desc, submission.id desc
+                     limit ?
+                    """, scope.tenantId(), findingId, organizations, SUBMISSION_LIMIT + 1));
+            boolean submissionsTruncated = submissions.size() > SUBMISSION_LIMIT;
+            if (submissionsTruncated) submissions.removeLast();
+            List<FindingDetailContext.SubmittedRemediation> submitted = submittedEvidence(
+                    scope, findingId, organizations, submissions);
+            Collections.reverse(submitted);
             UUID responsibleId = members.get("responsible_id", UUID.class);
             return Optional.of(new FindingDetailContext(
                     new FindingDetailContext.Member(members.get("reporter_id", UUID.class),
                             members.get("reporter_name", String.class)),
                     responsibleId == null ? null : new FindingDetailContext.Member(responsibleId,
-                            members.get("responsible_name", String.class)), history, truncated));
+                            members.get("responsible_name", String.class)), history, truncated,
+                    submitted, submissionsTruncated));
         });
+    }
+
+    private List<FindingDetailContext.SubmittedRemediation> submittedEvidence(
+            FindingReadScope scope, UUID findingId, UUID[] organizations, List<Record> submissions) {
+        if (submissions.isEmpty()) return new ArrayList<>();
+        Map<UUID, List<FindingDetailContext.SubmittedEvidence>> evidence = new LinkedHashMap<>();
+        Map<UUID, java.util.Set<UUID>> manifests = new LinkedHashMap<>();
+        for (Record submission : submissions) {
+            UUID id = submission.get("id", UUID.class);
+            Integer count = submission.get("evidence_snapshot_count", Integer.class);
+            UUID[] manifest = submission.get("evidence_snapshot_manifest", UUID[].class);
+            if (submission.get("evidence_snapshots_sealed_at") == null || count == null || count < 1
+                    || count > SUBMITTED_ITEM_LIMIT || manifest == null || manifest.length != count) {
+                throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException();
+            }
+            var ids = new HashSet<>(java.util.Arrays.asList(manifest));
+            if (ids.contains(null) || ids.size() != count) {
+                throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException();
+            }
+            manifests.put(id, ids);
+            evidence.put(id, new ArrayList<>());
+        }
+        var rows = dsl.fetch("""
+                select submission.id as submission_id, snapshot.evidence_item_id, snapshot.file_id,
+                       snapshot.sha256, snapshot.verification_level
+                  from public.remediation_submission submission
+                  join public.finding f on f.tenant_id = submission.tenant_id and f.id = submission.finding_id
+                  join lateral (
+                      select pinned.evidence_item_id, pinned.file_id, pinned.sha256, pinned.verification_level
+                        from public.remediation_submission_evidence pinned
+                       where pinned.tenant_id = submission.tenant_id and pinned.submission_id = submission.id
+                         and pinned.finding_id = submission.finding_id and pinned.round_no = submission.round_no
+                         and pinned.submitted_by = submission.submitted_by
+                         and pinned.evidence_set_id = submission.evidence_set_id
+                         and pinned.evidence_item_id = any(submission.evidence_snapshot_manifest)
+                       order by pinned.evidence_item_id
+                       limit 101
+                  ) snapshot on true
+                 where f.tenant_id = cast(? as uuid) and f.id = cast(? as uuid)
+                   and f.organization_id = any(?) and submission.id = any(?)
+                 order by submission.id, snapshot.evidence_item_id
+                 limit 2001
+                """, scope.tenantId(), findingId, organizations, evidence.keySet().toArray(UUID[]::new));
+        if (rows.size() > SUBMISSION_LIMIT * SUBMITTED_ITEM_LIMIT) {
+            throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException();
+        }
+        for (Record row : rows) {
+            UUID submissionId = row.get("submission_id", UUID.class);
+            UUID itemId = row.get("evidence_item_id", UUID.class);
+            String level = row.get("verification_level", String.class);
+            if (!manifests.containsKey(submissionId) || !manifests.get(submissionId).remove(itemId)
+                    || !("CONTENT".equals(level) || "SCANNED_CONTENT_V2".equals(level))) {
+                throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException();
+            }
+            evidence.get(submissionId).add(new FindingDetailContext.SubmittedEvidence(itemId,
+                    row.get("file_id", UUID.class), row.get("sha256", String.class), level));
+        }
+        List<FindingDetailContext.SubmittedRemediation> result = new ArrayList<>();
+        for (Record row : submissions) {
+            UUID id = row.get("id", UUID.class);
+            if (!manifests.get(id).isEmpty()) {
+                throw new com.mightyoung.softwarefactory.files.FileEvidenceTrustUnavailableException();
+            }
+            result.add(new FindingDetailContext.SubmittedRemediation(id, row.get("round_no", Integer.class),
+                    row.get("statement", String.class), row.get("submitted_at", OffsetDateTime.class),
+                    row.get("submitted_by", UUID.class), row.get("submitter_name", String.class), evidence.get(id)));
+        }
+        return result;
     }
 
     private void setLocalTenant(UUID tenantId) {

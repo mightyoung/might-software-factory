@@ -10,6 +10,7 @@ import {
 import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
+import { FindingRemediationHistory } from "./FindingRemediationHistory";
 import { FindingCommandPanel } from "./FindingCommandPanel";
 import { EvidenceUploadPanel } from "./EvidenceUploadPanel";
 import type { FindingEvidenceAdapter } from "../adapters/findingEvidence";
@@ -170,13 +171,15 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
             </ol>}
           </section>
 
+          {!demo && <FindingRemediationHistory findingId={finding.id} submissions={finding.submittedRemediations} truncated={finding.submittedRemediationsTruncated} />}
+
           {!commandAdapter?.history && <section className="detail-section history-section">
             <h3>{demo ? "演示轨迹" : "处理轨迹"}</h3>
             {!demo && finding.history.length === 0 && <p className="field-hint">后端暂未提供处理轨迹。</p>}
             {finding.historyTruncated && <p className="field-hint">仅显示最近 200 条处理轨迹。</p>}
             <ul>
               {finding.history.map((entry) => (
-                <li key={`${entry.at}-${entry.title}`}>
+                <li key={entry.id ?? `${entry.at}-${entry.title}`}>
                   <time>{formatDateTime(entry.at)}</time>
                   <div>
                     <strong>{entry.title}</strong>
@@ -188,7 +191,7 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
           </section>}
 
           {commandAdapter && evidenceAdapter && finding.state === "RECTIFYING" && finding.version !== undefined && (
-            <EvidenceUploadPanel key={`${finding.id}:${finding.round}`} finding={finding} adapter={evidenceAdapter} onUnauthenticated={onUnauthenticated} />
+            <EvidenceUploadPanel key={`${finding.id}:${finding.round}`} finding={finding} adapter={evidenceAdapter} commands={commandAdapter} onSubmitted={onCommandChanged ?? onRetry} onUnauthenticated={onUnauthenticated} />
           )}
 
           {onCreateRelated && finding.state === "NOT_ESTABLISHED" && (

@@ -471,6 +471,10 @@ export interface components {
             history?: components["schemas"]["FindingHistoryEntry"][];
             /** @description True when older transitions were omitted by the bounded history window. */
             historyTruncated?: boolean;
+            /** @description Latest 20 persisted remediation submissions, in increasing round order. Evidence is read only from each sealed submission's immutable snapshot manifest, never the current evidence set. Missing, unsealed or oversized snapshots fail closed with 503 instead of returning incomplete evidence. Submitter labels are current same-tenant directory labels. */
+            submittedRemediations?: components["schemas"]["SubmittedRemediation"][];
+            /** @description True only when older submissions were omitted by the latest-20 window; evidence within a returned submission is never silently truncated. */
+            submittedRemediationsTruncated?: boolean;
             /** Format: uuid */
             id: string;
             code: string;
@@ -521,6 +525,27 @@ export interface components {
             toVersion: number;
             actorName: string | null;
             reason: string | null;
+        };
+        SubmittedRemediation: {
+            /** Format: uuid */
+            id: string;
+            roundNo: number;
+            statement: string;
+            /** Format: date-time */
+            submittedAt: string;
+            /** Format: uuid */
+            submitterMemberId: string;
+            submitterName: string | null;
+            evidence: components["schemas"]["SubmittedRemediationEvidence"][];
+        };
+        SubmittedRemediationEvidence: {
+            /** Format: uuid */
+            itemId: string;
+            /** Format: uuid */
+            fileId: string;
+            sha256: string;
+            /** @enum {unknown} */
+            verificationLevel: "CONTENT" | "SCANNED_CONTENT_V2";
         };
         FindingEntitySchemaResponse: {
             data: components["schemas"]["FindingEntitySchema"];

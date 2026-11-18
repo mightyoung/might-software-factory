@@ -26,7 +26,7 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
 
     @Override
     public VerifiedFileEvidenceSnapshot requireVerifiedContentEvidence(EvidenceFileUse use) {
-        if (!validUse(use) || !"CONTENT".equals(use.recordedVerificationLevel())
+        if (!validUse(use) || !FileEvidenceVerificationLevel.isContentVerified(use.recordedVerificationLevel())
                 || !use.memberId().equals(use.evidenceSetOwnerMemberId())) {
             throw new FileEvidenceAccessException();
         }
@@ -51,7 +51,8 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
 
         ContentVerificationReceipt receipt = contentVerifier.findVerifiedContent(use, file)
                 .orElseThrow(FileEvidenceTrustUnavailableException::new);
-        if (!receiptMatches(file, use.tenantId(), receipt)) {
+        if (!receiptMatches(file, use.tenantId(), receipt)
+                || !receipt.verificationLevel().name().equals(use.recordedVerificationLevel())) {
             throw new FileEvidenceTrustUnavailableException();
         }
         return snapshot(use, file, fileLinkId, receipt);
@@ -68,7 +69,7 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
                 || !sameUuid(receipt.receiptId(), snapshot.verificationReceiptId())
                 || !snapshot.sha256().equals(normalizeDigest(receipt.sha256()))
                 || !snapshot.storageVersion().equals(receipt.storageVersion())
-                || receipt.verificationLevel() != FileEvidenceVerificationLevel.CONTENT
+                || receipt.verificationLevel() != snapshot.verificationLevel()
                 || !snapshot.verifierId().equals(receipt.verifierId())
                 || !snapshot.verifierKeyId().equals(receipt.verifierKeyId())
                 || !snapshot.verificationPolicyVersion().equals(receipt.verificationPolicyVersion())
@@ -85,7 +86,7 @@ public final class FindingEvidenceFileAccessPolicy implements FindingEvidenceFil
                 && sameUuid(receipt.fileId(), file.fileId())
                 && file.sha256().equals(normalizeDigest(receipt.sha256()))
                 && file.storageVersion().equals(receipt.storageVersion())
-                && receipt.verificationLevel() == FileEvidenceVerificationLevel.CONTENT
+                && receipt.verificationLevel() != null && receipt.verificationLevel().isContentVerified()
                 && nonBlank(receipt.verifierId()) && nonBlank(receipt.verifierKeyId())
                 && nonBlank(receipt.verificationPolicyVersion()) && receipt.verifiedAt() != null;
     }

@@ -13,7 +13,11 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <linux/audit.h>
-#include <linux/if_alg.h>
+#include <openssl/crypto.h>
+#include <openssl/evp.h>
+#include <openssl/provider.h>
+#include <dlfcn.h>
+#include <sys/sysmacros.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -28,6 +32,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -47,11 +52,12 @@
 #define CGROUP_ROOT "/sys/fs/cgroup/msf-scanner"
 #define ARRAY_LEN(a) (sizeof(a)/sizeof((a)[0]))
 enum frame_type { PREPARE=1,PREPARED,START,CHILD,GO,IMAGE,DATA,END,RESULT,INSPECT,QUIESCE,RECOVERY,PROBE,PROBE_RESULT,ERROR_FRAME };
-/* Integrity hashing uses the existing kernel crypto SHA256 provider, never local rounds,
-* a shell utility, or a linked library. Actual target acceptance must pin/probe this provider.
-* There is no fallback: provider failure terminates without a successful protocol report. */
-struct sha256 {int socket_fd,operation_fd;
-};
+/* OpenSSL's built-in default provider in a private context. No configuration,
+ * external provider selection or fallback. Failure exits before a success report. */
+struct sha256 {EVP_MD_CTX *context;};
+static OSSL_LIB_CTX *hash_library;
+static OSSL_PROVIDER *hash_default;
+static EVP_MD *hash_algorithm;
 static uint32_t be32(const unsigned char *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|(uint32_t)p[3];
 }
 static uint64_t be64(const unsigned char *p){return ((uint64_t)be32(p)<<32)|be32(p+4);
@@ -64,40 +70,34 @@ static void put32(unsigned char *p,uint32_t x){p[0]=(unsigned char)(x>>24);
 static void put64(unsigned char *p,uint64_t x){put32(p,(uint32_t)(x>>32));
     put32(p+4,(uint32_t)x);
 }
-static int hash_provider(struct sha256 *s,const char *name){
-    struct sockaddr_alg address;
-    memset(&address,0,sizeof(address));
-    address.salg_family=AF_ALG;
-    memcpy(address.salg_type,"hash",5);
-    if(strlen(name)>=sizeof(address.salg_name))return -1;
-    memcpy(address.salg_name,name,strlen(name)+1);
-    s->socket_fd=socket(AF_ALG,SOCK_SEQPACKET|SOCK_CLOEXEC,0);
-    if(s->socket_fd<0)return -1;
-    if(bind(s->socket_fd,(struct sockaddr *)&address,sizeof(address))!=0){close(s->socket_fd);
-        return -1;
-    }
-    s->operation_fd=accept4(s->socket_fd,NULL,NULL,SOCK_CLOEXEC);
-    if(s->operation_fd<0){close(s->socket_fd);
-        return -1;
-    }return 0;
+static int hash_provider(void){
+    if(hash_algorithm)return 0;
+    if(OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG,NULL)!=1)return -1;
+    hash_library=OSSL_LIB_CTX_new();
+    if(!hash_library)return -1;
+    hash_default=OSSL_PROVIDER_load(hash_library,"default");
+    if(!hash_default)return -1;
+    hash_algorithm=EVP_MD_fetch(hash_library,"SHA256","provider=default");
+    const char *provider_name=OSSL_PROVIDER_get0_name(hash_default);
+    if(!hash_algorithm||EVP_MD_get_size(hash_algorithm)!=32||EVP_MD_get0_provider(hash_algorithm)!=hash_default||!provider_name||strcmp(provider_name,"default"))return -1;
+    return 0;
 }
-static void sha_init(struct sha256 *s){if(hash_provider(s,"sha256")!=0)_exit(70);
+static void sha_abort(struct sha256 *s){EVP_MD_CTX_free(s->context);s->context=NULL;}
+static void sha_init(struct sha256 *s){
+    s->context=NULL;
+    if(hash_provider()!=0)_exit(70);
+    s->context=EVP_MD_CTX_new();
+    if(!s->context||EVP_DigestInit_ex2(s->context,hash_algorithm,NULL)!=1)_exit(70);
 }
-static void sha_update(struct sha256 *s,const void *data,size_t n){const unsigned char *p=data;
-    while(n){ssize_t sent=send(s->operation_fd,p,n,MSG_MORE|MSG_NOSIGNAL);
-        if(sent<0&&errno==EINTR)continue;
-        if(sent<=0)_exit(70);
-        p+=(size_t)sent;
-        n-=(size_t)sent;
-    }}
-static void sha_final(struct sha256 *s,unsigned char out[32]){if(send(s->operation_fd,NULL,0,MSG_NOSIGNAL)!=0)_exit(70);
-    size_t n=0;
-    while(n<32){ssize_t got=read(s->operation_fd,out+n,32-n);
-        if(got<0&&errno==EINTR)continue;
-        if(got<=0)_exit(70);
-        n+=(size_t)got;
-    }close(s->operation_fd);
-    close(s->socket_fd);
+static void sha_update(struct sha256 *s,const void *data,size_t n){
+    if(!s->context||EVP_DigestUpdate(s->context,data,n)!=1)_exit(70);
+}
+static void sha_final(struct sha256 *s,unsigned char out[32]){
+    unsigned char digest[EVP_MAX_MD_SIZE];unsigned int length=0;
+    if(!s->context||EVP_DigestFinal_ex(s->context,digest,&length)!=1||length!=32)_exit(70);
+    sha_abort(s);
+    memcpy(out,digest,32);
+    OPENSSL_cleanse(digest,sizeof(digest));
 }
 static void hash_bytes(const void *p,size_t n,unsigned char out[32]){struct sha256 s;
     sha_init(&s);
@@ -401,16 +401,10 @@ static bool relative_resource(const char *path){size_t n=strlen(path);
         for(size_t i=0;part[i];i++)if(!((part[i]>='A'&&part[i]<='Z')||(part[i]>='a'&&part[i]<='z')||(part[i]>='0'&&part[i]<='9')||part[i]=='_'||part[i]=='-'||part[i]=='+'||part[i]=='.'))return false;
     }return true;
 }
-static int load_profile(const char *id,const char *realm,const char *slot,struct profile *p){
+/* Parses a digest-bound candidate only. On-disk ownership and caller credentials remain load_profile fences. */
+static int parse_profile(unsigned char *data,size_t length,const char *id,const char *realm,const char *slot,struct profile *p){
     unsigned char expected_digest[32];
-    if(!hex_decode(id,32,expected_digest))return -1;
-    int root=secure_directory(PROFILE_ROOT);
-    if(root<0)return -1;
-    unsigned char data[FRAME_MAX];
-    size_t length;
-    int rc=read_file_at(root,id,data,sizeof(data)-1,&length);
-    close(root);
-    if(rc!=0||length==0||data[length-1]!='\n')return -1;
+    if(!hex_decode(id,32,expected_digest)||length==0||length>=FRAME_MAX||data[length-1]!='\n')return -1;
     hash_bytes(data,length,p->digest);
     if(!equal(expected_digest,p->digest,32))return -1;
     data[length]=0;
@@ -451,7 +445,7 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
     p->slot_count=(unsigned int)count;
     uint64_t n[10];
     for(size_t i=0;i<10;i++)if(decimal(values[i+3],&n[i])!=0)return -1;
-    if(n[0]==0||n[0]>UINT32_MAX||n[1]>UINT32_MAX||n[2]==0||n[2]>UINT32_MAX||n[3]==0||n[3]>UINT32_MAX||n[0]==n[2]||n[4]<1||n[4]>536870912||n[5]<1||n[5]>134217728||n[6]<1||n[6]>67108864||n[6]>n[5]||n[7]<1||n[7]>90||n[8]<1||n[8]>16||n[9]<3||n[9]>64||!hex_decode(values[13],32,p->scanner_digest))return -1;
+    if(n[0]==0||n[0]>UINT32_MAX||n[1]>UINT32_MAX||n[2]==0||n[2]>UINT32_MAX||n[3]==0||n[3]>UINT32_MAX||n[0]==n[2]||n[4]<1||n[4]>UINT64_C(2147483648)||n[5]<1||n[5]>134217728||n[6]<1||n[6]>67108864||n[6]>n[5]||n[7]<1||n[7]>90||n[8]<1||n[8]>16||n[9]<3||n[9]>64||!hex_decode(values[13],32,p->scanner_digest))return -1;
 
     uint64_t resource_count;
     if(decimal(values[16],&resource_count)!=0||resource_count<6||resource_count>64)return -1;
@@ -477,7 +471,6 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
         }
     }
     if(!executable||!main_db||!daily_db||!bytecode_db||!clamav_library||!package)return -1;
-    if(getuid()!=(uid_t)n[0]||getgid()!=(gid_t)n[1]||geteuid()!=0)return -1;
     p->caller_uid=(uid_t)n[0];
     p->caller_gid=(gid_t)n[1];
     p->scanner_uid=(uid_t)n[2];
@@ -491,6 +484,19 @@ static int load_profile(const char *id,const char *realm,const char *slot,struct
     memcpy(p->id,id,strlen(id)+1);
     memcpy(p->realm,realm,37);
     memcpy(p->slot,slot,strlen(slot)+1);
+    return 0;
+}
+static int load_profile(const char *id,const char *realm,const char *slot,struct profile *p){
+    unsigned char expected_digest[32];
+    if(!hex_decode(id,32,expected_digest))return -1;
+    int root=secure_directory(PROFILE_ROOT);
+    if(root<0)return -1;
+    unsigned char data[FRAME_MAX];
+    size_t length;
+    int rc=read_file_at(root,id,data,sizeof(data)-1,&length);
+    close(root);
+    if(rc!=0||parse_profile(data,length,id,realm,slot,p)!=0)return -1;
+    if(getuid()!=p->caller_uid||getgid()!=p->caller_gid||geteuid()!=0)return -1;
     return 0;
 }
 struct realm {int root,slot,control,lock;
@@ -742,10 +748,10 @@ static int hash_fd(int fd,unsigned char out[32]){struct sha256 hash;
     uint64_t total=0;
     for(;;){ssize_t got=read(fd,data,sizeof(data));
         if(got<0&&errno==EINTR)continue;
-        if(got<0)return -1;
+        if(got<0){sha_abort(&hash);return -1;}
         if(!got)break;
         total+=(uint64_t)got;
-        if(total>2147483648ULL)return -1;
+        if(total>2147483648ULL){sha_abort(&hash);return -1;}
         sha_update(&hash,data,(size_t)got);
     }sha_final(&hash,out);
     return 0;
@@ -1104,7 +1110,7 @@ static int scanner_arguments(const struct profile *p,char max[48],char scanmax[4
     if(n<0||n>=48)return -1;
     n=snprintf(scanmax,48,"--max-scansize=%llu",(unsigned long long)p->max_bytes);
     if(n<0||n>=48)return -1;
-    char *values[]={"/scanner/clamscan","--suppress-ok-results","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
+    char *values[]={"/scanner/clamscan","--infected","--stdout","--no-summary","--official-db-only=yes","--bytecode=yes","--bytecode-unsigned=no","--bytecode-timeout=10000",max,scanmax,"--max-files=1","--max-recursion=1","--alert-exceeds-max=yes","--alert-encrypted=yes","--alert-macros=yes","--scan-archive=no","--scan-pdf=no","--scan-html=no","--scan-mail=no","--scan-ole2=no","--scan-pe=no","--scan-elf=no","--database=/definitions","--tempdir=/scratch","-",NULL};
     _Static_assert(ARRAY_LEN(values)==26,"Closed scanner argv changed");
     memcpy(arguments,values,sizeof(values));
     return 0;
@@ -1124,15 +1130,49 @@ static void effective_policy(const struct profile *p,unsigned char out[32]){
     sha_update(&hash,environment,sizeof(environment)-1);
     sha_final(&hash,out);
 }
+/* Bind software-provider facts to the file actually mapped for the linked EVP API.
+ * A library replacement, writable image, missing map or read failure cannot be sealed. */
+static int crypto_library_digest(unsigned char out[32]){
+    Dl_info image;const void *symbol=(const void *)EVP_MD_fetch;
+    if(dladdr(symbol,&image)==0||!image.dli_fname||image.dli_fname[0]!='/')return -1;
+    char canonical[PATH_MAX];
+    if(!realpath(image.dli_fname,canonical))return -1;
+    char *base=strrchr(canonical,'/');
+    if(!base||strcmp(base+1,"libcrypto.so.3"))return -1;
+    *base=0;int directory=secure_directory(canonical);
+    if(directory<0)return -1;
+    int fd=openat(directory,base+1,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);close(directory);
+    if(fd<0)return -1;
+    struct stat before,after;struct statvfs filesystem;
+    if(fstat(fd,&before)!=0||fstatvfs(fd,&filesystem)!=0||!S_ISREG(before.st_mode)||before.st_uid!=0||before.st_nlink!=1||(before.st_mode&0022)!=0||((filesystem.f_flag&ST_RDONLY)==0&&(before.st_mode&0222)!=0)||before.st_size<=0){close(fd);return -1;}
+    FILE *maps=fopen("/proc/self/maps","re");
+    if(!maps){close(fd);return -1;}
+    char line[PATH_MAX+256];bool mapped=false,invalid=false;
+    while(fgets(line,sizeof(line),maps)){
+        if(!strchr(line,'\n')){invalid=true;break;}
+        unsigned long long start,end,offset,inode;unsigned int device_major,device_minor;char permissions[5];
+        if(sscanf(line,"%llx-%llx %4s %llx %x:%x %llu",&start,&end,permissions,&offset,&device_major,&device_minor,&inode)!=7){invalid=true;break;}
+        if((uint64_t)(uintptr_t)symbol>=start&&(uint64_t)(uintptr_t)symbol<end){
+            mapped=permissions[0]=='r'&&permissions[1]=='-'&&permissions[2]=='x'&&permissions[3]=='p'&&device_major==major(before.st_dev)&&device_minor==minor(before.st_dev)&&inode==(uint64_t)before.st_ino;
+            break;
+        }
+    }
+    if(ferror(maps))invalid=true;
+    if(fclose(maps)!=0)invalid=true;
+    int rc=!invalid&&mapped&&hash_fd(fd,out)==0&&fstat(fd,&after)==0&&same_file(&before,&after)&&before.st_mode==after.st_mode&&before.st_uid==after.st_uid&&before.st_gid==after.st_gid?0:-1;
+    close(fd);return rc;
+}
 static void provider_facts(unsigned char out[32]){
-    char release[256],providers[262144];
-    if(read_small("/proc/sys/kernel/osrelease",release,sizeof(release))!=0||read_small("/proc/crypto",providers,sizeof(providers))!=0)_exit(70);
-    struct sha256 hash;
-    sha_init(&hash);
-    const char domain[]="MSF_KERNEL_SHA256_PROVIDER_V1\n";
+    unsigned char library[32];
+    if(hash_provider()!=0||crypto_library_digest(library)!=0)_exit(70);
+    const char *provider_name=OSSL_PROVIDER_get0_name(hash_default),*version=OpenSSL_version(OPENSSL_VERSION);
+    if(!provider_name||strcmp(provider_name,"default")||!version||!version[0])_exit(70);
+    struct sha256 hash;sha_init(&hash);
+    const char domain[]="MSF_OPENSSL_SHA256_PROVIDER_V1\nSHA256\nprovider=default\n";
     sha_update(&hash,domain,sizeof(domain)-1);
-    sha_update(&hash,release,strlen(release));
-    sha_update(&hash,providers,strlen(providers));
+    sha_update(&hash,version,strlen(version));sha_update(&hash,"\n",1);
+    sha_update(&hash,provider_name,strlen(provider_name));sha_update(&hash,"\n",1);
+    sha_update(&hash,library,sizeof(library));
     sha_final(&hash,out);
 }
 static void control_seal(const struct binding *binding,const struct profile *profile,const struct resource_snapshot *resources,unsigned char out[32]){

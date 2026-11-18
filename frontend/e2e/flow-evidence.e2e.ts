@@ -4,7 +4,7 @@ import { openFindingReport, openInTab, selectReportOrganization } from "./findin
 
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
-test("整改中的记录：选择 PNG → 隔离扫描 → 扫描通过；非图片被拦截；提交整改仍禁用", async ({ page }) => {
+test("整改中的记录：选择 PNG → 隔离扫描 → 终结发布 → 提交整改；非图片被拦截", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("租户编码").fill("demo");
   await page.getByLabel("账号").fill("demo");
@@ -21,8 +21,10 @@ test("整改中的记录：选择 PNG → 隔离扫描 → 扫描通过；非图
   await expect(tab.getByRole("alert")).toContainText("只支持 PNG 或 JPEG");
 
   await file.setInputFiles({ name: "护栏.png", mimeType: "image/png", buffer: PNG });
-  await expect(tab.getByRole("status").filter({ hasText: "护栏.png" })).toContainText("扫描通过，等待终结确认", { timeout: 15_000 });
-  await expect(tab.getByRole("button", { name: "提交整改证据" })).toBeDisabled();
+  await expect(tab.getByRole("status").filter({ hasText: "护栏.png" })).toContainText("已终结", { timeout: 15_000 });
+  await tab.getByLabel("整改说明").fill("已加装护栏并复测");
+  await tab.getByRole("button", { name: "提交整改" }).click();
+  await expect(tab.locator(".status-current")).toHaveText("待验收");
 });
 
 test("未成立的记录：基于此创建关联上报，新记录详情带关联行，可回看原记录", async ({ page }) => {

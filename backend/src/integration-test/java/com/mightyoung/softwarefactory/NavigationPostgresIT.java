@@ -3,6 +3,7 @@ package com.mightyoung.softwarefactory;
 import com.mightyoung.softwarefactory.applicationregistry.navigation.NavigationController;
 import com.mightyoung.softwarefactory.applicationregistry.navigation.NavigationService;
 import com.mightyoung.softwarefactory.authorization.PersistentEntityReadAccessPolicy;
+import com.mightyoung.softwarefactory.authorization.PersistentEffectivePermissions;
 import com.mightyoung.softwarefactory.authorization.PersistentFindingReadAuthorizationRepository;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.parallel.Execution;
@@ -181,6 +182,7 @@ class NavigationPostgresIT {
     @Configuration(proxyBeanMethods = false)
     @TestComponent
     @Import({IdentityLoginPostgresIT.IdentityWebConfiguration.class, NavigationController.class,
-            NavigationService.class, PersistentEntityReadAccessPolicy.class, PersistentFindingReadAuthorizationRepository.class})
+            NavigationService.class, PersistentEntityReadAccessPolicy.class, PersistentFindingReadAuthorizationRepository.class,
+            PersistentEffectivePermissions.class})
     static class NavigationWebConfiguration { }
 }

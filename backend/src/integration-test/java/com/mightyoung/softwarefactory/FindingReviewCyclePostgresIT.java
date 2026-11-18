@@ -219,8 +219,9 @@ class FindingReviewCyclePostgresIT {
             List<String> columns=fixture.business.read(db->db.queryForList("select column_name from information_schema.columns where table_schema='public' and table_name=? and is_nullable='NO' order by ordinal_position",String.class,table));
             assertThat(columns).isNotEmpty();
             for(String column:columns) {
-                // Real PostgreSQL checks NOT NULL before uniqueness/FK; no successful synthetic clone is committed.
-                sqlState("23502",()->fixture.rollbackProbe(db->db.update("insert into public."+table+" select (jsonb_populate_record(null::public."+table+",to_jsonb(t)||jsonb_build_object(?,null))).* from public."+table+" t where tenant_id=? limit 1",column,fixture.business.tenantId)));
+                // FORCE RLS rejects a null tenant before NOT NULL; other required columns reach 23502.
+                // No successful synthetic clone is committed.
+                sqlState(column.equals("tenant_id")?"42501":"23502",()->fixture.rollbackProbe(db->db.update("insert into public."+table+" select (jsonb_populate_record(null::public."+table+",to_jsonb(t)||jsonb_build_object(?,null))).* from public."+table+" t where tenant_id=? limit 1",column,fixture.business.tenantId)));
             }
         }
         sqlState("23514",()->fixture.rollbackProbe(db->db.update("insert into public.finding_review_decision select (jsonb_populate_record(null::public.finding_review_decision,to_jsonb(t)||'{\"confirmed_grade\":null}'::jsonb)).* from public.finding_review_decision t where tenant_id=? and finding_id=? and stage='SAFETY' and decision='APPROVE'",fixture.business.tenantId,id)));

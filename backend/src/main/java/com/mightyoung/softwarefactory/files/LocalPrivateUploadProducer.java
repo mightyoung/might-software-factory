@@ -471,6 +471,14 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
             try{Opened opened=open(source.identity());opened.io=io;return opened;}
             catch(IOException|RuntimeException failure){io.close();throw failure;}
         }
+        Opened openPublished(RecordedAllocation allocation)throws IOException {
+            if(allocation.request().kind()!=AllocationKind.IMMUTABLE||allocation.baseline()==null
+                    ||allocation.disposalTombstoneId()!=null)throw unavailable();
+            WriterFence io=ioFence(AllocationIoKey.of(allocation.request()),IoMode.READ);
+            if(io==null)throw unavailable();
+            try{Opened opened=open(allocation.baseline().identity());opened.io=io;return opened;}
+            catch(IOException|RuntimeException failure){io.close();throw failure;}
+        }
         synchronized void dispose(ObjectIdentity expected,Deadline deadline)throws IOException {
             verifyDirectory();if(expected==null||!expected.rootGeneration().equals(generation))throw unavailable();
             Path name=Path.of(expected.serverObjectName());
@@ -614,7 +622,7 @@ public final class LocalPrivateUploadProducer implements FileIngestionPort,Uploa
         WriterFence(FileChannel channel,java.nio.channels.FileLock lock,String stopHash,String proofHash,Runnable releaseOwner){this.channel=channel;this.lock=lock;this.stopHash=stopHash;this.proofHash=proofHash;this.releaseOwner=releaseOwner;}
         @Override public void close()throws IOException{try{try{lock.release();}finally{channel.close();}}finally{releaseOwner.run();}}
     }
-    private static final class Opened implements AutoCloseable {
+    static final class Opened implements AutoCloseable {
         final PrivateDirectory directory;final Path name;final FileChannel channel;final ObjectIdentity identity;
         private WriterFence io;private final AtomicBoolean closed=new AtomicBoolean();
         private Opened(PrivateDirectory directory,Path name,FileChannel channel,ObjectIdentity identity){this.directory=directory;this.name=name;this.channel=channel;this.identity=identity;}
