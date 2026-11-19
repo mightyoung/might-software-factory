@@ -105,6 +105,29 @@ SOURCE = _LaneSpec(
         "framework-schema", "source-schema", "runtime-role", "runtime-rights", "seed-identity",
         "seed-foundation", "native-graph", "closed", "unknown",
     )), guard_count=52)
+REAUTH = _LaneSpec(
+    kind="g008-reauth", database="msf_ci_g008_reauth", runtime_role="msf_ci_reauth_runtime",
+    ack="ephemeral-g008-reauth-only", profile="ci-pg18-g008-reauth",
+    state_prefix="msf-ci-pg18-g008-reauth-", artifact_directory="ci-pg18-g008-reauth",
+    it_class="com.mightyoung.softwarefactory.identity.CiPg18ReauthPostgresIT",
+    unit_class="com.mightyoung.softwarefactory.identity.CiPg18ReauthTargetTest",
+    scenarios=frozenset((
+        "originalSchemaPrivilegesAndActualGuardAreEnforced",
+        "actualIssuerFeedsActualActiveTargetRevoke",
+        "absentAuthorityTargetGetsDirectRevocationFence",
+        "issuanceAndConsumptionReceiptsReplayWithoutRedeliveringToken",
+        "explicitReissueAcrossRetainedKeysReplacesOnlyExactLiveProof",
+        "currentCredentialAndSourceChangesMeetBothGuardCommitOrders",
+        "lateActualAuditFailureRollsBackIssuanceAndTerminalization",
+        "deferredCommitConstraintFailureRollsBackTheWholeGraph",
+        "commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken",
+        "crossAccountSourceTargetAndTenantContextCannotBorrowTheProof",
+    )), schema_field="reauthSchemaVerified", evidence_file="ci-pg18-reauth-safe-evidence.json",
+    failure_file="ci-pg18-reauth-safe-failure.json", failure_phases=frozenset((
+        "open", "target-version", "target-marker", "empty-schema", "migrate", "history",
+        "framework-schema", "reauth-schema", "runtime-role", "runtime-rights", "seed-identity",
+        "activate-authority", "closed", "unknown",
+    )), guard_count=55)
 RECOVERY = _LaneSpec(
     kind="risk-recovery", database="msf_ci_risk_recovery", runtime_role="msf_ci_recovery_runtime",
     ack="ephemeral-risk-recovery-only", profile="ci-pg18-risk-recovery",
@@ -144,7 +167,7 @@ def reject(stage):
 
 
 def _spec(lane):
-    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE and lane is not RECOVERY:
+    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE and lane is not REAUTH and lane is not RECOVERY:
         reject("LANE")
     return lane
 
@@ -176,7 +199,7 @@ def _result_lane(result, lane):
                     or any(type(tests.get(key)) is not int or tests[key] != 0 for key in ("failures", "errors", "skipped"))
                     or tests.get("scenarios") != sorted(lane.scenarios)):
                 reject("RESULT_LANE")
-            if lane is SOURCE or lane is RECOVERY:
+            if lane is SOURCE or lane is REAUTH or lane is RECOVERY:
                 revision = result.get("sourceRevision")
                 if (not isinstance(revision, dict) or set(revision) != {"commit", "tree"}
                         or any(not isinstance(revision[key], str) or not re.fullmatch(r"[0-9a-f]{40}", revision[key])
@@ -185,6 +208,11 @@ def _result_lane(result, lane):
             if lane is SOURCE:
                 try:
                     validate_source_diagnostics(result.get("sourceDiagnostics"), require_complete=True)
+                except Rejected:
+                    reject("RESULT_LANE")
+            if lane is REAUTH:
+                try:
+                    validate_reauth_commit_diagnostics(result.get("reauthCommitDiagnostics"), require_complete=True)
                 except Rejected:
                     reject("RESULT_LANE")
             if lane is RECOVERY:
@@ -322,6 +350,43 @@ def validate_source_diagnostics(value, require_complete=False):
     if require_complete and (found != SOURCE.scenarios or any(row["status"] != "PASSED" or row["issuerEntered"] == 0
                                                            for row in value["cases"])):
         reject("SOURCE_DIAGNOSTIC_NOT_PASS")
+    return value
+
+
+def validate_reauth_commit_diagnostics(value, require_complete=False):
+    """Fixed diagnostic phases only; no messages, identifiers, secrets or arbitrary values."""
+    case = "commitThenThrowKeepsOneDurableIssueAndNeverDeliversItsToken"
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "database", "case", "iterations"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or value["database"] != REAUTH.database or value["case"] != case
+            or not isinstance(value["iterations"], list) or len(value["iterations"]) != 6):
+        reject("REAUTH_COMMIT_DIAGNOSTIC")
+    expected = [(level, fault) for level in ("INFO", "DEBUG")
+                for fault in ("COMMIT_SQL", "COMMIT_RUNTIME", "COMMIT_ERROR")]
+    phases = {"SETUP", "ACTION", "LOG_PASSWORD_DRIVER", "LOG_SECRET_CANARIES",
+              "DURABLE_GRAPH", "COMMIT_COUNT", "REPLAY", "REPLAY_GRAPH", "NOT_REACHED"}
+    terminal = False
+    for row, pair in zip(value["iterations"], expected):
+        if (not isinstance(row, dict) or set(row) != {"level", "fault", "phase", "status", "failureKind"}
+                or (row["level"], row["fault"]) != pair
+                or not isinstance(row["phase"], str) or row["phase"] not in phases
+                or not isinstance(row["status"], str) or row["status"] not in {"PASS", "FAIL", "NOT_REACHED"}
+                or row["failureKind"] is not None and not isinstance(row["failureKind"], str)
+                or row["failureKind"] not in {None, "ASSERTION", "SESSION_SENSITIVE", "OTHER"}):
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+        if row["status"] == "NOT_REACHED":
+            if not terminal or row["phase"] != "NOT_REACHED" or row["failureKind"] is not None:
+                reject("REAUTH_COMMIT_DIAGNOSTIC")
+        elif terminal:
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+        elif row["status"] == "FAIL":
+            if row["phase"] == "NOT_REACHED" or row["failureKind"] is None:
+                reject("REAUTH_COMMIT_DIAGNOSTIC")
+            terminal = True
+        elif row["phase"] != "REPLAY_GRAPH" or row["failureKind"] is not None:
+            reject("REAUTH_COMMIT_DIAGNOSTIC")
+    if require_complete and any(row["status"] != "PASS" for row in value["iterations"]):
+        reject("REAUTH_COMMIT_DIAGNOSTIC_NOT_PASS")
     return value
 
 
@@ -850,6 +915,8 @@ def public_diagnostics(result, lane=CAPTURE):
             output["databaseEvidence"] = validate_success_evidence(result["databaseEvidence"], digest, lane)
     if lane is SOURCE and "sourceDiagnostics" in result:
         output["sourceDiagnostics"] = validate_source_diagnostics(result["sourceDiagnostics"])
+    if lane is REAUTH and "reauthCommitDiagnostics" in result:
+        output["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(result["reauthCommitDiagnostics"])
     if lane is RECOVERY and "recoveryProcesses" in result:
         output["recoveryProcesses"] = validate_recovery_process_evidence(result["recoveryProcesses"])
     migration = result.get("migrationDiagnostics", {})
@@ -893,7 +960,7 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         result["acceptanceKind"] = lane.kind
     stage = "INITIALIZE"
     try:
-        if lane is SOURCE or lane is RECOVERY:
+        if lane is SOURCE or lane is REAUTH or lane is RECOVERY:
             stage = "SOURCE_REVISION"
             result["sourceRevision"] = source_revision(repo, environment)
         # The source revision must be checked before this untracked acceptance artifact exists.
@@ -918,6 +985,17 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         stage = "MAVEN_VERIFY"
         maven_exit = run_maven(repo, state, child, lane)
         result["mavenExit"] = maven_exit
+        if lane is REAUTH:
+            stage = "REAUTH_COMMIT_DIAGNOSTICS"
+            diagnostics = repo / "backend" / "target" / "ci-pg18-reauth-commit-diagnostics.json"
+            if diagnostics.exists():
+                result["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(load_json(diagnostics), require_complete=not maven_exit)
+            elif not maven_exit:
+                reject("REAUTH_COMMIT_DIAGNOSTIC_MISSING")
+            evidence = repo / "backend" / "target" / lane.evidence_file
+            if evidence.exists():
+                result["databaseEvidence"] = validate_success_evidence(load_json(evidence), ownership["image_digest"], lane)
+            stage = "MAVEN_VERIFY"
         if lane is RECOVERY:
             stage = "RECOVERY_PROCESSES"
             processes = repo / "backend" / "target" / "ci-pg18-recovery-process-evidence.json"
