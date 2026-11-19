@@ -1,3 +1,5 @@
+import { Button } from "@astryxdesign/core/Button";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PermissionAdminError,
@@ -146,7 +148,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
       <section className="perm-page" role="alert">
         <h1>权限配置</h1>
         <p>{FAILURE_MESSAGE[loadError]}</p>
-        <button type="button" className="secondary" onClick={() => void reload()}>重试</button>
+        <Button type="button" label="重试" variant="secondary" onClick={() => void reload()} />
       </section>
     );
   }
@@ -184,11 +186,15 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
                 <fieldset key={application} className="perm-group" disabled={!canManage || saving}>
                   <legend>{APPLICATION_LABEL[application] ?? application}</legend>
                   {items.map((item) => (
-                    <label key={item.code} className="perm-item">
-                      <input type="checkbox" checked={draft.has(item.code)} onChange={() => toggle(item.code)} />
-                      <span>{item.label}</span>
+                    <div key={item.code} className="perm-item">
+                      <CheckboxInput
+                        label={item.label}
+                        value={draft.has(item.code)}
+                        isDisabled={!canManage || saving}
+                        onChange={() => toggle(item.code)}
+                      />
                       <code>{item.code}</code>
-                    </label>
+                    </div>
                   ))}
                 </fieldset>
               ))}
@@ -204,17 +210,20 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
               )}
               {canManage && (
                 <div className="perm-actions">
-                  <button type="button" onClick={() => void save()} disabled={!dirty || saving}>
-                    {saving ? "保存中…" : "保存"}
-                  </button>
-                  <button
+                  <Button
                     type="button"
-                    className="secondary"
-                    disabled={!dirty || saving}
+                    label={saving ? "保存中…" : "保存"}
+                    variant="primary"
+                    isDisabled={!dirty || saving}
+                    onClick={() => void save()}
+                  />
+                  <Button
+                    type="button"
+                    label="放弃修改"
+                    variant="secondary"
+                    isDisabled={!dirty || saving}
                     onClick={() => setDraft(new Set(selected.permissionCodes))}
-                  >
-                    放弃修改
-                  </button>
+                  />
                 </div>
               )}
             </>

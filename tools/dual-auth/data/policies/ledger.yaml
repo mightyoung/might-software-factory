@@ -1,0 +1,23 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: default
+  resource: ledger
+  rules:
+    - actions: [view, "quantity:view"]
+      effect: EFFECT_ALLOW
+      roles: [supervisor]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.department == P.attr.department
+    - actions: [view, edit, "quantity:view", "price:view"]
+      effect: EFFECT_ALLOW
+      roles: [registrar]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.owner == P.id
+    - actions: [view, edit, "quantity:view"]
+      effect: EFFECT_ALLOW
+      roles: [collaborator]
+      condition:
+        match:
+          expr: R.attr.tenant == P.attr.tenant && R.attr.record_id in P.attr.temporary_ids

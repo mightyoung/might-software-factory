@@ -1709,12 +1709,13 @@ select:focus-visible {
 .perm-detail { background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 20px; }
 .perm-group { border: 1px solid var(--rule); border-radius: 8px; margin: 12px 0; padding: 8px 16px 12px; }
 .perm-group legend { font-weight: 600; padding: 0 8px; }
-.perm-item { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: center; padding: 4px 0; }
+.perm-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 0; }
 .perm-item code { color: var(--muted); font-size: 12px; }
 .perm-diff { color: var(--warning); }
 .perm-ok { color: var(--success); }
 .perm-error { color: var(--danger); }
 .perm-actions { display: flex; gap: 12px; margin-top: 12px; }
+.perm-actions .astryx-button { transition-property: opacity, transform; }
 
 
 /* The register uses the same reading order on a narrow screen. Only rows scroll sideways. */

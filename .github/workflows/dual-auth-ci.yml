@@ -1,0 +1,54 @@
+name: Dual authorization CI
+
+on:
+  pull_request:
+    paths:
+      - "tools/dual-auth/**"
+      - "backend/src/main/java/com/mightyoung/softwarefactory/authorization/**"
+      - "backend/src/main/java/com/mightyoung/softwarefactory/ledger/**"
+      - ".github/workflows/dual-auth-ci.yml"
+      - "pom.xml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "tools/dual-auth/**"
+      - ".github/workflows/dual-auth-ci.yml"
+      - "pom.xml"
+      - "backend/src/main/java/com/mightyoung/softwarefactory/authorization/**"
+      - "backend/src/main/java/com/mightyoung/softwarefactory/ledger/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-and-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: authz_probe
+          POSTGRES_PASSWORD: local_probe_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d authz_probe"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      AUTHZ_PG_URL: jdbc:postgresql://127.0.0.1:5432/authz_probe
+      AUTHZ_PG_USER: postgres
+      AUTHZ_PG_PASSWORD: local_probe_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify jCasbin action grants
+        run: ./mvnw -B -ntp -f tools/dual-auth/function/pom.xml test
+      - name: Compare live Cerbos decisions with PostgreSQL and check composed writes
+        env:
+          AUTHZ_PLAN_FILE: ${{ runner.temp }}/astryx-authz-decisions.json
+        run: bash tools/dual-auth/data/run-ci.sh ./mvnw -B -ntp -f tools/dual-auth/query/pom.xml test
