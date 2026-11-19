@@ -605,14 +605,6 @@ select:focus-visible {
   text-align: center;
 }
 
-.ledger-table input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--petrol);
-  vertical-align: middle;
-}
-
 .table-action-column {
   width: 64px;
   min-width: 64px;

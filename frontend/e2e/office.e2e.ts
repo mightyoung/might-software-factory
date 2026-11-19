@@ -65,7 +65,7 @@ test("在线表格按需加载，导出的原生工作簿可以重新导入", as
   });
   await expect(editor.getByRole("alert")).toBeVisible();
   expect((await exportWorkbook()).sheets[sheet.id].cellData[0][0].v).toBe("工装量具");
-  const nameBox = editor.locator('input[type="text"]:not([aria-label]):visible').first();
+  const nameBox = editor.locator('input[type="text"]:not([aria-label]):not(#name):visible').first();
   await nameBox.fill("A1");
   await nameBox.press("Enter");
   await editor.locator('canvas[id^="univer-sheet-main-canvas_"]').click({ position: { x: 90, y: 35 } });
@@ -123,3 +123,53 @@ test("工装作业指导书可以在在线文档中重新打开、切换主题�
   await expect(dialog).toHaveCount(0);
   await expect(open).toBeFocused();
 });
+
+for (const kind of ["工作簿", "文档"] as const) {
+  test(`${kind}名称可修改、随文件保存并在导入后恢复`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await signIn(page);
+    const isDocument = kind === "文档";
+    const editorName = isDocument ? "在线文档" : "在线表格";
+    const closeName = isDocument ? "关闭文档" : "关闭表格";
+    await page.getByRole("button", { name: editorName, exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: editorName });
+    const editor = dialog.frameLocator("iframe");
+    const name = editor.getByRole("textbox", { name: `${kind}名称` });
+    await expect(name).toBeEnabled({ timeout: officeStartupTimeout });
+    await expect(name).toHaveValue(`未命名${kind}`);
+    await name.fill("   工装/点检:2026   ");
+    await name.press("Enter");
+    await expect(name).toHaveValue("工装/点检:2026");
+    await expect(editor.getByRole("status")).toContainText("尚未导出");
+    await name.fill("   ");
+    await name.press("Enter");
+    await expect(editor.getByRole("alert")).toContainText("名称不能为空");
+    await expect(name).toHaveValue("工装/点检:2026");
+    await name.fill("工装/点检:2026交接");
+    await expect(editor.getByRole("status")).toContainText("尚未导出");
+    const cancel = page.waitForEvent("dialog").then(prompt => prompt.dismiss());
+    await dialog.getByRole("button", { name: closeName }).click();
+    await cancel;
+    await expect(dialog).toBeVisible();
+    const save = editor.getByRole("button", { name: `导出${kind} JSON` });
+    const [download] = await Promise.all([page.waitForEvent("download"), save.click()]);
+    expect(download.suggestedFilename()).toBe("工装_点检_2026交接.json");
+    const path = await download.path();
+    if (!path) throw Error("无法读取导出的文件");
+    const snapshot = JSON.parse(await readFile(path, "utf8"));
+    expect(isDocument ? snapshot.document.title : snapshot.name).toBe("工装/点检:2026交接");
+    if (isDocument) snapshot.document.title = "接班作业指导书";
+    else snapshot.name = "接班工装清单";
+    const importedName = isDocument ? snapshot.document.title : snapshot.name;
+    await editor.locator('input[type="file"]').setInputFiles({
+      name: "交接.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(snapshot)),
+    });
+    await expect(name).toHaveValue(importedName);
+    const roundtrip = await downloadSnapshot(page, save);
+    expect(isDocument ? roundtrip.document.title : roundtrip.name).toBe(importedName);
+    await dialog.getByRole("button", { name: closeName }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}

@@ -1,3 +1,4 @@
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import type { LedgerColumn } from "../domain/ledger";
 import { useAppMode } from "../mode";
 
@@ -24,7 +25,9 @@ export function LedgerTable<T>({
   onOpen,
 }: LedgerTableProps<T>) {
   const demo = useAppMode() === "synthetic";
-  const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedIds.has(getKey(row)));
+  const selectedCount = rows.filter((row) => selectedIds.has(getKey(row))).length;
+  const someSelected = selectedCount > 0 && selectedCount < rows.length;
+  const pageSelection = someSelected ? "indeterminate" : selectedCount > 0;
 
   return (
     <div className="table-scroll-region">
@@ -32,11 +35,12 @@ export function LedgerTable<T>({
         <thead>
           <tr>
             <th className="selection-column">
-              <input
-                type="checkbox"
-                aria-label="选择本页记录"
-                checked={allVisibleSelected}
-                disabled={rows.length === 0}
+              <CheckboxInput
+                size="sm"
+                isLabelHidden
+                label="选择本页记录"
+                value={pageSelection}
+                isDisabled={rows.length === 0}
                 onChange={onTogglePage}
               />
             </th>
@@ -56,10 +60,11 @@ export function LedgerTable<T>({
             return (
               <tr key={id} className="ledger-row">
                 <td className="selection-column" onClick={(event) => event.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    aria-label={`选择 ${getLabel ? getLabel(row) : id}`}
-                    checked={selectedIds.has(id)}
+                  <CheckboxInput
+                    size="sm"
+                    isLabelHidden
+                    label={`选择 ${getLabel ? getLabel(row) : id}`}
+                    value={selectedIds.has(id)}
                     onChange={() => onToggleRow(id)}
                   />
                 </td>

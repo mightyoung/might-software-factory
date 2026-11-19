@@ -107,6 +107,7 @@ describe("隐患台账分页与详情", () => {
     await screen.findByText("TEST-HZ-001");
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 TEST-HZ-001" }));
     expect(screen.getByText("已选 1 条（当前页）")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择本页记录" })).toBePartiallyChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await screen.findByText("TEST-HZ-021");
