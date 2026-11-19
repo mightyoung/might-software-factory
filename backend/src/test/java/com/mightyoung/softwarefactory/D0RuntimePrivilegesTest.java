@@ -15,10 +15,14 @@ import org.junit.jupiter.api.Test;
 class D0RuntimePrivilegesTest {
     private static final Path MIGRATIONS = Path.of("src/main/resources/db/migration");
     private static final Path SCRIPT = Path.of("src/main/resources/db/operator/d0-runtime-grants.sql");
+    private static final Path REAUTH_WRITER = Path.of("src/main/java/com/mightyoung/softwarefactory/identity/JooqReauthIssuerStore.java");
+    private static final Path REAUTH_GRANTS = Path.of("src/ci-pg18-reauth-test/resources/ci-pg18-reauth/runtime-grants.sql");
+    private static final Set<String> REAUTH_ISSUANCE_TABLES = Set.of("sensitive_reauth_proof", "sensitive_reauth_issuance_receipt");
     private record Rights(Set<String> select, Set<String> insert, Set<String> update) { }
 
     @Test void manifestCoversNewTablesAndCurrentProducerColumns() throws Exception {
         var manifest = manifest();
+        var isolatedReauthInserts = isolatedReauthRights("insert");
         Set<String> tables = new HashSet<>();
         try (var paths = Files.list(MIGRATIONS)) {
             for (Path path : paths.filter(p -> p.getFileName().toString().matches("V(19|2[0-5])__.*")).toList()) {
@@ -33,7 +37,11 @@ class D0RuntimePrivilegesTest {
                 var inserts = Pattern.compile("insert into public\\.(\\w+)\\s*\\(([^)]*)\\)", Pattern.CASE_INSENSITIVE).matcher(source);
                 while (inserts.find()) {
                     var rights = manifest.get(inserts.group(1));
-                    if (rights != null) assertThat(rights.insert).as("INSERT in %s", path).containsAll(words(inserts.group(2)));
+                    if (rights != null) {
+                        Set<String> allowed = path.equals(REAUTH_WRITER) && REAUTH_ISSUANCE_TABLES.contains(inserts.group(1))
+                                ? isolatedReauthInserts.get(inserts.group(1)) : rights.insert;
+                        assertThat(allowed).as("INSERT in %s", path).containsAll(words(inserts.group(2)));
+                    }
                 }
                 var updates = Pattern.compile("update public\\.(\\w+)\\s+(?:\\w+\\s+)?set\\s+(.+?)\\s+where\\b", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(source);
                 while (updates.find()) {
@@ -64,6 +72,45 @@ class D0RuntimePrivilegesTest {
             assertThat(manifest.get(name).insert).as(name).isEmpty();
             assertThat(manifest.get(name).update).as(name).isEmpty();
         }
+    }
+
+    @Test void isolatedReauthWriterRequiresItsExplicitGrantAndD0CannotIssueProofs() throws Exception {
+        var baseline = manifest();
+        for (String table : REAUTH_ISSUANCE_TABLES) {
+            assertThat(baseline.get(table).insert).as(table).isEmpty();
+        }
+        var inserts = isolatedReauthRights("insert");
+        assertThat(inserts.get("sensitive_reauth_proof")).containsExactlyInAnyOrder(
+                "id", "account_id", "actor_id", "source_primary_id", "issued_credential_version", "action",
+                "target_primary_id", "expected_authority_version", "body_key_id", "body_digest", "secret_digest",
+                "state", "version", "created_at", "expires_at", "issuance_receipt_id");
+        assertThat(inserts.get("sensitive_reauth_issuance_receipt")).containsExactlyInAnyOrder(
+                "id", "account_id", "actor_id", "source_primary_id", "command_key", "fingerprint_key_id",
+                "fingerprint", "proof_id", "expires_at", "event_id", "completed_at");
+        var updates = isolatedReauthRights("update");
+        assertThat(updates.get("sensitive_reauth_proof")).containsExactlyInAnyOrder(
+                "state", "version", "session_consume_receipt_id");
+        assertThat(updates).doesNotContainKey("sensitive_reauth_issuance_receipt");
+        String writer = Files.readString(REAUTH_WRITER);
+        var statements = Pattern.compile("update public\\.(\\w+)\\s+set\\s+(.+?)\\s+where\\b",
+                Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(writer);
+        int count = 0;
+        while (statements.find()) {
+            assertThat(statements.group(1)).isEqualTo("sensitive_reauth_proof");
+            var columns = Pattern.compile("(?:^|,)\\s*(\\w+)\\s*=").matcher(statements.group(2));
+            while (columns.find()) assertThat(updates.get(statements.group(1))).contains(columns.group(1));
+            count++;
+        }
+        assertThat(count).isEqualTo(1);
+    }
+
+    private static Map<String, Set<String>> isolatedReauthRights(String operation) throws Exception {
+        Map<String, Set<String>> result = new HashMap<>();
+        var grants = Pattern.compile("grant " + operation
+                + "\\(([a-z0-9_,]+)\\) on public\\.\"([a-z_]+)\" to msf_ci_reauth_runtime;")
+                .matcher(Files.readString(REAUTH_GRANTS));
+        while (grants.find()) assertThat(result.put(grants.group(2), words(grants.group(1)))).isNull();
+        return result;
     }
 
     @Test void executableHelpersMatchOrdinaryRevokedFunctionsAndExcludeTriggerBodies() throws Exception {
