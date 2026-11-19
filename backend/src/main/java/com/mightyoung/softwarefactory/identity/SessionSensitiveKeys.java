@@ -32,6 +32,8 @@ public final class SessionSensitiveKeys {
     String sessionDigest(String keyId,String bearerId){return digest(keyId,"session-binding",bearerId);}
     String commandDigest(String keyId,String canonical){return digest(keyId,"session-revoke-command",canonical);}
     String actionDigest(String keyId,String canonical){return digest(keyId,"session-revoke-action",canonical);}
+    String issuanceDigest(String keyId,String canonical){return digest(keyId,"session-reauth-issuance",canonical);}
+    boolean matchesIssuance(String keyId,String expected,String canonical){return equal(expected,issuanceDigest(keyId,canonical));}
     boolean matchesAction(String keyId,String expected,String canonical){return equal(expected,actionDigest(keyId,canonical));}
     boolean matchesSession(String keyId,String expected,String bearerId){return equal(expected,sessionDigest(keyId,bearerId));}
     boolean matchesCommand(String keyId,String expected,String canonical){return equal(expected,commandDigest(keyId,canonical));}

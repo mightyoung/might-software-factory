@@ -38,13 +38,13 @@ class MigrationInventoryTests(unittest.TestCase):
                 inventories += 1
                 with self.subTest(fixture=path.name):
                     self.assertEqual(tuple(re.findall(r'"([0-9.]+)"', match[1])), VERSIONS)
-        self.assertEqual(inventories, 4)
+        self.assertEqual(inventories, 5)
 
     def test_all_lanes_accept_real_segmented_filenames_and_reject_wrong_version(self):
         digest = "sha256:" + "a" * 64
         migrations = [dict(version=version, script=path.name, checksum=123)
                       for version, path in zip(VERSIONS, MIGRATIONS)]
-        for lane in (subject.CAPTURE, subject.REGISTRY, subject.SOURCE, subject.RECOVERY):
+        for lane in (subject.CAPTURE, subject.REGISTRY, subject.SOURCE, subject.RECOVERY, subject.REAUTH):
             with self.subTest(lane=lane.kind):
                 evidence = dict(schemaVersion=1, postgresMajor=18, database=lane.database,
                                 instanceMarkerVerified=True, imageDigest=digest,

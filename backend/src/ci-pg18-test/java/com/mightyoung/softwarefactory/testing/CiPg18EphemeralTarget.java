@@ -13,6 +13,7 @@ public final class CiPg18EphemeralTarget {
         CAPTURE("msf_ci_risk_capture", "ephemeral-risk-capture-only", "msf_ci_capture_runtime"),
         REGISTRY("msf_ci_risk_registry", "ephemeral-risk-registry-only", "msf_ci_registry_runtime"),
         SOURCE("msf_ci_risk_source", "ephemeral-risk-source-only", "msf_ci_source_runtime"),
+        REAUTH("msf_ci_g008_reauth", "ephemeral-g008-reauth-only", "msf_ci_reauth_runtime"),
         RECOVERY("msf_ci_risk_recovery", "ephemeral-risk-recovery-only", "msf_ci_recovery_runtime");
         private final String database, acknowledgment, runtime;
         Lane(String database, String acknowledgment, String runtime) {
