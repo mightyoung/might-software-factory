@@ -17,11 +17,39 @@ describe("PermissionConfigPage", () => {
     render(<PermissionConfigPage adapter={createSyntheticPermissionAdmin()} canManage onUnauthenticated={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: /上报人/ }));
     const save = screen.getByRole("button", { name: "保存" });
-    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByLabelText(/查看风险管控/));
     expect(screen.getByText(/新增 1 项/)).toBeInTheDocument();
     fireEvent.click(save);
     expect(await screen.findByText(/已保存/)).toBeInTheDocument();
+  });
+
+  it("discards a draft without saving and prevents a clean save", async () => {
+    const base = createSyntheticPermissionAdmin();
+    const saveRolePermissions = vi.fn(base.saveRolePermissions);
+    render(<PermissionConfigPage adapter={{ load: base.load, saveRolePermissions }} canManage onUnauthenticated={vi.fn()} />);
+    const permission = await screen.findByLabelText(/查看风险管控/);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(saveRolePermissions).not.toHaveBeenCalled();
+    fireEvent.click(permission);
+    expect(permission).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+    expect(permission).not.toBeChecked();
+    expect(screen.queryByText(/待保存/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(saveRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed load without writing permissions", async () => {
+    const base = createSyntheticPermissionAdmin();
+    const load = vi.fn().mockRejectedValueOnce(new PermissionAdminError("unavailable")).mockImplementation(base.load);
+    const saveRolePermissions = vi.fn(base.saveRolePermissions);
+    render(<PermissionConfigPage adapter={{ load, saveRolePermissions }} canManage onUnauthenticated={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("heading", { name: "上报人" })).toBeInTheDocument();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(saveRolePermissions).not.toHaveBeenCalled();
   });
 
   it("keeps the saved role selected until its delayed save settles", async () => {
@@ -32,6 +60,12 @@ describe("PermissionConfigPage", () => {
     fireEvent.click(await screen.findByLabelText(/查看风险管控/));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     const other = screen.getByRole("button", { name: /安全员/ });
+    expect(screen.getByLabelText(/查看风险管控/)).toBeDisabled();
+    expect(screen.getByRole("button", { name: "放弃修改" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("button", { name: "保存中…" }));
+    fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+    expect(screen.getByLabelText(/查看风险管控/)).toBeChecked();
+    expect(saveRolePermissions).toHaveBeenCalledTimes(1);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(other);
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("上报人");
@@ -41,7 +75,7 @@ describe("PermissionConfigPage", () => {
     fireEvent.click(other);
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("安全员");
     expect(screen.getByLabelText(/查看风险管控/)).not.toBeChecked();
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true");
     expect(saveRolePermissions).toHaveBeenCalledTimes(1);
   });
 
@@ -51,7 +85,7 @@ describe("PermissionConfigPage", () => {
     render(<PermissionConfigPage adapter={{ load: base.load, saveRolePermissions }} canManage onUnauthenticated={vi.fn()} onPermissionsChanged={refresh} />);
     fireEvent.click(await screen.findByLabelText(/查看风险管控/));fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("权限已保存，但当前会话尚未同步");
-    expect(screen.queryByText("已保存，权限即时生效。")).not.toBeInTheDocument();expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.queryByText("已保存，权限即时生效。")).not.toBeInTheDocument();expect(screen.getByRole("button", { name: "保存" })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));expect(saveRolePermissions).toHaveBeenCalledTimes(1);expect(refresh).toHaveBeenCalledTimes(1);
   });
   it("ignores a late save completion after its identity page is replaced", async () => {
