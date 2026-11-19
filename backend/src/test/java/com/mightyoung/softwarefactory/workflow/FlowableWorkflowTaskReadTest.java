@@ -378,7 +378,7 @@ class FlowableWorkflowTaskReadTest {
 
     private WorkflowDefinitionPin reviewedPin() throws Exception {
         byte[] bytes;
-        try (var stream = getClass().getResourceAsStream("/" + PinnedFindingReviewDefinitionResolver.RESOURCE)) {
+        try (var stream = getClass().getResourceAsStream("/" + PackagedWorkflowDefinitions.RESOURCES.get("findingRemediationV3"))) {
             bytes = stream.readAllBytes();
         }
         when(definition.getKey()).thenReturn("findingRemediationV3");
@@ -387,7 +387,7 @@ class FlowableWorkflowTaskReadTest {
         when(repository.getResourceAsStream("deployment", "reviewed.bpmn20.xml"))
                 .thenAnswer(call -> new java.io.ByteArrayInputStream(bytes));
         return new WorkflowDefinitionPin(TENANT, "definition-1", "findingRemediationV3",
-                PinnedFindingReviewDefinitionResolver.sha256(bytes));
+                PackagedWorkflowDefinitions.sha256(bytes));
     }
 
     @Test void replayValidatesLiveOriginalTaskAndRejectsChangedAssignee() throws Exception {

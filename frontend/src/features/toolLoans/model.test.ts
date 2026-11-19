@@ -29,3 +29,13 @@ it("rejects malformed records and candidate identifiers before rendering them", 
   await expect(adapter.detail("bad-id")).rejects.toThrow();
   await expect(adapter.candidates("bad-id")).rejects.toThrow();
 });
+it("uses keeper-only queue/detail endpoints and posts one versioned issue command", async () => {
+  const h = http({ records: [{ ...row, state: "ISSUED" }] });
+  expect((await h.adapter.issueQueue())[0]!.state).toBe("ISSUED");
+  expect(h.get).toHaveBeenCalledWith("/api/v1/tooling/loan-applications/issue-queue", { signal: undefined });
+  h.get.mockResolvedValue({ data: { ...row, state: "ISSUED" }, meta: { traceId: "t" } });
+  expect((await h.adapter.issueDetail(id)).state).toBe("ISSUED");
+  expect(h.get).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/issue-detail`, { signal: undefined });
+  await h.adapter.command("issue", id, { definitionVersion: "1", expectedVersion: 2 }, id);
+  expect(h.post).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/issue`, { body: { definitionVersion: "1", expectedVersion: 2 }, headers: { "Idempotency-Key": id } });
+});

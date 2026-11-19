@@ -24,7 +24,7 @@ public class ToolLedgerConfiguration {
         return new ApplicationContribution("tooling","工装管理",List.of(new ApplicationContribution.Node(
                 "tools","正常工装档案","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update")),
                 new ApplicationContribution.Node("loans", "我的工装借用单", "apps/tooling/entities/tool_loan", "tool_loan",
-                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update"))));
+                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue"))));
     }
     static LedgerDefinition definition() {
         Map<String,LedgerDefinition.Field> fields=Map.of(

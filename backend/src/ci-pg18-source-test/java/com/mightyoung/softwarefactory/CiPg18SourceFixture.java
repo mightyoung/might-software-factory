@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Fresh isolated PG18 source lane only. Seeds identity prerequisites, never source command results. */
 public final class CiPg18SourceFixture implements AutoCloseable {
-    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29");
+    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30");
     private static final String RUNTIME = "msf_ci_source_runtime";
     private static final String GRANTS = "/ci-pg18-source/runtime-grants.sql";
     private static final Set<String> REQUIRED_FUNCTIONS=Set.of(

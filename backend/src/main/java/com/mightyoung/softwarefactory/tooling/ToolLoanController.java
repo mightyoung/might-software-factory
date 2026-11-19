@@ -36,6 +36,23 @@ public final class ToolLoanController {
         return response(service.candidates(request, custodyScopeId, loanId));
     }
 
+    @GetMapping("/issue-queue")
+    public ResponseEntity<?> issueQueue(HttpServletRequest request) {
+        return response(service.issueQueue(request));
+    }
+
+    @GetMapping("/{id}/issue-detail")
+    public ResponseEntity<?> issueDetail(HttpServletRequest request, @PathVariable UUID id) {
+        return response(service.issueDetail(request, id));
+    }
+
+    @PostMapping("/{id}/issue")
+    public ResponseEntity<?> issue(HttpServletRequest request, @PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String key) {
+        return response(service.issue(request, id, LedgerHttpParser.uuid(key,"Idempotency-Key"),
+                parser.read(request, ToolLoanService.IssueInput.class)));
+    }
+
     @PostMapping
     public ResponseEntity<?> create(HttpServletRequest request, @RequestHeader("Idempotency-Key") String key) {
         return response(service.command(request, null, LedgerHttpParser.uuid(key, "Idempotency-Key"),

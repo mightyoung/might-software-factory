@@ -1,20 +1,18 @@
 openapi: 3.1.0
 info:
   title: Tool loan applications
-  version: 1.0.0
-  description: Applicant-owned multi-item applications with atomic revision history
-    and idempotent commands. Tool issue, occupancy and returns are subsequent business
-    actions. Permissions are tooling/tool_loan read, create and update. List/detail
-    require read, create and initial candidates require create, and revision/cancellation
-    require update.
+  version: 1.1.0
+  description: Applicant-owned multi-item loan applications and keeper-authorized atomic whole-order issuance.
+    Application submission does not occupy tools. Issuance requires tool_loan.issue, current keeper qualification
+    and non-self handling. Every command rechecks current authorization and supports exact idempotent
+    replay.
 security:
 - sessionCookie: []
 paths:
   /api/v1/tooling/loan-applications:
     get:
       operationId: listOwnToolLoanApplications
-      description: Returns at most 100 own applications, newest first with id as tie
-        breaker.
+      description: Returns at most 100 own applications, newest first with id as tie breaker.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -60,9 +58,9 @@ paths:
                 $ref: '#/components/schemas/Error'
     post:
       operationId: createToolLoanApplication
-      description: Submit a multi-item application. No tool occupancy is created.
-        organizationId must be a current applicant department, and every tool must
-        belong to the authorized custody scope. The result has version 1.
+      description: Submit a multi-item application. No tool occupancy is created. organizationId must
+        be a current applicant department, and every tool must belong to the authorized custody scope.
+        The result has version 1.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -128,10 +126,10 @@ paths:
   /api/v1/tooling/loan-applications/candidates:
     get:
       operationId: toolLoanCandidates
-      description: Returns current applicant departments and authorized custody scopes.
-        At most 200 NORMAL tools from the selected visible scope are returned in code/id
-        order. Without a selected visible scope, tools is empty. loanId binds revision
-        candidates to an owned application and requires update authorization.
+      description: Returns current applicant departments and authorized custody scopes. At most 200 NORMAL
+        tools from the selected visible scope are returned in code/id order. Without a selected visible
+        scope, tools is empty. loanId binds revision candidates to an owned application and requires update
+        authorization.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -192,8 +190,7 @@ paths:
       schema: *id001
     get:
       operationId: readOwnToolLoanApplication
-      description: Returns the current revision of an application owned by the authenticated
-        applicant.
+      description: Returns the current revision of an application owned by the authenticated applicant.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -245,9 +242,9 @@ paths:
       schema: *id001
     post:
       operationId: reviseToolLoanApplication
-      description: Append a full replacement revision while PENDING_ISSUE. The original
-        department, custody scope and definition version stay fixed. Request replay
-        returns the original successful revision after current authorization is checked.
+      description: Append a full replacement revision while PENDING_ISSUE. The original department, custody
+        scope and definition version stay fixed. Request replay returns the original successful revision
+        after current authorization is checked.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -315,9 +312,9 @@ paths:
       schema: *id001
     post:
       operationId: cancelToolLoanApplication
-      description: Withdraw a PENDING_ISSUE application and append its final revision.
-        Only definitionVersion and expectedVersion are accepted. Request replay returns
-        the original successful revision after current authorization is checked.
+      description: Withdraw a PENDING_ISSUE application and append its final revision. Only definitionVersion
+        and expectedVersion are accepted. Request replay returns the original successful revision after
+        current authorization is checked.
       responses:
         '200':
           description: Success. Cache-Control is no-store.
@@ -377,6 +374,188 @@ paths:
         required: true
         schema: *id002
         description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/issue-queue:
+    get:
+      operationId: listKeeperPendingToolLoans
+      description: Returns at most 100 PENDING_ISSUE applications in the current eligible keeper custody
+        scopes, excluding the keeper’s own applications. Requires tool_loan.issue. This list does not
+        reserve or occupy any tool.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Requested application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/issue-detail:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getKeeperToolLoanDetail
+      description: Current application detail for an eligible keeper with tool_loan.issue. Applicant ownership
+        does not grant keeper handling access and self handling is denied. Includes ordered tool labels
+        for whole-order confirmation.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/issue:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: &id003
+        type: string
+        format: uuid
+    post:
+      operationId: issueToolLoanApplication
+      description: Atomically issue all current application detail items. Requires tool_loan.issue and
+        current effective custody keeper qualification, and forbids handling one’s own application. definitionVersion
+        and expectedVersion must match the current PENDING_ISSUE application. Revalidate every item and
+        create all occupancy records in the same transaction with the new ISSUED version, history, success
+        audit and command receipt. Any unavailable item rejects the entire command with no partial occupancy.
+        Same-key same-input replay returns the original successful result after current authorization
+        recheck. Unknown results must retain the original key and payload.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueRequest'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id003
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Current CSRF token from the authenticated session.
 components:
   securitySchemes:
     sessionCookie:
@@ -401,7 +580,7 @@ components:
       - tools
       properties:
         id: *id001
-        version: &id006
+        version: &id007
           type: integer
           format: int64
           minimum: 1
@@ -411,6 +590,7 @@ components:
           enum:
           - PENDING_ISSUE
           - WITHDRAWN
+          - ISSUED
         definitionVersion:
           type: string
           const: '1'
@@ -438,6 +618,11 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/Option'
+        awaitingOtherCustodian:
+          type: boolean
+          description: Optional own PENDING_ISSUE detail signal. True when the current custody scope has
+            no other effective keeper eligible to issue this application. Current authorization and the
+            self-handling restriction still apply to every command.
     CreateRequest:
       type: object
       additionalProperties: false
@@ -448,16 +633,16 @@ components:
       - purpose
       - toolIds
       properties:
-        definitionVersion: &id003
+        definitionVersion: &id004
           type: string
           const: '1'
         organizationId: *id001
         custodyScopeId: *id001
-        purpose: &id004
+        purpose: &id005
           type: string
           minLength: 1
           maxLength: 4000
-        toolIds: &id005
+        toolIds: &id006
           type: array
           items: *id001
           minItems: 1
@@ -474,12 +659,12 @@ components:
       - toolIds
       - expectedVersion
       properties:
-        definitionVersion: *id003
+        definitionVersion: *id004
         organizationId: *id001
         custodyScopeId: *id001
-        purpose: *id004
-        toolIds: *id005
-        expectedVersion: *id006
+        purpose: *id005
+        toolIds: *id006
+        expectedVersion: *id007
     CancelRequest:
       type: object
       additionalProperties: false
@@ -490,7 +675,7 @@ components:
         definitionVersion:
           type: string
           const: '1'
-        expectedVersion: *id006
+        expectedVersion: *id007
     Option:
       type: object
       additionalProperties: false
@@ -624,7 +809,7 @@ components:
       - createdAt
       - updatedAt
       properties:
-        id: &id007
+        id: &id008
           type: string
           format: uuid
         version:
@@ -637,18 +822,19 @@ components:
           enum:
           - PENDING_ISSUE
           - WITHDRAWN
+          - ISSUED
         definitionVersion:
           type: string
           const: '1'
-        organizationId: *id007
-        custodyScopeId: *id007
+        organizationId: *id008
+        custodyScopeId: *id008
         purpose:
           type: string
           minLength: 1
           maxLength: 4000
         toolIds:
           type: array
-          items: *id007
+          items: *id008
           minItems: 1
           maxItems: 100
           uniqueItems: true
@@ -658,3 +844,18 @@ components:
         updatedAt:
           type: string
           format: date-time
+    IssueRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      properties:
+        definitionVersion:
+          type: string
+          const: '1'
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
