@@ -1,4 +1,6 @@
 import type { FormEvent } from "react";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import "./LedgerQueryForm.css";
 import type { DateRange, LedgerQueryField, LedgerSchema, QueryValue, QueryValues } from "../domain/ledger";
 
 interface LedgerQueryFormProps<T> {
@@ -24,15 +26,18 @@ function QueryFieldControl<T>({
 }) {
   if (field.kind === "text") {
     return (
-      <label className="query-field" key={field.key}>
-        <span>{field.label}</span>
-        <input
-          type="search"
-          value={typeof value === "string" ? value : ""}
-          placeholder={field.placeholder}
-          onChange={(event) => onChange(field.key, event.currentTarget.value)}
-        />
-      </label>
+      <TextInput
+        key={field.key}
+        type="search"
+        label={field.label}
+        value={typeof value === "string" ? value : ""}
+        placeholder={field.placeholder}
+        enterKeyHint="search"
+        size="lg"
+        containerClassName="query-field ledger-search-field"
+        controlClassName="ledger-search-control"
+        onChange={(next) => onChange(field.key, next)}
+      />
     );
   }
 

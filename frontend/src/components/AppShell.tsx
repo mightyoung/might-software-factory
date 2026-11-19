@@ -1,3 +1,4 @@
+import { officeEditors, type OfficeEditorKind } from "../features/office/editors";
 import { Text } from "@astryxdesign/core/Text";
 import { lazy, Suspense } from "react";
 import { ThemeSelector, useTheme } from "../features/theme/ThemeProvider";
@@ -144,7 +145,7 @@ function Sidebar({
 
 export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
   const synthetic = useAppMode() === "synthetic";
-  const [officeOpen, setOfficeOpen] = useState(false);
+  const [officeKind, setOfficeKind] = useState<OfficeEditorKind | null>(null);
   const { resolvedTheme } = useTheme();
   const home = session.applications[0];
   return (
@@ -171,7 +172,11 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           ))}
         </nav>
         <div className="topbar-right">
-          <button className="button office-open" type="button" onClick={() => setOfficeOpen(true)}>在线表格</button>
+          {(["sheet", "doc"] as const).map(kind => (
+            <button className="button office-open" type="button" key={kind} onClick={() => setOfficeKind(kind)}>
+              {officeEditors[kind].title}
+            </button>
+          ))}
           <ThemeSelector />
           {synthetic && <span className="demo-environment">合成演示</span>}
           <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout}
@@ -180,8 +185,8 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         </div>
       </header>
 
-      {officeOpen && <Suspense fallback={<p role="status">正在加载在线表格…</p>}>
-        <OfficeDialog theme={resolvedTheme} onClose={() => setOfficeOpen(false)} />
+      {officeKind && <Suspense fallback={<p role="status">正在加载{officeEditors[officeKind].title}…</p>}>
+        <OfficeDialog kind={officeKind} theme={resolvedTheme} onClose={() => setOfficeKind(null)} />
       </Suspense>}
       <div className="workspace">
         {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}

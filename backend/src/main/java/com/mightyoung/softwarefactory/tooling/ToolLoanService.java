@@ -483,6 +483,59 @@ public final class ToolLoanService {
         return loan;
     }
 
+    public Object scopedList(HttpServletRequest request,String visibility) {
+        return execute(request,readResource(visibility),"read",false,e -> {
+            var rows=e.db.select(org.jooq.impl.DSL.table(org.jooq.impl.DSL.name("root")).asterisk()).select(org.jooq.impl.DSL.field("""
+                    array(select i.tool_id from public.tool_loan_item i where i.tenant_id=root.tenant_id
+                        and i.loan_id=root.id and i.version=root.version order by i.line_no)
+                    """).as("tool_ids")).from(org.jooq.impl.DSL.table("public.tool_loan").as("root"))
+                    .where(scopedVisibility(e,visibility))
+                    .orderBy(org.jooq.impl.DSL.field("root.created_at").desc(),org.jooq.impl.DSL.field("root.id"))
+                    .limit(100).fetch();
+            return Map.of("records",rows.map(row -> Map.of(
+                    "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
+                    "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
+                    "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
+                    "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+        });
+    }
+
+    public Object scopedDetail(HttpServletRequest request,String visibility,UUID id) {
+        return execute(request,readResource(visibility),"read",false,e -> record(e,id,null));
+    }
+
+    private static String readResource(String visibility) {
+        return switch(visibility) {
+            case "department" -> "tool_loan_department";
+            case "custody" -> "tool_loan_custody";
+            default -> throw new LedgerInputException("visibility","invalid_scope");
+        };
+    }
+
+    static org.jooq.Condition scopedVisibility(Execution e,String visibility) {
+        var context=e.decision.context();
+        String organizations="{"+String.join(",",e.decision.organizationIds().stream().map(UUID::toString).toList())+"}";
+        var tenant=org.jooq.impl.DSL.condition("root.tenant_id=?::uuid",context.tenantId());
+        if("department".equals(visibility)) return tenant.and(org.jooq.impl.DSL.condition("root.organization_id=any(?::uuid[])",organizations));
+        if(!"custody".equals(visibility)) throw new LedgerInputException("visibility","invalid_scope");
+        return tenant.and(org.jooq.impl.DSL.condition("""
+                exists(select 1 from public.tool_custody_scope s join public.tool_custodian k
+                    on k.tenant_id=s.tenant_id and k.custody_scope_id=s.id
+                    where s.tenant_id=root.tenant_id and s.id=root.custody_scope_id and s.active
+                      and s.organization_id=any(?::uuid[]) and k.member_id=?::uuid
+                      and k.valid_from<=?::timestamptz and (k.valid_to is null or k.valid_to>?::timestamptz))
+                """,organizations,context.memberId(),e.decision.observedAt(),e.decision.observedAt()));
+    }
+
+    private org.jooq.Record scopedLoan(Execution e,UUID id) {
+        String visibility=e.decision.action().resourceType().equals("tool_loan_department")?"department":"custody";
+        var row=e.db.selectFrom(org.jooq.impl.DSL.table("public.tool_loan").as("root"))
+                .where(scopedVisibility(e,visibility)).and(org.jooq.impl.DSL.condition("root.id=?::uuid",id)).fetchOne();
+        if(row==null) throw new LedgerException(404,"NOT_FOUND");
+        return row;
+    }
+
     public Object list(HttpServletRequest request) {
         return execute(request,"read",false,e -> {
             var context = e.decision.context();
@@ -583,7 +636,8 @@ public final class ToolLoanService {
     private List<UUID> items(Execution e,UUID id,long version) {return e.db.fetch("select tool_id from public.tool_loan_item where tenant_id=? and loan_id=? and version=? order by line_no",e.decision.context().tenantId(),id,version).getValues(0,UUID.class);
     }
     private Object record(Execution e,UUID id,Long historical) {
-        var row=Set.of("issue","receive","close_lost").contains(e.decision.action().action())? keeperLoan(e,id,false):owned(e,id,false);
+        var row=!e.decision.action().resourceType().equals("tool_loan")?scopedLoan(e,id)
+                :Set.of("issue","receive","close_lost").contains(e.decision.action().action())?keeperLoan(e,id,false):owned(e,id,false);
         long version=historical==null?row.get("version",Long.class):historical;
         var revision=e.db.fetchOne("select state,purpose,occurred_at from public.tool_loan_revision where tenant_id=? and loan_id=? and version=?",e.decision.context().tenantId(),id,version);
         var result = new LinkedHashMap<String,Object>();
@@ -612,6 +666,9 @@ public final class ToolLoanService {
         }catch(Exception failure){throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
         }}
     private <T>T execute(HttpServletRequest request,String operation,boolean mutation,Function<Execution,T> work) {
+        return execute(request,"tool_loan",operation,mutation,work);
+    }
+    private <T>T execute(HttpServletRequest request,String resource,String operation,boolean mutation,Function<Execution,T> work) {
         if(TransactionSynchronizationManager.isActualTransactionActive())throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
         var captured=requests.capture(request);
         try{return (mutation?write:read).execute(status->{
@@ -619,7 +676,7 @@ public final class ToolLoanService {
                 if(holder==null)throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
                 var connection=holder.getConnection();var db=DSL.using(connection,SQLDialect.POSTGRES,new Settings().withExecuteLogging(false).withFetchWarnings(false));
                 db.fetch("select set_config('app.tenant_id',?,true)",captured.context().tenantId().toString());
-                var action=new ApplicationEntityAction("tooling","tool_loan",operation);
+                var action=new ApplicationEntityAction("tooling",resource,operation);
                 Function<ApplicationActionAuthorization.Decision,T> call=decision->{actions.authorization().requireSqlConnection(decision,source,connection);T result=work.apply(new Execution(db,decision));actions.authorization().requireSqlConnection(decision,source,connection);return result;};
                 if(!mutation)return actions.callers().withRead(captured,boundary->call.apply(actions.authorization().requireRead(captured,boundary,action)));
                 actions.guard().forBusinessCommand(captured.context().tenantId());

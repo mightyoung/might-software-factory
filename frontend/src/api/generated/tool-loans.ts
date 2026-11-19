@@ -282,25 +282,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tooling/loan-applications/visibility/{visibility}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                visibility: "department" | "custody";
+            };
+            cookie?: never;
+        };
+        /** @description Returns at most 100 authorized applications, newest first. Department mode requires tool_loan_department.read and matches the original application organization. Custody mode requires tool_loan_custody.read plus a current effective custodianship in the original scope. Ordinary borrower read permission does not grant either mode. */
+        get: operations["listScopedToolLoanApplications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tooling/loan-applications/visibility/{visibility}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                visibility: "department" | "custody";
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Read-only detail using the same department or current custody predicate as the scoped list. Unauthorized or cross-tenant IDs return 404. Does not authorize any business command. */
+        get: operations["getScopedToolLoanApplication"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         LoanRecord: {
-            /** Format: uuid */
-            id: string;
+            id: unknown;
             /** Format: int64 */
             version: number;
             /** @enum {string} */
             state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
             /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
             definitionVersion: string;
-            /** Format: uuid */
-            organizationId: string;
-            /** Format: uuid */
-            custodyScopeId: string;
+            organizationId: unknown;
+            custodyScopeId: unknown;
             purpose: string;
-            toolIds: string[];
+            toolIds: unknown[];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -314,22 +350,18 @@ export interface components {
         CreateRequest: {
             /** @constant */
             definitionVersion: "1";
-            /** Format: uuid */
-            organizationId: string;
-            /** Format: uuid */
-            custodyScopeId: string;
+            organizationId: unknown;
+            custodyScopeId: unknown;
             purpose: string;
-            toolIds: string[];
+            toolIds: unknown[];
         };
         ReviseRequest: {
             /** @constant */
             definitionVersion: "1";
-            /** Format: uuid */
-            organizationId: string;
-            /** Format: uuid */
-            custodyScopeId: string;
+            organizationId: unknown;
+            custodyScopeId: unknown;
             purpose: string;
-            toolIds: string[];
+            toolIds: unknown[];
             /** Format: int64 */
             expectedVersion: number;
         };
@@ -340,16 +372,13 @@ export interface components {
             expectedVersion: number;
         };
         Option: {
-            /** Format: uuid */
-            id: string;
+            id: unknown;
             label: string;
         };
         CustodyScope: {
-            /** Format: uuid */
-            id: string;
+            id: unknown;
             label: string;
-            /** Format: uuid */
-            organizationId: string;
+            organizationId: unknown;
         };
         Candidates: {
             departments: components["schemas"]["Option"][];
@@ -1698,6 +1727,159 @@ export interface operations {
                 };
             };
             /** @description Application is not visible under current keeper qualification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listScopedToolLoanApplications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                visibility: "department" | "custody";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application not visible to current applicant */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getScopedToolLoanApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                visibility: "department" | "custody";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application not visible in the authorized scope */
             404: {
                 headers: {
                     [name: string]: unknown;

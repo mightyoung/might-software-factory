@@ -82,3 +82,25 @@ it("shows that another eligible custodian is needed only when the pending detail
   await screen.findByRole("heading", { name: "申请详情" });
   expect(screen.queryByText("对应保管范围目前无人可办（需另一名有效保管人发放）")).not.toBeInTheDocument();
 });
+it("shows scoped applications with detail only even when the reader also owns command permissions", async () => {
+  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
+  render(<LoanApplicationsPage adapter={adapter} owner="scope-test" visibility="department" permissions={[...grants,"tool_loan_department.read"]} onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  await screen.findByRole("region", { name: "借用单只读详情" });
+  expect(adapter.list).toHaveBeenCalledWith(expect.any(AbortSignal), "department");
+  expect(adapter.detail).toHaveBeenCalledWith(row.id, undefined, "department");
+  expect(screen.queryByRole("button", { name: "新建借用申请" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "修订申请" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "撤销申请" })).toBeNull();
+  expect(adapter.command).not.toHaveBeenCalled();
+});
+
+it.each(["department", "custody"] as const)("loads scoped applications with only the %s read grant", async visibility => {
+  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
+  render(<LoanApplicationsPage adapter={adapter} owner="only-reader" visibility={visibility} permissions={[`tool_loan_${visibility}.read`]} onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  await screen.findByRole("region", { name: "借用单只读详情" });
+  expect(adapter.list).toHaveBeenCalledWith(expect.any(AbortSignal), visibility);
+  expect(adapter.candidates).not.toHaveBeenCalled();
+  expect(adapter.command).not.toHaveBeenCalled();
+});

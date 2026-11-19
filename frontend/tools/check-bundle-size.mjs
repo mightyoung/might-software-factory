@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 const dist = join(import.meta.dirname, "..", "dist");
 const bundles = [
-  { name: "工作台（含 Astryx）", directory: "assets", limits: { js: 192, css: 56 } },
-  { name: "独立 Office 编辑器", directory: "office/assets", limits: { js: 2880, css: 24 } },
+  { name: "工作台（含 Astryx）", directory: "assets", limits: { js: 198, css: 56 } },
+  { name: "Office 表格及文档（共享资源只计一次）", directory: "office/assets", limits: { js: 2880, css: 36 } },
 ];
 
 let failed = false;

@@ -24,6 +24,16 @@ public final class ToolLoanController {
         return response(service.list(request));
     }
 
+    @GetMapping("/visibility/{visibility}")
+    public ResponseEntity<?> scopedList(HttpServletRequest request,@PathVariable String visibility) {
+        return response(service.scopedList(request,visibility));
+    }
+
+    @GetMapping("/visibility/{visibility}/{id}")
+    public ResponseEntity<?> scopedDetail(HttpServletRequest request,@PathVariable String visibility,@PathVariable UUID id) {
+        return response(service.scopedDetail(request,visibility,id));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<?> detail(HttpServletRequest request, @PathVariable UUID id) {
         return response(service.detail(request, id));

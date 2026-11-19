@@ -6,7 +6,7 @@ import { ApiError } from "../../api/httpClient";
 import { MultiItemRows } from "../../components/MultiItemRows";
 import { ledgerFailure } from "../ledger/httpEntityLedger";
 import { discardEntityDraft, peekEntityDraft, stashEntityDraft } from "../session/draftStash";
-import { unknownOutcome, type LoanAdapter, type LoanCandidates, type LoanInput, type LoanRecord } from "./model";
+import { unknownOutcome, type LoanAdapter, type LoanCandidates, type LoanInput, type LoanRecord, type LoanVisibility } from "./model";
 
 type Action = "create" | "revise" | "cancel";
 interface Pending { action: Action; id?: string; input: LoanInput | { definitionVersion: string; expectedVersion: number }; key: string }
@@ -14,10 +14,12 @@ interface Draft { department: string; scope: string; purpose: string; tools: str
 const EMPTY: LoanCandidates = { departments: [], scopes: [], tools: [] };
 const stateLabel = (state: LoanRecord["state"]) => ({ PENDING_ISSUE: "待发放", WITHDRAWN: "已撤销", ISSUED: "已发放", SETTLED: "已结清" })[state];
 
-export function LoanApplicationsPage({ adapter, owner, identityScope, permissions, onUnauthenticated }: {
-  adapter: LoanAdapter; owner: string; identityScope?: { accountId: string; memberId: string }; permissions: readonly string[]; onUnauthenticated(): void;
+export function LoanApplicationsPage({ adapter, owner, identityScope, permissions, onUnauthenticated, visibility = "own" }: {
+  visibility?: LoanVisibility; adapter: LoanAdapter; owner: string; identityScope?: { accountId: string; memberId: string }; permissions: readonly string[]; onUnauthenticated(): void;
 }) {
-  const [view, setView] = useState<"own" | "issue" | "receive" | "loss">(permissions.includes("tool_loan.read") || permissions.includes("tool_loan.create") ? "own" : permissions.includes("tool_loan.issue") ? "issue" : permissions.includes("tool_loan.receive") ? "receive" : "loss");
+  const scoped = visibility !== "own";
+  const readPermission = scoped ? `tool_loan_${visibility}.read` : "tool_loan.read";
+  const [view, setView] = useState<"own" | "issue" | "receive" | "loss">(scoped || permissions.includes("tool_loan.read") || permissions.includes("tool_loan.create") ? "own" : permissions.includes("tool_loan.issue") ? "issue" : permissions.includes("tool_loan.receive") ? "receive" : "loss");
   const [records, setRecords] = useState<LoanRecord[]>([]);
   const [selected, setSelected] = useState<LoanRecord | null>(null);
   const [form, setForm] = useState<Action | null>(null);
@@ -31,7 +33,7 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
     const mine = ++readGeneration.current;
     setDetailBusy(true);setError("");setSelected(null);
     try {
-      const result = await adapter.detail(id);
+      const result = await adapter.detail(id, undefined, visibility);
       if (mine === readGeneration.current) setSelected(result);
     } catch (failure) {
       if (mine === readGeneration.current) {
@@ -43,22 +45,43 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);setError("");
-    if (view !== "own" || !permissions.includes("tool_loan.read")) { setRecords([]);setLoading(false);return; }
-    void adapter.list(controller.signal).then(rows => { if (!controller.signal.aborted) setRecords(rows); }, failure => {
+    if (view !== "own" || !permissions.includes(readPermission)) { setRecords([]);setLoading(false);return; }
+    void adapter.list(controller.signal, visibility).then(rows => { if (!controller.signal.aborted) setRecords(rows); }, failure => {
       if (controller.signal.aborted) return;
       setError(ledgerFailure(failure));
       if (failure instanceof ApiError && failure.status === 401) onUnauthenticated();
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [adapter, permissions, revision, onUnauthenticated, view]);
-  const read = permissions.includes("tool_loan.read");
+  }, [adapter, permissions, revision, onUnauthenticated, view, visibility, readPermission]);
+  const read = permissions.includes(readPermission);
   const identityKey = JSON.stringify([identityScope?.accountId, identityScope?.memberId]);
-  const tabs = (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive") || permissions.includes("tool_loan.close_lost")) && <nav className="operational-tabs" aria-label="借用申请工作区">
+  const tabs = !scoped && (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive") || permissions.includes("tool_loan.close_lost")) && <nav className="operational-tabs" aria-label="借用申请工作区">
     {(read || permissions.includes("tool_loan.create")) && <button aria-pressed={view === "own"} onClick={() => setView("own")}>本人申请</button>}
     {permissions.includes("tool_loan.issue") && <button aria-pressed={view === "issue"} onClick={() => setView("issue")}>待发放工作</button>}
     {permissions.includes("tool_loan.receive") && <button aria-pressed={view === "receive"} onClick={() => setView("receive")}>待接收工作</button>}
     {permissions.includes("tool_loan.close_lost") && <button aria-pressed={view === "loss"} onClick={() => setView("loss")}>遗失结案</button>}
   </nav>;
+  if (scoped) return <section className="ledger-main operational-page loan-page">
+    <div className="page-heading"><h1>{visibility === "department" ? "部门借用单" : "保管范围借用单"}</h1></div>
+    <p>{visibility === "department" ? "按申请时的部门查看授权范围内的单据。" : "按当前有效保管关系查看原保管范围的单据。"}</p>
+    <button className="button button-subtle" onClick={() => setRevision(value => value + 1)}>刷新借用单</button>
+    {error && <p role="alert">{error}</p>}
+    {loading ? <p role="status">正在读取借用单…</p> : <div className="operational-table-scroll"><table>
+      <caption>可查看的借用单（最多最近 100 条）</caption>
+      <thead><tr><th>用途</th><th>状态</th><th>工装件数</th><th>操作</th></tr></thead>
+      <tbody>{records.map(record => <tr key={record.id}><td>{record.purpose}</td><td>{stateLabel(record.state)}</td><td>{record.toolIds.length}</td>
+        <td><button className="text-button" onClick={() => void openRecord(record.id)}>查看申请</button></td></tr>)}</tbody>
+    </table>{records.length === 0 && <p>当前授权范围内没有借用单。</p>}</div>}
+    {detailBusy && <p role="status">正在读取借用单详情…</p>}
+    {selected && <section className="operational-detail" aria-label="借用单只读详情"><h2>{selected.purpose}</h2>
+      <p>{stateLabel(selected.state)} · 第 {selected.version} 版</p>
+      <dl className="operational-facts"><div><dt>申请时部门</dt><dd>{selected.organizationId}</dd></div>
+        <div><dt>原保管范围</dt><dd>{selected.custodyScopeId}</dd></div></dl>
+      <ReturnProgress items={selected.returnItems ?? []} />
+      <ul>{(selected.tools ?? selected.toolIds.map(id => ({ id, label: id }))).map(tool => <li key={tool.id}>{tool.label}</li>)}</ul>
+      {(selected.returnItems ?? []).filter(item => item.reason).map(item => <p key={item.toolId}>{item.label} · {item.state === "LOST" ? "已遗失结案" : "损坏接收"} · {item.reason}</p>)}
+    </section>}
+  </section>;
   if ((view === "receive" && permissions.includes("tool_loan.receive")) || (view === "loss" && permissions.includes("tool_loan.close_lost"))) return <section className="ledger-main operational-page loan-page">
     <div className="page-heading"><h1>工装借用申请</h1></div>{tabs}<LoanReceiveQueue key={view} mode={view} adapter={adapter} owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} />
   </section>;
