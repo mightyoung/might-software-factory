@@ -1,3 +1,4 @@
+import { createHttpLoans } from "../features/toolLoans/model";
 import { createHttpEntityLedger } from "../features/ledger/httpEntityLedger";
 import type { EntityLedgerFactory } from "../features/ledger/model";
 import { createHttpPermissionAdmin } from "./httpPermissionAdmin";
@@ -42,4 +43,9 @@ export function createFindingStoreFactory(mode: string | undefined): (() => Find
 export function createEntityLedgerFactory(mode: string | undefined): EntityLedgerFactory | undefined {
   if (parseAppMode(mode) === "synthetic") return undefined;
   return (app, entity) => createHttpEntityLedger(createHttpClient(), app, entity);
+}
+
+export function createLoanFactory(mode: string | undefined) {
+  if (parseAppMode(mode) === "synthetic") return undefined;
+  return () => createHttpLoans(createHttpClient());
 }

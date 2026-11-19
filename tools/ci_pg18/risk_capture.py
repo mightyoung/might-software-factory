@@ -19,7 +19,7 @@ from pathlib import Path
 REPOSITORY = "mightyoung/might-software-factory"
 IMAGE_TAG = "docker.io/library/postgres:18-bookworm"
 ADMIN = "msf_ci_bootstrap"
-VERSIONS = (*map(str, range(2, 9)), *map(str, range(11, 19)), "18.1", "18.2", "18.3", *map(str, range(19, 29)))
+VERSIONS = (*map(str, range(2, 9)), *map(str, range(11, 19)), "18.1", "18.2", "18.3", *map(str, range(19, 30)))
 
 
 @dataclass(frozen=True)

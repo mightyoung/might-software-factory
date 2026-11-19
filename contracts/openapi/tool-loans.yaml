@@ -1,0 +1,660 @@
+openapi: 3.1.0
+info:
+  title: Tool loan applications
+  version: 1.0.0
+  description: Applicant-owned multi-item applications with atomic revision history
+    and idempotent commands. Tool issue, occupancy and returns are subsequent business
+    actions. Permissions are tooling/tool_loan read, create and update. List/detail
+    require read, create and initial candidates require create, and revision/cancellation
+    require update.
+security:
+- sessionCookie: []
+paths:
+  /api/v1/tooling/loan-applications:
+    get:
+      operationId: listOwnToolLoanApplications
+      description: Returns at most 100 own applications, newest first with id as tie
+        breaker.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: createToolLoanApplication
+      description: Submit a multi-item application. No tool occupancy is created.
+        organizationId must be a current applicant department, and every tool must
+        belong to the authorized custody scope. The result has version 1.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequest'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: &id001
+          type: string
+          format: uuid
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema: &id002
+          type: string
+        description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/candidates:
+    get:
+      operationId: toolLoanCandidates
+      description: Returns current applicant departments and authorized custody scopes.
+        At most 200 NORMAL tools from the selected visible scope are returned in code/id
+        order. Without a selected visible scope, tools is empty. loanId binds revision
+        candidates to an owned application and requires update authorization.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CandidatesResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: custodyScopeId
+        in: query
+        required: false
+        schema: *id001
+      - name: loanId
+        in: query
+        required: false
+        schema: *id001
+  /api/v1/tooling/loan-applications/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: *id001
+    get:
+      operationId: readOwnToolLoanApplication
+      description: Returns the current revision of an application owned by the authenticated
+        applicant.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/revise:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: *id001
+    post:
+      operationId: reviseToolLoanApplication
+      description: Append a full replacement revision while PENDING_ISSUE. The original
+        department, custody scope and definition version stay fixed. Request replay
+        returns the original successful revision after current authorization is checked.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviseRequest'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id001
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema: *id002
+        description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/{id}/cancel:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: *id001
+    post:
+      operationId: cancelToolLoanApplication
+      description: Withdraw a PENDING_ISSUE application and append its final revision.
+        Only definitionVersion and expectedVersion are accepted. Request replay returns
+        the original successful revision after current authorization is checked.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id001
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema: *id002
+        description: Current CSRF token from the authenticated session.
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: SESSION
+  schemas:
+    LoanRecord:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - version
+      - state
+      - definitionVersion
+      - organizationId
+      - custodyScopeId
+      - purpose
+      - toolIds
+      - createdAt
+      - updatedAt
+      - tools
+      properties:
+        id: *id001
+        version: &id006
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
+        state:
+          type: string
+          enum:
+          - PENDING_ISSUE
+          - WITHDRAWN
+        definitionVersion:
+          type: string
+          const: '1'
+        organizationId: *id001
+        custodyScopeId: *id001
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        toolIds:
+          type: array
+          items: *id001
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        tools:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Option'
+    CreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - organizationId
+      - custodyScopeId
+      - purpose
+      - toolIds
+      properties:
+        definitionVersion: &id003
+          type: string
+          const: '1'
+        organizationId: *id001
+        custodyScopeId: *id001
+        purpose: &id004
+          type: string
+          minLength: 1
+          maxLength: 4000
+        toolIds: &id005
+          type: array
+          items: *id001
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+    ReviseRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - organizationId
+      - custodyScopeId
+      - purpose
+      - toolIds
+      - expectedVersion
+      properties:
+        definitionVersion: *id003
+        organizationId: *id001
+        custodyScopeId: *id001
+        purpose: *id004
+        toolIds: *id005
+        expectedVersion: *id006
+    CancelRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      properties:
+        definitionVersion:
+          type: string
+          const: '1'
+        expectedVersion: *id006
+    Option:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - label
+      properties:
+        id: *id001
+        label: *id002
+    CustodyScope:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - label
+      - organizationId
+      properties:
+        id: *id001
+        label: *id002
+        organizationId: *id001
+    Candidates:
+      type: object
+      additionalProperties: false
+      required:
+      - departments
+      - scopes
+      - tools
+      properties:
+        departments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Option'
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustodyScope'
+        tools:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/Option'
+    Meta:
+      type: object
+      additionalProperties: false
+      required:
+      - traceId
+      properties:
+        traceId: *id002
+    LoanResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LoanRecord'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required:
+          - records
+          properties:
+            records:
+              type: array
+              maxItems: 100
+              items:
+                $ref: '#/components/schemas/ListRecord'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CandidatesResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Candidates'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - message
+      - traceId
+      - retryable
+      properties:
+        code: *id002
+        message: *id002
+        traceId: *id002
+        retryable:
+          type: boolean
+        fieldErrors:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - field
+            - reason
+            properties:
+              field: *id002
+              reason: *id002
+        currentVersion:
+          type: integer
+          format: int64
+    ListRecord:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - version
+      - state
+      - definitionVersion
+      - organizationId
+      - custodyScopeId
+      - purpose
+      - toolIds
+      - createdAt
+      - updatedAt
+      properties:
+        id: &id007
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
+        state:
+          type: string
+          enum:
+          - PENDING_ISSUE
+          - WITHDRAWN
+        definitionVersion:
+          type: string
+          const: '1'
+        organizationId: *id007
+        custodyScopeId: *id007
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        toolIds:
+          type: array
+          items: *id007
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
