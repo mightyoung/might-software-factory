@@ -17,7 +17,7 @@ class ToolLoanIssueInputTest {
     }
 
     @Test void definitionConflictIsExplicitBeforeAnyCommandEffects() {
-        assertThatThrownBy(() -> ToolLoanService.validateIssue(new ToolLoanService.IssueInput("2",1L)))
+        assertThatThrownBy(() -> ToolLoanService.validateIssue(new ToolLoanService.IssueInput("3",1L)))
                 .isInstanceOfSatisfying(LedgerException.class,error -> {
                     assertThat(error.status()).isEqualTo(409);
                     assertThat(error.code()).isEqualTo("DEFINITION_CONFLICT");

@@ -140,7 +140,7 @@ function IssueDetail({ adapter, owner, identityKey, record, onUnauthenticated, o
     } finally { if (mine === generation.current) setBusy(false); }
   }
   return <section className="operational-detail" aria-label="发放核对">
-    <h3>发放核对</h3><p>{current.purpose}</p><p>第 {current.version} 版 · {current.state === "SETTLED" ? "已结清" : current.state === "ISSUED" ? "已发放" : current.state === "WITHDRAWN" ? "已撤销" : "待发放"}</p>
+    <h3>发放核对</h3><p>{current.purpose}</p>{current.usageLocation && <p>使用地点：{current.usageLocation}</p>}<p>第 {current.version} 版 · {current.state === "SETTLED" ? "已结清" : current.state === "ISSUED" ? "已发放" : current.state === "WITHDRAWN" ? "已撤销" : "待发放"}</p>
     <ol>{current.toolIds.map(id => <li key={id}>{current.tools?.find(tool => tool.id === id)?.label ?? id}</li>)}</ol>
     {error && <p role="alert">{error}</p>}
     {uncertain && <p role="status">发放结果尚未确认，请核对后使用原请求重试。</p>}

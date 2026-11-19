@@ -123,6 +123,35 @@ paths:
         schema: &id002
           type: string
         description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/definition:
+    get:
+      operationId: toolLoanDefinition
+      description: Published creation fields, requiring current create permission. Cache-Control is no-store.
+      responses:
+        '200':
+          description: Current creation definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanDefinitionResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Current create permission required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/tooling/loan-applications/candidates:
     get:
       operationId: toolLoanCandidates
@@ -1144,6 +1173,10 @@ components:
             the stored version without rebinding the loan to the current creation definition.
         organizationId: *id001
         custodyScopeId: *id001
+        usageLocation:
+          type: [string, 'null']
+          maxLength: 200
+          description: Required for V2; V1 retains its original definition without this field.
         purpose:
           type: string
           minLength: 1
@@ -1189,12 +1222,27 @@ components:
       - custodyScopeId
       - purpose
       - toolIds
+      allOf:
+      - if:
+          properties:
+            definitionVersion:
+              const: '2'
+        then:
+          required: [usageLocation]
+        else:
+          not:
+            required: [usageLocation]
       properties:
         definitionVersion: &id006
           type: string
-          const: '1'
+          enum: ['1', '2']
         organizationId: *id001
         custodyScopeId: *id001
+        usageLocation:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Required for V2; V1 retains its original definition without this field.
         purpose: &id007
           type: string
           minLength: 1
@@ -1215,10 +1263,25 @@ components:
       - purpose
       - toolIds
       - expectedVersion
+      allOf:
+      - if:
+          properties:
+            definitionVersion:
+              const: '2'
+        then:
+          required: [usageLocation]
+        else:
+          not:
+            required: [usageLocation]
       properties:
         definitionVersion: *id006
         organizationId: *id001
         custodyScopeId: *id001
+        usageLocation:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Required for V2; V1 retains its original definition without this field.
         purpose: *id007
         toolIds: *id008
         expectedVersion: *id009
@@ -1231,7 +1294,7 @@ components:
       properties:
         definitionVersion:
           type: string
-          const: '1'
+          enum: ['1', '2']
         expectedVersion: *id009
     Option:
       type: object
@@ -1310,6 +1373,26 @@ components:
               maxItems: 100
               items:
                 $ref: '#/components/schemas/ListRecord'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LoanDefinitionResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [definitionVersion, usageLocationRequired, usageLocationMaxLength]
+          properties:
+            definitionVersion:
+              type: string
+              enum: ['1', '2']
+            usageLocationRequired:
+              type: boolean
+            usageLocationMaxLength:
+              type: integer
+              const: 200
         meta:
           $ref: '#/components/schemas/Meta'
     CandidatesResponse:
@@ -1415,7 +1498,7 @@ components:
       properties:
         definitionVersion:
           type: string
-          const: '1'
+          enum: ['1', '2']
         expectedVersion:
           type: integer
           format: int64

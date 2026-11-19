@@ -57,7 +57,10 @@ afterEach(cleanup);
 
 describe("通用台账查询表单", () => {
   it("按字段类型生成输入、选择器和日期区间，重置会清空全部条件", () => {
-    render(<QueryHarness />);
+    let submitCount = 0;
+    render(<QueryHarness onSearch={() => { submitCount += 1; }} />);
+    expect(screen.getByRole("button", { name: "查询" })).toHaveAttribute("type", "submit");
+    expect(screen.getByRole("button", { name: "重置" })).toHaveAttribute("type", "button");
     const keyword = screen.getByRole("searchbox", { name: "隐患编号" });
     const state = screen.getByRole("combobox", { name: "状态" });
     const from = screen.getByLabelText("上报日期起");
@@ -78,6 +81,7 @@ describe("通用台账查询表单", () => {
     expect(state).toHaveValue("");
     expect(from).toHaveValue("");
     expect(to).toHaveValue("");
+    expect(submitCount).toBe(0);
   });
 
   it("清除单个文本条件后保留其他条件、返回输入焦点并等待查询提交", () => {

@@ -14,13 +14,21 @@ import org.jooq.*;
 import org.jooq.impl.DSL;
 import org.jooq.conf.Settings;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.*;
 import tools.jackson.databind.ObjectMapper;
 @Service
 public final class ToolLoanService {
-    public record Input(String definitionVersion,UUID organizationId,UUID custodyScopeId,String purpose,List<UUID> toolIds,Long expectedVersion) { }
+    public record Input(String definitionVersion,UUID organizationId,UUID custodyScopeId,String purpose,List<UUID> toolIds,Long expectedVersion,
+                        @JsonInclude(JsonInclude.Include.NON_NULL) String usageLocation) {
+        public Input(String definitionVersion,UUID organizationId,UUID custodyScopeId,String purpose,List<UUID> toolIds,Long expectedVersion) {
+            this(definitionVersion,organizationId,custodyScopeId,purpose,toolIds,expectedVersion,null);
+        }
+    }
+    private final String publishedDefinitionVersion;
     private final ToolLoanWorkflow workflow;
     private final EffectivePermissions effectivePermissions;
     private final DataSource source;
@@ -29,7 +37,9 @@ public final class ToolLoanService {
     private final LedgerAuditAppend audit;
     private final ObjectMapper json;
     private final TransactionTemplate read,write;
-    public ToolLoanService(DataSource source,ApplicationActionRuntime actions,SessionSensitiveRequests requests,LedgerAuditAppend audit,ObjectMapper json,PlatformTransactionManager manager,ToolLoanWorkflow workflow,EffectivePermissions effectivePermissions) {
+    public ToolLoanService(DataSource source,ApplicationActionRuntime actions,SessionSensitiveRequests requests,LedgerAuditAppend audit,ObjectMapper json,PlatformTransactionManager manager,ToolLoanWorkflow workflow,EffectivePermissions effectivePermissions,
+            @Value("${software-factory.tooling.loan-definition-version:2}") String publishedDefinitionVersion) {
+        this.publishedDefinitionVersion=publishedVersion(publishedDefinitionVersion);
         this.effectivePermissions=effectivePermissions;
         this.workflow=workflow;
         this.source=source;
@@ -52,6 +62,15 @@ public final class ToolLoanService {
     public record ReceiveItem(UUID toolId,String condition,String reason) { }
     public record ReceiveInput(String definitionVersion,Long expectedVersion,List<ReceiveItem> items) { }
 
+    static String publishedVersion(String version) {
+        if(!Set.of("1","2").contains(version)) throw new IllegalArgumentException("Unsupported published loan definition");
+        return version;
+    }
+    public Object definition(HttpServletRequest request) {
+        return execute(request,"create",false,e -> Map.of("definitionVersion",publishedDefinitionVersion,
+                "usageLocationRequired",publishedDefinitionVersion.equals("2"),"usageLocationMaxLength",200));
+    }
+
     public Object lossQueue(HttpServletRequest request) {
         return execute(request,"close_lost",false,e -> {
             var context=e.decision.context();
@@ -70,12 +89,12 @@ public final class ToolLoanService {
                         where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.issued_at is not null and r.settled_at is null)
                     order by l.created_at,l.id limit 100
                     """,organizations,context.tenantId(),context.memberId(),context.memberId());
-            return Map.of("records",rows.map(row -> Map.of(
+            return Map.of("records",rows.map(row -> withUsageLocation(row,Map.of(
                     "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
                     "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
                     "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
                     "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
-                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at")))));
         });
     }
 
@@ -97,12 +116,12 @@ public final class ToolLoanService {
                         where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.received_at is null and r.superseded_at is null)
                     order by l.created_at,l.id limit 100
                     """,organizations,context.tenantId(),context.memberId(),context.memberId());
-            return Map.of("records",rows.map(row -> Map.of(
+            return Map.of("records",rows.map(row -> withUsageLocation(row,Map.of(
                     "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
                     "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
                     "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
                     "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
-                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at")))));
         });
     }
 
@@ -296,9 +315,9 @@ public final class ToolLoanService {
         String state=settled?"SETTLED":"ISSUED";
         e.db.execute("update public.tool_loan set version=?,state=?,updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,state,now,command,context.tenantId(),id);
         e.db.execute("""
-                insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,command_id,action,occurred_at,actor_id)
-                values(?,?,?,?,?,?,?,cast(? as timestamptz),?)
-                """,context.tenantId(),id,version,state,loan.get("purpose"),command,verb,now,context.actorId());
+                insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,usage_location,command_id,action,occurred_at,actor_id)
+                values(?,?,?,?,?,?,?,?,cast(? as timestamptz),?)
+                """,context.tenantId(),id,version,state,loan.get("purpose"),loan.get("usage_location"),command,verb,now,context.actorId());
         e.db.execute("""
                 insert into public.tool_loan_item(tenant_id,loan_id,version,line_no,tool_id)
                 select tenant_id,loan_id,?,line_no,tool_id from public.tool_loan_item
@@ -364,12 +383,12 @@ public final class ToolLoanService {
                           and k.valid_from<=current_timestamp and (k.valid_to is null or k.valid_to>current_timestamp))
                     order by l.created_at,l.id limit 100
                     """,organizations,context.tenantId(),context.memberId(),context.memberId());
-            return Map.of("records",rows.map(row -> Map.of(
+            return Map.of("records",rows.map(row -> withUsageLocation(row,Map.of(
                     "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
                     "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
                     "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
                     "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
-                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at")))));
         });
     }
 
@@ -382,7 +401,7 @@ public final class ToolLoanService {
 
     static void validateIssue(IssueInput input) {
         if(input==null || input.definitionVersion()==null) throw new LedgerInputException("definitionVersion","required");
-        if(!"1".equals(input.definitionVersion())) throw new LedgerException(409,"DEFINITION_CONFLICT");
+        if(!Set.of("1","2").contains(input.definitionVersion())) throw new LedgerException(409,"DEFINITION_CONFLICT");
         if(input.expectedVersion()==null || input.expectedVersion()<1 || input.expectedVersion()==Long.MAX_VALUE)
             throw new LedgerInputException("expectedVersion","invalid_version");
     }
@@ -399,6 +418,7 @@ public final class ToolLoanService {
                     where tenant_id=? and actor_id=? and action='ISSUE' and idempotency_key=?
                     """,context.tenantId(),context.actorId(),key);
             var loan=keeperLoan(e,id,true);
+            requireBoundDefinition(loan.get("definition_version",String.class),input.definitionVersion());
             if(previous!=null) {
                 if(!hash.equals(previous.get(0,String.class))) throw new LedgerException(409,"IDEMPOTENCY_CONFLICT");
                 return record(e,id,previous.get(1,Long.class));
@@ -421,9 +441,9 @@ public final class ToolLoanService {
             var now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC).toString();
             e.db.execute("update public.tool_loan set version=?,state='ISSUED',updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,now,command,context.tenantId(),id);
             e.db.execute("""
-                    insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,command_id,action,occurred_at,actor_id)
-                    values(?,?,?,'ISSUED',?,?,'ISSUE',cast(? as timestamptz),?)
-                    """,context.tenantId(),id,version,loan.get("purpose"),command,now,context.actorId());
+                    insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,usage_location,command_id,action,occurred_at,actor_id)
+                    values(?,?,?,'ISSUED',?,?,?,'ISSUE',cast(? as timestamptz),?)
+                    """,context.tenantId(),id,version,loan.get("purpose"),loan.get("usage_location"),command,now,context.actorId());
             e.db.execute("""
                     insert into public.tool_loan_item(tenant_id,loan_id,version,line_no,tool_id,issued_at)
                     select tenant_id,loan_id,?,line_no,tool_id,cast(? as timestamptz) from public.tool_loan_item
@@ -492,12 +512,12 @@ public final class ToolLoanService {
                     .where(scopedVisibility(e,visibility))
                     .orderBy(org.jooq.impl.DSL.field("root.created_at").desc(),org.jooq.impl.DSL.field("root.id"))
                     .limit(100).fetch();
-            return Map.of("records",rows.map(row -> Map.of(
+            return Map.of("records",rows.map(row -> withUsageLocation(row,Map.of(
                     "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
                     "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
                     "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
                     "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
-                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at")))));
         });
     }
 
@@ -547,12 +567,12 @@ public final class ToolLoanService {
                     where root.tenant_id=? and root.applicant_member_id=?
                     order by root.created_at desc,root.id limit 100
                     """, context.tenantId(), context.memberId());
-            return Map.of("records", rows.map(row -> Map.of(
+            return Map.of("records", rows.map(row -> withUsageLocation(row,Map.of(
             "id", row.get("id"), "version", row.get("version"), "state", row.get("state"),
             "definitionVersion", row.get("definition_version"), "organizationId", row.get("organization_id"),
             "custodyScopeId", row.get("custody_scope_id"), "purpose", row.get("purpose"),
             "toolIds", Arrays.asList(row.get("tool_ids",UUID[].class)),
-            "createdAt", row.get("created_at"), "updatedAt", row.get("updated_at"))));
+            "createdAt", row.get("created_at"), "updatedAt", row.get("updated_at")))));
         });
     }
     public Object detail(HttpServletRequest request,UUID id) { return execute(request,"read",false,e->record(e,id,null));
@@ -581,6 +601,7 @@ public final class ToolLoanService {
                 if(!hash.equals(receipt.get(0,String.class)))throw new LedgerException(409,"IDEMPOTENCY_CONFLICT");
                 return record(e,receipt.get(1,UUID.class),receipt.get(2,Long.class));
             }
+            if(verb.equals("CREATE")) requireBoundDefinition(publishedDefinitionVersion,input.definitionVersion());
             org.jooq.Record current=null;
             if(id!=null) {
                 current=owned(e,id,true);
@@ -594,31 +615,36 @@ public final class ToolLoanService {
             if(current!=null&&(!custody.equals(current.get("custody_scope_id"))||!organization.equals(current.get("organization_id"))))throw new LedgerInputException("custodyScopeId","immutable");
             if(!cancel) validateReferences(e,input,current==null);
             String purpose=cancel?current.get("purpose",String.class):input.purpose().trim();
+            String usageLocation=cancel?current.get("usage_location",String.class):input.usageLocation()==null?null:input.usageLocation().trim();
             List<UUID> items=cancel?items(e,id,current.get("version",Long.class)):input.toolIds();
             UUID loan=id==null?UUID.randomUUID():id,command=UUID.randomUUID();
             long version=current==null?1:current.get("version",Long.class)+1;
             String state=cancel?"WITHDRAWN":"PENDING_ISSUE";
             var at=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC);
-            if(current==null)e.db.execute("insert into public.tool_loan(tenant_id,id,version,state,applicant_member_id,organization_id,custody_scope_id,definition_version,purpose,created_at,updated_at,last_command_id) values(?,?,1,?,?,?,?,?,?,cast(? as timestamptz),cast(? as timestamptz),?)",c.tenantId(),loan,state,c.memberId(),organization,custody,input.definitionVersion(),purpose,at,at,command);
-            else e.db.execute("update public.tool_loan set version=?,state=?,purpose=?,updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,state,purpose,at,command,c.tenantId(),loan);
-            e.db.execute("insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,command_id,action,occurred_at,actor_id) values(?,?,?,?,?,?,?,cast(? as timestamptz),?)",c.tenantId(),loan,version,state,purpose,command,verb,at,c.actorId());
+            if(current==null)e.db.execute("insert into public.tool_loan(tenant_id,id,version,state,applicant_member_id,organization_id,custody_scope_id,definition_version,purpose,usage_location,created_at,updated_at,last_command_id) values(?,?,1,?,?,?,?,?,?,?,cast(? as timestamptz),cast(? as timestamptz),?)",c.tenantId(),loan,state,c.memberId(),organization,custody,input.definitionVersion(),purpose,usageLocation,at,at,command);
+            else e.db.execute("update public.tool_loan set version=?,state=?,purpose=?,usage_location=?,updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,state,purpose,usageLocation,at,command,c.tenantId(),loan);
+            e.db.execute("insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,usage_location,command_id,action,occurred_at,actor_id) values(?,?,?,?,?,?,?,?,cast(? as timestamptz),?)",c.tenantId(),loan,version,state,purpose,usageLocation,command,verb,at,c.actorId());
             for(int i=0;i<items.size();i++)e.db.execute("insert into public.tool_loan_item(tenant_id,loan_id,version,line_no,tool_id) values(?,?,?,?,?)",c.tenantId(),loan,version,i+1,items.get(i));
-            UUID event=audit.appendSuccess(e.decision,command,loan,UUID.randomUUID(),Set.of("purpose","toolIds","state"));
+            UUID event=audit.appendSuccess(e.decision,command,loan,UUID.randomUUID(),input.usageLocation()==null?Set.of("purpose","toolIds","state"):Set.of("purpose","usageLocation","toolIds","state"));
             e.db.execute("insert into public.tool_loan_command_receipt(tenant_id,actor_id,idempotency_key,action,request_hash,loan_id,result_version,command_id,event_id,occurred_at) values(?,?,?,?,?,?,?,?,?,cast(? as timestamptz))",c.tenantId(),c.actorId(),key,verb,hash,loan,version,command,event,at);
             return record(e,loan,version);
         });
     }
     static void validate(Input input,String verb) {
         if(input==null||input.definitionVersion()==null)throw new LedgerInputException("definitionVersion","required");
-        if(!"1".equals(input.definitionVersion()))throw new LedgerException(409,"DEFINITION_CONFLICT");
+        if(!Set.of("1","2").contains(input.definitionVersion()))throw new LedgerException(409,"DEFINITION_CONFLICT");
         if(!verb.equals("CREATE")&&(input.expectedVersion()==null||input.expectedVersion()<1||input.expectedVersion()==Long.MAX_VALUE))throw new LedgerInputException("expectedVersion","invalid_version");
         if(verb.equals("WITHDRAW")) {
-            if(input.organizationId()!=null||input.custodyScopeId()!=null||input.purpose()!=null||input.toolIds()!=null)throw new LedgerInputException("request","unknown_field");
+            if(input.organizationId()!=null||input.custodyScopeId()!=null||input.purpose()!=null||input.toolIds()!=null||input.usageLocation()!=null)throw new LedgerInputException("request","unknown_field");
             return;
         }
         if(verb.equals("CREATE")&&input.expectedVersion()!=null)throw new LedgerInputException("expectedVersion","not_allowed");
         if(input.organizationId()==null||input.custodyScopeId()==null)throw new LedgerInputException("custodyScopeId","required");
         if(input.purpose()==null||input.purpose().isBlank()||input.purpose().length()>4000)throw new LedgerInputException("purpose","invalid_text");
+        if("2".equals(input.definitionVersion())) {
+            if(input.usageLocation()==null || input.usageLocation().isBlank() || input.usageLocation().length()>200)
+                throw new LedgerInputException("usageLocation","invalid_text");
+        } else if(input.usageLocation()!=null) throw new LedgerInputException("usageLocation","unknown_field");
         LedgerDetailValidation.validate("toolIds",input.toolIds(),100,(index,id)->{});
     }
     private void validateReferences(Execution e,Input input,boolean creation) {
@@ -639,7 +665,7 @@ public final class ToolLoanService {
         var row=!e.decision.action().resourceType().equals("tool_loan")?scopedLoan(e,id)
                 :Set.of("issue","receive","close_lost").contains(e.decision.action().action())?keeperLoan(e,id,false):owned(e,id,false);
         long version=historical==null?row.get("version",Long.class):historical;
-        var revision=e.db.fetchOne("select state,purpose,occurred_at from public.tool_loan_revision where tenant_id=? and loan_id=? and version=?",e.decision.context().tenantId(),id,version);
+        var revision=e.db.fetchOne("select state,purpose,usage_location,occurred_at from public.tool_loan_revision where tenant_id=? and loan_id=? and version=?",e.decision.context().tenantId(),id,version);
         var result = new LinkedHashMap<String,Object>();
         result.put("id",id);
         result.put("version",version);
@@ -648,6 +674,7 @@ public final class ToolLoanService {
         result.put("organizationId",row.get("organization_id"));
         result.put("custodyScopeId",row.get("custody_scope_id"));
         result.put("purpose",revision.get("purpose"));
+        result.put("usageLocation",revision.get("usage_location"));
         result.put("toolIds",items(e,id,version));
         if(e.decision.context().memberId().equals(row.get("applicant_member_id")) && Set.of("PENDING_ISSUE","ISSUED").contains(revision.get("state")))
             result.put("awaitingOtherCustodian",!otherCustodianExists(e,row));
@@ -662,7 +689,13 @@ public final class ToolLoanService {
         "id",item.get("id"),"label",item.get("code")+" · "+item.get("name"))));
         return Collections.unmodifiableMap(result);
     }
-    private String fingerprint(UUID id,String verb,Object input) {try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(Arrays.asList(verb,id,input)).getBytes(StandardCharsets.UTF_8)));
+    private static Map<String,Object> withUsageLocation(org.jooq.Record row,Map<String,Object> values) {
+        var result=new LinkedHashMap<>(values);
+        result.put("usageLocation",row.get("usage_location"));
+        return Collections.unmodifiableMap(result);
+    }
+    private String fingerprint(UUID id,String verb,Object input) {return fingerprint(json,id,verb,input);}
+    static String fingerprint(ObjectMapper json,UUID id,String verb,Object input) {try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(Arrays.asList(verb,id,input)).getBytes(StandardCharsets.UTF_8)));
         }catch(Exception failure){throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
         }}
     private <T>T execute(HttpServletRequest request,String operation,boolean mutation,Function<Execution,T> work) {

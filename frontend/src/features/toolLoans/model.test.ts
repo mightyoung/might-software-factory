@@ -62,3 +62,18 @@ it("preserves a bound historical definition version for return and receipt", asy
   expect(h.post).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/return-requests`, expect.objectContaining({ body: { definitionVersion: "legacy-v0.9", expectedVersion: 4, toolIds: [id] } }));
   h.get.mockResolvedValue({ data: { ...historical, definitionVersion: " " }, meta: { traceId: "t" } });await expect(h.adapter.detail(id)).rejects.toThrow();
 });
+
+it("loads the authoritative published creation fields and rejects incoherent metadata", async () => {
+  const value = { definitionVersion: "2", usageLocationRequired: true, usageLocationMaxLength: 200 };
+  const h = http(value);
+  expect(await h.adapter.definition()).toEqual(value);
+  expect(h.get).toHaveBeenCalledWith("/api/v1/tooling/loan-applications/definition", { signal: undefined });
+  h.get.mockResolvedValue({ data: { ...value, usageLocationRequired: false }, meta: { traceId: "t" } });
+  await expect(h.adapter.definition()).rejects.toThrow();
+});
+it("requires the V2 location while accepting original V1 records", async () => {
+  const h = http({ records: [{ ...row, definitionVersion: "2", usageLocation: "二车间" }] });
+  expect((await h.adapter.list())[0]!.usageLocation).toBe("二车间");
+  h.get.mockResolvedValue({ data: { records: [{ ...row, definitionVersion: "2" }] }, meta: { traceId: "t" } });
+  await expect(h.adapter.list()).rejects.toThrow();
+});

@@ -107,6 +107,37 @@ test("查询框可用键盘清除编号并保留状态与日期条件", async ({
   ]);
 });
 
+test("查询和重置可由键盘激活并在两种主题保持可访问", async ({ page }) => {
+  await signIn(page);
+  const firstCode = (await page.locator(".ledger-row").first().locator("td").nth(1).textContent())!.trim();
+  const originalCount = await page.locator(".ledger-row").count();
+  const keyword = page.getByRole("searchbox", { name: "隐患编号" });
+  const search = page.getByRole("button", { name: "查询", exact: true });
+  const reset = page.getByRole("button", { name: "重置", exact: true });
+  const queryPath = "/api/v1/entities/finding/query";
+  for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await keyword.fill(firstCode);
+    await search.focus();
+    await expect(search).toBeFocused();
+    await scan(page, `查询按钮（${theme}）`);
+    const searched = page.waitForResponse(response => new URL(response.url()).pathname === queryPath);
+    await page.keyboard.press("Enter");
+    expect((await searched).status()).toBe(200);
+    await expect(page.locator(".ledger-row")).toHaveCount(1);
+    await reset.focus();
+    const resetResponse = page.waitForResponse(response => new URL(response.url()).pathname === queryPath);
+    await page.keyboard.press("Space");
+    const response = await resetResponse;
+    expect(response.status()).toBe(200);
+    expect(response.request().postDataJSON()).not.toHaveProperty("filterAST");
+    await expect(keyword).toHaveValue("");
+    await expect(page.locator(".ledger-row")).toHaveCount(originalCount);
+    await expect(reset).toBeFocused();
+  }
+});
+
 test("流程命令表单（验收：退回整改）", async ({ page }) => {
   await signIn(page);
   await page.getByLabel("状态").selectOption("ACCEPTANCE_PENDING");

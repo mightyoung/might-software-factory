@@ -8,7 +8,7 @@ const scope = "11111111-1111-4111-8111-111111111111", org = "22222222-2222-4222-
 const row: LoanRecord = { id: "55555555-5555-4555-8555-555555555555", version: 1, state: "PENDING_ISSUE", definitionVersion: "1", organizationId: org, custodyScopeId: scope, purpose: "装配使用", toolIds: [tool, tool2], createdAt: "2026-11-18T00:00:00Z", updatedAt: "2026-11-18T00:00:00Z" };
 const grants = ["tool_loan.read", "tool_loan.create", "tool_loan.update"];
 function setup(records: LoanRecord[] = []) {
-  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
+  const adapter: LoanAdapter = { definition: vi.fn(async () => ({ definitionVersion: "1" as const, usageLocationRequired: false, usageLocationMaxLength: 200 })), lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
   const expire = vi.fn();
   const view = render(<LoanApplicationsPage adapter={adapter} owner="tenant/member" permissions={grants} onUnauthenticated={expire} />);
   return { adapter, expire, view };
@@ -83,7 +83,7 @@ it("shows that another eligible custodian is needed only when the pending detail
   expect(screen.queryByText("对应保管范围目前无人可办（需另一名有效保管人发放）")).not.toBeInTheDocument();
 });
 it("shows scoped applications with detail only even when the reader also owns command permissions", async () => {
-  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
+  const adapter: LoanAdapter = { definition: vi.fn(async () => ({ definitionVersion: "1" as const, usageLocationRequired: false, usageLocationMaxLength: 200 })), lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
   render(<LoanApplicationsPage adapter={adapter} owner="scope-test" visibility="department" permissions={[...grants,"tool_loan_department.read"]} onUnauthenticated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
   await screen.findByRole("region", { name: "借用单只读详情" });
@@ -96,11 +96,50 @@ it("shows scoped applications with detail only even when the reader also owns co
 });
 
 it.each(["department", "custody"] as const)("loads scoped applications with only the %s read grant", async visibility => {
-  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
+  const adapter: LoanAdapter = { definition: vi.fn(async () => ({ definitionVersion: "1" as const, usageLocationRequired: false, usageLocationMaxLength: 200 })), lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn().mockResolvedValue([row]), detail: vi.fn().mockResolvedValue(row), candidates: vi.fn(), command: vi.fn() };
   render(<LoanApplicationsPage adapter={adapter} owner="only-reader" visibility={visibility} permissions={[`tool_loan_${visibility}.read`]} onUnauthenticated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
   await screen.findByRole("region", { name: "借用单只读详情" });
   expect(adapter.list).toHaveBeenCalledWith(expect.any(AbortSignal), visibility);
   expect(adapter.candidates).not.toHaveBeenCalled();
   expect(adapter.command).not.toHaveBeenCalled();
+});
+
+it("creates V2 with published required location while keeping old revisions on V1", async () => {
+  const { adapter } = setup([row]);
+  vi.mocked(adapter.definition).mockResolvedValue({ definitionVersion: "2", usageLocationRequired: true, usageLocationMaxLength: 200 });
+  await fill();
+  const location = await screen.findByLabelText("使用地点");
+  expect(location).toBeRequired();
+  expect(location).toHaveAttribute("maxlength", "200");
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  expect(adapter.command).not.toHaveBeenCalled();
+  fireEvent.change(location, { target: { value: "二车间装配工位" } });
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  await waitFor(() => expect(adapter.command).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(adapter.command).mock.calls[0]![2]).toMatchObject({ definitionVersion: "2", usageLocation: "二车间装配工位" });
+  fireEvent.click(await screen.findByRole("button", { name: "修订申请" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "提交申请" })).not.toBeDisabled());
+  expect(screen.queryByLabelText("使用地点")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  await waitFor(() => expect(adapter.command).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(adapter.command).mock.calls[1]![2]).toMatchObject({ definitionVersion: "1" });
+  expect(vi.mocked(adapter.command).mock.calls[1]![2]).not.toHaveProperty("usageLocation");
+});
+it("retries the exact V1 request after a V2 publication while an outcome is unknown", async () => {
+  const { adapter } = setup();
+  vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(503, "UNAVAILABLE", null, false));
+  await fill();
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  await screen.findByRole("button", { name: "核对后重试原请求" });
+  const original = vi.mocked(adapter.command).mock.calls[0]!;
+  vi.mocked(adapter.definition).mockResolvedValue({ definitionVersion: "2", usageLocationRequired: true, usageLocationMaxLength: 200 });
+  fireEvent.click(screen.getByRole("button", { name: "返回列表（保留输入）" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建借用申请" }));
+  await waitFor(() => expect(adapter.definition).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole("button", { name: "核对后重试原请求" })).not.toBeDisabled());
+  expect(screen.queryByLabelText("使用地点")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
+  await waitFor(() => expect(adapter.command).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(original);
 });

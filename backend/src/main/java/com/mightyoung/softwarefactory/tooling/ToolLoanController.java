@@ -19,6 +19,11 @@ public final class ToolLoanController {
         this.parser = parser;
     }
 
+    @GetMapping("/definition")
+    public ResponseEntity<?> definition(HttpServletRequest request) {
+        return response(service.definition(request));
+    }
+
     @GetMapping
     public ResponseEntity<?> list(HttpServletRequest request) {
         return response(service.list(request));

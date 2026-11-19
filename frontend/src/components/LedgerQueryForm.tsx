@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
 import { InternationalizationProvider } from "@astryxdesign/core/i18n";
+import { Button } from "@astryxdesign/core/Button";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import "./LedgerQueryForm.css";
 import type { DateRange, LedgerQueryField, LedgerSchema, QueryValue, QueryValues } from "../domain/ledger";
@@ -154,12 +155,8 @@ export function LedgerQueryForm<T>({ schema, values, onChange, onSearch, onReset
           ))}
         </div>
         <div className="query-actions">
-          <button className="button button-primary" type="submit">
-            查询
-          </button>
-          <button className="button button-subtle" type="button" onClick={onReset}>
-            重置
-          </button>
+          <Button className="ledger-query-action" label="查询" variant="primary" size="lg" type="submit" />
+          <Button className="ledger-query-action" label="重置" variant="secondary" size="lg" type="button" onClick={onReset} />
         </div>
       </form>
     </InternationalizationProvider>

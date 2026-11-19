@@ -68,7 +68,7 @@ export function LoanReceiveQueue({ mode, adapter, owner, identityKey, onUnauthen
         <td><button onClick={() => void openDetail(record.id)}>{loss ? "核对遗失工装" : "核对接收"}</button></td></tr>)}</tbody>
     </table></div>}
     {detailLoading && <p role="status">正在读取当前归还明细…</p>}
-    {selected && <section className="operational-detail" aria-label={loss ? "遗失结案详情" : "接收申请详情"}><h3>{selected.purpose}</h3>
+    {selected && <section className="operational-detail" aria-label={loss ? "遗失结案详情" : "接收申请详情"}><h3>{selected.purpose}</h3>{selected.usageLocation && <p>使用地点：{selected.usageLocation}</p>}
       {loss ? <LoanLossForm key={selected.id} adapter={adapter} record={selected} owner={owner} identityKey={identityKey}
         onUnauthenticated={onUnauthenticated} onSaved={record => { setSelected(record);setRevision(value => value + 1); }} /> :
       <LoanReturnForm key={selected.id} adapter={adapter} record={selected} action="receive" owner={owner} identityKey={identityKey}

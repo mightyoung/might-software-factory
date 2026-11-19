@@ -8,7 +8,7 @@ const id = "11111111-1111-4111-8111-111111111111";
 const other = "22222222-2222-4222-8222-222222222222";
 const row: LoanRecord = { id, version: 2, definitionVersion: "1", state: "PENDING_ISSUE", organizationId: id, custodyScopeId: id, purpose: "装配发放测试", toolIds: [id, other], tools: [{ id, label: "T-001 工装一" }, { id: other, label: "T-002 工装二" }], createdAt: "2026-11-19T00:00:00Z", updatedAt: "2026-11-19T00:00:00Z" };
 function setup() {
-  const adapter: LoanAdapter = { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(async () => [row]), issueDetail: vi.fn(async () => row), list: vi.fn(), detail: vi.fn(), candidates: vi.fn(), command: vi.fn(async () => ({ ...row, state: "ISSUED" as const, version: 3 })) };
+  const adapter: LoanAdapter = { definition: vi.fn(async () => ({ definitionVersion: "1" as const, usageLocationRequired: false, usageLocationMaxLength: 200 })), lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(async () => [row]), issueDetail: vi.fn(async () => row), list: vi.fn(), detail: vi.fn(), candidates: vi.fn(), command: vi.fn(async () => ({ ...row, state: "ISSUED" as const, version: 3 })) };
   const expire = vi.fn();
   const view = render(<LoanApplicationsPage adapter={adapter} owner="t/actor" identityScope={{ accountId: "account", memberId: "member" }} permissions={["tool_loan.issue"]} onUnauthenticated={expire} />);
   return { adapter, expire, view };
