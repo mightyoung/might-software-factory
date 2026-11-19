@@ -261,6 +261,14 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       ) : (
         <StatusPage title="页面未开放" description="该路由不属于首批前端交付范围。" />
       );
+  } else if (entityRoute?.appKey === "tooling" && ["tool_loan_department","tool_loan_custody"].includes(entityRoute.entityKey) && entityRoute.page === "entry") {
+    const visibility = entityRoute.entityKey === "tool_loan_department" ? "department" : "custody";
+    title = visibility === "department" ? "部门借用单" : "保管范围借用单";
+    const grants = session.canonicalPermissions ?? session.permissions;
+    content = !authorizedApplication || !grants.includes(`${entityRoute.entityKey}.read`)
+      ? <StatusPage title="无权访问" description="当前账号没有此借用单查看权限。" />
+      : !loanAdapter || mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后查看借用单。" />
+        : <LoanApplicationsPage key={JSON.stringify([identityKey,visibility])} visibility={visibility} adapter={loanAdapter} owner={draftOwnerKey(session.tenant.id, session.actor.id)} identityScope={session.identityScope} permissions={grants} onUnauthenticated={expire} />;
   } else if (entityRoute?.appKey === "tooling" && entityRoute.entityKey === "tool_loan" && entityRoute.page === "entry") {
     title = "工装借用申请";
     const grants = session.canonicalPermissions ?? session.permissions;

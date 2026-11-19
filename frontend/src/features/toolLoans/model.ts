@@ -39,11 +39,12 @@ export interface LoanAdapter {
   receiveDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   issueQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
   issueDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
-  list(signal?: AbortSignal): Promise<LoanRecord[]>;
-  detail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
+  list(signal?: AbortSignal, visibility?: LoanVisibility): Promise<LoanRecord[]>;
+  detail(id: string, signal?: AbortSignal, visibility?: LoanVisibility): Promise<LoanRecord>;
   candidates(scope?: string, signal?: AbortSignal, loanId?: string): Promise<LoanCandidates>;
   command(action: "create" | "revise" | "cancel" | "issue" | "return-requests" | "receive" | "close-lost", id: string | undefined, input: LoanCommandInput, key: string): Promise<LoanRecord>;
 }
+export type LoanVisibility = "own" | "department" | "custody";
 export type LoanFactory = () => LoanAdapter;
 function unwrap(value: unknown): unknown {
   requireProtocol(object(value) && object(value.meta) && typeof value.meta.traceId === "string" && Object.hasOwn(value, "data"));
@@ -99,12 +100,12 @@ export function createHttpLoans(client: HttpClient): LoanAdapter {
       requireProtocol(UUID.test(id));
       return record(unwrap(await client.get(`${base}/${id}/issue-detail`, { signal })));
     },
-    async list(signal) {
-      const value = unwrap(await client.get(base, { signal }));
+    async list(signal, visibility = "own") {
+      const value = unwrap(await client.get(visibility === "own" ? base : `${base}/visibility/${visibility}`, { signal }));
       requireProtocol(object(value) && Array.isArray(value.records));
       return value.records.map(record);
     },
-    async detail(id, signal) { requireProtocol(UUID.test(id));return record(unwrap(await client.get(`${base}/${id}`, { signal }))); },
+    async detail(id, signal, visibility = "own") { requireProtocol(UUID.test(id));return record(unwrap(await client.get(visibility === "own" ? `${base}/${id}` : `${base}/visibility/${visibility}/${id}`, { signal }))); },
     async candidates(scope, signal, loanId) {
       if (scope) requireProtocol(UUID.test(scope));
       if (loanId) requireProtocol(UUID.test(loanId));

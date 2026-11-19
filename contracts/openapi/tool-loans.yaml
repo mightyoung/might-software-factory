@@ -981,6 +981,124 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/visibility/{visibility}:
+    parameters:
+    - &id001
+      name: visibility
+      in: path
+      required: true
+      schema:
+        type: string
+        enum:
+        - department
+        - custody
+    get:
+      operationId: listScopedToolLoanApplications
+      description: Returns at most 100 authorized applications, newest first. Department
+        mode requires tool_loan_department.read and matches the original application
+        organization. Custody mode requires tool_loan_custody.read plus a current effective
+        custodianship in the original scope. Ordinary borrower read permission does
+        not grant either mode.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/visibility/{visibility}/{id}:
+    parameters:
+    - *id001
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getScopedToolLoanApplication
+      description: Read-only detail using the same department or current custody predicate
+        as the scoped list. Unauthorized or cross-tenant IDs return 404. Does not authorize
+        any business command.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application not visible to current applicant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     sessionCookie:
