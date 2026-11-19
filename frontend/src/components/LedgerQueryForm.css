@@ -50,3 +50,9 @@
 .ledger-search-field .ledger-search-control input:focus-visible {
   outline: none;
 }
+
+/* Keep palette changes immediate while preserving the library's press feedback. */
+.query-actions .ledger-query-action {
+  min-width: 64px;
+  transition-property: opacity, transform;
+}

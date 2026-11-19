@@ -33,7 +33,7 @@ test("修改密码：校验、当前密码错误、成功后旧会话作废并�
   // 成功：回到登录页并提示
   await dialog.getByLabel("当前密码").fill("demo");
   await dialog.getByRole("button", { name: "修改密码" }).click();
-  await expect(page.getByRole("status")).toContainText("密码已修改");
+  await expect(page.getByRole("status").filter({ hasText: "密码已修改" })).toContainText("密码已修改");
   await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
 
   // 旧密码不能登录，新密码可以
