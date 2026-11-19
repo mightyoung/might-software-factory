@@ -1,0 +1,23 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "full",
+  "shape": "app screen",
+  "theme": "custom",
+  "genre": "modern-minimal",
+  "axes": "warm paper / sans / petrol",
+  "hero": "none",
+  "nav": "application bar and contextual navigation",
+  "footer": "pagination",
+  "imagery": "product",
+  "photos": [],
+  "sections": [
+   "login",
+   "ledger",
+   "loan",
+   "office"
+  ],
+  "signature": "ruled work register",
+  "date": "2026-11-19"
+ }
+]

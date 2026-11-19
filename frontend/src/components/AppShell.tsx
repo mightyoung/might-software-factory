@@ -1,3 +1,6 @@
+import { Text } from "@astryxdesign/core/Text";
+import { lazy, Suspense } from "react";
+import { ThemeSelector, useTheme } from "../features/theme/ThemeProvider";
 import { useState, type ReactNode } from "react";
 import type { AppMenuState } from "../features/session/useAppMenu";
 import {
@@ -11,6 +14,8 @@ import { RouteLink } from "../routing/router";
 import { tenantPath } from "../routing/paths";
 import { useAppMode } from "../mode";
 import { UserMenu } from "./UserMenu";
+
+const OfficeDialog = lazy(() => import("../features/office/OfficeDialog").then(module => ({ default: module.OfficeDialog })));
 
 const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
   warning: { glyph: "◇", className: "glyph-warning" },
@@ -130,7 +135,6 @@ function Sidebar({
       )}
       {synthetic && (
         <div className="sidebar-footer">
-          <span className="demo-dot" aria-hidden="true" />
           前端合成数据
         </div>
       )}
@@ -140,6 +144,8 @@ function Sidebar({
 
 export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
   const synthetic = useAppMode() === "synthetic";
+  const [officeOpen, setOfficeOpen] = useState(false);
+  const { resolvedTheme } = useTheme();
   const home = session.applications[0];
   return (
     <div className="app-root">
@@ -150,7 +156,7 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           aria-label="MIGHT 工作台首页"
         >
           <span className="brand-mark" aria-hidden="true" />
-          <span>MIGHT 工作台</span>
+          <Text as="span" type="inherit" color="inherit" className="brand-wordmark">MIGHT <span>工作台</span></Text>
         </RouteLink>
         <nav className="application-switcher" aria-label="应用选择">
           {session.applications.map((app) => (
@@ -165,6 +171,8 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           ))}
         </nav>
         <div className="topbar-right">
+          <button className="button office-open" type="button" onClick={() => setOfficeOpen(true)}>在线表格</button>
+          <ThemeSelector />
           {synthetic && <span className="demo-environment">合成演示</span>}
           <UserMenu displayName={session.actor.displayName} tenantName={session.tenant.name} onLogout={onLogout}
             onChangePassword={onChangePassword}
@@ -172,6 +180,9 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         </div>
       </header>
 
+      {officeOpen && <Suspense fallback={<p role="status">正在加载在线表格…</p>}>
+        <OfficeDialog theme={resolvedTheme} onClose={() => setOfficeOpen(false)} />
+      </Suspense>}
       <div className="workspace">
         {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}
         <main className="main-region" aria-label={title}>

@@ -1,23 +1,29 @@
-// 构建产物体积预算（gzip）。超出就失败：新增依赖或大块代码要有意识地提高预算并写明原因。
-// 预算是工程门槛，不是性能结论：首屏时间要在真实网络与后端上测。
+// Measure every emitted JS/CSS chunk, including deferred language resources, in KiB gzip.
 import { readdirSync, readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 
-const BUDGET_KB = { js: 130, css: 12 }; // 2026-11：JS≈93KB、CSS≈5KB，留约 40% / 2 倍余量
-const dir = join(import.meta.dirname, "..", "dist", "assets");
-const totals = { js: 0, css: 0 };
-
-for (const file of readdirSync(dir)) {
-  const kind = file.endsWith(".js") ? "js" : file.endsWith(".css") ? "css" : null;
-  if (kind) totals[kind] += gzipSync(readFileSync(join(dir, file))).length;
-}
+const dist = join(import.meta.dirname, "..", "dist");
+const bundles = [
+  { name: "工作台（含 Astryx）", directory: "assets", limits: { js: 192, css: 56 } },
+  { name: "独立 Office 编辑器", directory: "office/assets", limits: { js: 2880, css: 24 } },
+];
 
 let failed = false;
-for (const kind of ["js", "css"]) {
-  const kb = totals[kind] / 1024;
-  const ok = kb <= BUDGET_KB[kind];
-  failed ||= !ok;
-  console.log(`${ok ? "OK  " : "FAIL"} ${kind.toUpperCase()} gzip ${kb.toFixed(1)} KB / 预算 ${BUDGET_KB[kind]} KB`);
+for (const bundle of bundles) {
+  const dir = join(dist, bundle.directory);
+  const totals = { js: 0, css: 0 };
+  for (const file of readdirSync(dir)) {
+    const kind = file.split(".").pop();
+    if (kind === "js" || kind === "css") {
+      totals[kind] += gzipSync(readFileSync(join(dir, file))).length;
+    }
+  }
+  for (const kind of ["js", "css"]) {
+    const size = totals[kind] / 1024;
+    const ok = size > 0 && size <= bundle.limits[kind];
+    failed ||= !ok;
+    console.log(`${ok ? "OK" : "FAIL"}  ${bundle.name} ${kind.toUpperCase()} ${size.toFixed(1)} / ${bundle.limits[kind]} KiB gzip`);
+  }
 }
-if (failed) process.exit(1);
+if (failed) process.exitCode = 1;

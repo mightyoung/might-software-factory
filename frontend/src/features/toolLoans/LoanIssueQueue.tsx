@@ -59,21 +59,21 @@ export function LoanIssueQueue({ adapter, owner, identityKey, onUnauthenticated 
       if (failure instanceof ApiError && failure.status === 401) onUnauthenticated();
     } finally { if (mine === generation.current) setDetailLoading(false); }
   }
-  return <section aria-label="待发放工作">
-    <h2>待发放工作</h2>
+  return <section className="operational-queue" aria-label="待发放工作">
+    <div className="operational-queue-heading"><h2>待发放工作</h2>
     <button disabled={loading} onClick={() => {
       setRevision(value => value + 1);
       const lastId = peekEntityDraft(owner, selectionKey)?.values.loanId;
       if (lastId) void openDetail(lastId);
-    }}>刷新待发放申请</button>
+    }}>刷新待发放申请</button></div>
     {loading && <p role="status">正在读取待发放申请…</p>}
     {error && <p role="alert">{error}</p>}
     {!loading && !error && records.length === 0 && <p>当前保管范围内没有待发放申请。</p>}
-    {records.length > 0 && <table><caption>可办理的待发放申请（最多最近 100 条）</caption>
+    {records.length > 0 && <div className="operational-table-scroll"><table><caption>可办理的待发放申请（最多最近 100 条）</caption>
       <thead><tr><th>用途</th><th>件数</th><th>申请时间</th><th>操作</th></tr></thead>
       <tbody>{records.map(record => <tr key={record.id}><td>{record.purpose}</td><td>{record.toolIds.length}</td>
         <td>{new Date(record.createdAt).toLocaleString()}</td><td><button onClick={() => void openDetail(record.id)}>核对发放</button></td></tr>)}</tbody>
-    </table>}
+    </table></div>}
     {detailLoading && <p role="status">正在读取当前申请明细…</p>}
     {selected && <IssueDetail key={selected.id} adapter={adapter} owner={owner} identityKey={identityKey} record={selected}
       onUnauthenticated={onUnauthenticated} onIssued={record => {
@@ -139,7 +139,7 @@ function IssueDetail({ adapter, owner, identityKey, record, onUnauthenticated, o
       if (failure instanceof ApiError && failure.status === 401) onUnauthenticated();
     } finally { if (mine === generation.current) setBusy(false); }
   }
-  return <section aria-label="发放核对">
+  return <section className="operational-detail" aria-label="发放核对">
     <h3>发放核对</h3><p>{current.purpose}</p><p>第 {current.version} 版 · {current.state === "SETTLED" ? "已结清" : current.state === "ISSUED" ? "已发放" : current.state === "WITHDRAWN" ? "已撤销" : "待发放"}</p>
     <ol>{current.toolIds.map(id => <li key={id}>{current.tools?.find(tool => tool.id === id)?.label ?? id}</li>)}</ol>
     {error && <p role="alert">{error}</p>}

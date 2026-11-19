@@ -1,0 +1,10 @@
+{
+  "skill": "hallmark@2.0.0",
+  "source": "Nutlope/hallmark@04977e15f3dfd6ee4b74c887dac3eb52665d6c92",
+  "baseline": "8001b9b",
+  "audience": "单厂制造企业中的检查人、借用人和保管人",
+  "tasks": ["查台账", "核对逐件状态", "办理业务", "编辑本地工作簿"],
+  "preserve": ["按会话授权的导航", "原有业务命令和重试语义", "中文字段与状态"],
+  "baselineIssue": "390px 设备上的文档宽度为 1040px",
+  "surfaces": ["frontend/src/features/session/LoginPage.tsx", "frontend/src/components/AppShell.tsx", "frontend/src/features/findings/FindingsLedger.tsx", "frontend/src/features/ledger/EntityLedgerPage.tsx", "frontend/src/features/toolLoans/LoanApplicationsPage.tsx"]
+}

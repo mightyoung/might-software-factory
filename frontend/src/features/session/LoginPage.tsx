@@ -1,3 +1,4 @@
+import { ThemeSelector } from "../theme/ThemeProvider";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { DEMO_ACCOUNTS } from "../../adapters/sessionAdapter";
 import { SessionError } from "../../domain/session";
@@ -78,95 +79,100 @@ export function LoginPage({ notice }: { notice: Notice }) {
 
   return (
     <main className="login-page" aria-label="登录">
-      <section className="login-card">
-        <div className="login-brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <span>MIGHT 工厂安全</span>
-        </div>
-        <h1>登录</h1>
+      <div className="login-theme"><ThemeSelector /></div>
+      <div className="login-layout">
+        <header className="login-identity">
+          <div className="login-brand">
+            <span className="brand-mark" aria-hidden="true" />
+            <span className="login-wordmark">MIGHT <span>工厂安全</span></span>
+          </div>
+        </header>
+        <section className="login-card" aria-labelledby="login-title">
+          <h1 id="login-title">登录</h1>
 
-        {notice !== "none" && !error && (
-          <p className="login-notice" role="status">
-            {NOTICE_TEXT[notice]}
-          </p>
-        )}
-        {error && (
-          <p className="login-error" role="alert">
-            {error}
-          </p>
-        )}
+          {notice !== "none" && !error && (
+            <p className="login-notice" role="status">
+              {NOTICE_TEXT[notice]}
+            </p>
+          )}
+          {error && (
+            <p className="login-error" role="alert">
+              {error}
+            </p>
+          )}
 
-        <form onSubmit={handleSubmit} noValidate>
-          {requiresTenantCode && (
+          <form onSubmit={handleSubmit} noValidate>
+            {requiresTenantCode && (
+              <label className="login-field">
+                <span>租户编码</span>
+                <input
+                  name="tenantCode"
+                  type="text"
+                  autoComplete="organization"
+                  autoFocus
+                  value={tenantCode}
+                  onChange={(event) => setTenantCode(event.target.value)}
+                  disabled={pending}
+                />
+              </label>
+            )}
             <label className="login-field">
-              <span>租户编码</span>
+              <span>账号</span>
               <input
-                name="tenantCode"
+                ref={usernameRef}
+                name="username"
                 type="text"
-                autoComplete="organization"
-                autoFocus
-                value={tenantCode}
-                onChange={(event) => setTenantCode(event.target.value)}
+                autoComplete="username"
+                autoFocus={!requiresTenantCode}
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
                 disabled={pending}
               />
             </label>
-          )}
-          <label className="login-field">
-            <span>账号</span>
-            <input
-              ref={usernameRef}
-              name="username"
-              type="text"
-              autoComplete="username"
-              autoFocus={!requiresTenantCode}
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              disabled={pending}
-            />
-          </label>
-          <label className="login-field">
-            <span>密码</span>
-            <input
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              disabled={pending}
-            />
-          </label>
-          <button className="button button-primary login-submit" type="submit" disabled={pending || remainingSeconds > 0}>
-            {pending ? "登录中…" : remainingSeconds > 0 ? `等待 ${remainingSeconds} 秒` : "登录"}
-          </button>
-        </form>
+            <label className="login-field">
+              <span>密码</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={pending}
+              />
+            </label>
+            <button className="button button-primary login-submit" type="submit" disabled={pending || remainingSeconds > 0}>
+              {pending ? "登录中…" : remainingSeconds > 0 ? `等待 ${remainingSeconds} 秒` : "登录"}
+            </button>
+          </form>
 
-        {!requiresTenantCode && (
-        <aside className="login-demo" aria-label="合成演示说明">
-          <p>
-            <strong>合成演示：</strong>
-            账号只认下列演示账号，密码任意非空即可。这不是真实认证，不提供任何安全保证，刷新页面后需重新登录。
-          </p>
-          <ul>
-            {Object.entries(DEMO_ACCOUNTS).map(([name, account]) => (
-              <li key={name}>
-                <button
-                  type="button"
-                  className="login-demo-fill"
-                  onClick={() => {
-                    setUsername(name);
-                    usernameRef.current?.focus();
-                  }}
-                  disabled={pending}
-                >
-                  {name}
-                </button>
-                <span>{account.description}</span>
-              </li>
-            ))}
-          </ul>
-        </aside>
-        )}
-      </section>
+          {!requiresTenantCode && (
+          <aside className="login-demo" aria-label="合成演示说明">
+            <p>
+              <strong>合成演示：</strong>
+              账号只认下列演示账号，密码任意非空即可。这不是真实认证，不提供任何安全保证，刷新页面后需重新登录。
+            </p>
+            <ul>
+              {Object.entries(DEMO_ACCOUNTS).map(([name, account]) => (
+                <li key={name}>
+                  <button
+                    type="button"
+                    className="login-demo-fill"
+                    onClick={() => {
+                      setUsername(name);
+                      usernameRef.current?.focus();
+                    }}
+                    disabled={pending}
+                  >
+                    {name}
+                  </button>
+                  <span>{account.description}</span>
+                </li>
+              ))}
+            </ul>
+          </aside>
+          )}
+        </section>
+      </div>
     </main>
   );
 }
