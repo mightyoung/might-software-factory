@@ -11,7 +11,6 @@ import { navigate, useLocation } from "./routing/router";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
-import { PermissionConfigPage } from "./features/platform/PermissionConfigPage";
 import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
 import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -25,6 +24,7 @@ import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
+const PermissionConfigPage = lazy(() => import("./features/platform/PermissionConfigPage").then(module => ({ default: module.PermissionConfigPage })));
 const LedgerConfigPage = lazy(() => import("./features/ledgerConfig/LedgerConfigPage"));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
@@ -338,12 +338,14 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   } else if (route.page.kind === "permissions") {
     title = route.page.title;
     content = (
-      <PermissionConfigPage
-        adapter={permissionAdmin}
-        onPermissionsChanged={refresh}
-        canManage={hasPermission(session, "platform.permission.manage")}
-        onUnauthenticated={expire}
-      />
+      <Suspense fallback={<p role="status">正在载入权限配置…</p>}>
+        <PermissionConfigPage
+          adapter={permissionAdmin}
+          onPermissionsChanged={refresh}
+          canManage={hasPermission(session, "platform.permission.manage")}
+          onUnauthenticated={expire}
+        />
+      </Suspense>
     );
   } else {
     title = route.page.title;
