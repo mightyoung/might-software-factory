@@ -22,12 +22,21 @@ function endpoint(id: string, command: FindingCommand): { path: string; body: Re
       return { path: `${base}/supplements`, body: { reviewCycle: command.reviewCycle, statement: command.statement } };
     case "closeNotEstablished":
       return { path: `${base}/close-not-established`, body: { stage: command.stage, reason: command.reason } };
+    case "submitRemediation":
+      return { path: `${base}/remediation-submissions`, body: { evidenceSetId: command.evidenceSetId, statement: command.statement } };
     case "initialize":
       return { path: `${base}/workflow-initialization`, body: {} };
     case "confirmPerson":
       return { path: `${base}/confirm/person`, body: { reason: command.reason } };
     case "confirmSafety":
       return { path: `${base}/confirm/safety`, body: { reason: command.reason, grade: command.grade } };
+    case "closeNotEstablished":
+      return { path: `${base}/close-not-established`, body: { stage: command.stage, reason: command.reason } };
+    case "dispatch":
+      return {
+        path: `${base}/dispatch`,
+        body: { assigneeMemberId: command.assigneeMemberId, dueAt: command.dueAt, requirements: command.requirements },
+      };
     case "verify":
       return {
         path: `${base}/verifications`,
@@ -58,6 +67,30 @@ function classify(error: ApiError): FindingCommandFailureKind {
 
 export function createHttpFindingCommands(client: HttpClient): FindingCommandAdapter {
   return {
+    async searchDispatchCandidates(findingId, { prefix, afterMemberId, limit }, signal) {
+      const params = new URLSearchParams();
+      if (prefix) params.set("q", prefix);
+      if (limit !== undefined) params.set("limit", String(limit));
+      if (afterMemberId) params.set("afterMemberId", afterMemberId);
+      const query = params.toString();
+      try {
+        const body = await client.get<components["schemas"]["DispatchCandidatesResponse"]>(
+          `/api/v1/findings/${encodeURIComponent(findingId)}/dispatch-candidates${query ? `?${query}` : ""}`,
+          { signal },
+        );
+        return {
+          items: body.data.map(({ memberId, displayName }) => ({ memberId, displayName })),
+          hasMore: body.hasMore,
+          next: body.nextAfterMemberId,
+          findingVersion: body.findingVersion,
+          state: body.state,
+          roundNo: body.roundNo,
+        };
+      } catch (error) {
+        if (error instanceof ApiError) throw new FindingCommandError(classify(error), error.traceId);
+        throw error;
+      }
+    },
     async history(findingId, options) {
       try {
         const query = options?.cursor ? `&cursor=${encodeURIComponent(options.cursor)}` : "";

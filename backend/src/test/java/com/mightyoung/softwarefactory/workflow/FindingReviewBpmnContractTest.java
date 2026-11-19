@@ -43,7 +43,7 @@ class FindingReviewBpmnContractTest {
     }
     private String hash(String version) throws Exception {
         try (var stream = getClass().getResourceAsStream("/processes/finding-remediation-" + version + ".bpmn20.xml")) {
-            return PinnedFindingReviewDefinitionResolver.sha256(stream.readAllBytes());
+            return PackagedWorkflowDefinitions.sha256(stream.readAllBytes());
         }
     }
 }

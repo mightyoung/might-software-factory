@@ -1,0 +1,58 @@
+/* Hallmark v2.0.0 · scope: component · theme: shared workspace · signature: semantic query controls */
+/* Critique: align the library field with the common register while keeping its label and focus relationship intact. */
+.ledger-search-field {
+  --color-border-emphasized: var(--field-edge);
+  --color-background-surface: var(--white);
+  --color-text-primary: var(--ink);
+  --color-text-secondary: var(--muted);
+  min-width: 0;
+}
+
+.ledger-search-field > label {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 580;
+}
+
+.ledger-search-field .ledger-search-control {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--field-edge);
+  border-radius: 3px;
+  background: var(--white);
+}
+
+.ledger-search-field .ledger-search-control input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ledger-search-control:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ledger-search-control:active {
+  border-color: var(--petrol);
+}
+
+/* The shared field wrapper owns the focus ring around the entire control. */
+.ledger-search-field .ledger-search-control input:focus-visible {
+  outline: none;
+}
+
+/* Keep palette changes immediate while preserving the library's press feedback. */
+.query-actions .ledger-query-action {
+  min-width: 64px;
+  transition-property: opacity, transform;
+}

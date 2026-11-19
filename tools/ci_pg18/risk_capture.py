@@ -19,7 +19,7 @@ from pathlib import Path
 REPOSITORY = "mightyoung/might-software-factory"
 IMAGE_TAG = "docker.io/library/postgres:18-bookworm"
 ADMIN = "msf_ci_bootstrap"
-VERSIONS = tuple(map(str, (*range(2, 9), *range(11, 25))))
+VERSIONS = (*map(str, range(2, 9)), *map(str, range(11, 19)), "18.1", "18.2", "18.3", *map(str, range(19, 36)))
 
 
 @dataclass(frozen=True)
@@ -128,6 +128,25 @@ REAUTH = _LaneSpec(
         "framework-schema", "reauth-schema", "runtime-role", "runtime-rights", "seed-identity",
         "activate-authority", "closed", "unknown",
     )), guard_count=55)
+RECOVERY = _LaneSpec(
+    kind="risk-recovery", database="msf_ci_risk_recovery", runtime_role="msf_ci_recovery_runtime",
+    ack="ephemeral-risk-recovery-only", profile="ci-pg18-risk-recovery",
+    state_prefix="msf-ci-pg18-risk-recovery-", artifact_directory="ci-pg18-risk-recovery",
+    it_class="com.mightyoung.softwarefactory.CiPg18RecoveryPostgresIT",
+    unit_class="com.mightyoung.softwarefactory.CiPg18RecoveryTargetTest",
+    scenarios=frozenset((
+        "actualSourceNamedListenerCaptureAndAckCommit",
+        "causeCommitWithKnownAckRollbackRecoversExactlyOnce",
+        "serviceRevocationLeavesIncompleteThenCurrentEligibilityRestoresRecovery",
+        "newJvmRecoversPublicationLeftByTerminatedProducer",
+        "unknownAckCommitThenThrowIsObservedBeforeAnyFurtherDispatch",
+    )), schema_field="recoverySchemaVerified", evidence_file="ci-pg18-recovery-safe-evidence.json",
+    failure_file="ci-pg18-recovery-safe-failure.json", failure_phases=frozenset((
+        "open", "target-version", "target-marker", "empty-schema", "migrate", "history",
+        "framework-schema", "canonical-rights", "capture-rights", "seed-service", "source-producer",
+        "source-commit-observed", "service-consumer", "capture-observed", "ack-observed",
+        "unknown-ack-observed", "producer-exit", "consumer-start", "child-cleanup", "closed", "unknown",
+    )), guard_count=61)
 # Legacy capture constants and default call signatures remain the capture lane.
 DATABASE, IT_CLASS, UNIT_CLASS = CAPTURE.database, CAPTURE.it_class, CAPTURE.unit_class
 SCENARIOS, FAILURE_PHASES = CAPTURE.scenarios, CAPTURE.failure_phases
@@ -148,7 +167,7 @@ def reject(stage):
 
 
 def _spec(lane):
-    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE and lane is not REAUTH:
+    if lane is not CAPTURE and lane is not REGISTRY and lane is not SOURCE and lane is not REAUTH and lane is not RECOVERY:
         reject("LANE")
     return lane
 
@@ -180,7 +199,7 @@ def _result_lane(result, lane):
                     or any(type(tests.get(key)) is not int or tests[key] != 0 for key in ("failures", "errors", "skipped"))
                     or tests.get("scenarios") != sorted(lane.scenarios)):
                 reject("RESULT_LANE")
-            if lane is SOURCE or lane is REAUTH:
+            if lane is SOURCE or lane is REAUTH or lane is RECOVERY:
                 revision = result.get("sourceRevision")
                 if (not isinstance(revision, dict) or set(revision) != {"commit", "tree"}
                         or any(not isinstance(revision[key], str) or not re.fullmatch(r"[0-9a-f]{40}", revision[key])
@@ -194,6 +213,11 @@ def _result_lane(result, lane):
             if lane is REAUTH:
                 try:
                     validate_reauth_commit_diagnostics(result.get("reauthCommitDiagnostics"), require_complete=True)
+                except Rejected:
+                    reject("RESULT_LANE")
+            if lane is RECOVERY:
+                try:
+                    validate_recovery_process_evidence(result.get("recoveryProcesses"), require_complete=True)
                 except Rejected:
                     reject("RESULT_LANE")
 
@@ -230,6 +254,8 @@ def validate_success_evidence(value, digest, lane=CAPTURE):
     lane = _spec(lane)
     keys = {"schemaVersion", "postgresMajor", "database", "instanceMarkerVerified",
             "imageDigest", "migrations", lane.schema_field, "runtimeRightsVerified"}
+    if lane is RECOVERY:
+        keys.add("captureRightsVerified")
     if (not isinstance(value, dict) or set(value) != keys or not isinstance(digest, str)
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)):
         reject("SUCCESS_EVIDENCE")
@@ -239,6 +265,8 @@ def validate_success_evidence(value, digest, lane=CAPTURE):
             or value["instanceMarkerVerified"] is not True
             or value[lane.schema_field] is not True
             or value["runtimeRightsVerified"] is not True):
+        reject("SUCCESS_EVIDENCE")
+    if lane is RECOVERY and value["captureRightsVerified"] is not True:
         reject("SUCCESS_EVIDENCE")
     migrations = value["migrations"]
     if not isinstance(migrations, list) or len(migrations) != len(VERSIONS):
@@ -250,14 +278,15 @@ def validate_success_evidence(value, digest, lane=CAPTURE):
         version, script, checksum = row["version"], row["script"], row["checksum"]
         if (not isinstance(version, str) or version not in VERSIONS or version in found
                 or not isinstance(script, str)
-                or not re.fullmatch(r"V" + re.escape(version) + r"__[A-Za-z0-9_]+\.sql", script)
+                or not re.fullmatch(r"V" + re.escape(version).replace(r"\.", "[._]") + r"__[A-Za-z0-9_]+\.sql", script)
                 or type(checksum) is not int or not -(2**31) <= checksum < 2**31):
             reject("MIGRATION_EVIDENCE")
         found[version] = {"version": version, "script": script, "checksum": checksum}
     return {"schemaVersion": 1, "postgresMajor": 18, "database": lane.database,
             "instanceMarkerVerified": True, "imageDigest": digest,
             "migrations": [found[version] for version in VERSIONS],
-            lane.schema_field: True, "runtimeRightsVerified": True}
+            lane.schema_field: True, "runtimeRightsVerified": True,
+            **({"captureRightsVerified": True} if lane is RECOVERY else {})}
 
 
 def validate_failure_evidence(value, lane=CAPTURE):
@@ -358,6 +387,46 @@ def validate_reauth_commit_diagnostics(value, require_complete=False):
             reject("REAUTH_COMMIT_DIAGNOSTIC")
     if require_complete and any(row["status"] != "PASS" for row in value["iterations"]):
         reject("REAUTH_COMMIT_DIAGNOSTIC_NOT_PASS")
+    return value
+
+
+def validate_recovery_process_evidence(value, require_complete=False):
+    """Public bounded process facts; raw process IDs, credentials and error text stay private."""
+    expected_workers = {
+        "actualSourceNamedListenerCaptureAndAckCommit": 1,
+        "causeCommitWithKnownAckRollbackRecoversExactlyOnce": 3,
+        "serviceRevocationLeavesIncompleteThenCurrentEligibilityRestoresRecovery": 3,
+        "newJvmRecoversPublicationLeftByTerminatedProducer": 2,
+        "unknownAckCommitThenThrowIsObservedBeforeAnyFurtherDispatch": 3,
+    }
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "database", "cases"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or value["database"] != RECOVERY.database or not isinstance(value["cases"], list)
+            or len(value["cases"]) != 5):
+        reject("RECOVERY_PROCESS_EVIDENCE")
+    flags = {"ownershipVerified", "processCleanupVerified", "restartDistinctProcesses", "unknownObservedBeforeRecovery"}
+    fields = {"name", "status", "workersStarted", "workersExited"} | flags
+    found = set()
+    for row in value["cases"]:
+        if (not isinstance(row, dict) or set(row) != fields
+                or not isinstance(row["name"], str) or row["name"] not in expected_workers or row["name"] in found
+                or not isinstance(row["status"], str) or row["status"] not in {"PASSED", "FAILED", "NOT_REACHED"}
+                or any(type(row[key]) is not bool for key in flags)
+                or any(type(row[key]) is not int for key in ("workersStarted", "workersExited"))
+                or not 0 <= row["workersExited"] <= row["workersStarted"] <= expected_workers[row["name"]]):
+            reject("RECOVERY_PROCESS_EVIDENCE")
+        found.add(row["name"])
+        if row["status"] == "PASSED":
+            if (row["workersStarted"] != expected_workers[row["name"]]
+                    or row["workersExited"] != row["workersStarted"]
+                    or not row["ownershipVerified"] or not row["processCleanupVerified"]
+                    or row["restartDistinctProcesses"] != (row["name"] == "newJvmRecoversPublicationLeftByTerminatedProducer")
+                    or row["unknownObservedBeforeRecovery"] != (row["name"] == "unknownAckCommitThenThrowIsObservedBeforeAnyFurtherDispatch")):
+                reject("RECOVERY_PROCESS_EVIDENCE")
+        elif row["status"] == "NOT_REACHED" and (row["workersStarted"] != 0 or any(row[key] for key in flags)):
+            reject("RECOVERY_PROCESS_EVIDENCE")
+    if found != RECOVERY.scenarios or require_complete and any(row["status"] != "PASSED" for row in value["cases"]):
+        reject("RECOVERY_PROCESS_NOT_PASS")
     return value
 
 
@@ -646,7 +715,7 @@ def cleanup_container(state, run, attempt, lane=CAPTURE):
     if not identifiers:
         resources_file = state / "resources.json"
         if not resources_file.exists():
-            scrub_private(state)
+            scrub_private(state, lane)
             return {"verified": False, "containerAbsent": True, "anonymousVolumesUnknown": True}
         resources = validate_resources(load_json(resources_file), run, attempt, intent["instance"], lane)
         for name in resources["volumes"]:
@@ -688,12 +757,20 @@ def cleanup_container(state, run, attempt, lane=CAPTURE):
     return {"verified": True, "containerRemoved": True, "anonymousVolumesRemoved": True}
 
 
-def scrub_private(state):
+def scrub_private(state, lane=CAPTURE):
+    lane = _spec(lane)
     if state.is_symlink() or not state.is_dir():
         return
     if (state / "maven-process.json").exists() or (state / "maven-starting").exists():
         reject("MAVEN_GROUP_UNVERIFIED")
-    for name in ("admin.password", "runtime.password", "postgres.env", "maven.log"):
+    workers = state / "recovery-workers"
+    if lane is RECOVERY and (workers.exists() or workers.is_symlink()):
+        if workers.is_symlink() or not workers.is_dir() or workers.stat().st_uid != os.getuid():
+            reject("WORKER_PRIVATE_CLEANUP")
+        # The verified Maven group includes all marked workers. No private files are
+        # removed until that group is gone; rmtree does not follow child symlinks.
+        shutil.rmtree(workers)
+    for name in ("admin.password", "runtime.password", "capture.password", "postgres.env", "maven.log"):
         (state / name).unlink(missing_ok=True)
 
 
@@ -727,6 +804,12 @@ def create_container(state, run, attempt, lane=CAPTURE):
         print("::add-mask::" + password, flush=True)
     private_write(state / "admin.password", admin_password)
     private_write(state / "runtime.password", runtime_password)
+    if lane is RECOVERY:
+        capture_password = secrets.token_hex(32)
+        if capture_password in (admin_password, runtime_password):
+            reject("PASSWORD_GENERATION")
+        print("::add-mask::" + capture_password, flush=True)
+        private_write(state / "capture.password", capture_password)
     private_write(state / "postgres.env", "POSTGRES_USER=" + ADMIN + "\nPOSTGRES_DB=" + lane.database
                   + "\nPOSTGRES_PASSWORD=" + admin_password
                   + "\nPOSTGRES_INITDB_ARGS=--auth-host=scram-sha-256\n")
@@ -834,6 +917,8 @@ def public_diagnostics(result, lane=CAPTURE):
         output["sourceDiagnostics"] = validate_source_diagnostics(result["sourceDiagnostics"])
     if lane is REAUTH and "reauthCommitDiagnostics" in result:
         output["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(result["reauthCommitDiagnostics"])
+    if lane is RECOVERY and "recoveryProcesses" in result:
+        output["recoveryProcesses"] = validate_recovery_process_evidence(result["recoveryProcesses"])
     migration = result.get("migrationDiagnostics", {})
     if isinstance(migration, dict):
         version = migration.get("lastMigrationVersion")
@@ -875,7 +960,7 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         result["acceptanceKind"] = lane.kind
     stage = "INITIALIZE"
     try:
-        if lane is SOURCE or lane is REAUTH:
+        if lane is SOURCE or lane is REAUTH or lane is RECOVERY:
             stage = "SOURCE_REVISION"
             result["sourceRevision"] = source_revision(repo, environment)
         # The source revision must be checked before this untracked acceptance artifact exists.
@@ -895,6 +980,8 @@ def run_acceptance(repo, environment, lane=CAPTURE):
             "MSF_CI_PG18_ADMIN_PASSWORD_FILE": str(state / "admin.password"),
             "MSF_CI_PG18_RUNTIME_PASSWORD_FILE": str(state / "runtime.password"),
         })
+        if lane is RECOVERY:
+            child["MSF_CI_PG18_CAPTURE_PASSWORD_FILE"] = str(state / "capture.password")
         stage = "MAVEN_VERIFY"
         maven_exit = run_maven(repo, state, child, lane)
         result["mavenExit"] = maven_exit
@@ -905,6 +992,17 @@ def run_acceptance(repo, environment, lane=CAPTURE):
                 result["reauthCommitDiagnostics"] = validate_reauth_commit_diagnostics(load_json(diagnostics), require_complete=not maven_exit)
             elif not maven_exit:
                 reject("REAUTH_COMMIT_DIAGNOSTIC_MISSING")
+            evidence = repo / "backend" / "target" / lane.evidence_file
+            if evidence.exists():
+                result["databaseEvidence"] = validate_success_evidence(load_json(evidence), ownership["image_digest"], lane)
+            stage = "MAVEN_VERIFY"
+        if lane is RECOVERY:
+            stage = "RECOVERY_PROCESSES"
+            processes = repo / "backend" / "target" / "ci-pg18-recovery-process-evidence.json"
+            if processes.exists():
+                result["recoveryProcesses"] = validate_recovery_process_evidence(load_json(processes), require_complete=not maven_exit)
+            elif not maven_exit:
+                reject("RECOVERY_PROCESS_MISSING")
             evidence = repo / "backend" / "target" / lane.evidence_file
             if evidence.exists():
                 result["databaseEvidence"] = validate_success_evidence(load_json(evidence), ownership["image_digest"], lane)
@@ -950,7 +1048,7 @@ def run_acceptance(repo, environment, lane=CAPTURE):
         except Exception:
             result["status"], result["stage"] = "FAILED", "CLEANUP_FAILED"
         try:
-            scrub_private(state)
+            scrub_private(state, lane)
         except Exception:
             result["status"], result["stage"] = "FAILED", "PRIVATE_CLEANUP_FAILED"
         write_result(repo, result, lane)
@@ -981,12 +1079,12 @@ def always_cleanup(repo, environment, lane=CAPTURE):
         previous["status"], previous["stage"] = "FAILED", "CLEANUP_FAILED"
         previous["cleanup"] = {"verified": False}
         try:
-            scrub_private(state)
+            scrub_private(state, lane)
         except Exception:
             previous["stage"] = "PRIVATE_CLEANUP_FAILED"
         write_result(repo, previous, lane)
         return 1
-    scrub_private(state)
+    scrub_private(state, lane)
     if not previous["cleanup"].get("verified"):
         previous["status"], previous["stage"] = "FAILED", "CLEANUP_UNVERIFIED"
     write_result(repo, previous, lane)

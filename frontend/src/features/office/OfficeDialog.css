@@ -1,0 +1,34 @@
+/* Hallmark v2.0.0 | scope: component | theme: industrial workbench | signature: focused workbook */
+/* Critique: keep the workbook large and the exit visible while modal focus stays inside. */
+.office-dialog {
+  width: calc(100% - 32px);
+  max-width: 1600px;
+  height: calc(100% - 32px);
+  max-height: 1100px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  overflow: clip;
+}
+.office-dialog[open] { display: flex; flex-direction: column; }
+.office-dialog::backdrop { background: var(--backdrop); }
+.office-dialog-actions { display: flex; align-items: center; gap: 16px; }
+.office-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--rule); }
+.office-dialog-heading h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+.office-dialog-heading button { padding: 8px 16px; border: 1px solid var(--rule); border-radius: 3px; background: var(--white); color: var(--ink); font: inherit; cursor: pointer; }
+.office-dialog-heading button:hover { border-color: var(--petrol); }
+.office-dialog-heading button:active { background: var(--paper); }
+.office-dialog-heading button:focus-visible { outline: 3px solid var(--petrol); outline-offset: 2px; }
+.office-dialog iframe { flex: 1; width: 100%; min-height: 0; border: 0; }
+.office-dialog-loading { padding: 8px 20px; margin: 0; }
+@media (max-width: 600px) {
+  .office-dialog { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+  .office-dialog-heading { padding: 12px; }
+}
+@media (max-width: 360px) {
+  .office-dialog-heading { flex-wrap: wrap; gap: 8px; }
+  .office-dialog-actions { flex-basis: 100%; justify-content: space-between; }
+  .office-dialog-heading h2, .office-dialog-actions .theme-selector { white-space: nowrap; }
+}

@@ -51,6 +51,10 @@ public final class FindingEvidenceUploadContracts {
         public Status(UUID intentId,State state,OffsetDateTime expiresAt){this(intentId,state,expiresAt,false);}
     }
     public record Reservation(Status status, boolean replayed) {}
+    /** 当前用户在某一轮整改里仍可编辑的证据集及其上传意图状态（刷新页面后用来找回 evidenceSetId）。 */
+    public record CurrentSet(UUID evidenceSetId, long evidenceRevision, java.util.List<Status> uploads) {
+        public CurrentSet { uploads = java.util.List.copyOf(uploads); }
+    }
     public record Finding(UUID id, UUID organizationId, String state, int roundNo, long version) {}
     public record Notice(UUID id, UUID assigneeMemberId, boolean openRound) {}
     public record EvidenceSet(UUID id, UUID findingId, int roundNo, UUID ownerMemberId,

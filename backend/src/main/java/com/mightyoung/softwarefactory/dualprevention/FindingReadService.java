@@ -99,7 +99,11 @@ public final class FindingReadService {
             FindingReadScope scope = authorizer.requireReadScope(sessionContextResolver.currentTenant());
             FindingRecord record = repository.findVisible(scope, findingId)
                     .orElseThrow(FindingNotVisibleException::new);
-            return new DetailResponse(record.toApiMap(), metadata());
+            var context = repository.findDetailContext(scope, findingId)
+                    .orElseThrow(FindingNotVisibleException::new);
+            Map<String, Object> detail = new LinkedHashMap<>(record.toApiMap());
+            detail.putAll(context.toApiMap());
+            return new DetailResponse(detail, metadata());
         });
     }
 

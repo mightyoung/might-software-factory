@@ -19,8 +19,9 @@ class NavigationServiceTest {
     private final TenantApplicationReadRepository applications = mock(TenantApplicationReadRepository.class);
     private final EntityReadAccessPolicy reads = mock(EntityReadAccessPolicy.class);
     private final FindingWorkflowAuthorizationRepository actions = mock(FindingWorkflowAuthorizationRepository.class);
+    private final com.mightyoung.softwarefactory.authorization.EffectivePermissions permissions = mock(com.mightyoung.softwarefactory.authorization.EffectivePermissions.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
-    private final NavigationService service = new NavigationService(resolver, sessions, applications, reads, actions, manager);
+    private final NavigationService service = new NavigationService(resolver, sessions, applications, reads, actions, permissions, manager);
 
     private CurrentTenantContext session() {
         CurrentTenantContext context = new CurrentTenantContext(UUID.randomUUID(), UUID.randomUUID(),
@@ -39,6 +40,19 @@ class NavigationServiceTest {
         when(reads.resolveEntityReadGrant(context, "finding")).thenReturn(Optional.empty());
         when(actions.loadActionSnapshot(context, "finding.create", "create")).thenReturn(Optional.empty());
         return context;
+    }
+
+    @Test void issueOnlyKeeperGetsItsApplicationAndNodeWithoutCatalogRead() {
+        var context=session();
+        var contribution=new com.mightyoung.softwarefactory.tooling.ToolLedgerConfiguration().toolingApplication();
+        var contributed=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"tool_loan.issue")).thenReturn(true);
+        assertThat(contributed.bootstrap().applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("tooling");
+        assertThat(contributed.bootstrap().permissions()).containsExactly("tool_loan.issue");
+        assertThat(contributed.menu("tooling").nodes()).extracting(NavigationService.MenuNode::permission).containsExactly("tool_loan.issue");
+        when(permissions.has(context,"tool_loan.issue")).thenReturn(false);
+        assertThat(contributed.bootstrap().applications()).isEmpty();
     }
 
     @Test void differentTenantsOnlyReceiveTheirEntitledAndScopedApplication() {
@@ -162,12 +176,41 @@ class NavigationServiceTest {
     }
 
     @Test void unknownApplicationsAreDeniedWithoutLookingUpAnyClientTenant() {
-        assertThatThrownBy(() -> service.menu("equipment")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.menu("unknown")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> service.menu(null)).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(applications,resolver,sessions);
     }
 
+    @Test void contributedApplicationsExposeActualCapabilitiesAndCreateOnlyEntryWithoutRead() {
+        var context=session();
+        var contribution=new ApplicationContribution("tooling","工装",List.of(new ApplicationContribution.Node(
+                "tools","工装台账","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update"))));
+        var dynamic=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"tool.create")).thenReturn(true);
+        assertThat(dynamic.bootstrap().permissions()).containsExactly("tool.create");
+        assertThat(dynamic.menu("tooling").nodes()).containsExactly(new NavigationService.MenuNode("tools","工装台账","apps/tooling/entities/tool","tool.create"));
+        when(permissions.has(context,"tool.read")).thenReturn(true);when(permissions.has(context,"tool.update")).thenReturn(true);
+        assertThat(dynamic.bootstrap().permissions()).containsExactly("tool.read","tool.create","tool.update");
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(false,2)));
+        assertThat(dynamic.bootstrap().applications()).isEmpty();
+    }
+
     private FindingReadAuthorizationSnapshot snapshot(CurrentTenantContext c, Set<UUID> scope,long memberEpoch) {
         return new FindingReadAuthorizationSnapshot(c.actorId(),c.accountId(),"HUMAN","ACTIVE","ACTIVE","ACTIVE","ACTIVE",2,memberEpoch,scope);
+    }
+
+    @Test void configurablePermissionsDriveApplicationsAndMenuNodes() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(),"safety")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(reads.resolveEntityReadGrant(context,"finding")).thenReturn(Optional.of(new EntityReadGrant(context.tenantId(),Set.of(organization))));
+        when(permissions.has(context,"platform.permission.read")).thenReturn(true);
+        var bootstrap = service.bootstrap();
+        assertThat(bootstrap.applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("safety","platform");
+        assertThat(bootstrap.permissions()).containsExactly("finding.read","platform.permission.read");
+        assertThat(service.menu("safety").nodes()).extracting(NavigationService.MenuNode::id).containsExactly("findings");
+        assertThat(service.menu("platform").nodes()).extracting(NavigationService.MenuNode::path).containsExactly("platform/permissions");
+        assertThatThrownBy(() -> service.menu("equipment")).isInstanceOf(AccessDeniedException.class);
     }
 }

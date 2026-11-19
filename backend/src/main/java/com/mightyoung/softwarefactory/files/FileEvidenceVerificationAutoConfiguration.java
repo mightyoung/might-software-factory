@@ -11,7 +11,8 @@ import java.nio.file.Path;
 import java.util.Base64;
 
 /** Supplies a denying verifier only when no trusted storage verifier has been configured. */
-@AutoConfiguration
+@AutoConfiguration(after = {org.springframework.boot.jooq.autoconfigure.JooqAutoConfiguration.class,
+        org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration.class})
 @Import(FileIngestionConfiguration.class)
 public class FileEvidenceVerificationAutoConfiguration {
 
@@ -35,6 +36,18 @@ public class FileEvidenceVerificationAutoConfiguration {
             throw new IllegalArgumentException("The local file trust configuration is invalid");
         }
         return new LocalPrivateFileStorageAdapter(root, key, verifierId, receiptKeyId, policyVersion, maxBytes);
+    }
+
+    @Bean
+    @org.springframework.context.annotation.Primary
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnBean({JooqFileIngestionLedger.class,
+            org.jooq.DSLContext.class, javax.sql.DataSource.class})
+    @ConditionalOnProperty(prefix="software-factory.files.ingestion.storage",name="immutable-root")
+    PublishedIngestionContentReader publishedIngestionContentReader(org.jooq.DSLContext dsl,
+            javax.sql.DataSource source,
+            JooqFileIngestionLedger ledger, FileIngestionProperties properties, IngestionProofCodec codec,
+            org.springframework.beans.factory.ObjectProvider<LocalPrivateFileStorageAdapter> legacy) {
+        return new PublishedIngestionContentReader(dsl,source,ledger,properties,codec,legacy.getIfAvailable());
     }
 
     @Bean

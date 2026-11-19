@@ -24,6 +24,10 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
     private record Family(Class<?> event, Class<?> listener, Method method, String id, boolean risk) {}
     private final AbstractApplicationContext context;
     private final List<Family> families;
+    private final RiskScenarioExecutor riskExecutor;
+    private volatile boolean riskRegistered;
+    private volatile String riskListenerBean;
+    private volatile Object riskListenerInstance;
     private volatile Set<Class<?>> registered = Set.of();
     private volatile boolean verified;
     private volatile boolean closing;
@@ -32,6 +36,7 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
 
     NativePublicationInventory(AbstractApplicationContext context) {
         this.context = java.util.Objects.requireNonNull(context);
+        this.riskExecutor = new RiskScenarioExecutor(context);
         try {
             String base = "com.mightyoung.softwarefactory.dualprevention.";
             var definitions = List.of(
@@ -58,6 +63,7 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
     }
 
     Set<Class<?>> eventTypes() { return families.stream().map(Family::event).collect(java.util.stream.Collectors.toUnmodifiableSet()); }
+    RiskScenarioExecutor riskExecutor() { return riskExecutor; }
     boolean risk(Object event) { return family(event == null ? null : event.getClass()).risk(); }
     String target(Object event) { return family(event == null ? null : event.getClass()).id(); }
     void requirePair(Object event, Object target, boolean requireRegistered) {
@@ -74,6 +80,12 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
         if (!verified || !context.isActive() && !closing) throw unavailable();
         try {
             if (repositoryBean == null || context.getBeanFactory().getSingleton(repositoryBean) != repositoryInstance) throw unavailable();
+            // Native destroy may still read after the worker has closed; writes requireWritable below.
+            if (riskRegistered && !closing) {
+                riskExecutor.requireOwner(context);
+                if (context.getBeanFactory().getSingleton(riskListenerBean) != riskListenerInstance) throw unavailable();
+                requireRiskAsync(families.stream().filter(Family::risk).findFirst().orElseThrow(), riskListenerInstance);
+            }
         } catch (RuntimeException | LinkageError failure) { throw unavailable(); }
     }
     void requireWritable() { requireReady(); if (closing || !context.isActive()) throw unavailable(); }
@@ -85,6 +97,7 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
         closing = false;
         verified = false;
         registered = Set.of();
+        riskRegistered = false;
         try {
             Object multicaster = context.getBean(AbstractApplicationContext.APPLICATION_EVENT_MULTICASTER_BEAN_NAME);
             if (multicaster.getClass() != Class.forName("org.springframework.modulith.events.support.PersistentApplicationEventMulticaster", false,
@@ -109,6 +122,16 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
                 if (names.length == 0 && family.risk()) continue;
                 if (names.length != 1 || AopUtils.getTargetClass(context.getBean(names[0])) != family.listener()
                         || !factory.supportsMethod(family.method())) throw unavailable();
+                if (family.risk()) {
+                    var async = family.method().getAnnotation(org.springframework.scheduling.annotation.Async.class);
+                    if (async == null || !RiskScenarioExecutor.BEAN_NAME.equals(async.value())
+                            || context.getBean(RiskScenarioExecutor.BEAN_NAME) != riskExecutor) throw unavailable();
+                    riskExecutor.requireOwner(context);
+                    riskListenerBean = names[0];
+                    riskListenerInstance = context.getBean(names[0]);
+                    requireRiskAsync(family, riskListenerInstance);
+                    riskRegistered = true;
+                }
                 List<ApplicationListener<?>> matching = context.getApplicationListeners().stream()
                         .filter(listener -> listener instanceof TransactionalApplicationListener<?> transaction
                                 && family.id().equals(transaction.getListenerId())).toList();
@@ -132,6 +155,24 @@ final class NativePublicationInventory implements ApplicationListener<Applicatio
 
     private Family family(Class<?> event) {
         return families.stream().filter(family -> family.event() == event).findFirst().orElseThrow(NativePublicationInventory::unavailable);
+    }
+    private void requireRiskAsync(Family family, Object listener) {
+        try {
+            if (!(listener instanceof org.springframework.aop.framework.Advised advised)
+                    || advised.getTargetSource().getClass() != org.springframework.aop.target.SingletonTargetSource.class
+                    || advised.getTargetSource().getTarget().getClass() != family.listener()) throw unavailable();
+            var advisors = advised.getAdvisors();
+            if (advisors.length == 0
+                    || advisors[0].getClass() != org.springframework.scheduling.annotation.AsyncAnnotationAdvisor.class
+                    || advisors[0].getAdvice().getClass() != org.springframework.scheduling.annotation.AnnotationAsyncExecutionInterceptor.class)
+                throw unavailable();
+            var pointcut = ((org.springframework.aop.PointcutAdvisor) advisors[0]).getPointcut();
+            if (!pointcut.getClassFilter().matches(family.listener())
+                    || !pointcut.getMethodMatcher().matches(family.method(), family.listener())) throw unavailable();
+            long asyncCount = java.util.Arrays.stream(advisors)
+                    .filter(advisor -> advisor.getAdvice() instanceof org.springframework.aop.interceptor.AsyncExecutionInterceptor).count();
+            if (asyncCount != 1) throw unavailable();
+        } catch (Exception | LinkageError failure) { throw unavailable(); }
     }
     private static ResolvableType payload(Class<?> event) { return ResolvableType.forClassWithGenerics(PayloadApplicationEvent.class, event); }
     private static IllegalStateException unavailable() { return new IllegalStateException("Native publication inventory unavailable"); }

@@ -180,6 +180,33 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/Unavailable'}
 
+  /api/v1/findings/{findingId}/remediation-rounds/{roundNo}/evidence-set:
+    parameters:
+      - $ref: '#/components/parameters/FindingId'
+      - $ref: '#/components/parameters/RoundNo'
+    get:
+      operationId: getCurrentFindingEvidenceSet
+      security:
+        - session: []
+      description: >-
+        No query or body. Returns the caller's most recent unsealed evidence set for this round, its
+        current evidenceRevision and the status of its upload intents, so a refreshed page can resume.
+        Missing, cross-owner, cross-tenant, sealed and no-longer-authorized sets are uniformly invisible.
+        No filename, storage path, digest or scan output is returned.
+      responses:
+        '200':
+          description: The caller's current editable evidence set.
+          headers:
+            Cache-Control: {schema: {const: no-store}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EvidenceSetResponse'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/Invisible'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Assignment'}
+        '503': {$ref: '#/components/responses/Unavailable'}
 components:
   securitySchemes:
     session: {type: apiKey, in: cookie, name: SESSION}
@@ -260,6 +287,24 @@ components:
       required: [data, meta]
       properties:
         data: {$ref: '#/components/schemas/StatusData'}
+        meta: {$ref: '#/components/schemas/Meta'}
+    EvidenceSetData:
+      type: object
+      additionalProperties: false
+      required: [evidenceSetId, evidenceRevision, uploads]
+      properties:
+        evidenceSetId: {type: string, format: uuid}
+        evidenceRevision: {type: integer, format: int64, minimum: 0}
+        uploads:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/ReservationData'}
+    EvidenceSetResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/EvidenceSetData'}
         meta: {$ref: '#/components/schemas/Meta'}
     ReservationResponse:
       type: object

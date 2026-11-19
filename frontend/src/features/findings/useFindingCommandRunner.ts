@@ -10,7 +10,17 @@ import { newIdempotencyKey } from "../../adapters/findingSubmit";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
 import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft";
 
-import { ACTIONS, REFRESH_ON, REASON_MAX, reviewActions, type ActionDef } from "./commandActions";
+import {
+  ACTIONS,
+  EMPTY_DISPATCH,
+  REFRESH_ON,
+  REASON_MAX,
+  reviewActions,
+  validateDispatchInput,
+  type ActionDef,
+  type DispatchErrors,
+  type DispatchValues,
+} from "./commandActions";
 interface Options { finding: FindingRecord; adapter: FindingCommandAdapter; onChanged: () => void; onUnauthenticated?: () => void; onForbidden?: () => void; readBlocked?: boolean; refreshing?: boolean; }
 export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthenticated,onForbidden,readBlocked=false,refreshing=false}:Options) {
   const [history, setHistory] = useState<ReviewHistory | null>(null);
@@ -20,12 +30,16 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   const [pagePending, setPagePending] = useState(false);
   const [draftAction, setDraftAction] = useState<ActionDef | null>(null);
   const reviewState = ["PERSON_CONFIRM_PENDING", "SAFETY_CONFIRM_PENDING", "REPORTER_SUPPLEMENT_PENDING"].includes(history?.currentState ?? finding.state);
-  const actions = reviewState ? reviewActions(historyLoading || historyFailure ? null : history) : ACTIONS[finding.state] ?? [];
-  const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? [{ label: "分派整改", reason: "派单需要选择整改责任人，契约还没有成员查询接口。" }] : finding.state === "RECTIFYING" ? [{ label: "提交整改证据", reason: "提交整改需要先上传证据集，契约还没有证据上传接口。" }] : [];
+  const actions = reviewState ? reviewActions(historyLoading || historyFailure ? null : history) : (ACTIONS[finding.state] ?? []).filter((action) => !action.dispatch || adapter.searchDispatchCandidates);
+  // 派单需要适配器能查候选成员；没有此能力就不假装可用。
+  const canSearchCandidates = Boolean(adapter.searchDispatchCandidates);
+  const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? (canSearchCandidates ? [] : [{ label: "分派整改", reason: "当前连接没有派单候选查询能力。" }]) : [];
   const [activeId, setActiveId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [grade, setGrade] = useState<"" | "GENERAL" | "MAJOR">("");
   const [errors, setErrors] = useState<{ reason?: string; grade?: string }>({});
+  const [dispatch, setDispatch] = useState<DispatchValues>(EMPTY_DISPATCH);
+  const [dispatchErrors, setDispatchErrors] = useState<DispatchErrors>({});
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<FindingCommandFailureKind | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -69,6 +83,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     setDraftAction(null);
     setReason("");
     setGrade("");
+    setDispatch(EMPTY_DISPATCH);
     setHistory(null);
     if (kind === "unauthenticated") onUnauthenticated?.();
     else onForbidden?.();
@@ -95,6 +110,8 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     setDraftAction(actions.find(action => action.id === id) ?? null);
     setReason("");
     setGrade("");
+    setDispatch(EMPTY_DISPATCH);
+    setDispatchErrors({});
     setErrors({});
     setFailure(null);
     setDone(null);
@@ -111,11 +128,13 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
       else if (active.reason === "required" && !hasVisibleCharacter(reason)) found.reason = "请填写意见";
     }
     if (!uncertain && active.grade && !grade) found.grade = "请选择隐患等级";
+    const dispatchFound = active.dispatch && !uncertain ? validateDispatchInput(dispatch) : {};
     setErrors(found);
+    setDispatchErrors(dispatchFound);
     setFailure(null);
-    if (Object.keys(found).length > 0) return;
+    if (Object.keys(found).length > 0 || Object.keys(dispatchFound).length > 0) return;
 
-    const command = uncertain ? attempt.current!.command : active.build({ reason: active.cycleText ? reason : reason.trim(), grade: grade || "GENERAL" });
+    const command = uncertain ? attempt.current!.command : active.build({ reason: active.cycleText ? reason : reason.trim(), grade: grade || "GENERAL", dispatch });
     const commandVersion = uncertain ? attempt.current!.version : version;
     const payload = JSON.stringify([finding.id, commandVersion, command]);
     if (attempt.current?.payload !== payload) attempt.current = { payload, key: newIdempotencyKey(), command, version: commandVersion };
@@ -129,6 +148,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
       setActiveId(null);
       setDraftAction(null);
       setReason("");
+      setDispatch(EMPTY_DISPATCH);
       attempt.current = null;
       setRefresh(value => value + 1);
       onChanged();
@@ -149,5 +169,5 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   }
 
 
-  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason,grade,setGrade,errors,pending,failure,done,submit };
+  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason,grade,setGrade,errors,dispatch,setDispatch,dispatchErrors,pending,failure,done,submit };
 }

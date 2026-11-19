@@ -1,0 +1,141 @@
+# Role permission configuration. Describes the three routes implemented by the platformadmin module.
+# Unlike the entity routes these responses are not wrapped in a `data` envelope; that is the implemented shape.
+openapi: 3.1.0
+info:
+  title: Platform administration — role permission configuration
+  version: 1.0.0
+  description: >-
+    Read the configurable permission catalog, read tenant roles with their permission codes, and replace one
+    role's permission set. Every route requires an authenticated tenant session; reads require
+    platform.permission.read and the replace requires platform.permission.manage. The server re-checks
+    authority on every request and records each replace in an append-only change log.
+    Role permissionCodes include permissions outside this configurable catalog. A replacement must retain
+    those existing codes unchanged; adding or removing an uncatalogued code is rejected as UNKNOWN_PERMISSION.
+    Removing a role's management permission also requires another active human member whose remaining role
+    grants resolve the management permission to a nonempty active organization scope.
+paths:
+  /api/v1/admin/permissions:
+    get:
+      operationId: listPermissionCatalog
+      summary: Catalogued permissions that a role may be granted
+      responses:
+        "200":
+          description: Catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/roles:
+    get:
+      operationId: listRoles
+      summary: Tenant roles with their current permission codes
+      responses:
+        "200":
+          description: Roles
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RolesResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/admin/roles/{roleId}/permissions:
+    put:
+      operationId: replaceRolePermissions
+      summary: Replace the whole permission set of one role
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceRequest" }
+      responses:
+        "200":
+          description: The role after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleView" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404":
+          description: ROLE_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: VERSION_CONFLICT — the role changed since expectedVersion was read
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: ROLE_HAS_NO_SCOPE, LAST_PERMISSION_MANAGER or UNKNOWN_PERMISSION
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+components:
+  responses:
+    Error:
+      description: Request rejected
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  schemas:
+    CatalogItem:
+      type: object
+      additionalProperties: false
+      required: [code, application, label]
+      properties:
+        code: { type: string }
+        application: { type: string }
+        label: { type: string }
+    CatalogResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogItem" }
+    RoleView:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, active, permissionCodes, memberCount, version]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        permissionCodes:
+          type: array
+          items: { type: string }
+        memberCount: { type: integer, minimum: 0 }
+        version: { type: string, description: Opaque; send back unchanged as expectedVersion. }
+    RolesResponse:
+      type: object
+      additionalProperties: false
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/RoleView" }
+    ReplaceRequest:
+      type: object
+      additionalProperties: false
+      required: [permissionCodes, expectedVersion]
+      properties:
+        permissionCodes:
+          type: array
+          items: { type: string }
+        expectedVersion: { type: string }
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        traceId: { type: string }
+        retryable: { type: boolean }

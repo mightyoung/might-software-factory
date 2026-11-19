@@ -1,5 +1,16 @@
 import type { FormEvent } from "react";
+import { InternationalizationProvider } from "@astryxdesign/core/i18n";
+import { Button } from "@astryxdesign/core/Button";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import "./LedgerQueryForm.css";
 import type { DateRange, LedgerQueryField, LedgerSchema, QueryValue, QueryValues } from "../domain/ledger";
+
+const queryControlMessages = {
+  "zh-CN": {
+    "@astryx.textInput.clearLabel": "清除 {label}",
+    "@astryx.inputClearButton.tooltip": "清除",
+  },
+};
 
 interface LedgerQueryFormProps<T> {
   schema: LedgerSchema<T>;
@@ -24,15 +35,19 @@ function QueryFieldControl<T>({
 }) {
   if (field.kind === "text") {
     return (
-      <label className="query-field" key={field.key}>
-        <span>{field.label}</span>
-        <input
-          type="search"
-          value={typeof value === "string" ? value : ""}
-          placeholder={field.placeholder}
-          onChange={(event) => onChange(field.key, event.currentTarget.value)}
-        />
-      </label>
+      <TextInput
+        key={field.key}
+        type="search"
+        hasClear
+        label={field.label}
+        value={typeof value === "string" ? value : ""}
+        placeholder={field.placeholder}
+        enterKeyHint="search"
+        size="lg"
+        containerClassName="query-field ledger-search-field"
+        controlClassName="ledger-search-control"
+        onChange={(next) => onChange(field.key, next)}
+      />
     );
   }
 
@@ -127,25 +142,23 @@ export function LedgerQueryForm<T>({ schema, values, onChange, onSearch, onReset
   }
 
   return (
-    <form className="query-panel" onSubmit={handleSubmit}>
-      <div className="query-fields">
-        {schema.queryFields.map((field) => (
-          <QueryFieldControl
-            key={field.key}
-            field={field}
-            value={values[field.key]}
-            onChange={onChange}
-          />
-        ))}
-      </div>
-      <div className="query-actions">
-        <button className="button button-primary" type="submit">
-          查询
-        </button>
-        <button className="button button-subtle" type="button" onClick={onReset}>
-          重置
-        </button>
-      </div>
-    </form>
+    <InternationalizationProvider locale="zh-CN" overrides={queryControlMessages}>
+      <form className="query-panel" onSubmit={handleSubmit}>
+        <div className="query-fields">
+          {schema.queryFields.map((field) => (
+            <QueryFieldControl
+              key={field.key}
+              field={field}
+              value={values[field.key]}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+        <div className="query-actions">
+          <Button className="ledger-query-action" label="查询" variant="primary" size="lg" type="submit" />
+          <Button className="ledger-query-action" label="重置" variant="secondary" size="lg" type="button" onClick={onReset} />
+        </div>
+      </form>
+    </InternationalizationProvider>
   );
 }

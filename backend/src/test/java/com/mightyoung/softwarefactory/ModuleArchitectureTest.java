@@ -22,22 +22,28 @@ class ModuleArchitectureTest {
             "Support services",
             "Audit and operations",
             "File evidence access",
-            "Dual-prevention business sample"
+            "Dual-prevention business sample",
+            "Platform administration",
+            "Entity ledger",
+            "Tooling catalog"
     );
 
-    private static final Map<String, Set<String>> EXPECTED_ALLOWED_DEPENDENCIES = Map.of(
-            "Identity and authentication", Set.of(),
-            "Tenancy", Set.of("Identity and authentication"),
-            "Directory", Set.of("Identity and authentication", "Tenancy"),
-            "Authorization", Set.of("Identity and authentication", "Tenancy", "Directory"),
-            "Application registry", Set.of("Authorization", "Tenancy", "Identity and authentication"),
-            "Workflow", Set.of("Authorization", "Identity and authentication", "Tenancy"),
-            "Support services", Set.of("Authorization", "Tenancy", "Identity and authentication"),
-            "Audit and operations", Set.of("Authorization", "Identity and authentication", "Tenancy"),
-            "File evidence access", Set.of(),
-            "Dual-prevention business sample", Set.of(
+    private static final Map<String, Set<String>> EXPECTED_ALLOWED_DEPENDENCIES = Map.ofEntries(
+            Map.entry("Identity and authentication", Set.of()),
+            Map.entry("Tenancy", Set.of("Identity and authentication")),
+            Map.entry("Directory", Set.of("Identity and authentication", "Tenancy")),
+            Map.entry("Authorization", Set.of("Identity and authentication", "Tenancy", "Directory")),
+            Map.entry("Application registry", Set.of("Authorization", "Tenancy", "Identity and authentication")),
+            Map.entry("Workflow", Set.of("Authorization", "Identity and authentication", "Tenancy")),
+            Map.entry("Support services", Set.of("Authorization", "Tenancy", "Identity and authentication")),
+            Map.entry("Audit and operations", Set.of("Authorization", "Identity and authentication", "Tenancy")),
+            Map.entry("File evidence access", Set.of()),
+            Map.entry("Dual-prevention business sample", Set.of(
                     "Application registry", "Audit and operations", "Authorization", "Directory",
-                    "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")
+                    "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")),
+            Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication")),
+            Map.entry("Entity ledger", Set.of("Application registry", "Authorization", "Identity and authentication", "Audit and operations")),
+            Map.entry("Tooling catalog", Set.of("Workflow", "Entity ledger", "Authorization", "Identity and authentication", "Application registry", "Audit and operations"))
     );
 
     @Test

@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-15T02:37:38.227667+00:00",
+  "phase": "D0",
+  "verificationStatus": "PASS",
+  "source": {
+    "baseHead": "f2e2b09d74560cf0da67ab6d390cb3cf76ef125f",
+    "dirtySource": true,
+    "manifest": "source-manifest.json",
+    "manifestSha256": "9d387e5656cd72ac5d50bf010674134bc6f662088476e36ac4985b9dfa4b3f78",
+    "fileCount": 1147,
+    "changedSinceSnapshot": []
+  },
+  "productionJarSha256": "ab403d0186cf01dac1725953fba12be518f092f1c84375a6ec6d9a9c711df2af",
+  "linuxOffline": {
+    "suites": 277,
+    "tests": 2533,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "coreIntegration": {
+    "classes": 25,
+    "tests": 258,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "coreGuards": {
+    "suites": 7,
+    "classes": [
+      "MigrationVersionUniquenessTest",
+      "D0RuntimePrivilegesTest",
+      "LanPostgresRolePreflightTest",
+      "IdentityAcceptanceTargetTest",
+      "LanPostgresDatabaseTargetTest",
+      "IdentityRuntimePrivilegeProfileTest",
+      "FixturePostgresTargetTest"
+    ],
+    "tests": 61,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "p0Integration": {
+    "classes": 5,
+    "tests": 21,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "sameSourceManifest": true
+  },
+  "p0Guards": {
+    "tests": 42,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "frontend": {
+    "unitTests": 419,
+    "mockBrowserTests": 20,
+    "typecheck": "PASS",
+    "build": "PASS",
+    "bundle": "PASS",
+    "generatedApiTypes": 11
+  },
+  "liveBrowser": {
+    "status": "PASS",
+    "checks": [
+      "real HTTPS login and persisted session",
+      "create through published definition and real process; reporter cannot confirm",
+      "separate actors confirm and dispatch; missing evidence blocks submission",
+      "permission removal immediately hides create and denies direct API with 403",
+      "permission restored; removing the last permission manager is rejected"
+    ],
+    "detailUrl": "https://127.0.0.1:15443/t/9e5f3ab6-c9d8-3761-aa53-3b8806edf3f8/safety/findings?tab=1&caseId=b08ad4be-225a-4d2b-8da9-934771e94801"
+  },
+  "native": {
+    "protocol": "PASS",
+    "cryptoFailureCases": 12,
+    "negativeArgv": "PASS",
+    "readOnlyCryptoSmoke": "PASS"
+  },
+  "migration": {
+    "freshVersion": "26",
+    "upgradeFrom": "18.3",
+    "upgradeTo": "26",
+    "preservedSyntheticTables": 22,
+    "preservedSyntheticRows": 22,
+    "preservedFlywayRows": 18,
+    "canonicalPermissionCases": [
+      "missing",
+      "compatible_preserve_identity_and_grants",
+      "incompatible_23514_rollback"
+    ]
+  },
+  "bootstrap": {
+    "offlineGuards": 18,
+    "frameworkSeedWorkflowRerun": "PASS",
+    "extraAuthorityRejectedAndRolledBack": "PASS"
+  },
+  "boundaries": [
+    "Only new local Docker PostgreSQL 18.6 test databases; no existing LAN or NAS writes",
+    "No production scanner deployment or trusted physical-file upgrade proof",
+    "TenantAuditPrivilegePostgresIT read-only profile is a separate gate",
+    "Counts from overlapping guard suites are reported separately, not summed as unique tests"
+  ],
+  "privateEvidenceRoots": [
+    "/private/tmp/msf-d0-final-verification",
+    "/private/tmp/msf-d0-final-probe",
+    "/private/tmp/msf-d0-closure",
+    "/private/tmp/msf-d0-linux-offline"
+  ],
+  "architectureReview": "CLEAR"
+}

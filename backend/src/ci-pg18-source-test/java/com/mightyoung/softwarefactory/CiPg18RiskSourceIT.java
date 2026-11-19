@@ -11,6 +11,7 @@ import com.mightyoung.softwarefactory.dualprevention.risk.RiskScenarioDraftChang
 import com.mightyoung.softwarefactory.support.RiskNativePublicationTransactions;
 import com.mightyoung.softwarefactory.testing.CiPg18EphemeralTarget;
 import java.util.ArrayDeque;
+import com.mightyoung.softwarefactory.support.RiskScenarioExecutor;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -81,7 +82,7 @@ class CiPg18RiskSourceIT {
             assertThat(after.commits()-controls.commits()).isEqualTo(1);
             assertThat(after.rollbacks()-controls.rollbacks()).isZero();
             assertThat(after.publicationInserts()-controls.publicationInserts()).isEqualTo(1);
-            assertThat(context.getBean(DeferredConsumers.class).pending).hasSize(1);
+            assertThat(context.getBean(RiskScenarioExecutor.class).pendingTaskCount()).isEqualTo(1);
         });
     }
 
@@ -114,14 +115,14 @@ class CiPg18RiskSourceIT {
             assertThat(refreshedWire.get("meta").get("traceId").stringValue()).isEqualTo(nextTraceId.toString());
             assertThat(counts()).containsExactly(before);
             assertThat(fixture.metrics().publicationInserts()).isEqualTo(controls.publicationInserts());
-            assertThat(context.getBean(DeferredConsumers.class).pending).hasSize(1);
+            assertThat(context.getBean(RiskScenarioExecutor.class).pendingTaskCount()).isEqualTo(1);
             var changed = new RiskScenarioContracts.Create(input.code(),input.organizationId(),"changed payload",
                     input.triggeringConditions(),input.exposureDescription(),input.consequence(),input.hazardIds());
             assertThatThrownBy(() -> fixture.invokeIssuer(()->service.create(fixture.session().captured(), key, UUID.randomUUID(), UUID.randomUUID(), changed)))
                     .isInstanceOf(RiskScenarioContracts.Failure.class)
                     .satisfies(failure -> assertThat(((RiskScenarioContracts.Failure) failure).status()).isEqualTo(409));
             assertThat(counts()).containsExactly(before);
-            assertThat(context.getBean(DeferredConsumers.class).pending).hasSize(1);
+            assertThat(context.getBean(RiskScenarioExecutor.class).pendingTaskCount()).isEqualTo(1);
         });
     }
 
@@ -144,7 +145,7 @@ class CiPg18RiskSourceIT {
             assertThat(after.commits()-controls.commits()).isZero();
             assertThat(after.rollbacks()-controls.rollbacks()).isEqualTo(1);
             assertThat(after.publicationInserts()-controls.publicationInserts()).isEqualTo(1);
-            assertThat(context.getBean(DeferredConsumers.class).pending).isEmpty();
+            assertThat(context.getBean(RiskScenarioExecutor.class).pendingTaskCount()).isZero();
         });
     }
 
@@ -197,6 +198,15 @@ class CiPg18RiskSourceIT {
                     assertThat(context.getBeansOfType(EventPublicationRepository.class)).hasSize(1);
                     assertThat(context.getBeansOfType(PlatformTransactionManager.class)).hasSize(1);
                     assertThat(context.getBeansOfType(EventSerializer.class)).hasSize(1);
+                    var started = new java.util.concurrent.CountDownLatch(1);
+                    var hold = new java.util.concurrent.CountDownLatch(1);
+                    context.getBean(RiskScenarioExecutor.class).execute(() -> {
+                        started.countDown();
+                        try { hold.await(); }
+                        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                    });
+                    assertThat(started.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                    // Context close interrupts this blocker and discards queued deliveries. No capture claim.
                     fixture.graphReady();
                     assertions.accept((AbstractApplicationContext) context.getSourceApplicationContext());
                 });
@@ -238,6 +248,8 @@ class CiPg18RiskSourceIT {
         @Bean RiskScenarioDraftChangedListener riskScenarioDraftChangedListener(javax.sql.DataSource source,CiPg18SourceFixture fixture) {
             return new RiskScenarioDraftChangedListener(RiskChangeCaptureService.create(source,UUID.randomUUID(),Set.of(fixture.identity().tenant())));
         }
+        @Bean(name="riskScenarioExecutor", destroyMethod="close")
+        RiskScenarioExecutor riskScenarioExecutor(RiskNativePublicationTransactions transactions) { return transactions.riskExecutor(); }
         @Bean DeferredConsumers taskExecutor() { return new DeferredConsumers(); }
         @Bean static BeanFactoryPostProcessor nativeBinding() {
             return factory -> {

@@ -5,14 +5,14 @@ import { createEmptyQuery, type LedgerSchema, type QueryValue, type QueryValues 
 import { findingLedgerSchema } from "../features/findings/schema";
 import { LedgerQueryForm } from "./LedgerQueryForm";
 
-function QueryHarness() {
+function QueryHarness({ onSearch = () => undefined }: { onSearch?: () => void } = {}) {
   const [values, setValues] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
   return (
     <LedgerQueryForm
       schema={findingLedgerSchema}
       values={values}
       onChange={(key, value: QueryValue) => setValues((current) => ({ ...current, [key]: value }))}
-      onSearch={() => undefined}
+      onSearch={onSearch}
       onReset={() => setValues(createEmptyQuery(findingLedgerSchema.queryFields))}
     />
   );
@@ -57,7 +57,10 @@ afterEach(cleanup);
 
 describe("通用台账查询表单", () => {
   it("按字段类型生成输入、选择器和日期区间，重置会清空全部条件", () => {
-    render(<QueryHarness />);
+    let submitCount = 0;
+    render(<QueryHarness onSearch={() => { submitCount += 1; }} />);
+    expect(screen.getByRole("button", { name: "查询" })).toHaveAttribute("type", "submit");
+    expect(screen.getByRole("button", { name: "重置" })).toHaveAttribute("type", "button");
     const keyword = screen.getByRole("searchbox", { name: "隐患编号" });
     const state = screen.getByRole("combobox", { name: "状态" });
     const from = screen.getByLabelText("上报日期起");
@@ -78,6 +81,30 @@ describe("通用台账查询表单", () => {
     expect(state).toHaveValue("");
     expect(from).toHaveValue("");
     expect(to).toHaveValue("");
+    expect(submitCount).toBe(0);
+  });
+
+  it("清除单个文本条件后保留其他条件、返回输入焦点并等待查询提交", () => {
+    let submitCount = 0;
+    render(<QueryHarness onSearch={() => { submitCount += 1; }} />);
+    const keyword = screen.getByRole("searchbox", { name: "隐患编号" });
+    const state = screen.getByRole("combobox", { name: "状态" });
+    const from = screen.getByLabelText("上报日期起");
+    expect(screen.queryByRole("button", { name: "清除 隐患编号" })).not.toBeInTheDocument();
+    fireEvent.change(keyword, { target: { value: "YH-001" } });
+    fireEvent.change(state, { target: { value: "RECTIFYING" } });
+    fireEvent.change(from, { target: { value: "2026-10-01" } });
+    const clear = screen.getByRole("button", { name: "清除 隐患编号" });
+    expect(clear).toHaveAttribute("type", "button");
+    fireEvent.click(clear);
+    expect(keyword).toHaveValue("");
+    expect(keyword).toHaveFocus();
+    expect(state).toHaveValue("RECTIFYING");
+    expect(from).toHaveValue("2026-10-01");
+    expect(submitCount).toBe(0);
+    expect(screen.queryByRole("button", { name: "清除 隐患编号" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    expect(submitCount).toBe(1);
   });
 
   it("数值字段使用数字输入，引用字段只能选择传入的对象选项", () => {

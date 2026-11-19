@@ -86,6 +86,48 @@ class FindingEvidenceFileAccessPolicyTest {
     }
 
     @Test
+    void scannedV2ReceiptRemainsExplicitInThePinnedSnapshotAndAcceptance() {
+        adapter.receipt = withLevel(adapter.receipt, FileEvidenceVerificationLevel.SCANNED_CONTENT_V2);
+
+        VerifiedFileEvidenceSnapshot snapshot = policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "SCANNED_CONTENT_V2", sha256Unchecked(SYNTHETIC_CONTENT)));
+
+        assertThat(snapshot.verificationLevel()).isEqualTo(FileEvidenceVerificationLevel.SCANNED_CONTENT_V2);
+        policy.requirePreviouslySubmittedEvidence(snapshot);
+        assertThat(adapter.lastReceiptLookup).isEqualTo(snapshot.verificationReceiptId());
+    }
+
+    @Test
+    void legacyAndScannedReceiptProtocolsCannotSubstituteForEachOtherAtSubmission() {
+        assertThatThrownBy(() -> policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "SCANNED_CONTENT_V2", sha256Unchecked(SYNTHETIC_CONTENT))))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+
+        adapter.receipt = withLevel(adapter.receipt, FileEvidenceVerificationLevel.SCANNED_CONTENT_V2);
+        assertThatThrownBy(() -> policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "CONTENT", sha256Unchecked(SYNTHETIC_CONTENT))))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
+    @Test
+    void acceptanceRejectsChangingThePinnedReceiptProtocolWithoutChangingItsIdentity() {
+        adapter.receipt = withLevel(adapter.receipt, FileEvidenceVerificationLevel.SCANNED_CONTENT_V2);
+        VerifiedFileEvidenceSnapshot snapshot = policy.requireVerifiedContentEvidence(
+                use(TENANT_ID, ACTOR_ID, MEMBER_ID, "SCANNED_CONTENT_V2", sha256Unchecked(SYNTHETIC_CONTENT)));
+        adapter.receipt = withLevel(adapter.receipt, FileEvidenceVerificationLevel.CONTENT);
+
+        assertThatThrownBy(() -> policy.requirePreviouslySubmittedEvidence(snapshot))
+                .isInstanceOf(FileEvidenceTrustUnavailableException.class);
+    }
+
+    private static ContentVerificationReceipt withLevel(
+            ContentVerificationReceipt receipt, FileEvidenceVerificationLevel level) {
+        return new ContentVerificationReceipt(receipt.receiptId(), receipt.tenantId(), receipt.fileId(),
+                receipt.sha256(), receipt.storageVersion(), level, receipt.verifierId(), receipt.verifierKeyId(),
+                receipt.verificationPolicyVersion(), receipt.verifiedAt());
+    }
+
+    @Test
     void rejectsInactiveObjectsWrongActorAndClientOrDatabaseOnlyContentClaims() {
         adapter.metadata = metadata(TENANT_ID, MEMBER_ID, ACTOR_ID, FileObjectState.QUARANTINED,
                 sha256Unchecked(SYNTHETIC_CONTENT), "disk-v1");

@@ -24,7 +24,7 @@ const VIEW_STATES: Record<Exclude<FindingView, "all">, readonly FindingState[]> 
   acceptance: ["ACCEPTANCE_PENDING"],
 };
 
-/** 契约列表/详情没有上报人、责任人、历史（frontend-contract-gap R4），不臆造。 */
+/** 列表投影或旧服务器未提供的身份不臆造。 */
 const NOT_PROVIDED = "—";
 
 /** 服务端响应缺少默认投影里必有的字段：按“读取失败”处理，不替服务端编造状态或内容。 */
@@ -65,6 +65,55 @@ export function toFindingRecord(item: Item | Detail, definition: FindingDefiniti
     ...(item.urgency ? { urgency: item.urgency === "URGENT" ? "IMMEDIATE" : item.urgency } : {}),
     ...(item.interimMeasure ? { interimMeasure: item.interimMeasure } : {}),
     ...(typeof item.backfill === "boolean" ? { backfill: item.backfill } : {}),
+    ...(item.relatedFindingId ? { relatedFindingId: item.relatedFindingId } : {}),
+  };
+}
+
+function historyTitle(entry: components["schemas"]["FindingHistoryEntry"]): string {
+  if (entry.fromState === null) return "发现上报";
+  switch (entry.toState) {
+    case "PERSON_CONFIRM_PENDING":
+      return entry.fromState === "REPORTER_SUPPLEMENT_PENDING" ? "提交补充资料" : "启动确认流程";
+    case "REPORTER_SUPPLEMENT_PENDING": return "退回补充";
+    case "SAFETY_CONFIRM_PENDING": return "一人确认";
+    case "SAFETY_DISPATCH_PENDING": return "安全确认";
+    case "RECTIFYING":
+      return entry.fromState === "ACCEPTANCE_PENDING" ? "退回整改"
+        : entry.fromState === "RECTIFYING" ? "重新分派" : "分派整改";
+    case "ACCEPTANCE_PENDING": return "提交整改";
+    case "CLOSED": return "验收通过";
+    case "NOT_ESTABLISHED": return "不成立";
+    default: return "状态变更";
+  }
+}
+
+function toFindingDetailRecord(detail: Detail, definition: Parameters<typeof toFindingRecord>[1]): FindingRecord {
+  return {
+    ...toFindingRecord(detail, definition),
+    reporter: detail.reporter?.displayName ?? NOT_PROVIDED,
+    responsible: detail.responsible?.displayName ?? NOT_PROVIDED,
+    history: (detail.history ?? []).map((entry) => ({
+      id: entry.id,
+      at: entry.at,
+      title: historyTitle(entry),
+      note: [entry.actorName, entry.reason].filter((value) => value != null && value !== "").join(" · "),
+    })),
+    ...(detail.historyTruncated === undefined ? {} : { historyTruncated: detail.historyTruncated }),
+    submittedRemediations: (detail.submittedRemediations ?? []).map((submission) => ({
+      id: submission.id,
+      roundNo: submission.roundNo,
+      statement: submission.statement,
+      submittedAt: submission.submittedAt,
+      submitterMemberId: submission.submitterMemberId,
+      submitterName: submission.submitterName,
+      evidence: submission.evidence.map((item) => ({
+        itemId: item.itemId,
+        fileId: item.fileId,
+        sha256: item.sha256,
+        verificationLevel: item.verificationLevel,
+      })),
+    })),
+    ...(detail.submittedRemediationsTruncated === undefined ? {} : { submittedRemediationsTruncated: detail.submittedRemediationsTruncated }),
   };
 }
 
@@ -100,7 +149,7 @@ export function createHttpFindingLedger(client: HttpClient): FindingLedgerAdapte
         `/api/v1/entities/finding/${encodeURIComponent(id)}`, { signal: options?.signal },
       );
       options?.signal?.throwIfAborted();
-      return { record: toFindingRecord(body.data, definition), definition };
+      return { record: toFindingDetailRecord(body.data, definition), definition };
     } catch (error) {
       if (error instanceof ApiError && classifyHttpError(error) === "notVisible") return { record: null, definition: null };
       throw toAccessError(error);

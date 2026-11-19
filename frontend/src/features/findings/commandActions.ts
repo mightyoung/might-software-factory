@@ -1,8 +1,19 @@
 import type { FindingCommand, FindingCommandFailureKind, FindingReviewHistory as ReviewHistory } from "../../adapters/findingCommands";
 import type { FindingState } from "../../domain/finding";
 import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft";
+import { wallTimeToIso } from "../../domain/time";
 export type Grade = "GENERAL" | "MAJOR";
 export const REASON_MAX = 4000;
+export const REQUIREMENTS_MAX = 4000;
+
+/** 派单表单的值；dueAt 是上海墙上时间 YYYY-MM-DDTHH:mm（datetime-local）。 */
+export interface DispatchValues {
+  assigneeMemberId: string;
+  dueAt: string;
+  requirements: string;
+}
+export const EMPTY_DISPATCH: DispatchValues = { assigneeMemberId: "", dueAt: "", requirements: "" };
+export type DispatchErrors = Partial<Record<"assignee" | "dueAt" | "requirements", string>>;
 
 export interface ActionDef {
   id: string;
@@ -12,12 +23,30 @@ export interface ActionDef {
   grade?: boolean;
   supplement?: boolean;
   cycleText?: boolean;
-  build(input: { reason: string; grade: "GENERAL" | "MAJOR" }): FindingCommand;
+  /** 派单：需要选责任人、填期限与要求，不用意见 / 等级。 */
+  dispatch?: boolean;
+  build(input: { reason: string; grade: "GENERAL" | "MAJOR"; dispatch: DispatchValues }): FindingCommand;
 }
+
+const dispatchAction: ActionDef = {
+  id: "dispatch",
+  label: "分派整改",
+  dispatch: true,
+  build: ({ dispatch: { assigneeMemberId, dueAt, requirements } }) => ({
+    kind: "dispatch",
+    assigneeMemberId,
+    dueAt: wallTimeToIso(dueAt) ?? dueAt,
+    requirements: requirements.trim(),
+  }),
+};
 
 /** 契约已有、前端已接线的动作。按钮出现与否只是呈现，服务端对身份、职责、状态、版本、轮次最终校验。 */
 export const ACTIONS: Partial<Record<FindingState, readonly ActionDef[]>> = {
   DISCOVERED: [{ id: "init", label: "启动确认流程", build: () => ({ kind: "initialize" }) }],
+  SAFETY_DISPATCH_PENDING: [dispatchAction],
+  // 验收退回后的新一轮同样处于 RECTIFYING 且尚无责任人，需要重新分派；前端不知道当前轮是否已有责任人，
+  // 已有时服务端返回 409，候选查询同样 409，面板会提示。
+  RECTIFYING: [{ ...dispatchAction, id: "redispatch", label: "重新分派" }],
   ACCEPTANCE_PENDING: [
     { id: "pass", label: "验收通过", reason: "optional", build: ({ reason }) => ({ kind: "verify", decision: "PASS", ...(reason ? { reason } : {}) }) },
     { id: "fail", label: "退回整改", reason: "required", build: ({ reason }) => ({ kind: "verify", decision: "FAIL", reason }) },
@@ -76,7 +105,8 @@ export const FAILURE_MESSAGE: Record<FindingCommandFailureKind, string> = {
 export const REFRESH_ON: ReadonlySet<FindingCommandFailureKind> = new Set(["versionConflict", "stateConflict"]);
 
 
-export const UNAVAILABLE: Partial<Record<FindingState, readonly { label: string; reason: string }[]>> = { SAFETY_DISPATCH_PENDING: [{ label: "分派整改", reason: "派单需要选择整改责任人，契约还没有成员查询接口。" }], RECTIFYING: [{ label: "提交整改证据", reason: "提交整改需要先上传证据集，契约还没有证据上传接口。" }] };
+/** 提交整改在证据上传面板里办理（证据终结发布后可提交），这里不再放占位按钮。 */
+export const UNAVAILABLE: Partial<Record<FindingState, readonly { label: string; reason: string }[]>> = {};
 export interface CommandInputErrors {
   reason?: string;
   grade?: string;
@@ -91,5 +121,16 @@ export function validateCommandInput(action: ActionDef, reason: string, grade: "
     else if (action.reason === "required" && !hasVisibleCharacter(reason)) errors.reason = "请填写意见";
   }
   if (action.grade && !grade) errors.grade = "请选择隐患等级";
+  return errors;
+}
+
+/** 派单本地校验；服务端仍会重新校验。到期时间只检查格式，是否合理由服务端判断。 */
+export function validateDispatchInput(values: DispatchValues): DispatchErrors {
+  const errors: DispatchErrors = {};
+  if (!values.assigneeMemberId) errors.assignee = "请选择整改责任人";
+  if (!values.dueAt) errors.dueAt = "请填写整改期限";
+  else if (wallTimeToIso(values.dueAt) === null) errors.dueAt = "整改期限格式不正确";
+  if (codePointLength(values.requirements) > REQUIREMENTS_MAX) errors.requirements = `不能超过 ${REQUIREMENTS_MAX} 个字`;
+  else if (!hasVisibleCharacter(values.requirements)) errors.requirements = "请填写整改要求";
   return errors;
 }

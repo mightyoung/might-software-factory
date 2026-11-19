@@ -16,6 +16,9 @@ import org.springframework.context.annotation.*;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
@@ -106,7 +109,11 @@ class FindingNotEstablishedPostgresIT {
         }
         assertThat(snapshot()).isEqualTo(committed);
         assertConstraint("update public.finding set state='DISCOVERED' where tenant_id=? and id=?",parent,"prevent_not_established_finding_reopen");
-        assertConstraint("update public.finding set related_finding_id=null where tenant_id=? and id=?",child,"finding_related_finding_immutable");
+        String immutableLinkUpdate="update public.finding set related_finding_id=null where tenant_id=? and id=?";
+        Throwable runtimeFailure=catchThrowable(()->repository.inTenantTransaction(fixture.tenantId,tx->{jdbc.update(immutableLinkUpdate,fixture.tenantId,child);return null;}));
+        assertThat(runtimeFailure).isInstanceOf(DataAccessException.class);
+        assertThat(sqlFailure(runtimeFailure).getSQLState()).as("runtime cannot update an immutable link column").isEqualTo("42501");
+        assertConstraint(immutableLinkUpdate,child,"finding_related_finding_immutable");
         assertThat(snapshot()).isEqualTo(committed);
     }
 
@@ -136,7 +143,29 @@ class FindingNotEstablishedPostgresIT {
     }
     private void assertDefinition(UUID finding,String key){String id=fieldBinding(finding,"definition_id");var definition=definitions.createProcessDefinitionQuery().processDefinitionId(id).singleResult();assertThat(definition).isNotNull();assertThat(definition.getKey()).isEqualTo(key);assertThat(definition.getTenantId()).isEqualTo(fixture.tenantId.toString());var instance=runtime.createProcessInstanceQuery().processInstanceId(instance(finding)).singleResult();assertThat(instance).isNotNull();assertThat(instance.getProcessDefinitionId()).isEqualTo(id);}
     private void assertClosed(UUID command,UUID finding,long version,String instance){assertThat(runtime.createProcessInstanceQuery().processInstanceId(instance).count()).isZero();assertThat(tasks.createTaskQuery().processInstanceId(instance).count()).isZero();fixture.read(db->{assertThat(db.queryForObject("select count(*) from public.act_hi_procinst where proc_inst_id_=? and end_time_ is not null",Long.class,instance)).isEqualTo(1);assertThat(db.queryForObject("select count(*) from public.finding_confirmation where tenant_id=? and command_id=? and decision='NOT_ESTABLISHED'",Long.class,fixture.tenantId,command)).isEqualTo(1);assertThat(db.queryForObject("select count(*) from public.finding_command_receipt where tenant_id=? and command_id=? and result_finding_id=? and result_version=? and completed_at is not null",Long.class,fixture.tenantId,command,finding,version)).isEqualTo(1);return null;});assertThat(fixture.publications(command)).isPositive();}
-    private void assertConstraint(String sql,UUID id,String expected){Throwable failure=catchThrowable(()->repository.inTenantTransaction(fixture.tenantId,tx->{jdbc.update(sql,fixture.tenantId,id);return null;}));assertThat(failure).isInstanceOf(DataAccessException.class);SQLException pg=null;for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof SQLException s)pg=s;assertThat((Throwable)pg).isNotNull();assertThat(pg.getSQLState()).isEqualTo("23514");assertThat((Throwable)pg).isInstanceOf(org.postgresql.util.PSQLException.class);assertThat(((org.postgresql.util.PSQLException)pg).getServerErrorMessage().getConstraint()).isEqualTo(expected);}
+    private void assertConstraint(String sql,UUID id,String expected) {
+        // A direct database-trigger probe uses the gated migration identity, not extra runtime grants.
+        var target=FixturePostgresTarget.preflightRepository(System.getenv());
+        var source=new DriverManagerDataSource(target.jdbcUrl(),System.getenv("LAN_PG_USERNAME"),System.getenv("LAN_PG_PASSWORD"));
+        var management=new JdbcTemplate(source);
+        var transaction=new TransactionTemplate(new DataSourceTransactionManager(source));
+        Throwable failure=catchThrowable(()->transaction.executeWithoutResult(status->{
+            management.queryForObject("select set_config('app.tenant_id',?,true)",String.class,fixture.tenantId.toString());
+            management.update(sql,fixture.tenantId,id);
+            status.setRollbackOnly();
+        }));
+        assertThat(failure).isInstanceOf(DataAccessException.class);
+        SQLException pg=sqlFailure(failure);
+        assertThat(pg.getSQLState()).isEqualTo("23514");
+        assertThat((Throwable)pg).isInstanceOf(org.postgresql.util.PSQLException.class);
+        assertThat(((org.postgresql.util.PSQLException)pg).getServerErrorMessage().getConstraint()).isEqualTo(expected);
+    }
+    private static SQLException sqlFailure(Throwable failure) {
+        SQLException pg=null;
+        for(Throwable cause=failure;cause!=null;cause=cause.getCause())if(cause instanceof SQLException s)pg=s;
+        assertThat((Throwable)pg).isNotNull();
+        return pg;
+    }
     private void assertTask(UUID finding,String key,UUID actor){var task=tasks.createTaskQuery().processInstanceId(instance(finding)).singleResult();assertThat(task).isNotNull();assertThat(task.getTaskDefinitionKey()).isEqualTo(key);assertThat(task.getAssignee()).isEqualTo(actor.toString());}
     private String instance(UUID finding){return fieldBinding(finding,"process_instance_id");}
     private String fieldBinding(UUID finding,String field){if(!Set.of("process_instance_id","definition_id").contains(field))throw new IllegalArgumentException();return fixture.read(db->db.queryForObject("select "+field+" from public.workflow_binding where tenant_id=? and business_id=?",String.class,fixture.tenantId,finding));}

@@ -10,7 +10,10 @@ import {
 import { formatDateTime } from "../domain/time";
 import type { FindingLedgerReadFailureKind } from "../adapters/findingLedger";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
+import { FindingRemediationHistory } from "./FindingRemediationHistory";
 import { FindingCommandPanel } from "./FindingCommandPanel";
+import { EvidenceUploadPanel } from "./EvidenceUploadPanel";
+import type { FindingEvidenceAdapter } from "../adapters/findingEvidence";
 import { useAppMode } from "../mode";
 import { findingReadFailureMessage } from "../features/findings/readFailureMessage";
 
@@ -25,12 +28,16 @@ interface FindingDetailsProps {
   onRetry: () => void;
   /** 提供时显示可用的流程操作（需要记录带版本号）；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
+  evidenceAdapter?: FindingEvidenceAdapter;
+  /** 提供时，“未成立”的记录可以发起关联上报。 */
+  onCreateRelated?: (finding: FindingRecord) => void;
+  onOpenRelated?: (id: string) => void;
   onCommandChanged?: () => void;
   onUnauthenticated?: () => void;
   onForbidden?: () => void;
 }
 
-export function FindingDetails({ definition, finding, loading, error, onClose, onRetry, commandAdapter, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
+export function FindingDetails({ definition, finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
   const demo = useAppMode() === "synthetic";
   const noun = demo ? "演示记录" : "记录";
   return (
@@ -112,6 +119,16 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
               </div>
             </dl>)}
 
+                      {finding.relatedFindingId && (
+              <p className="detail-related">
+                关联记录：由一条未成立记录补充新证据而来
+                {onOpenRelated && (
+                  <button className="link-button" type="button" onClick={() => onOpenRelated(finding.relatedFindingId!)}>
+                    {" "}查看原记录
+                  </button>
+                )}
+              </p>
+            )}
           </section>
 
           <section className="detail-section state-summary" aria-label="当前状态">
@@ -154,13 +171,16 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
             </ol>}
           </section>
 
+          {!demo && <FindingRemediationHistory findingId={finding.id} submissions={finding.submittedRemediations} truncated={finding.submittedRemediationsTruncated} />}
+
           {!commandAdapter?.history && <section className="detail-section history-section">
             <h3>{demo ? "演示轨迹" : "处理轨迹"}</h3>
             {!demo && finding.history.length === 0 && <p className="field-hint">后端暂未提供处理轨迹。</p>}
+            {finding.historyTruncated && <p className="field-hint">仅显示最近 200 条处理轨迹。</p>}
             <ul>
               {finding.history.map((entry) => (
-                <li key={`${entry.at}-${entry.title}`}>
-                  <time>{entry.at}</time>
+                <li key={entry.id ?? `${entry.at}-${entry.title}`}>
+                  <time>{formatDateTime(entry.at)}</time>
                   <div>
                     <strong>{entry.title}</strong>
                     <p>{entry.note}</p>
@@ -169,6 +189,18 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
               ))}
             </ul>
           </section>}
+
+          {commandAdapter && evidenceAdapter && finding.state === "RECTIFYING" && finding.version !== undefined && (
+            <EvidenceUploadPanel key={`${finding.id}:${finding.round}`} finding={finding} adapter={evidenceAdapter} commands={commandAdapter} onSubmitted={onCommandChanged ?? onRetry} onUnauthenticated={onUnauthenticated} />
+          )}
+
+          {onCreateRelated && finding.state === "NOT_ESTABLISHED" && (
+            <div className="detail-actions">
+              <button className="button button-primary" type="button" onClick={() => onCreateRelated(finding)}>
+                基于此创建关联上报
+              </button>
+            </div>
+          )}
 
           {!commandAdapter && (
             <>

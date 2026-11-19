@@ -11,10 +11,19 @@ import { navigate, useLocation } from "./routing/router";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
+import { PermissionConfigPage } from "./features/platform/PermissionConfigPage";
+import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
+import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
+import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "./adapters/findingSubmit";
+import { LoanApplicationsPage } from "./features/toolLoans/LoanApplicationsPage";
+import type { LoanFactory } from "./features/toolLoans/model";
+import { parseEntityRoute } from "./routing/entityPaths";
+import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
+import type { EntityLedgerFactory } from "./features/ledger/model";
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -22,6 +31,8 @@ export interface FindingStore {
   submit: FindingSubmitAdapter;
   /** 流程命令；合成存储没有。 */
   commands?: FindingCommandAdapter;
+  /** 整改证据上传；合成存储没有。 */
+  evidence?: FindingEvidenceAdapter;
 }
 import type { FindingView } from "./adapters/findingLedger";
 
@@ -40,13 +51,19 @@ interface PlaceholderPage {
   description: string;
 }
 
+interface PermissionsPage {
+  kind: "permissions";
+  title: string;
+  description: string;
+}
+
 interface RouteDef {
   /** 不含租户前缀的应用内路径。 */
   rest: string;
   application: ApplicationId;
   /** 仅用于界面呈现的权限摘要判断；服务端对每个请求仍须最终鉴权。 */
   permission: string;
-  page: LedgerPage | PlaceholderPage;
+  page: LedgerPage | PlaceholderPage | PermissionsPage;
 }
 
 const ROUTES: readonly RouteDef[] = [
@@ -87,18 +104,18 @@ const ROUTES: readonly RouteDef[] = [
     page: { kind: "placeholder", title: "设备管理", description: "首批只展示应用导航入口。" },
   },
   {
-    rest: "platform/overview",
+    rest: "platform/permissions",
     application: "platform",
-    permission: "platform.overview.read",
-    page: { kind: "placeholder", title: "综合管理", description: "首批只展示应用导航入口。" },
+    permission: "platform.permission.read",
+    page: { kind: "permissions", title: "权限配置", description: "按角色配置可使用的功能权限。" },
   },
 ];
 
-const APPLICATION_IDS: readonly string[] = ["safety", "equipment", "platform"];
-
 function applicationOfPath(rest: string): ApplicationId | null {
+  const entity = parseEntityRoute(rest);
+  if (entity) return entity.appKey;
   const first = rest.split("/")[0] ?? "";
-  return APPLICATION_IDS.includes(first) ? (first as ApplicationId) : null;
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(first) ? first : null;
 }
 
 function splitLocation(location: string): { pathname: string; search: string } {
@@ -148,21 +165,35 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: 
   </section>;
 }
 
-function AppRouter({ createFindingStore }: { createFindingStore: () => FindingStore }) {
-  const { state, logout, expire, canChangePassword, changePassword } = useSession();
+interface AppAdapterFactories {
+  createFindingStore: () => FindingStore;
+  createPermissionAdmin: () => PermissionAdminAdapter;
+  createEntityLedger?: EntityLedgerFactory;
+  createLoans?: LoanFactory;
+}
+
+function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans }: AppAdapterFactories) {
+  const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
   const mode = useAppMode();
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
   // 按身份和租户重建：适配器可能缓存 schema，不得跨账号或租户复用。
-  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId, [...session.permissions].sort(), session.applications.map((app) => [app.id, app.entryPath]).sort()]) : "";
+  const identityKey = session ? JSON.stringify([session.tenant.id, session.actor.id, session.identityScope?.accountId, session.identityScope?.memberId, [...session.permissions].sort(), [...(session.canonicalPermissions ?? [])].sort(), session.applications.map((app) => [app.id, app.entryPath]).sort()]) : "";
   const previousIdentity = useRef("");
   const pendingSelectionReset = useRef(false);
   if (identityKey && previousIdentity.current && previousIdentity.current !== identityKey) pendingSelectionReset.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const findingStore = useMemo(() => createFindingStore(), [identityKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const permissionAdmin = useMemo(() => createPermissionAdmin(), [identityKey]);
 
   const parsed = parsePath(pathname);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
+  const entityRoute = parseEntityRoute(parsed.rest);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
   const redirect = session ? canonicalTarget(session, location) : null;
   const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
   const route = tenantMatches ? ROUTES.find((candidate) => candidate.rest === parsed.rest) : undefined;
@@ -222,7 +253,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         note="此提示仅用于界面呈现，实际访问权限由服务端校验。"
       />
     );
-  } else if (!route) {
+  } else if (!route && !entityRoute) {
     title = session.applications.length === 0 ? "没有可用应用" : "页面未开放";
     content =
       session.applications.length === 0 ? (
@@ -230,7 +261,27 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       ) : (
         <StatusPage title="页面未开放" description="该路由不属于首批前端交付范围。" />
       );
-  } else if (!authorizedApplication || (!canReadRoute && !canReportHere)) {
+  } else if (entityRoute?.appKey === "tooling" && ["tool_loan_department","tool_loan_custody"].includes(entityRoute.entityKey) && entityRoute.page === "entry") {
+    const visibility = entityRoute.entityKey === "tool_loan_department" ? "department" : "custody";
+    title = visibility === "department" ? "部门借用单" : "保管范围借用单";
+    const grants = session.canonicalPermissions ?? session.permissions;
+    content = !authorizedApplication || !grants.includes(`${entityRoute.entityKey}.read`)
+      ? <StatusPage title="无权访问" description="当前账号没有此借用单查看权限。" />
+      : !loanAdapter || mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后查看借用单。" />
+        : <LoanApplicationsPage key={JSON.stringify([identityKey,visibility])} visibility={visibility} adapter={loanAdapter} owner={draftOwnerKey(session.tenant.id, session.actor.id)} identityScope={session.identityScope} permissions={grants} onUnauthenticated={expire} />;
+  } else if (entityRoute?.appKey === "tooling" && entityRoute.entityKey === "tool_loan" && entityRoute.page === "entry") {
+    title = "工装借用申请";
+    const grants = session.canonicalPermissions ?? session.permissions;
+    content = !authorizedApplication || !grants.some(code => ["tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue", "tool_loan.receive", "tool_loan.close_lost"].includes(code))
+      ? <StatusPage title="无权访问" description="当前账号没有借用申请权限。" />
+      : !loanAdapter || mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用借用申请。" />
+        : <LoanApplicationsPage key={identityKey} adapter={loanAdapter} owner={draftOwnerKey(session.tenant.id, session.actor.id)} identityScope={session.identityScope} permissions={grants} onUnauthenticated={expire} />;
+  } else if (entityRoute) {
+    title = "通用台账";
+    content = !authorizedApplication ? <StatusPage title="无权访问" description="当前账号没有此应用的访问权限。" />
+      : mode !== "http" || !entityAdapter ? <StatusPage title="需连接后端" description="此台账使用已发布的服务端定义，请连接后端后使用。" />
+        : <EntityLedgerPage key={JSON.stringify([identityKey, entityRoute.appKey, entityRoute.entityKey, entityRoute.page, entityRoute.id])} adapter={entityAdapter} route={entityRoute} tenantId={session.tenant.id} actorId={session.actor.id} identityScope={session.identityScope} permissions={session.canonicalPermissions ?? session.permissions} onUnauthenticated={expire} />;
+  } else if (!route || !authorizedApplication || (!canReadRoute && !canReportHere)) {
     title = "无权访问";
     content = (
       <StatusPage
@@ -255,8 +306,19 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
         resetInitialSelection={resetInitialSelection}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
+        evidenceAdapter={findingStore.evidence}
         canReport={hasPermission(session, "safety.finding.report")}
         draftKey={draftOwnerKey(session.tenant.id, session.actor.id)}
+        onUnauthenticated={expire}
+      />
+    );
+  } else if (route.page.kind === "permissions") {
+    title = route.page.title;
+    content = (
+      <PermissionConfigPage
+        adapter={permissionAdmin}
+        onPermissionsChanged={refresh}
+        canManage={hasPermission(session, "platform.permission.manage")}
         onUnauthenticated={expire}
       />
     );
@@ -277,7 +339,7 @@ function AppRouter({ createFindingStore }: { createFindingStore: () => FindingSt
       key={identityKey}
       session={session}
       application={authorizedApplication}
-      currentRest={parsed.rest}
+      currentRest={entityRoute?.base ?? parsed.rest}
       menu={menu.state}
       onRetryMenu={menu.retry}
       onLogout={logout}
@@ -293,6 +355,9 @@ export function App({
   sessionAdapter,
   findingStore = syntheticFindingStore,
   createFindingStore,
+  createPermissionAdmin,
+  createEntityLedger,
+  createLoans,
   mode = "synthetic",
 }: {
   sessionAdapter?: SessionAdapter;
@@ -300,13 +365,17 @@ export function App({
   findingStore?: FindingStore;
   /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
   createFindingStore?: () => FindingStore;
+  /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
+  createPermissionAdmin?: () => PermissionAdminAdapter;
+  createEntityLedger?: EntityLedgerFactory;
+  createLoans?: LoanFactory;
   /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
   mode?: AppMode;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} />
+        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
       </SessionProvider>
     </ModeProvider>
   );

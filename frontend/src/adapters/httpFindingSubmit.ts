@@ -91,7 +91,7 @@ export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapte
         throw error;
       }
     },
-    async submit(input, { idempotencyKey, organizationId, signal }) {
+    async submit(input, { idempotencyKey, organizationId, relatedFindingId, signal }) {
       if (!organizationId) throw new FindingSubmitError("validation");
       const draft: FindingDraft = normalizeDraft(input);
       const urgency = URGENCY_MAP[draft.urgency];
@@ -108,6 +108,7 @@ export function createHttpFindingSubmit(client: HttpClient): FindingSubmitAdapte
         urgency,
         location: draft.location,
         ...(draft.interimMeasure ? { interimMeasure: draft.interimMeasure } : {}),
+        ...(relatedFindingId ? { relatedFindingId } : {}),
       };
       try {
         await loadFindingDefinition(client, "CREATE", signal);

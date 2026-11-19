@@ -186,6 +186,32 @@ class FindingEvidenceUploadControllerHttpTest {
                 .header("Content-Length","3").contentType("image/png").content(new byte[]{1,2,3})).andExpect(status().isForbidden());
         verifyNoInteractions(receiver);
     }
+    static final String SET_PATH = "/api/v1/findings/" + FINDING + "/remediation-rounds/2/evidence-set";
+    @Test void currentSetReturnsRevisionAndUploadStatusesWithoutFileDetails() throws Exception {
+        var set = UUID.fromString("52000000-0000-0000-0000-0000000000a1");
+        when(service.currentSet(FINDING, 2)).thenReturn(new CurrentSet(set, 3,
+                java.util.List.of(new Status(INTENT, State.VERIFIED_PENDING_FINALIZATION, EXPIRY),
+                        new Status(UUID.fromString("52000000-0000-0000-0000-000000000002"), State.EXPIRED, EXPIRY))));
+        mvc.perform(get(SET_PATH).with(authenticatedMember())).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.data.evidenceSetId").value(set.toString()))
+                .andExpect(jsonPath("$.data.evidenceRevision").value(3))
+                .andExpect(jsonPath("$.data.uploads[0].uploadIntentId").value(INTENT.toString()))
+                .andExpect(jsonPath("$.data.uploads[0].state").value("VERIFIED_PENDING_FINALIZATION"))
+                .andExpect(jsonPath("$.data.uploads[0].statusUrl").value(PATH + "/" + INTENT))
+                .andExpect(jsonPath("$.data.uploads[1].recoveryAction").value("FRESH_KEY_REQUIRED"))
+                .andExpect(jsonPath("$.data.uploads[0].filename").doesNotExist())
+                .andExpect(jsonPath("$.data.uploads[0].sha256").doesNotExist());
+    }
+    @Test void currentSetIsNotFoundWhenInvisibleAndRejectsQueriesAndBodiesBeforeService() throws Exception {
+        when(service.currentSet(FINDING, 2)).thenThrow(new FindingNotVisibleException());
+        mvc.perform(get(SET_PATH).with(authenticatedMember())).andExpect(status().isNotFound());
+        reset(service);
+        mvc.perform(get(SET_PATH + "?x=1").with(authenticatedMember())).andExpect(status().isBadRequest());
+        mvc.perform(get(SET_PATH).with(authenticatedMember()).content("{}")).andExpect(status().isBadRequest());
+        mvc.perform(get(SET_PATH.replace("/2/", "/02/")).with(authenticatedMember())).andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
     private static org.springframework.test.web.servlet.request.RequestPostProcessor authenticatedMember() {
         return request -> {
             var principal = VerifiedSessionPrincipalTestFixture.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1L, 1L);

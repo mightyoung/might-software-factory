@@ -1,0 +1,189 @@
+"""Run against the dedicated read-scope database using private environment credentials."""
+import json
+import os
+import subprocess
+import uuid
+from pathlib import Path
+import psycopg2
+from audited_grants import audit_baseline, prepare_fixture, verify_change
+
+DATABASE = "msf_d2_read_scope_test"
+if os.environ.get("PGDATABASE") != DATABASE or os.environ.get("D2_SCOPE_ACK") != f"isolated-read-scope:{DATABASE}":
+    raise RuntimeError("Dedicated read-scope database and acknowledgement required")
+root = Path(__file__).resolve().parents[2]
+evidence = Path(os.environ["D2_SCOPE_EVIDENCE"])
+if not evidence.is_relative_to(Path("/private/tmp")):
+    raise RuntimeError("Private evidence directory required")
+evidence.mkdir(parents=True, exist_ok=True)
+summary_path = evidence / "summary.json"
+summary_path.unlink(missing_ok=True)
+connection = psycopg2.connect("")
+with connection:
+    with connection.cursor() as query:
+        query.execute((Path(__file__).with_name("seed.sql")).read_text().replace("\\set ON_ERROR_STOP on\n", "").replace("begin;", "", 1).rsplit("commit;", 1)[0])
+        query.execute("""select t.id,s.id,s.organization_id,tool.id from tenant t
+            join tool_custody_scope s on s.tenant_id=t.id and s.code='D1-SCOPE-A'
+            join tool on tool.tenant_id=t.id and tool.custody_scope_id=s.id
+            where t.code='d1seed' and tool.code like 'D2-READ-SCOPE-%' order by tool.created_at desc limit 1""")
+        tenant, scope, organization, tool = map(str, query.fetchone())
+        query.execute("select id from org_unit where tenant_id=%s and code='D1-ORG-B'", (tenant,))
+        other_organization = str(query.fetchone()[0])
+        query.execute("select m.id from tenant_member m join account a on a.id=m.account_id where m.tenant_id=%s and a.login_key='d1seed-reader'", (tenant,))
+        member = str(query.fetchone()[0])
+        # A foreign tenant's pending record is an explicit negative fixture, never returned by its ID.
+        query.execute("""select t.id,m.id,s.id,s.organization_id from tenant t join tenant_member m on m.tenant_id=t.id
+            join tool_custody_scope s on s.tenant_id=t.id where t.id<>%s limit 1""", (tenant,))
+        foreign_tenant, foreign_member, foreign_scope, foreign_organization = map(str, query.fetchone())
+        foreign_loan = str(uuid.uuid4())
+        query.execute("""insert into tool_loan(tenant_id,id,version,state,applicant_member_id,organization_id,custody_scope_id,
+            definition_version,purpose,created_at,updated_at,last_command_id)
+            values(%s,%s,1,'PENDING_ISSUE',%s,%s,%s,'1','跨租户负例',now(),now(),%s)""",
+            (foreign_tenant, foreign_loan, foreign_member, foreign_organization, foreign_scope, str(uuid.uuid4())))
+with connection:
+    with connection.cursor() as query:
+        # Reset only the synthetic successor's staged grant and relationship for repeatable runs.
+        query.execute("""delete from role_permission rp using role r, permission p
+            where rp.tenant_id=%s and r.tenant_id=rp.tenant_id and r.id=rp.role_id
+              and r.code='D1-nonkeeper' and p.id=rp.permission_id and p.code='tool_loan.receive'""", (tenant,))
+        query.execute("""update tool_custodian set valid_to=now() where tenant_id=%s and custody_scope_id=%s
+            and member_id=(select m.id from tenant_member m join account a on a.id=m.account_id
+                where m.tenant_id=%s and a.login_key='d1seed-nonkeeper') and valid_to is null""", (tenant, scope, tenant))
+        query.execute("update member_org set valid_to=now() where tenant_id=%s and member_id=%s and org_id<>%s and valid_to is null", (tenant, member, organization))
+        query.execute("""insert into member_org(tenant_id,member_id,org_id,kind,valid_from)
+            select %s,%s,%s,'PRIMARY',now() where not exists(select 1 from member_org
+                where tenant_id=%s and member_id=%s and org_id=%s and valid_to is null)""", (tenant, member, organization, tenant, member, organization))
+        query.execute("""insert into tool_custodian(tenant_id,custody_scope_id,member_id,valid_from)
+            select %s,%s,m.id,now() from tenant_member m join account a on a.id=m.account_id
+            where m.tenant_id=%s and a.login_key='d1seed-keeper' and not exists(select 1 from tool_custodian k
+                where k.tenant_id=m.tenant_id and k.custody_scope_id=%s and k.member_id=m.id and k.valid_to is null)""", (tenant, scope, tenant, scope))
+prepare_fixture(connection, tenant)
+env = dict(os.environ, D2_SCOPE_ID=scope, D2_ORG_A=organization, D2_TOOL_ID=tool, D2_FOREIGN_LOAN=foreign_loan)
+def browser(phase):
+    output = subprocess.check_output(["node", "tools/d2-read-scope/browser.mjs"], cwd=root,
+        env=dict(env, D2_SCOPE_PHASE=phase), text=True)
+    (evidence / f"{phase}.log").write_text(output)
+    print(output.strip())
+
+def change_receive(phase, role, direction):
+    baseline = audit_baseline(connection, tenant)
+    output = subprocess.check_output(["node", "tools/d2-read-scope/audited-grants.mjs"], cwd=root,
+        env=dict(env, D2_SCOPE_GRANT_PHASE=phase), text=True)
+    (evidence / f"{phase}.log").write_text(output)
+    print(output.strip())
+    event = verify_change(connection, tenant, role, direction, baseline)
+    (evidence / f"{phase}-audit.json").write_text(json.dumps(event, indent=2))
+
+browser("create")
+loan_id = json.loads((evidence / "loan.json").read_text())["id"]
+def business_facts():
+    with connection:
+        with connection.cursor() as query:
+            query.execute("""select row_to_json(l)::text,
+                (select count(*) from tool_loan_revision r where r.tenant_id=l.tenant_id and r.loan_id=l.id),
+                (select count(*) from tool_loan_command_receipt r where r.tenant_id=l.tenant_id and r.loan_id=l.id),
+                (select count(*) from tool_loan_item i where i.tenant_id=l.tenant_id and i.loan_id=l.id and i.issued_at is not null and i.settled_at is null)
+                from tool_loan l where l.tenant_id=%s and l.id=%s""", (tenant, loan_id))
+            return query.fetchone()
+before_read = business_facts()
+with connection:
+    with connection.cursor() as query:
+        query.execute("update member_org set valid_to=now() where tenant_id=%s and member_id=%s and org_id=%s and valid_to is null", (tenant, member, organization))
+        query.execute("insert into member_org(tenant_id,member_id,org_id,kind,valid_from) values(%s,%s,%s,'PRIMARY',now())", (tenant, member, other_organization))
+browser("transferred")
+with connection:
+    with connection.cursor() as query:
+        query.execute("""update tool_custodian set valid_to=now() where tenant_id=%s and custody_scope_id=%s
+            and member_id=(select m.id from tenant_member m join account a on a.id=m.account_id
+                where m.tenant_id=%s and a.login_key='d1seed-keeper') and valid_to is null""", (tenant, scope, tenant))
+browser("revoked")
+with connection:
+    with connection.cursor() as query:
+        query.execute("delete from role_permission where tenant_id=%s and permission_id=(select id from permission where code='tool_loan_department.read')", (tenant,))
+        query.execute("select count(*) from role_permission where tenant_id=%s and permission_id=(select id from permission where code='tool_loan_department.read')", (tenant,))
+        assert query.fetchone()[0] == 0
+browser("permission-revoked")
+assert business_facts() == before_read, "Read and denied commands changed the loan facts"
+
+def workflow_tasks():
+    with connection:
+        with connection.cursor() as query:
+            query.execute("""select task.id_,task.task_def_key_,task.assignee_ from workflow_binding b
+                join act_ru_task task on task.proc_inst_id_=b.process_instance_id
+                where b.tenant_id=%s and b.business_id=%s order by task.id_""", (tenant, loan_id))
+            return query.fetchall()
+
+def handover_facts():
+    with connection:
+        with connection.cursor() as query:
+            query.execute("""select
+                (select json_agg(r order by r.version)::text from tool_loan_revision r where r.tenant_id=%s and r.loan_id=%s),
+                (select json_agg(i order by i.version,i.line_no)::text from tool_loan_item i where i.tenant_id=%s and i.loan_id=%s),
+                (select json_agg(r order by r.request_id,r.tool_id)::text from tool_return_request_item r where r.tenant_id=%s and r.loan_id=%s),
+                (select count(*) from audit_event a where a.tenant_id=%s and a.resource_id=%s and a.result='SUCCESS')""",
+                (tenant, loan_id) * 4)
+            facts = query.fetchone()
+    return business_facts(), facts, workflow_tasks()
+
+tasks = workflow_tasks()
+assert len(tasks) == 1 and tasks[0][1:] == ("returnRequest", member)
+browser("return-transferred")
+tasks = workflow_tasks()
+assert len(tasks) == 1 and tasks[0][1] == "receive" and not tasks[0][2]
+before_denied = handover_facts()
+browser("former-keeper-denied")
+assert handover_facts() == before_denied, "Former custodian command changed business or workflow facts"
+with connection:
+    with connection.cursor() as query:
+        query.execute("""insert into tool_custodian(tenant_id,custody_scope_id,member_id,valid_from)
+            select %s,%s,m.id,now() from tenant_member m join account a on a.id=m.account_id
+            where m.tenant_id=%s and a.login_key='d1seed-keeper'""", (tenant, scope, tenant))
+change_receive("revoke-keeper", "D1-keeper", "revoke")
+browser("former-keeper-permission-denied")
+assert handover_facts() == before_denied, "Revoked permission changed business or workflow facts"
+change_receive("grant-successor", "D1-nonkeeper", "grant")
+browser("successor-without-custody")
+assert handover_facts() == before_denied, "Permission without custody changed business or workflow facts"
+with connection:
+    with connection.cursor() as query:
+        query.execute("""insert into tool_custodian(tenant_id,custody_scope_id,member_id,valid_from)
+            select %s,%s,m.id,now() from tenant_member m join account a on a.id=m.account_id
+            where m.tenant_id=%s and a.login_key='d1seed-nonkeeper' returning member_id""", (tenant, scope, tenant))
+        successor = str(query.fetchone()[0])
+browser("successor-receive")
+with connection:
+    with connection.cursor() as query:
+        query.execute("select state,version,organization_id,custody_scope_id from tool_loan where tenant_id=%s and id=%s", (tenant, loan_id))
+        state, version, final_organization, final_scope = query.fetchone()
+        assert (state, version, str(final_organization), str(final_scope)) == ("SETTLED", 4, organization, scope)
+        query.execute("""select a.login_key from tool_loan_revision r join principal p on p.id=r.actor_id
+            join account a on a.id=p.account_id where r.tenant_id=%s and r.loan_id=%s and r.action='ISSUE'""", (tenant, loan_id))
+        assert query.fetchall() == [("d1seed-keeper",)], "Historical issuer changed"
+        query.execute("""select r.created_by_member_id,i.received_by_member_id,i.outcome,i.received_at is not null
+            from tool_return_request r join tool_return_request_item i
+            on i.tenant_id=r.tenant_id and i.request_id=r.id where r.tenant_id=%s and r.loan_id=%s""", (tenant, loan_id))
+        assert [(str(row[0]), str(row[1]), row[2], row[3]) for row in query.fetchall()] == [(member, successor, "NORMAL", True)]
+        query.execute("select count(*) from tool_loan_item where tenant_id=%s and loan_id=%s and issued_at is not null and settled_at is null", (tenant, loan_id))
+        assert query.fetchone()[0] == 0, "Received tool remained occupied"
+        query.execute("""select r.action,a.login_key from tool_loan_command_receipt r
+            join principal p on p.id=r.actor_id join account a on a.id=p.account_id
+            join audit_event audit on audit.tenant_id=r.tenant_id and audit.id=r.event_id
+                and audit.resource_id=r.loan_id and audit.result='SUCCESS'
+            join tool_loan_revision v on v.tenant_id=r.tenant_id and v.loan_id=r.loan_id
+                and v.command_id=r.command_id and v.version=r.result_version and v.actor_id=r.actor_id
+            where r.tenant_id=%s and r.loan_id=%s order by r.result_version""", (tenant, loan_id))
+        assert query.fetchall() == [("CREATE", "d1seed-reader"), ("ISSUE", "d1seed-keeper"),
+                                     ("RETURN", "d1seed-reader"), ("RECEIVE", "d1seed-nonkeeper")]
+        query.execute("""select count(*),count(h.end_time_) from workflow_binding b
+            join act_hi_procinst h on h.proc_inst_id_=b.process_instance_id
+            where b.tenant_id=%s and b.business_id=%s""", (tenant, loan_id))
+        assert query.fetchone() == (1, 1), "Loan workflow did not finish"
+assert workflow_tasks() == [], "Settled loan retained an active workflow task"
+connection.close()
+summary_path.write_text(json.dumps({"database": DATABASE, "originalDepartmentPreserved": True,
+    "ordinaryBorrowerDeniedScopedRead": True, "explicitReadGrantRequired": True, "currentCustodyRequired": True,
+    "crossTenantHidden": True, "readDoesNotGrantCommands": True, "browserReadOnlyDetail": True, "businessFactsUnchanged": True,
+    "transferredBorrowerReturned": True, "formerCustodianDeniedWithoutEffects": True,
+    "receiveRevokeAndGrantAudited": True,
+    "receivePermissionRequiresCurrentCustody": True, "successorReceivedOriginalScope": True,
+    "historicalIssuerPreserved": True, "receiptAuditAttributedToSuccessor": True,
+    "occupancyReleased": True, "flowableCompleted": True}, indent=2))

@@ -54,7 +54,8 @@ class NavigationControllerTest {
         when(actions.loadActionSnapshot(context, "finding.create", "create")).thenReturn(java.util.Optional.of(
                 new com.mightyoung.softwarefactory.authorization.FindingReadAuthorizationSnapshot(id, id,
                         "HUMAN", "ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE", 2, 3, java.util.Set.of(id))));
-        var service = new NavigationService(resolver, sessions, applications, reads, actions, manager);
+        var service = new NavigationService(resolver, sessions, applications, reads, actions,
+                mock(com.mightyoung.softwarefactory.authorization.EffectivePermissions.class), manager);
         var mvc = MockMvcBuilders.standaloneSetup(new NavigationController(service)).build();
         mvc.perform(get("/api/v1/session/bootstrap")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.applications[0].id").value("safety"))

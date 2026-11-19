@@ -86,6 +86,27 @@ public final class FindingEvidenceUploadService {
             throw new FindingNotVisibleException();
         }
     }
+    /** 当前用户这一轮的可编辑证据集；不存在或不属于当前用户一律按“不可见”处理。 */
+    public CurrentSet currentSet(UUID findingId,int roundNo) {
+        requireIndependentTransaction();
+        var owner=sessions.currentTenant();
+        try {
+            return reads.inTenantReadSnapshot(owner.tenantId(), snapshot -> {
+                var finding=snapshot.finding(findingId).orElseThrow(FindingNotVisibleException::new);
+                access.requireAction(owner, finding);
+                var notice=snapshot.notice(findingId,roundNo).orElseThrow(FindingNotVisibleException::new);
+                var set=snapshot.openSetOf(findingId,roundNo,owner.memberId()).orElseThrow(FindingNotVisibleException::new);
+                access.requireOwnedContext(owner,finding,roundNo,notice,set);
+                var now=snapshot.now();
+                var uploads=snapshot.intentsOf(set.id()).stream().filter(intent ->
+                        owner.accountId().equals(intent.ownerAccountId()) && owner.actorId().equals(intent.ownerActorId())
+                        && notice.id().equals(intent.noticeId())).map(intent -> intent.status(now)).toList();
+                return new CurrentSet(set.id(),set.revision(),uploads);
+            });
+        } catch (org.springframework.security.access.AccessDeniedException denied) {
+            throw new FindingNotVisibleException();
+        }
+    }
     static void requireIndependentTransaction() {
         if (TransactionSynchronizationManager.isActualTransactionActive() || TransactionSynchronizationManager.isSynchronizationActive()
                 || !TransactionSynchronizationManager.getResourceMap().isEmpty()) {

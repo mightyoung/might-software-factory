@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Fresh isolated PG18 source lane only. Seeds identity prerequisites, never source command results. */
 public final class CiPg18SourceFixture implements AutoCloseable {
-    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","19","20","21","22","23","24");
+    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35");
     private static final String RUNTIME = "msf_ci_source_runtime";
     private static final String GRANTS = "/ci-pg18-source/runtime-grants.sql";
     private static final Set<String> REQUIRED_FUNCTIONS=Set.of(
@@ -54,6 +54,13 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private static final Pattern FUNCTION_GRANT=Pattern.compile("grant execute on function (public\\.[a-z0-9_]+\\([a-z0-9_.,\\[\\]]*\\)) to msf_ci_source_runtime;");
     private static final Set<String> PHASES = Set.of("open","target-version","target-marker","empty-schema","migrate","history",
             "framework-schema","source-schema","runtime-role","runtime-rights","seed-identity","seed-foundation","native-graph","closed","unknown");
+    private enum Spec {
+        SOURCE("msf_ci_risk_source","msf_ci_source_runtime"),
+        RECOVERY("msf_ci_risk_recovery","msf_ci_recovery_runtime");
+        final String database,runtime;
+        Spec(String database,String runtime){this.database=database;this.runtime=runtime;}
+    }
+    private final Spec spec;
     private final CiPg18EphemeralTarget target;
     private final DataSource admin;
     private final DataSource runtime;
@@ -72,28 +79,34 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     public record Identity(UUID tenant, UUID account, UUID actor, UUID member, UUID organization) { }
     public record Metrics(int borrows, int commits, int rollbacks, int publicationInserts) { }
 
-    private CiPg18SourceFixture(CiPg18EphemeralTarget target) {
-        if (target == null || !"msf_ci_risk_source".equals(target.databaseName())
-                || !"msf_ci_bootstrap".equals(target.adminUser()) || !RUNTIME.equals(target.runtimeUser()))
+    private CiPg18SourceFixture(CiPg18EphemeralTarget target,Spec spec) {
+        this.spec=spec;
+        if (target == null || !spec.database.equals(target.databaseName())
+                || !"msf_ci_bootstrap".equals(target.adminUser()) || !spec.runtime.equals(target.runtimeUser()))
             throw rejected();
         this.target = target;
         admin = source(true); runtime = source(false);
+        if(spec==Spec.RECOVERY){keys=null;return;}
         byte[] key = new byte[32]; new SecureRandom().nextBytes(key);
         keys = new SessionSensitiveKeys("ci-source-k1", Map.of("ci-source-k1", key));
         java.util.Arrays.fill(key, (byte) 0);
     }
 
     public static CiPg18SourceFixture open(CiPg18EphemeralTarget target) {
-        var fixture = new CiPg18SourceFixture(target);
+        return open(target,Spec.SOURCE);
+    }
+    public static CiPg18SourceFixture openRecovery(CiPg18EphemeralTarget target){return open(target,Spec.RECOVERY);}
+    private static CiPg18SourceFixture open(CiPg18EphemeralTarget target,Spec spec){
+        var fixture = new CiPg18SourceFixture(target,spec);
         String phase = "open";
         try {
             phase = "empty-schema";
             try (Connection connection = fixture.connect(true)) {
-                require(connection, "select not exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname='public')"
+                require(connection, fixture.runtimeSql("select not exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname='public')"
                         + " and not exists(select 1 from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace where n.nspname='public')"
                         + " and not exists(select 1 from pg_catalog.pg_type t join pg_catalog.pg_namespace n on n.oid=t.typnamespace where n.nspname='public')"
                         + " and not exists(select 1 from pg_catalog.pg_namespace where nspname not in ('public','pg_catalog','information_schema','pg_toast'))"
-                        + " and not exists(select 1 from pg_catalog.pg_roles where rolname='msf_ci_source_runtime')");
+                        + " and not exists(select 1 from pg_catalog.pg_roles where rolname='msf_ci_source_runtime')"));
             }
             phase = "migrate";
             fixture.flyway = Flyway.configure().dataSource(fixture.admin).locations("classpath:db/migration")
@@ -109,9 +122,9 @@ public final class CiPg18SourceFixture implements AutoCloseable {
             try (Connection connection = fixture.connect(true)) {
                 connection.setAutoCommit(false);
                 try (var statement = connection.createStatement()) {
-                    statement.execute("create role msf_ci_source_runtime login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password '"
-                            + target.runtimePassword() + "'");
-                    statement.execute(resource());
+                    statement.execute(fixture.runtimeSql("create role msf_ci_source_runtime login nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls password '"
+                            + target.runtimePassword() + "'"));
+                    statement.execute(fixture.canonicalResource());
                 }
                 connection.commit();
             }
@@ -119,19 +132,20 @@ public final class CiPg18SourceFixture implements AutoCloseable {
             phase = "seed-identity"; fixture.seedIdentityAndSession();
             phase = "seed-foundation"; fixture.seedOwnedFoundationPrerequisites();
             phase = "source-schema"; fixture.verifySourceSchema();
-            fixture.writeEvidence();
+            if(spec==Spec.SOURCE)fixture.writeEvidence();
             return fixture;
         } catch (Throwable failure) {
-            writeFailure(phase, failure);
+            writeFailure(phase, failure,spec);
             fixture.close();
+            if(spec==Spec.RECOVERY)throw new RecoveryBootstrapFailure();
             throw rejected();
         }
     }
 
     public DataSource runtimeSource() { ensureOpen(); return runtime; }
-    public SessionSensitiveKeys keys() { ensureOpen(); return keys; }
+    public SessionSensitiveKeys keys() { ensureOpen(); if(keys==null)throw rejected();return keys; }
     public Identity identity() { ensureOpen(); return identity; }
-    public CiPg18SourceSession session() { ensureOpen(); return session; }
+    public CiPg18SourceSession session() { ensureOpen();if(session==null)throw rejected(); return session; }
     public UUID hazard() { ensureOpen(); return hazard; }
     public Metrics metrics() { return new Metrics(borrows.get(),commits.get(),rollbacks.get(),publicationInserts.get()); }
     void beginCase(String name) { diagnostics.begin(name,metrics()); }
@@ -276,7 +290,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     private void writeEvidence() throws Exception {
         var migrations = new ArrayList<Map<String,Object>>();
         for (var migration : flyway.info().applied()) {
-            if (!migration.getScript().matches("V[0-9]+__[A-Za-z0-9_]+\\.sql")) throw rejected();
+            if (!migration.getScript().matches("V[0-9]+(?:_[0-9]+)*__[A-Za-z0-9_]+\\.sql")) throw rejected();
             migrations.add(Map.of("version",migration.getVersion().getVersion(),"script",migration.getScript(),"checksum",migration.getChecksum()));
         }
         var value=Map.of("schemaVersion",1,"postgresMajor",18,"database",target.databaseName(),
@@ -284,14 +298,24 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                 "sourceSchemaVerified",true,"runtimeRightsVerified",true);
         Files.writeString(Path.of("target","ci-pg18-source-safe-evidence.json"),tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(value),StandardCharsets.UTF_8);
     }
-    private static void writeFailure(String phase,Throwable failure) {
+    static final class RecoveryBootstrapFailure extends IllegalStateException {
+        RecoveryBootstrapFailure(){super("CI recovery bootstrap rejected");}
+    }
+    private static void writeFailure(String phase,Throwable failure,Spec spec) {
         String state=null;
         for(int index=0;index<8&&failure!=null;index++,failure=failure.getCause()) {
             if(failure instanceof SQLException sql&&sql.getSQLState()!=null&&sql.getSQLState().matches("[0-9A-Z]{5}")){state=sql.getSQLState();break;}
         }
         String safe=PHASES.contains(phase)?phase:"unknown";
+        if(spec==Spec.RECOVERY)safe=switch(safe){
+            case "runtime-role","runtime-rights","source-schema"->"canonical-rights";
+            case "seed-identity","seed-foundation"->"open";
+            case "native-graph"->"unknown";
+            default->safe;
+        };
+        String file=spec==Spec.RECOVERY?"ci-pg18-recovery-safe-failure.json":"ci-pg18-source-safe-failure.json";
         try {
-            Files.writeString(Path.of("target","ci-pg18-source-safe-failure.json"),"{\"schemaVersion\":1,\"database\":\"msf_ci_risk_source\",\"phase\":\""+safe+"\",\"migrationVersion\":null,\"sqlState\":"+(state==null?"null":"\""+state+"\"")+"}",StandardCharsets.UTF_8);
+            Files.writeString(Path.of("target",file),"{\"schemaVersion\":1,\"database\":\""+spec.database+"\",\"phase\":\""+safe+"\",\"migrationVersion\":null,\"sqlState\":"+(state==null?"null":"\""+state+"\"")+"}",StandardCharsets.UTF_8);
         } catch(Exception ignored) { }
     }
 
@@ -299,12 +323,12 @@ public final class CiPg18SourceFixture implements AutoCloseable {
     public void verifyRights() throws Exception {
         Map<String, Map<String, Set<String>>> expected = expectedRights();
         try (Connection connection = connect(true)) {
-            require(connection, "select not rolsuper and not rolcreatedb and not rolcreaterole and not rolinherit and not rolreplication and not rolbypassrls and rolcanlogin"
+            requireRuntime(connection, "select not rolsuper and not rolcreatedb and not rolcreaterole and not rolinherit and not rolreplication and not rolbypassrls and rolcanlogin"
                     + " and not exists(select 1 from pg_auth_members m where m.member=r.oid)"
                     + " and not exists(select 1 from pg_class c where c.relowner=r.oid)"
                     + " and not exists(select 1 from pg_database d where d.datdba=r.oid)"
                     + " from pg_roles r where rolname='msf_ci_source_runtime'");
-            require(connection, "select has_database_privilege('msf_ci_source_runtime',current_database(),'CONNECT')"
+            requireRuntime(connection, "select has_database_privilege('msf_ci_source_runtime',current_database(),'CONNECT')"
                     + " and not has_database_privilege('msf_ci_source_runtime',current_database(),'CREATE,TEMP')"
                     + " and has_schema_privilege('msf_ci_source_runtime','public','USAGE')"
                     + " and not has_schema_privilege('msf_ci_source_runtime','public','CREATE')");
@@ -314,13 +338,13 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                 while (rows.next()) {
                     long oid = rows.getLong(1); String relation = rows.getString(3);
                     observed.add(relation);
-                    try (var query = connection.prepareStatement(rows.getString(2).equals("S")
+                    try (var query = connection.prepareStatement(runtimeSql(rows.getString(2).equals("S")
                             ? "select not has_sequence_privilege('msf_ci_source_runtime',?::oid,'USAGE,SELECT,UPDATE')"
-                            : "select not has_table_privilege('msf_ci_source_runtime',?::oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')")) {
+                            : "select not has_table_privilege('msf_ci_source_runtime',?::oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"))) {
                         query.setLong(1, oid); try (var result = query.executeQuery()) { require(result); }
                     }
                     if (rows.getString(2).equals("S")) continue;
-                    try (var query = connection.prepareStatement("select a.attname,has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'SELECT'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'INSERT'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'UPDATE'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'REFERENCES') from pg_attribute a where a.attrelid=?::oid and a.attnum>0 and not a.attisdropped")) {
+                    try (var query = connection.prepareStatement(runtimeSql("select a.attname,has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'SELECT'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'INSERT'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'UPDATE'),has_column_privilege('msf_ci_source_runtime',a.attrelid,a.attnum,'REFERENCES') from pg_attribute a where a.attrelid=?::oid and a.attnum>0 and not a.attisdropped"))) {
                         query.setLong(1, oid);
                         try (var columns = query.executeQuery()) {
                             while (columns.next()) {
@@ -339,8 +363,8 @@ public final class CiPg18SourceFixture implements AutoCloseable {
         }
     }
 
-    private static void verifyFunctionRights(Connection connection) throws Exception {
-        Set<String> signatures=declaredFunctionGrants(resource());
+    private void verifyFunctionRights(Connection connection) throws Exception {
+        Set<String> signatures=declaredFunctionGrants(canonicalResource().replace(spec.runtime,RUNTIME));
         var expected=new java.util.HashSet<Long>();
         for(String signature:signatures)try(var statement=connection.prepareStatement("select pg_catalog.to_regprocedure(?)::oid")) {
             statement.setString(1,signature);
@@ -349,7 +373,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
             }
         }
         var found=new java.util.HashSet<Long>();
-        try(var statement=connection.createStatement();var rows=statement.executeQuery("""
+        try(var statement=connection.createStatement();var rows=statement.executeQuery(runtimeSql("""
                 select p.oid,p.prosecdef,p.prorettype='pg_catalog.trigger'::regtype,
                        p.proowner=(select oid from pg_roles where rolname='msf_ci_bootstrap'),
                        p.proowner=(select oid from pg_roles where rolname='msf_ci_source_runtime'),
@@ -361,7 +385,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                        exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
                               where a.grantee=(select oid from pg_roles where rolname='msf_ci_source_runtime') and a.is_grantable)
                   from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
-                """)) {
+                """))) {
             while(rows.next()) {
                 boolean allowed=expected.contains(rows.getLong(1));
                 if(rows.getBoolean(5)||rows.getBoolean(9)||rows.getBoolean(8)!=allowed)throw rejected();
@@ -427,16 +451,16 @@ public final class CiPg18SourceFixture implements AutoCloseable {
                 String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest("isolated-ci-source-enforcement-v1".getBytes(StandardCharsets.UTF_8)));
                 execute(connection, "insert into public.identity_sensitive_event(id,operation,result,provenance,database_role,trace_id,policy_version,occurred_at) values(?,'ACTIVATE_SESSION_AUTHORITY','SUCCESS','CONTROLLED_ACTIVATION',current_user,?,'session-sensitive-v1',?)", event, UUID.randomUUID(), at);
                 execute(connection, "update public.session_authority_activation set state='ENFORCING',version=1,activated_at=?,activated_by_database_role=current_user,activation_event_id=?,activation_evidence_sha256=? where singleton and state='OFF' and version=0", at, event, digest);
-                session = CiPg18SourceSession.create(connection, identity.tenant(), identity.account(), identity.actor(), identity.member(), keys);
+                if(spec==Spec.SOURCE)session = CiPg18SourceSession.create(connection, identity.tenant(), identity.account(), identity.actor(), identity.member(), keys);
             } catch (Exception failure) { throw rejected(); }
             finally { DataSourceUtils.releaseConnection(connection, admin); }
         });
     }
 
-    private static Map<String, Map<String, Set<String>>> expectedRights() throws Exception {
+    private Map<String, Map<String, Set<String>>> expectedRights() throws Exception {
         var pattern = Pattern.compile("grant (select|insert|update)\\(([a-z0-9_,]+)\\) on public\\.\"([a-z_]+)\" to msf_ci_source_runtime;");
         Map<String, Map<String, Set<String>>> expected = new HashMap<>();
-        String text=resource();declaredFunctionGrants(text);
+        String text=canonicalResource().replace(spec.runtime,RUNTIME);declaredFunctionGrants(text);
         for (String line : text.lines().toList()) {
             var match = pattern.matcher(line);
             if (match.matches()) expected.computeIfAbsent(match.group(3), ignored -> new HashMap<>())
@@ -444,7 +468,7 @@ public final class CiPg18SourceFixture implements AutoCloseable {
             else if(FUNCTION_GRANT.matcher(line).matches()) { /* Independently checked against the fixed signature closure above. */ }
             else if (line.startsWith("grant ") && !line.startsWith("grant connect ") && !line.startsWith("grant usage ")) throw rejected();
         }
-        if (expected.size() != 30) throw rejected();
+        if (expected.size() != (spec==Spec.SOURCE?30:31)) throw rejected();
         return expected;
     }
     static Set<String> declaredFunctionGrants(String text) {
@@ -456,6 +480,17 @@ public final class CiPg18SourceFixture implements AutoCloseable {
         }
         if(!found.equals(REQUIRED_FUNCTIONS))throw rejected();
         return Set.copyOf(found);
+    }
+    private String runtimeSql(String sql){return sql.replace("msf_ci_source_runtime",spec.runtime);}
+    private void requireRuntime(Connection connection,String sql)throws SQLException{require(connection,runtimeSql(sql));}
+    private String canonicalResource()throws Exception{
+        String sql=resource().replace("msf_ci_risk_source",spec.database).replace("msf_ci_source_runtime",spec.runtime);
+        if(spec==Spec.RECOVERY){
+            try(var in=CiPg18SourceFixture.class.getResourceAsStream("/ci-pg18-recovery/canonical-extra-grants.sql")){
+                if(in==null)throw rejected();sql+="\n"+new String(in.readAllBytes(),StandardCharsets.UTF_8);
+            }
+        }
+        return sql;
     }
     private static String resource() throws Exception {
         try (var input = CiPg18SourceFixture.class.getResourceAsStream(GRANTS)) {

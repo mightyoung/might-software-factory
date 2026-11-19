@@ -61,3 +61,9 @@ flowable:
   database-schema-update: false
   async-executor-activate: false
   async-history-executor-activate: false
+  # 业务身份、权限和待办都在应用自己的表里；不使用 Flowable 的 IDM 与事件注册表，
+  # 它们各自有独立的 ACT_ID_* / FLW_EVENT_* 表和版本检查，库里没有这些表时会导致启动失败。
+  idm:
+    enabled: false
+  eventregistry:
+    enabled: false

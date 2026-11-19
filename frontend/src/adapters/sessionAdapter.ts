@@ -3,6 +3,7 @@ import {
   type AppMenu,
   type ApplicationEntry,
   type ApplicationId,
+  type DemoApplicationId,
   type SessionBootstrap,
 } from "../domain/session";
 
@@ -36,16 +37,16 @@ export interface SessionAdapter {
 
 const TENANT = { id: "demo-tenant", name: "演示租户（合成）" } as const;
 
-const ALL_APPLICATIONS: Record<ApplicationId, ApplicationEntry> = {
+const ALL_APPLICATIONS: Record<DemoApplicationId, ApplicationEntry> = {
   safety: { id: "safety", name: "生产安全", entryPath: "safety/findings" },
   equipment: { id: "equipment", name: "设备管理", entryPath: "equipment/overview" },
-  platform: { id: "platform", name: "综合管理", entryPath: "platform/overview" },
+  platform: { id: "platform", name: "系统设置", entryPath: "platform/permissions" },
 };
 
 interface DemoAccount {
   displayName: string;
   description: string;
-  applications: readonly ApplicationId[];
+  applications: readonly DemoApplicationId[];
   permissions: readonly string[];
 }
 
@@ -83,12 +84,13 @@ export const DEMO_ACCOUNTS: Readonly<Record<string, DemoAccount>> = {
       "safety.risk.read",
       "safety.inspection.read",
       "equipment.overview.read",
-      "platform.overview.read",
+      "platform.permission.read",
+      "platform.permission.manage",
     ],
   },
 };
 
-export const MENUS: Record<ApplicationId, AppMenu> = {
+export const MENUS: Record<DemoApplicationId, AppMenu> = {
   safety: {
     applicationId: "safety",
     title: "安全管理",
@@ -114,8 +116,8 @@ export const MENUS: Record<ApplicationId, AppMenu> = {
   },
   platform: {
     applicationId: "platform",
-    title: "综合管理",
-    nodes: [{ id: "overview", label: "综合概览", path: "platform/overview", permission: "platform.overview.read" }],
+    title: "系统设置",
+    nodes: [{ id: "permissions", label: "权限配置", path: "platform/permissions", permission: "platform.permission.read" }],
   },
 };
 
@@ -167,7 +169,8 @@ export function createSyntheticSessionAdapter(options: SyntheticSessionOptions =
       throwIfAborted(signal);
       if (!current) throw new SessionError("unauthenticated");
       if (!current.applications.some((app) => app.id === applicationId)) throw new SessionError("forbidden");
-      return MENUS[applicationId];
+      if (!Object.hasOwn(MENUS, applicationId)) throw new SessionError("forbidden");
+      return MENUS[applicationId as DemoApplicationId];
     },
   };
 }

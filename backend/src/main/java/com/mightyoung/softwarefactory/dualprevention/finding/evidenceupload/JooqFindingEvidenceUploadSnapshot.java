@@ -120,6 +120,23 @@ class JooqFindingEvidenceUploadSnapshot implements FindingEvidenceUploadReadRepo
         return dsl.fetchOptional("select * from public.finding_evidence_upload_intent where tenant_id=cast(? as uuid) and id=cast(? as uuid)",
                 tenantId,id).map(JooqFindingEvidenceUploadSnapshot::toIntent);
     }
+    @Override public Optional<EvidenceSet> openSetOf(UUID findingId,int roundNo,UUID ownerMemberId) {
+        requireOpen();
+        return dsl.fetchOptional("""
+                select id, finding_id, round_no, owner_member_id, evidence_revision, submission_sealed_at is not null as sealed
+                  from public.evidence_set
+                 where tenant_id=cast(? as uuid) and finding_id=cast(? as uuid) and round_no=? and owner_member_id=cast(? as uuid)
+                   and submission_sealed_at is null
+                 order by created_at desc, id desc limit 1
+                """,tenantId,findingId,roundNo,ownerMemberId).map(r -> new EvidenceSet(r.get("id",UUID.class),
+                r.get("finding_id",UUID.class),r.get("round_no",Integer.class),r.get("owner_member_id",UUID.class),
+                r.get("evidence_revision",Long.class),r.get("sealed",Boolean.class)));
+    }
+    @Override public java.util.List<Intent> intentsOf(UUID evidenceSetId) {
+        requireOpen();
+        return dsl.fetch("select * from public.finding_evidence_upload_intent where tenant_id=cast(? as uuid) and evidence_set_id=cast(? as uuid) order by created_at, id limit 100",
+                tenantId,evidenceSetId).map(JooqFindingEvidenceUploadSnapshot::toIntent);
+    }
     @Override public OffsetDateTime now() {
         requireOpen(); return dsl.fetchOne("select current_timestamp as now").get("now",OffsetDateTime.class);
     }

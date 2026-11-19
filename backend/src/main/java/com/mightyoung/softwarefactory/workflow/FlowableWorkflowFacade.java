@@ -25,11 +25,12 @@ import java.sql.SQLException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Tenant-checking adapter around the embedded Flowable engine and the shared PostgreSQL transaction. */
 @Component
-public final class FlowableWorkflowFacade implements WorkflowFacade {
+public final class FlowableWorkflowFacade implements WorkflowFacade, WorkflowTaskClaim, WorkflowExceptionalEnd {
 
     private final org.flowable.engine.HistoryService historyService;
     private final RuntimeService runtimeService;
@@ -40,12 +41,17 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
     private final DataSource dataSource;
     private final ManagementService managementService;
     private final AuthorizationWriteGuard authorizationGuard;
+    private final Set<Pool> taskPools;
+    private final Set<WorkflowExceptionalEnd.Route> exceptionalEnds;
 
     public FlowableWorkflowFacade(RuntimeService runtimeService, TaskService taskService,
                                   RepositoryService repositoryService, DSLContext dsl,
                                   WorkflowBindingTransactionLock bindingLock, DataSource dataSource,
                                   ManagementService managementService, AuthorizationWriteGuard authorizationGuard,
-                                  org.flowable.engine.HistoryService historyService) {
+                                  org.flowable.engine.HistoryService historyService, Set<Pool> taskPools,
+                                  Set<WorkflowExceptionalEnd.Route> exceptionalEnds) {
+        this.exceptionalEnds=Set.copyOf(exceptionalEnds);
+        this.taskPools = Set.copyOf(taskPools);
         this.historyService = historyService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
@@ -104,7 +110,7 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
         try {
             managementService.executeCommand(context -> {
                 requireEngineConnection(context, connection);
-                PinnedFindingReviewDefinitionResolver.verify(repositoryService, definition);
+                PackagedWorkflowDefinitions.verify(repositoryService, definition);
                 ProcessInstance instance = runtimeService.createProcessInstanceBuilder()
                         .processDefinitionId(definition.definitionId()).tenantId(tenantId.toString())
                         .businessKey(businessType + ":" + businessId).variables(variables).start();
@@ -162,6 +168,62 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
                     authority.invalidated = true;
                     return null;
                 });
+    }
+
+    @Override
+    public void claimAndComplete(WorkflowTaskReadSnapshot expected, UUID memberId, Map<String, Object> variables) {
+        Objects.requireNonNull(memberId, "Claiming member required");
+        Connection connection = commandConnection(expected.tenantId());
+        bindingLock.acquire(expected.tenantId(), expected.businessType(), expected.businessId());
+        withCurrentTask(expected.tenantId(), expected.businessType(), expected.businessId(),
+                expected.taskDefinitionKey(), connection, (actual, task) -> {
+                    // Unassigned individual tasks (for example a missing finding assignee)
+                    // are unresolved, and must never become claimable through this operation.
+                    var pool = new Pool(actual.businessType(), actual.processDefinitionKey(), actual.taskDefinitionKey());
+                    if (!taskPools.contains(pool)
+                            || !expected.equals(actual) || !actual.active() || !blank(actual.assignee())) {
+                        throw new WorkflowTaskStateConflictException();
+                    }
+                    taskService.claim(actual.taskId(), memberId.toString());
+                    taskService.complete(actual.taskId(), variables);
+                    return null;
+                });
+    }
+
+    @Override
+    public void end(WorkflowTaskReadSnapshot expected,String endNode) {
+        Objects.requireNonNull(expected,"Expected task required");
+        var route=new WorkflowExceptionalEnd.Route(expected.businessType(),expected.processDefinitionKey(),expected.taskDefinitionKey(),endNode);
+        if(!exceptionalEnds.contains(route)) throw new WorkflowTaskStateConflictException();
+        Connection connection=commandConnection(expected.tenantId());
+        bindingLock.acquire(expected.tenantId(),expected.businessType(),expected.businessId());
+        String processId=withCurrentTask(expected.tenantId(),expected.businessType(),expected.businessId(),expected.taskDefinitionKey(),connection,(actual,task)->{
+            if(!actual.equals(expected) || !actual.active()) throw new WorkflowTaskStateConflictException();
+            String resource=PackagedWorkflowDefinitions.RESOURCES.get(actual.processDefinitionKey());
+            if(resource==null) throw unavailable("Unregistered packaged exception process");
+            try(var bytes=FlowableWorkflowFacade.class.getClassLoader().getResourceAsStream(resource)) {
+                if(bytes==null) throw unavailable("Missing packaged process");
+                PackagedWorkflowDefinitions.verify(repositoryService,new WorkflowDefinitionPin(actual.tenantId(),actual.definitionId(),actual.processDefinitionKey(),PackagedWorkflowDefinitions.sha256(bytes.readAllBytes())));
+            } catch(java.io.IOException failure) {throw new WorkflowEngineUnavailableException(failure);}
+            var model=repositoryService.getBpmnModel(actual.definitionId());
+            if(model==null || model.getMainProcess()==null
+                    || !(model.getMainProcess().getFlowElement(actual.taskDefinitionKey(),true) instanceof org.flowable.bpmn.model.UserTask)
+                    || !(model.getMainProcess().getFlowElement(endNode,true) instanceof org.flowable.bpmn.model.EndEvent))
+                throw new WorkflowTaskStateConflictException();
+            runtimeService.createChangeActivityStateBuilder().processInstanceId(actual.processInstanceId())
+                    .moveActivityIdTo(actual.taskDefinitionKey(),endNode).changeState();
+            return actual.processInstanceId();
+        });
+        // Flowable drains its state-change agenda when the outer command returns.
+        // Check the terminal result in a fresh command on the same managed SQL transaction.
+        try {
+            managementService.executeCommand(context -> {
+                requireEngineConnection(context,connection);
+                if(runtimeService.createProcessInstanceQuery().processInstanceId(processId).singleResult()!=null)
+                    throw unavailable("Exceptional terminal transition did not end process");
+                return null;
+            });
+        } catch(FlowableException failure) {throw new WorkflowEngineUnavailableException(failure);}
     }
 
     @Override

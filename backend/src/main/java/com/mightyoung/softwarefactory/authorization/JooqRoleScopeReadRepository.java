@@ -96,8 +96,13 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
             Set<UUID> positionIds,
             Set<UUID> groupIds,
             String permissionCode) {
+        // Permission codes are "<resource_type>.<action>"; this keeps finding.read unchanged and lets any
+        // catalogued permission resolve its scopes through the same persisted grants.
+        int dot = permissionCode.indexOf('.');
+        String resourceType = dot > 0 ? permissionCode.substring(0, dot) : "finding";
+        String action = dot > 0 ? permissionCode.substring(dot + 1) : "read";
         return findActiveActionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
-                "finding", "read", permissionCode);
+                resourceType, action, permissionCode);
     }
 
     @Override

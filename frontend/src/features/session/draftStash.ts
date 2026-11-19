@@ -11,6 +11,14 @@ export interface StashedDraft {
 }
 
 const stash = new Map<string, StashedDraft>();
+export interface EntityPendingRequest { key: string; fingerprint: string; definitionVersion: string; values: Record<string, string | number | null>; expectedVersion?: number }
+export interface EntityDraftStash { request?: EntityPendingRequest; values: Record<string,string>; definitionVersion: string; key: string | null; fingerprint: string | null; locked: boolean; expectedVersion?: number }
+const entityDrafts = new Map<string, Map<string, EntityDraftStash>>();
+export function peekEntityDraft(owner: string, route: string) { return entityDrafts.get(owner)?.get(route); }
+export function stashEntityDraft(owner: string, route: string, draft: EntityDraftStash) {
+  const drafts = entityDrafts.get(owner) ?? new Map<string, EntityDraftStash>(); drafts.set(route,draft); entityDrafts.set(owner,drafts);
+}
+export function discardEntityDraft(owner: string, route: string) { entityDrafts.get(owner)?.delete(route); }
 let expiring = false;
 
 export const draftOwnerKey = (tenantId: string, actorId: string): string => `${tenantId}/${actorId}`;
@@ -36,6 +44,7 @@ export function discardDraft(owner: string): void {
 /** 主动退出 / 改密：全部丢弃，并结束“被动失效”状态。 */
 export function clearAllDrafts(): void {
   stash.clear();
+  entityDrafts.clear();
   expiring = false;
 }
 
@@ -43,4 +52,5 @@ export function clearAllDrafts(): void {
 export function onSignedIn(owner: string): void {
   expiring = false;
   for (const key of [...stash.keys()]) if (key !== owner) stash.delete(key);
+  for (const key of [...entityDrafts.keys()]) if (key !== owner) entityDrafts.delete(key);
 }

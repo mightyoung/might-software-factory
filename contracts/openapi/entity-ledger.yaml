@@ -1,0 +1,785 @@
+openapi: 3.1.0
+info:
+  title: Application-qualified standard entity ledger
+  version: 1.0.0
+  description: Code-registered definitions and standard read/create/update. Definition versions, optimistic record versions
+    and idempotency keys are distinct. No SQL identifiers or caller authority are accepted from clients.
+paths:
+  /api/v1/apps/{appKey}/entities/{entityKey}/definition:
+    parameters: &id001
+    - &id009
+      name: appKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    - &id010
+      name: entityKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    get:
+      operationId: readLedgerDefinition
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefinitionResponse'
+        '400': &id002
+          description: Invalid input or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401': &id003
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403': &id004
+          description: Action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404': &id005
+          description: Resource not visible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409': &id006
+          description: Definition/version/idempotency conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422': &id007
+          description: Business reference or state rule rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503': &id008
+          description: Required authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: use
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Use'
+  /api/v1/apps/{appKey}/entities/{entityKey}/query:
+    parameters: *id001
+    post:
+      operationId: queryLedgerRecords
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '400': *id002
+        '401': *id003
+        '403': *id004
+        '404': *id005
+        '409': *id006
+        '422': *id007
+        '503': *id008
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+  /api/v1/apps/{appKey}/entities/{entityKey}/records:
+    parameters: *id001
+    post:
+      operationId: createLedgerRecord
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        '400': *id002
+        '401': *id003
+        '403': *id004
+        '404': *id005
+        '409': *id006
+        '422': *id007
+        '503': *id008
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequest'
+      parameters:
+      - &id012
+        name: Idempotency-Key
+        in: header
+        required: true
+        schema: &id011
+          type: string
+          format: uuid
+  /api/v1/apps/{appKey}/entities/{entityKey}/records/{id}:
+    parameters:
+    - *id009
+    - *id010
+    - name: id
+      in: path
+      required: true
+      schema: *id011
+    get:
+      operationId: readLedgerRecord
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordResponse'
+        '400': *id002
+        '401': *id003
+        '403': *id004
+        '404': *id005
+        '409': *id006
+        '422': *id007
+        '503': *id008
+  /api/v1/apps/{appKey}/entities/{entityKey}/records/{id}/update:
+    parameters:
+    - *id009
+    - *id010
+    - name: id
+      in: path
+      required: true
+      schema: *id011
+    post:
+      operationId: updateLedgerRecord
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        '400': *id002
+        '401': *id003
+        '403': *id004
+        '404': *id005
+        '409': *id006
+        '422': *id007
+        '503': *id008
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRequest'
+      parameters:
+      - *id012
+  /api/v1/apps/{appKey}/entities/{entityKey}/references/{referenceKey}/query:
+    parameters:
+    - *id009
+    - *id010
+    - name: referenceKey
+      in: path
+      required: true
+      schema: &id013
+        type: string
+    post:
+      operationId: queryLedgerReference
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceResponse'
+        '400': *id002
+        '401': *id003
+        '403': *id004
+        '404': *id005
+        '409': *id006
+        '422': *id007
+        '503': *id008
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferenceRequest'
+components:
+  schemas:
+    Use:
+      type: string
+      enum:
+      - READ
+      - CREATE
+      - EDIT
+    FieldType:
+      type: string
+      enum:
+      - TEXT
+      - MULTILINE_TEXT
+      - UUID
+      - INTEGER
+      - DATE_TIME
+      - ENUM
+      - REFERENCE
+    Meta:
+      type: object
+      additionalProperties: false
+      required:
+      - traceId
+      properties:
+        traceId: *id013
+    Field:
+      type: object
+      additionalProperties: false
+      required:
+      - label
+      - type
+      - nullable
+      - valueLabels
+      properties:
+        label: *id013
+        type:
+          $ref: '#/components/schemas/FieldType'
+        nullable:
+          type: boolean
+        valueLabels:
+          type: object
+          additionalProperties: *id013
+    InputField:
+      type: object
+      additionalProperties: false
+      required:
+      - label
+      - type
+      - required
+      - maxLength
+      - allowedValues
+      - referenceKey
+      - uses
+      properties:
+        label: *id013
+        type:
+          $ref: '#/components/schemas/FieldType'
+        required:
+          type: boolean
+        maxLength:
+          type: integer
+          minimum: 0
+        allowedValues:
+          type: array
+          items: *id013
+        referenceKey:
+          anyOf:
+          - *id013
+          - type: 'null'
+        uses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Use'
+    Layout:
+      type: object
+      additionalProperties: false
+      required:
+      - list
+      - detail
+      - create
+      - edit
+      - query
+      properties:
+        list:
+          type: array
+          items: *id013
+        detail:
+          type: array
+          items: *id013
+        create:
+          type: array
+          items: *id013
+        edit:
+          type: array
+          items: *id013
+        query:
+          type: array
+          items: *id013
+    Action:
+      type: object
+      additionalProperties: false
+      required:
+      - label
+      - permission
+      properties:
+        label: *id013
+        permission: *id013
+    Actions:
+      type: object
+      additionalProperties: false
+      required:
+      - read
+      - create
+      - update
+      properties:
+        read:
+          $ref: '#/components/schemas/Action'
+        create:
+          $ref: '#/components/schemas/Action'
+        update:
+          $ref: '#/components/schemas/Action'
+    Reference:
+      type: object
+      additionalProperties: false
+      required:
+      - label
+      properties:
+        label: *id013
+    QueryField:
+      type: object
+      additionalProperties: false
+      required:
+      - type
+      - nullable
+      - selectable
+      - sortable
+      - operators
+      - maxLength
+      - enumValues
+      properties:
+        type:
+          type: string
+          enum:
+          - TEXT
+          - NUMBER
+          - MONEY
+          - DATE
+          - DATETIME
+          - BOOLEAN
+          - ENUM
+          - UUID
+          - USER
+          - ORGANIZATION
+          - REFERENCE
+          - IMAGE
+          - ATTACHMENT
+        nullable:
+          type: boolean
+        selectable:
+          type: boolean
+        sortable:
+          type: boolean
+        operators:
+          type: array
+          items: *id013
+        maxLength:
+          type: integer
+        enumValues:
+          type: array
+          items: *id013
+    QuerySchema:
+      type: object
+      additionalProperties: false
+      required:
+      - key
+      - schemaVersion
+      - idField
+      - defaultFields
+      - fields
+      properties:
+        key: *id013
+        schemaVersion: *id013
+        idField:
+          type: string
+          const: id
+          description: Reserved technical ID. Register UUID selectable/sortable query field id; core maps root.id and returns
+            only RecordData.id, never values.id.
+        defaultFields:
+          type: array
+          items: *id013
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/QueryField'
+    Definition:
+      type: object
+      additionalProperties: false
+      required:
+      - appKey
+      - entityKey
+      - definitionVersion
+      - title
+      - fields
+      - inputFields
+      - querySchema
+      - layout
+      - actions
+      - references
+      properties:
+        appKey: *id013
+        entityKey: *id013
+        definitionVersion: *id013
+        title: *id013
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Field'
+        inputFields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/InputField'
+        querySchema:
+          $ref: '#/components/schemas/QuerySchema'
+        layout:
+          $ref: '#/components/schemas/Layout'
+        actions:
+          $ref: '#/components/schemas/Actions'
+        references:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Reference'
+    DefinitionData:
+      type: object
+      additionalProperties: false
+      required:
+      - definition
+      - use
+      - effectiveActions
+      properties:
+        definition:
+          $ref: '#/components/schemas/Definition'
+        use:
+          $ref: '#/components/schemas/Use'
+        effectiveActions:
+          type: array
+          items: *id013
+    Values:
+      type: object
+      additionalProperties: true
+      description: Only registered input/record field keys; reference UUID strings, safe integers and UTC ISO timestamps.
+        Protected keys are rejected.
+    CreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - values
+      properties:
+        definitionVersion: *id013
+        values:
+          $ref: '#/components/schemas/Values'
+    UpdateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      - values
+      properties:
+        definitionVersion: *id013
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        values:
+          $ref: '#/components/schemas/Values'
+    FilterCondition:
+      type: object
+      additionalProperties: false
+      required:
+      - field
+      - operator
+      properties:
+        field: *id013
+        operator:
+          type: string
+          enum:
+          - EQ
+          - GT
+          - GTE
+          - LT
+          - LTE
+          - BETWEEN
+          - IN
+          - CONTAINS
+          - IS_EMPTY
+          - IS_NOT_EMPTY
+          - IS_NULL
+          - IS_NOT_NULL
+          - IN_SUBTREE
+        value: {}
+    Query:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        filterAST:
+          type: object
+          additionalProperties: false
+          required:
+          - operator
+          - conditions
+          properties:
+            operator:
+              type: string
+              enum:
+              - AND
+            conditions:
+              type: array
+              items:
+                $ref: '#/components/schemas/FilterCondition'
+        sort:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - field
+            - direction
+            properties:
+              field: *id013
+              direction:
+                type: string
+                enum:
+                - ASC
+                - DESC
+        page:
+          type: object
+          additionalProperties: false
+          required:
+          - number
+          properties:
+            number:
+              type: integer
+              minimum: 1
+        size:
+          type: integer
+          enum:
+          - 20
+          - 50
+          - 100
+          default: 20
+        fields:
+          type: array
+          items: *id013
+    QueryRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - query
+      properties:
+        definitionVersion: *id013
+        query:
+          $ref: '#/components/schemas/Query'
+    RecordData:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - version
+      - definitionVersion
+      - values
+      - effectiveActions
+      properties:
+        id: *id011
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        definitionVersion: *id013
+        values:
+          $ref: '#/components/schemas/Values'
+        effectiveActions:
+          type: array
+          items: *id013
+    QueryData:
+      type: object
+      additionalProperties: false
+      required:
+      - records
+      - page
+      - size
+      - total
+      - hasMore
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecordData'
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          enum:
+          - 20
+          - 50
+          - 100
+          default: 20
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+        hasMore:
+          type: boolean
+    ReferenceRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - use
+      properties:
+        definitionVersion: *id013
+        use:
+          $ref: '#/components/schemas/Use'
+        search:
+          type: string
+          maxLength: 200
+        context:
+          $ref: '#/components/schemas/Values'
+        size:
+          type: integer
+          minimum: 1
+          maximum: 50
+    ReferenceOption:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - label
+      properties:
+        id: *id011
+        label: *id013
+    ReferenceData:
+      type: object
+      additionalProperties: false
+      required:
+      - options
+      - hasMore
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferenceOption'
+        hasMore:
+          type: boolean
+    CommandData:
+      type: object
+      additionalProperties: false
+      required:
+      - commandId
+      - id
+      - version
+      - definitionVersion
+      - eventId
+      - occurredAt
+      - replay
+      properties:
+        commandId: *id011
+        id: *id011
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        definitionVersion: *id013
+        eventId: *id011
+        occurredAt:
+          type: string
+          format: date-time
+        replay:
+          type: boolean
+    DefinitionResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/DefinitionData'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    RecordResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/RecordData'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    QueryResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/QueryData'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ReferenceResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/ReferenceData'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CommandResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/CommandData'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Error:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - message
+      - traceId
+      - retryable
+      properties:
+        code: *id013
+        message: *id013
+        traceId: *id013
+        fieldErrors:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - field
+            - reason
+            properties:
+              field: *id013
+              reason: *id013
+        retryable:
+          type: boolean

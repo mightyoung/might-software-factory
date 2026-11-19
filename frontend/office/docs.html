@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; worker-src 'self' blob:; form-action 'none'; base-uri 'none'; object-src 'none'" />
+  <title>在线文档</title>
+</head>
+<body>
+  <div class="office-toolbar">
+    <label class="office-name">文档名称<input id="name" type="text" disabled /></label>
+    <div><button id="import" type="button" disabled>导入文档 JSON</button><input id="file" type="file" accept=".json,application/json" hidden /><button id="export" type="button" disabled>导出文档 JSON</button><button id="export-text" type="button" disabled>导出纯文本 TXT</button></div>
+    <span id="status" role="status">准备编辑器…</span>
+  </div>
+  <p class="office-storage-note">内容仅在本次编辑器中保留，导出文件后保存在本机。关闭前请导出需要保留的内容。TXT 保存正文文字；JSON 保留文档格式并可重新导入。</p>
+  <p id="error" role="alert" hidden></p>
+  <main id="editor" aria-label="文档编辑区域"></main>
+  <script type="module" src="./docs-main.ts"></script>
+</body>
+</html>

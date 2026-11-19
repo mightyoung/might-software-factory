@@ -1,0 +1,13 @@
+.git
+.claude
+.codex
+.agents
+.omx
+**/target
+**/node_modules
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key

@@ -69,7 +69,8 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
             UUID fileId = item.get("file_id", UUID.class);
             if (!"FILE".equals(item.get("source_kind", String.class)) || fileId == null
                     || !"READY".equals(item.get("state", String.class))
-                    || !"CONTENT".equals(item.get("verification_level", String.class))) {
+                    || !com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel
+                            .isContentVerified(item.get("verification_level", String.class))) {
                 throw new FindingWorkflowEvidenceException(
                         "Evidence items must be ready files with a trusted content verification");
             }
@@ -108,7 +109,8 @@ public final class JooqFindingWorkflowEvidencePolicy implements FindingWorkflowE
                 && use.recordedSha256().strip().toLowerCase(Locale.ROOT).equals(snapshot.sha256())
                 && snapshot.fileLinkId() != null
                 && snapshot.verificationReceiptId() != null
-                && snapshot.verificationLevel() == com.mightyoung.softwarefactory.files.FileEvidenceVerificationLevel.CONTENT;
+                && snapshot.verificationLevel().isContentVerified()
+                && snapshot.verificationLevel().name().equals(use.recordedVerificationLevel());
     }
 
     @Override

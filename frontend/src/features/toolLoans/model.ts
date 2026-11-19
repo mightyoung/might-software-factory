@@ -1,0 +1,142 @@
+import { ApiError, type HttpClient } from "../../api/httpClient";
+import { object, UUID, requireProtocol, safeInteger } from "../ledger/model";
+
+export interface ReturnItem {
+  toolId: string;
+  label: string;
+  state: "OUTSTANDING" | "REQUESTED" | "RECEIVED" | "LOST";
+  requestId?: string;
+  condition?: "NORMAL" | "DAMAGED";
+  reason?: string;
+}
+export interface VersionInput { definitionVersion: string; expectedVersion: number }
+export interface ReturnRequestInput extends VersionInput { toolIds: string[] }
+export interface LossInput extends VersionInput { toolId: string; reason: string }
+export interface ReceiveInput extends VersionInput { items: { toolId: string; condition: "NORMAL" | "DAMAGED"; reason?: string }[] }
+export type LoanCommandInput = LoanInput | VersionInput | ReturnRequestInput | ReceiveInput | LossInput;
+export interface LoanRecord {
+  id: string;
+  version: number;
+  state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
+  definitionVersion: string;
+  organizationId: string;
+  custodyScopeId: string;
+  purpose: string;
+  usageLocation?: string | null;
+  toolIds: string[];
+  tools?: { id: string; label: string }[];
+  awaitingOtherCustodian?: boolean;
+  returnItems?: ReturnItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+export interface LoanInput { definitionVersion: string; organizationId: string; custodyScopeId: string; purpose: string; usageLocation?: string; toolIds: string[]; expectedVersion?: number }
+export interface LoanScope { id: string; label: string; organizationId: string }
+export interface LoanCandidates { departments: { id: string; label: string }[]; scopes: LoanScope[]; tools: { id: string; label: string }[] }
+export interface LoanDefinition { definitionVersion: "1" | "2"; usageLocationRequired: boolean; usageLocationMaxLength: number }
+export interface LoanAdapter {
+  definition(signal?: AbortSignal): Promise<LoanDefinition>;
+  lossQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  lossDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
+  receiveQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  receiveDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
+  issueQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  issueDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
+  list(signal?: AbortSignal, visibility?: LoanVisibility): Promise<LoanRecord[]>;
+  detail(id: string, signal?: AbortSignal, visibility?: LoanVisibility): Promise<LoanRecord>;
+  candidates(scope?: string, signal?: AbortSignal, loanId?: string): Promise<LoanCandidates>;
+  command(action: "create" | "revise" | "cancel" | "issue" | "return-requests" | "receive" | "close-lost", id: string | undefined, input: LoanCommandInput, key: string): Promise<LoanRecord>;
+}
+export type LoanVisibility = "own" | "department" | "custody";
+export type LoanFactory = () => LoanAdapter;
+function unwrap(value: unknown): unknown {
+  requireProtocol(object(value) && object(value.meta) && typeof value.meta.traceId === "string" && Object.hasOwn(value, "data"));
+  return value.data;
+}
+function record(value: unknown): LoanRecord {
+  requireProtocol(object(value) && UUID.test(String(value.id)) && safeInteger(value.version) && value.version > 0
+    && ["PENDING_ISSUE", "WITHDRAWN", "ISSUED", "SETTLED"].includes(String(value.state)) && typeof value.definitionVersion === "string" && value.definitionVersion.trim().length > 0 && [...value.definitionVersion].length <= 64
+    && UUID.test(String(value.organizationId)) && UUID.test(String(value.custodyScopeId)) && typeof value.purpose === "string"
+    && Array.isArray(value.toolIds) && value.toolIds.every(id => typeof id === "string" && UUID.test(id))
+    && typeof value.createdAt === "string" && typeof value.updatedAt === "string");
+  requireProtocol(value.usageLocation === undefined || value.usageLocation === null || (typeof value.usageLocation === "string" && value.usageLocation.trim().length > 0 && [...value.usageLocation].length <= 200));
+  requireProtocol(value.definitionVersion !== "2" || typeof value.usageLocation === "string");
+  requireProtocol(value.awaitingOtherCustodian === undefined || typeof value.awaitingOtherCustodian === "boolean");
+  const toolIds = value.toolIds as string[];
+  if (value.tools !== undefined) requireProtocol(Array.isArray(value.tools) && value.tools.length === toolIds.length && value.tools.every((tool, index) => object(tool) && tool.id === toolIds[index] && typeof tool.label === "string"));
+  if (value.returnItems !== undefined) {
+    requireProtocol(Array.isArray(value.returnItems) && value.returnItems.length === (["PENDING_ISSUE", "WITHDRAWN"].includes(String(value.state)) ? 0 : toolIds.length));
+    requireProtocol(value.returnItems.every((item, index) => object(item) && item.toolId === toolIds[index]
+      && typeof item.label === "string" && ["OUTSTANDING", "REQUESTED", "RECEIVED", "LOST"].includes(String(item.state))
+      && (item.requestId === undefined || UUID.test(String(item.requestId)))
+      && (item.condition === undefined || ["NORMAL", "DAMAGED"].includes(String(item.condition)))
+      && (item.state !== "LOST" || (typeof item.reason === "string" && item.reason.trim().length > 0 && item.condition === undefined))
+      && (item.reason === undefined || typeof item.reason === "string")));
+  }
+  return value as unknown as LoanRecord;
+}
+export function createHttpLoans(client: HttpClient): LoanAdapter {
+  const base = "/api/v1/tooling/loan-applications";
+  return {
+    async definition(signal) {
+      const value = unwrap(await client.get(`${base}/definition`, { signal }));
+      requireProtocol(object(value) && ["1", "2"].includes(String(value.definitionVersion))
+        && value.usageLocationRequired === (value.definitionVersion === "2") && value.usageLocationMaxLength === 200);
+      return value as unknown as LoanDefinition;
+    },
+    async lossQueue(signal) {
+      const value = unwrap(await client.get(`${base}/loss-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async lossDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/loss-detail`, { signal })));
+    },
+    async receiveQueue(signal) {
+      const value = unwrap(await client.get(`${base}/receive-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async receiveDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/receive-detail`, { signal })));
+    },
+    async issueQueue(signal) {
+      const value = unwrap(await client.get(`${base}/issue-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async issueDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/issue-detail`, { signal })));
+    },
+    async list(signal, visibility = "own") {
+      const value = unwrap(await client.get(visibility === "own" ? base : `${base}/visibility/${visibility}`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async detail(id, signal, visibility = "own") { requireProtocol(UUID.test(id));return record(unwrap(await client.get(visibility === "own" ? `${base}/${id}` : `${base}/visibility/${visibility}/${id}`, { signal }))); },
+    async candidates(scope, signal, loanId) {
+      if (scope) requireProtocol(UUID.test(scope));
+      if (loanId) requireProtocol(UUID.test(loanId));
+      const query = new URLSearchParams();
+      if (scope) query.set("custodyScopeId", scope);
+      if (loanId) query.set("loanId", loanId);
+      const value = unwrap(await client.get(`${base}/candidates${query.size ? `?${query}` : ""}`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.departments) && Array.isArray(value.scopes) && Array.isArray(value.tools));
+      requireProtocol(value.scopes.every(row => object(row) && UUID.test(String(row.id)) && UUID.test(String(row.organizationId)) && typeof row.label === "string"));
+      requireProtocol(value.departments.every(row => object(row) && UUID.test(String(row.id)) && typeof row.label === "string"));
+      requireProtocol(value.tools.every(row => object(row) && UUID.test(String(row.id)) && typeof row.label === "string"));
+      return value as unknown as LoanCandidates;
+    },
+    async command(action, id, input, key) {
+      requireProtocol(UUID.test(key) && (action === "create" || (id && UUID.test(id))));
+      const path = action === "create" ? base : `${base}/${id}/${action}`;
+      return record(unwrap(await client.post(path, { body: input, headers: { "Idempotency-Key": key } })));
+    },
+  };
+}
+export function unknownOutcome(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status === 0 || error.status >= 500;
+}

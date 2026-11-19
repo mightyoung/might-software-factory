@@ -52,7 +52,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FindingPostgresReadIT {
 
-    private static final String EXPECTED_DATABASE = "might_software_factory_pg18_test";
     private static final UUID ACTOR_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID MEMBER_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
     private static final Pattern SAFE_ROLE_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,62}");
@@ -71,16 +70,14 @@ class FindingPostgresReadIT {
 
     @Test
     void lowPrivilegeConnectionReadsOnlyItsTenantAndRlsHidesOtherTenantRows() throws Exception {
-        LanPostgresCompatibilityIT.DatabaseTarget target =
-                LanPostgresCompatibilityIT.DatabaseTarget.preflightFromEnvironment(System.getenv());
-        assertThat(target.databaseName()).isEqualTo(EXPECTED_DATABASE);
+        FixturePostgresTarget.Target target = FixturePostgresTarget.preflightRepository(System.getenv());
         appRole = required("LAN_PG_APP_USERNAME");
         assertThat(SAFE_ROLE_NAME.matcher(appRole).matches()).isTrue();
 
-        verifyFindingMigrationAndReadGrant(target.jdbcUrl(), appRole);
+        verifyFindingMigrationAndReadGrant(target.jdbcUrl(), target.databaseName(), appRole);
         applicationDataSource = createApplicationDataSource(target.jdbcUrl(), appRole,
                 required("LAN_PG_APP_PASSWORD"));
-        verifyApplicationRoleBoundary(applicationDataSource, appRole);
+        verifyApplicationRoleBoundary(applicationDataSource, target.databaseName(), appRole);
         verifyFindingRlsDefinition(target.jdbcUrl());
 
         UUID tenantA = UUID.randomUUID();
@@ -130,7 +127,7 @@ class FindingPostgresReadIT {
         assertSyntheticFindingsRemoved(target.jdbcUrl(), tenantA, tenantB, findingA, findingB);
     }
 
-    private static void verifyFindingMigrationAndReadGrant(String jdbcUrl, String applicationRole) throws Exception {
+    private static void verifyFindingMigrationAndReadGrant(String jdbcUrl, String expectedDatabase, String applicationRole) throws Exception {
         String migrationUser = required("LAN_PG_USERNAME");
         String migrationPassword = required("LAN_PG_PASSWORD");
         try (Connection connection = DriverManager.getConnection(jdbcUrl, migrationUser, migrationPassword);
@@ -150,7 +147,7 @@ class FindingPostgresReadIT {
             query.setString(1, applicationRole);
             try (ResultSet result = query.executeQuery()) {
                 assertThat(result.next()).isTrue();
-                assertThat(result.getString(1)).isEqualTo(EXPECTED_DATABASE);
+                assertThat(result.getString(1)).isEqualTo(expectedDatabase);
                 assertThat(result.getString(2)).isEqualTo(migrationUser);
                 assertThat(result.getBoolean(3)).isFalse();
                 assertThat(result.getBoolean(4)).isTrue();
@@ -175,7 +172,7 @@ class FindingPostgresReadIT {
         return new HikariDataSource(config);
     }
 
-    private static void verifyApplicationRoleBoundary(DataSource dataSource, String expectedRole) throws Exception {
+    private static void verifyApplicationRoleBoundary(DataSource dataSource, String expectedDatabase, String expectedRole) throws Exception {
         try (Connection connection = dataSource.getConnection(); Statement query = connection.createStatement();
                 ResultSet result = query.executeQuery("""
                         select current_database(), current_user, session_user,
@@ -195,7 +192,7 @@ class FindingPostgresReadIT {
                          where r.rolname = current_user
                         """)) {
             assertThat(result.next()).isTrue();
-            assertThat(result.getString(1)).isEqualTo(EXPECTED_DATABASE);
+            assertThat(result.getString(1)).isEqualTo(expectedDatabase);
             assertThat(result.getString(2)).isEqualTo(expectedRole);
             assertThat(result.getString(3)).isEqualTo(expectedRole);
             assertThat(result.getString(4)).isNotEqualTo(expectedRole);

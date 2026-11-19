@@ -1,7 +1,8 @@
 import { useId, type FormEvent } from "react";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
 import type { FindingRecord } from "../domain/finding";
-import { BLOCKED, FAILURE_MESSAGE, type ActionDef, type CommandInputErrors, type Grade } from "../features/findings/commandActions";
+import { DispatchCandidatePicker } from "./DispatchCandidatePicker";
+import { BLOCKED, FAILURE_MESSAGE, type ActionDef, type CommandInputErrors, type DispatchErrors, type DispatchValues, type Grade } from "../features/findings/commandActions";
 import { FindingReviewHistory } from "./FindingReviewHistory";
 import { useFindingCommandRunner } from "../features/findings/useFindingCommandRunner";
 
@@ -30,9 +31,19 @@ interface FormProps {
   onGrade: (value: "" | Grade) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  /** 派单用的表单状态与候选查询；非派单动作不用。 */
+  dispatch?: {
+    finding: FindingRecord;
+    adapter: FindingCommandAdapter;
+    values: DispatchValues;
+    errors: DispatchErrors;
+    onChange: (values: DispatchValues) => void;
+    onStale: () => void;
+    onUnauthenticated?: () => void;
+  };
 }
 
-function CommandForm({ action, reason, grade, errors, busy, retry, canSubmit, fieldsBlocked, onReason, onGrade, onCancel, onSubmit }: FormProps) {
+function CommandForm({ action, reason, grade, errors, busy, retry, canSubmit, fieldsBlocked, onReason, onGrade, onCancel, onSubmit, dispatch }: FormProps) {
   const uid = useId();
   return (
     <form className="report-form" onSubmit={onSubmit} noValidate aria-busy={busy} aria-label={action.label}>
@@ -48,6 +59,32 @@ function CommandForm({ action, reason, grade, errors, busy, retry, canSubmit, fi
           </select>
           {errors.grade && <p className="field-error">{errors.grade}</p>}
         </div>
+      )}
+      {action.dispatch && dispatch && (
+        <>
+          <DispatchCandidatePicker
+            findingId={dispatch.finding.id}
+            findingVersion={dispatch.finding.version}
+            adapter={dispatch.adapter}
+            value={dispatch.values.assigneeMemberId}
+            onChange={(id) => dispatch.onChange({ ...dispatch.values, assigneeMemberId: id })}
+            error={dispatch.errors.assignee}
+            disabled={busy || fieldsBlocked}
+            onStale={dispatch.onStale}
+            onUnauthenticated={dispatch.onUnauthenticated}
+          />
+          <div className="report-field">
+            <label htmlFor={`${uid}-dueAt`}>整改期限<span className="required-mark" aria-hidden="true"> *</span></label>
+            <input id={`${uid}-dueAt`} type="datetime-local" value={dispatch.values.dueAt} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.dueAt)} onChange={(event) => dispatch.onChange({ ...dispatch.values, dueAt: event.target.value })} />
+            <p className="field-hint">按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。</p>
+            {dispatch.errors.dueAt && <p className="field-error">{dispatch.errors.dueAt}</p>}
+          </div>
+          <div className="report-field">
+            <label htmlFor={`${uid}-requirements`}>整改要求<span className="required-mark" aria-hidden="true"> *</span></label>
+            <textarea id={`${uid}-requirements`} rows={3} value={dispatch.values.requirements} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.requirements)} onChange={(event) => dispatch.onChange({ ...dispatch.values, requirements: event.target.value })} />
+            {dispatch.errors.requirements && <p className="field-error">{dispatch.errors.requirements}</p>}
+          </div>
+        </>
       )}
       {action.reason && (
         <div className="report-field">
@@ -126,6 +163,7 @@ export function FindingCommandPanel({ finding, adapter, refreshing = false, onCh
           onGrade={run.setGrade}
           onCancel={run.cancel}
           onSubmit={run.submit}
+          dispatch={{ finding, adapter, values: run.dispatch, errors: run.dispatchErrors, onChange: run.setDispatch, onStale: onChanged, onUnauthenticated }}
         />
       )}
     </div>

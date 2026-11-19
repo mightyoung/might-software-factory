@@ -16,7 +16,7 @@ public class RiskScenarioDraftChangedListener {
         this.capture = capture;
     }
 
-    @Async
+    @Async("riskScenarioExecutor")
     @TransactionalEventListener(id = "risk-scenario-draft-change", phase = TransactionPhase.AFTER_COMMIT)
     public void capture(RiskScenarioDraftChangedEvent event) {
         try {

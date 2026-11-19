@@ -38,6 +38,8 @@ export interface FindingReportFormProps {
   onUnauthenticated?: () => void;
   /** 当前登录者的标识；提供时，会话被动失效后未提交的内容会在同一个人重新登录后恢复。 */
   draftKey?: string;
+  /** 从“未成立”记录发起的关联上报：提交时带上父记录 id。 */
+  relatedTo?: { id: string; code: string };
   now?: () => Date;
   createKey?: () => string;
 }
@@ -63,6 +65,7 @@ function FindingReportFormBody({
   onOpenSubmitted,
   onUnauthenticated,
   draftKey,
+  relatedTo,
   now = () => new Date(),
   createKey = newIdempotencyKey,
 }: FindingReportFormProps) {
@@ -145,7 +148,7 @@ function FindingReportFormBody({
       else focus.focusFirstError(found);
       return;
     }
-    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined);
+    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined, relatedTo?.id);
     if (outcome.fieldErrors) {
       setErrors(outcome.fieldErrors);
       focus.focusFirstError(outcome.fieldErrors);
@@ -187,6 +190,12 @@ function FindingReportFormBody({
           ×
         </button>
       </div>
+
+      {relatedTo && (
+        <p className="report-banner" role="note">
+          这是基于未成立记录 <strong>{relatedTo.code}</strong> 补充新证据的关联上报；不会重新打开或修改原记录。
+        </p>
+      )}
 
       <p className="report-banner" role="note">
         {live ? (

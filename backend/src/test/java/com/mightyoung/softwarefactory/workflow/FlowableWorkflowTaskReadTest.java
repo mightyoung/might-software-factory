@@ -129,7 +129,8 @@ class FlowableWorkflowTaskReadTest {
         when(task.getTaskDefinitionKey()).thenReturn("remediation");
         when(task.getAssignee()).thenReturn("member-1");
         facade = new FlowableWorkflowFacade(runtime, tasks, repository,
-                mock(org.jooq.DSLContext.class), lock, source, management, guard, history);
+                mock(org.jooq.DSLContext.class), lock, source, management, guard, history,
+                java.util.Set.of(new WorkflowTaskClaim.Pool("tool_loan", "toolLoanV1", "receive")),java.util.Set.of());
     }
 
     @AfterEach void end() {
@@ -274,6 +275,58 @@ class FlowableWorkflowTaskReadTest {
         assertThat(read().active()).isFalse();
     }
 
+    @Test void unregisteredExceptionSourceAndTargetNeverReachEngineMutation() throws Exception {
+        UUID actor=UUID.randomUUID();
+        commandMode(actor);
+        var original=read();
+        assertThatThrownBy(()->facade.end(original,"end")).isInstanceOf(WorkflowTaskStateConflictException.class);
+        assertThatThrownBy(()->facade.end(original,"serviceTask")).isInstanceOf(WorkflowTaskStateConflictException.class);
+        verify(runtime,never()).createChangeActivityStateBuilder();
+        verify(tasks,never()).claim(anyString(),anyString());
+    }
+
+    @Test void registeredTerminalExceptionChecksPinAndEndsWithoutBorrowerImpersonation() throws Exception {
+        UUID borrower=UUID.randomUUID();
+        commandMode(borrower);
+        when(instance.getBusinessKey()).thenReturn("tool_loan:"+FINDING);
+        when(definition.getKey()).thenReturn("toolLoanV1");
+        when(definition.getDeploymentId()).thenReturn("loan-deployment");
+        when(definition.getResourceName()).thenReturn("loan.bpmn20.xml");
+        byte[] xml=getClass().getClassLoader().getResourceAsStream("processes/tool-loan-v1.bpmn20.xml").readAllBytes();
+        when(repository.getResourceAsStream("loan-deployment","loan.bpmn20.xml"))
+                .thenAnswer(call->new java.io.ByteArrayInputStream(xml));
+        when(task.getTaskDefinitionKey()).thenReturn("returnRequest");
+        var model=new org.flowable.bpmn.model.BpmnModel();
+        var process=new org.flowable.bpmn.model.Process();process.setId("toolLoanV1");
+        var sourceTask=new org.flowable.bpmn.model.UserTask();sourceTask.setId("returnRequest");
+        var endEvent=new org.flowable.bpmn.model.EndEvent();endEvent.setId("end");
+        process.addFlowElement(sourceTask);process.addFlowElement(endEvent);model.addProcess(process);
+        when(repository.getBpmnModel("definition-1")).thenReturn(model);
+        facade=new FlowableWorkflowFacade(runtime,tasks,repository,mock(org.jooq.DSLContext.class),lock,source,
+                management,guard,history,java.util.Set.of(),java.util.Set.of(
+                    new WorkflowExceptionalEnd.Route("tool_loan","toolLoanV1","returnRequest","end")));
+        var original=facade.readCurrentTask(TENANT,"tool_loan",FINDING,"returnRequest");
+        var move=mock(org.flowable.engine.runtime.ChangeActivityStateBuilder.class,RETURNS_SELF);
+        when(runtime.createChangeActivityStateBuilder()).thenReturn(move);
+        doAnswer(call->{when(runtime.createProcessInstanceQuery().singleResult()).thenReturn(null);return null;})
+                .when(move).changeState();
+        facade.end(original,"end");
+        verify(move).processInstanceId("process-1");
+        verify(move).moveActivityIdTo("returnRequest","end");
+        verify(tasks,never()).claim(anyString(),anyString());
+        verify(tasks,never()).complete(anyString(),anyMap());
+    }
+
+    @Test void unresolvedIndividualTaskCannotBeClaimedAsAPooledTask() throws Exception {
+        UUID actor = UUID.randomUUID();
+        commandMode(actor);
+        when(task.getAssignee()).thenReturn(null);
+        var unassigned = read();
+        assertThatThrownBy(() -> facade.claimAndComplete(unassigned, actor, java.util.Map.of()))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+        verify(tasks, never()).claim(anyString(), anyString());
+    }
+
     @Test void authorityLocksOnlyAfterExistingGuardAndCompletesExactTaskOnSameConnection() throws Exception {
         UUID actor = UUID.randomUUID();
         commandMode(actor);
@@ -378,7 +431,7 @@ class FlowableWorkflowTaskReadTest {
 
     private WorkflowDefinitionPin reviewedPin() throws Exception {
         byte[] bytes;
-        try (var stream = getClass().getResourceAsStream("/" + PinnedFindingReviewDefinitionResolver.RESOURCE)) {
+        try (var stream = getClass().getResourceAsStream("/" + PackagedWorkflowDefinitions.RESOURCES.get("findingRemediationV3"))) {
             bytes = stream.readAllBytes();
         }
         when(definition.getKey()).thenReturn("findingRemediationV3");
@@ -387,7 +440,7 @@ class FlowableWorkflowTaskReadTest {
         when(repository.getResourceAsStream("deployment", "reviewed.bpmn20.xml"))
                 .thenAnswer(call -> new java.io.ByteArrayInputStream(bytes));
         return new WorkflowDefinitionPin(TENANT, "definition-1", "findingRemediationV3",
-                PinnedFindingReviewDefinitionResolver.sha256(bytes));
+                PackagedWorkflowDefinitions.sha256(bytes));
     }
 
     @Test void replayValidatesLiveOriginalTaskAndRejectsChangedAssignee() throws Exception {

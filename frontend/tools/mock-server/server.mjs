@@ -35,6 +35,16 @@ const SCHEMA = {
   },
 };
 
+// 派单候选成员：24 个“张”开头（用于分页）+ 李四、王五；memberId 稳定且按此顺序升序。
+const MEMBERS = [
+  ...Array.from({ length: 24 }, (_, i) => `张${"一二三四五六七八九十"[i % 10]}${i >= 10 ? i : ""}`),
+  "李四",
+  "王五",
+].map((displayName, i) => ({ memberId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`, displayName }));
+// 当前轮是否已有责任人：用 Symbol 键保存，不会出现在 JSON 响应里。
+const ASSIGNED = Symbol("assigned");
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const shanghaiDay = (d) => new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10).replaceAll("-", "");
 const cp = (s) => [...s].length;
 
@@ -48,6 +58,8 @@ export function createMockServer(options = {}) {
   const findings = [];
   const reviewEntries = new Map();
   const receipts = new Map(); // Idempotency-Key -> { body, response }
+  const evidenceSets = new Map(); // Idempotency-Key -> { id, at }
+  const uploads = new Map(); // Idempotency-Key -> 上传意图
   const seqByDay = new Map();
 
   function addFinding(input, now = new Date()) {
@@ -60,7 +72,7 @@ export function createMockServer(options = {}) {
       id: randomUUID(), code: `YH-${day}-${String(seq).padStart(4, "0")}`, organizationId: org.id, organizationName: org.name,
       description: input.description, discoveredAt: discovered.toISOString(), sourceCategory: input.sourceCategory, urgency: input.urgency,
       location: input.location ?? null, interimMeasure: input.interimMeasure ?? null, backfill: now.getTime() - discovered.getTime() > 24 * 3600_000,
-      sourceEventId: null, riskId: null, grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1, reviewCycle: 1, reviewProtocol: "LEGACY",
+      sourceEventId: null, riskId: null, relatedFindingId: input.relatedFindingId ?? null, [ASSIGNED]: (input.state ?? "PERSON_CONFIRM_PENDING") === "RECTIFYING", grade: "UNKNOWN", state: input.state ?? "PERSON_CONFIRM_PENDING", roundNo: 1, version: 1, reviewCycle: 1, reviewProtocol: "LEGACY",
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     findings.unshift(row);
@@ -121,7 +133,7 @@ export function createMockServer(options = {}) {
 
     if (req.method === "GET" && path === "/api/v1/auth/csrf") return send(res, 204, undefined, { "Set-Cookie": newCsrf() });
 
-    if (req.method === "POST") {
+    if (req.method === "POST" || req.method === "PUT") {
       if (!csrfOk()) return err(res, 403, "ACTION_DENIED", "CSRF token missing or mismatched");
     }
 
@@ -218,6 +230,87 @@ export function createMockServer(options = {}) {
       const total = rows.length;
       return send(res, 200, { data: { items: rows.slice((number - 1) * size, number * size), page: { number, size, total, pageCount: Math.ceil(total / size) } }, meta: meta() });
     }
+    const upload = /^\/api\/v1\/findings\/([^/]+)\/remediation-rounds\/([1-9][0-9]*)\/evidence-(sets?|uploads)(?:\/([^/]+)(?:\/(content|cancel))?)?$/.exec(path);
+    if (upload) {
+      const [, rawId, round, kind, intentId, action] = upload;
+      const row = findings.find((r) => r.id === decodeURIComponent(rawId));
+      if (!row || !session) return err(res, session ? 404 : 401, session ? "RESOURCE_NOT_VISIBLE" : "AUTH_REQUIRED", "Not visible");
+      if (row.state !== "RECTIFYING" || Number(round) !== row.roundNo) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const view = (u) => ({ data: { uploadIntentId: u.id, state: u.state, expiresAt: u.expiresAt, ...(u.cancel ? { cancelRequested: true } : {}) }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "2" } });
+      const key = req.headers["idempotency-key"];
+      if (kind === "set" && req.method === "GET") {
+        const set = [...evidenceSets.values()].filter((x) => x.findingId === row.id).at(-1);
+        if (!set) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        const statusUrl = (u) => `/api/v1/findings/${rawId}/remediation-rounds/${round}/evidence-uploads/${u.id}`;
+        const items = [...uploads.values()].filter((u) => u.setId === set.id).map((u) => ({ ...view(u).data, statusUrl: statusUrl(u) }));
+        return send(res, 200, { data: { evidenceSetId: set.id, evidenceRevision: 0, uploads: items }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "2" } }, { "Cache-Control": "no-store" });
+      }
+      if (kind === "sets" && req.method === "POST") {
+        if (typeof key !== "string" || !UUID_RE.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
+        const b = await readJson(req);
+        if (!b || Object.keys(b).join() !== "expectedFindingVersion" || b.expectedFindingVersion !== row.version) return err(res, b?.expectedFindingVersion === undefined ? 400 : 409, b?.expectedFindingVersion === undefined ? "INVALID_REQUEST" : "VERSION_CONFLICT", "Bad version", { currentVersion: row.version });
+        const prior = evidenceSets.get(key);
+        const set = prior ?? { id: randomUUID(), at: new Date().toISOString(), findingId: row.id };
+        evidenceSets.set(key, set);
+        return send(res, prior ? 200 : 201, { data: { evidenceSetId: set.id, state: "UPLOADING", initialEvidenceRevision: 0, createdAt: set.at }, meta: { requestId: randomUUID(), traceId: randomUUID(), schemaVersion: "1" } }, { "Cache-Control": "no-store" });
+      }
+      if (kind === "uploads" && !intentId && req.method === "POST") {
+        if (typeof key !== "string" || !UUID_RE.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
+        const b = await readJson(req);
+        const ok = b && ["evidenceSetId", "expectedFindingVersion", "expectedEvidenceRevision", "filename", "declaredMediaType", "declaredSizeBytes"].every((k) => k in b) && Object.keys(b).length === 6;
+        if (!ok) return err(res, 400, "INVALID_REQUEST", "Declaration must have exactly six fields");
+        if (![...evidenceSets.values()].some((x) => x.id === b.evidenceSetId)) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        if (b.expectedFindingVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale", { currentVersion: row.version });
+        if (!["image/png", "image/jpeg"].includes(b.declaredMediaType)) return err(res, 415, "INVALID_REQUEST", "Media type not allowed");
+        if (!Number.isInteger(b.declaredSizeBytes) || b.declaredSizeBytes < 1 || b.declaredSizeBytes > 67108864) return err(res, 413, "INVALID_REQUEST", "Too large");
+        const prior = uploads.get(key);
+        const u = prior ?? { id: randomUUID(), state: "INTENT_CREATED", size: b.declaredSizeBytes, type: b.declaredMediaType, name: b.filename, setId: b.evidenceSetId, expiresAt: new Date(Date.now() + 3600_000).toISOString(), polls: 0 };
+        uploads.set(key, u);
+        return send(res, prior ? 200 : 201, { ...view(u), data: { ...view(u).data, statusUrl: `${path}/${u.id}` } }, { "Cache-Control": "no-store", Location: `${path}/${u.id}` });
+      }
+      const intent = [...uploads.values()].find((u) => u.id === intentId?.toLowerCase());
+      if (kind === "uploads" && intentId && !intent) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      if (intent && action === "content" && req.method === "PUT") {
+        if (intent.received) return err(res, 409, "ALREADY_RECEIVED", "Already received", {}, { Location: `${path.replace(/\/content$/, "")}` });
+        if (req.headers["content-type"] !== intent.type) return err(res, 415, "INVALID_REQUEST", "Content-Type must equal the declared type");
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        if (Buffer.concat(chunks).length !== intent.size || Number(req.headers["content-length"]) !== intent.size) return err(res, 400, "INVALID_REQUEST", "Length differs from declaration");
+        intent.received = true;
+        intent.state = "QUARANTINED";
+        return send(res, 202, view(intent), { "Cache-Control": "no-store" });
+      }
+      if (intent && !action && req.method === "GET") {
+        // 每次查询推进一步，模拟异步扫描：QUARANTINED → SCANNING → 终态（文件名以 reject 开头则被拒绝）。
+        if (intent.received && intent.state === "QUARANTINED") intent.state = "SCANNING";
+        else if (intent.state === "SCANNING") intent.state = /^reject/i.test(intent.name) ? "REJECTED" : "VERIFIED_PENDING_FINALIZATION";
+        else if (intent.state === "VERIFIED_PENDING_FINALIZATION") intent.state = "FINALIZED";
+        return send(res, 200, view(intent), { "Cache-Control": "no-store" });
+      }
+      if (intent && action === "cancel" && req.method === "POST") {
+        if (!["VERIFIED_PENDING_FINALIZATION", "FINALIZED", "REJECTED", "FAILED", "CANCELLED", "EXPIRED"].includes(intent.state)) intent.cancel = true;
+        return send(res, 200, view(intent), { "Cache-Control": "no-store" });
+      }
+      return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+    }
+    const candidates = /^\/api\/v1\/findings\/([^/]+)\/dispatch-candidates$/.exec(path);
+    if (req.method === "GET" && candidates) {
+      const row = findings.find((r) => r.id === decodeURIComponent(candidates[1]));
+      if (!row) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+      const allowed = new Set(["q", "limit", "afterMemberId"]);
+      const keys = [...url.searchParams.keys()];
+      const q = url.searchParams.get("q") ?? "";
+      const limitText = url.searchParams.get("limit");
+      const after = url.searchParams.get("afterMemberId");
+      const limit = limitText === null ? 20 : /^[1-9][0-9]*$/.test(limitText) ? Number(limitText) : NaN;
+      if (keys.some((k) => !allowed.has(k)) || new Set(keys).size !== keys.length || cp(q) > 100 || !(limit >= 1 && limit <= 50) || (after !== null && !UUID_RE.test(after)))
+        return err(res, 400, "INVALID_QUERY", "Invalid query");
+      if (!(row.state === "SAFETY_DISPATCH_PENDING" || (row.state === "RECTIFYING" && !row[ASSIGNED]))) return err(res, 409, "COMMAND_CONFLICT", "Not awaiting dispatch");
+      const eligible = MEMBERS.filter((m) => m.displayName.startsWith(q) && (after === null || m.memberId > after.toLowerCase()));
+      const pageItems = eligible.slice(0, limit);
+      const hasMore = eligible.length > limit;
+      return send(res, 200, { data: pageItems, findingVersion: row.version, roundNo: row.roundNo, state: row.state, hasMore, nextAfterMemberId: hasMore ? pageItems.at(-1).memberId : null }, { "Cache-Control": "no-store" });
+    }
     const detail = /^\/api\/v1\/entities\/finding\/([^/]+)$/.exec(path);
     if (req.method === "GET" && detail) {
       const row = visibleFindings.find((r) => r.id === decodeURIComponent(detail[1]));
@@ -236,7 +329,7 @@ export function createMockServer(options = {}) {
         entries: reviewEntries.get(row.id) ?? [], currentVersion: row.version, currentState: row.state,
         reviewCycle: row.reviewCycle, reviewProtocol: row.reviewProtocol,
         processDefinitionKey: row.state === "DISCOVERED" ? null : "findingRemediationV2", reviewStage: stage,
-        availableReviewActions: stage ? ["APPROVE"] : [], blockedReason: stage ? null : "NO_REVIEW_ACTION_AT_CURRENT_STATE",
+        availableReviewActions: stage ? ["APPROVE", "NOT_ESTABLISHED"] : [], blockedReason: stage ? null : "NO_REVIEW_ACTION_AT_CURRENT_STATE",
         hasMore: false, nextCursor: null,
       }, meta: meta() });
     }
@@ -258,12 +351,17 @@ export function createMockServer(options = {}) {
       if (prior) return prior.body === canonical ? send(res, 200, prior.response) : err(res, 409, "IDEMPOTENCY_CONFLICT", "Same key, different request");
       const fieldErrors = validateCreate(b);
       if (fieldErrors.length) return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors });
+      if (b.relatedFindingId !== undefined) {
+        const parent = typeof b.relatedFindingId === "string" && UUID_RE.test(b.relatedFindingId) ? findings.find((r) => r.id === b.relatedFindingId.toLowerCase()) : undefined;
+        if (!parent) return err(res, 404, "RESOURCE_NOT_VISIBLE", "Not visible");
+        if (parent.state !== "NOT_ESTABLISHED") return err(res, 422, "WORKFLOW_RULE", "Parent must be NOT_ESTABLISHED");
+      }
       const row = addFinding(b);
       const response = { data: { findingId: row.id, code: row.code, state: row.state, roundNo: row.roundNo, version: row.version } };
       receipts.set(key, { body: canonical, response });
       return send(res, 200, response);
     }
-    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|verifications)$/.exec(path);
+    const command = /^\/api\/v1\/findings\/([^/]+)\/(workflow-initialization|confirm\/person|confirm\/safety|close-not-established|dispatch|verifications|remediation-submissions)$/.exec(path);
     if (req.method === "POST" && command) {
       const key = req.headers["idempotency-key"];
       if (typeof key !== "string" || !/^[0-9a-f-]{36}$/i.test(key)) return err(res, 400, "INVALID_REQUEST", "Idempotency-Key must be a UUID");
@@ -286,6 +384,19 @@ export function createMockServer(options = {}) {
         if (!reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
         if (!["GENERAL", "MAJOR"].includes(b.grade)) fieldErrors.push({ field: "grade", reason: "Pattern" });
       }
+      if (op === "close-not-established") {
+        if (!["PERSON", "SAFETY"].includes(b.stage)) fieldErrors.push({ field: "stage", reason: "Pattern" });
+        if (!reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
+      }
+      if (op === "dispatch") {
+        if (!MEMBERS.some((m) => m.memberId === b.assigneeMemberId)) fieldErrors.push({ field: "assigneeMemberId", reason: "NotInScope" });
+        if (typeof b.dueAt !== "string" || Number.isNaN(Date.parse(b.dueAt))) fieldErrors.push({ field: "dueAt", reason: "Pattern" });
+        if (typeof b.requirements !== "string" || cp(b.requirements) > 4000 || b.requirements.trim().length === 0) fieldErrors.push({ field: "requirements", reason: "NotBlank" });
+      }
+      if (op === "remediation-submissions") {
+        if (typeof b.evidenceSetId !== "string" || !b.evidenceSetId) fieldErrors.push({ field: "evidenceSetId", reason: "NotBlank" });
+        if (typeof b.statement !== "string" || cp(b.statement) > 4000 || b.statement.trim().length === 0) fieldErrors.push({ field: "statement", reason: "NotBlank" });
+      }
       if (op === "verifications") {
         if (!["PASS", "FAIL"].includes(b.decision)) fieldErrors.push({ field: "decision", reason: "Pattern" });
         else if (b.decision === "FAIL" && !reasonOk) fieldErrors.push({ field: "reason", reason: "NotBlank" });
@@ -293,13 +404,22 @@ export function createMockServer(options = {}) {
       if (fieldErrors.length) return err(res, 400, "INVALID_REQUEST", "Validation failed", { fieldErrors });
       if (b.expectedVersion !== row.version) return err(res, 409, "VERSION_CONFLICT", "Stale version", { currentVersion: row.version });
 
-      const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING" }[op];
-      if (row.state !== from) return err(res, 409, "COMMAND_CONFLICT", "State does not allow this command");
+      const from = { "workflow-initialization": "DISCOVERED", "confirm/person": "PERSON_CONFIRM_PENDING", "confirm/safety": "SAFETY_CONFIRM_PENDING", verifications: "ACCEPTANCE_PENDING", "remediation-submissions": "RECTIFYING" }[op];
+      const stateOk =
+        op === "close-not-established"
+          ? row.state === (b.stage === "PERSON" ? "PERSON_CONFIRM_PENDING" : "SAFETY_CONFIRM_PENDING")
+          : op === "dispatch"
+            ? row.state === "SAFETY_DISPATCH_PENDING" || (row.state === "RECTIFYING" && !row[ASSIGNED])
+            : row.state === from;
+      if (!stateOk) return err(res, 409, "COMMAND_CONFLICT", "State does not allow this command");
       if (op === "workflow-initialization") row.state = "PERSON_CONFIRM_PENDING";
       else if (op === "confirm/person") row.state = "SAFETY_CONFIRM_PENDING";
       else if (op === "confirm/safety") { row.state = "SAFETY_DISPATCH_PENDING"; row.grade = b.grade; }
+      else if (op === "close-not-established") row.state = "NOT_ESTABLISHED";
+      else if (op === "dispatch") { row.state = "RECTIFYING"; row[ASSIGNED] = true; }
+      else if (op === "remediation-submissions") row.state = "ACCEPTANCE_PENDING";
       else if (b.decision === "PASS") row.state = "CLOSED";
-      else { row.state = "RECTIFYING"; row.roundNo += 1; }
+      else { row.state = "RECTIFYING"; row.roundNo += 1; row[ASSIGNED] = false; }
       if (op === "confirm/person" || op === "confirm/safety") {
         const stage = op === "confirm/person" ? "PERSON" : "SAFETY";
         reviewEntries.set(row.id, [...(reviewEntries.get(row.id) ?? []), {

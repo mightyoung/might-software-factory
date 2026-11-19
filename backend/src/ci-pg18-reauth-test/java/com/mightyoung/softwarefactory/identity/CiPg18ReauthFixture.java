@@ -33,7 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Owned fresh CI target only. No proof, issuance/revoke receipt or revocation fence is seeded. */
 final class CiPg18ReauthFixture implements AutoCloseable {
     static final String ROLE="msf_ci_reauth_runtime";
-    static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","19","20","21","22","23","24");
+    static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35");
     static final Set<String> PHASES=Set.of("open","target-version","target-marker","empty-schema","migrate","history","framework-schema","reauth-schema","runtime-role","runtime-rights","seed-identity","activate-authority","closed","unknown");
     static final List<String> REQUIRED_FUNCTIONS=List.of("public.require_sensitive_global_guard()","public.require_sensitive_enforcement()","public.require_sensitive_source(character varying,uuid,uuid,bigint)");
     private final CiPg18EphemeralTarget target;

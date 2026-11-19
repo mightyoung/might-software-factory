@@ -9,6 +9,7 @@ import {
 } from "../../adapters/findingLedger";
 import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
+import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetails } from "../../components/FindingDetails";
 import { FindingReportForm } from "../../components/FindingReportForm";
@@ -20,7 +21,7 @@ import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { findingLedgerSchema } from "./schema";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
-import { navigate, useLocation } from "../../routing/router";
+import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
   /** Session mode controls demo wording independently of adapter metadata capabilities. */
@@ -35,6 +36,7 @@ interface FindingsLedgerProps {
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
   commandAdapter?: FindingCommandAdapter;
+  evidenceAdapter?: FindingEvidenceAdapter;
   canReport?: boolean;
   /** 当前登录者标识；传给上报表单用于登录失效后恢复草稿。 */
   draftKey?: string;
@@ -67,6 +69,7 @@ function FindingsLedgerBody({
   synthetic,
   submitAdapter,
   commandAdapter,
+  evidenceAdapter,
   canReport = false,
   draftKey,
   onUnauthenticated,
@@ -77,7 +80,13 @@ function FindingsLedgerBody({
   const location = useLocation();
   const [path, search = ""] = location.split("?");
   const selectionReady = useRef(!resetInitialSelection);
-  const selectedFindingId = selectionReady.current ? new URLSearchParams(search).get("caseId") : null;
+  const params = new URLSearchParams(search);
+  // tab=1：详情 / 新建上报在独立标签页里整页展示，不再占用台账右侧面板。
+  const standalone = params.get("tab") === "1";
+  const reporting = standalone && params.get("report") === "1";
+  const relatedId = params.get("related");
+  const relatedTo = reporting && relatedId ? { id: relatedId, code: params.get("relatedCode") ?? relatedId } : null;
+  const selectedFindingId = selectionReady.current ? params.get("caseId") : null;
   useEffect(() => {
     if (selectionReady.current) return;
     selectionReady.current = true;
@@ -103,13 +112,11 @@ function FindingsLedgerBody({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
-  const [reporting, setReporting] = useState(false);
-  const reportButtonRef = useRef<HTMLButtonElement>(null);
-  const restoreFocus = useRef(false);
   const detailController = useRef<AbortController | null>(null);
   const showReport = canReport && submitAdapter !== undefined && view === "all";
 
   useEffect(() => {
+    if (standalone) { setLoading(false); return; }
     let current = true;
     const controller = new AbortController();
     setLoading(true);
@@ -128,7 +135,7 @@ function FindingsLedgerBody({
         if (!current || controller.signal.aborted) return;
         const kind = classifyFindingLedgerReadFailure(error);
         setListError(kind);
-        if (published) { setDefinition(null); setPage(firstPage); setDetailSnapshot({ record: null, definition: null }); setDetailError(kind); setReporting(false); }
+        if (published) { setDefinition(null); setPage(firstPage); setDetailSnapshot({ record: null, definition: null }); setDetailError(kind); }
         if (kind === "unauthenticated" || kind === "forbidden") {
           detailController.current?.abort();
           setDetailSnapshot({ record: null, definition: null });
@@ -136,7 +143,6 @@ function FindingsLedgerBody({
           setDetailLoading(false);
           setSelectedIds(new Set());
           setPage(firstPage);
-          setReporting(false);
           navigate(path, true);
         }
         if (kind === "unauthenticated") onUnauthenticated?.();
@@ -149,7 +155,7 @@ function FindingsLedgerBody({
       current = false;
       controller.abort();
     };
-  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view, path]);
+  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view, path, standalone]);
 
   useEffect(() => {
     let current = true;
@@ -192,22 +198,15 @@ function FindingsLedgerBody({
     };
   }, [adapter, detailRefreshKey, selectedFindingId]);
 
-  useEffect(() => {
-    if (!reporting && restoreFocus.current) {
-      restoreFocus.current = false;
-      reportButtonRef.current?.focus();
-    }
-  }, [reporting]);
-
-  function openReport() {
-    // 详情与上报共用右侧面板，打开上报时先关闭详情。
-    if (selectedFindingId) navigate(path, true);
-    setReporting(true);
+  function openReport(related: { id: string; code: string } | null = null) {
+    const extra = related ? `&related=${encodeURIComponent(related.id)}&relatedCode=${encodeURIComponent(related.code)}` : "";
+    openInNewTab(`${path}?tab=1&report=1${extra}`);
   }
 
-  function closeReport() {
-    restoreFocus.current = true;
-    setReporting(false);
+  /** 独立标签页里“关闭”：能关就关；不是脚本打开的标签页关不掉，就退回台账。 */
+  function closeTab() {
+    closeCurrentTab();
+    navigate(path, true);
   }
 
   function handleSubmitted() {
@@ -217,8 +216,7 @@ function FindingsLedgerBody({
   }
 
   function openSubmitted(id: string) {
-    setReporting(false);
-    navigate(`${path}?caseId=${encodeURIComponent(id)}`);
+    navigate(`${path}?tab=1&caseId=${encodeURIComponent(id)}`, true);
   }
 
   function updateQuery(key: string, value: QueryValue) {
@@ -240,7 +238,7 @@ function FindingsLedgerBody({
   }
 
   function openDetail(record: FindingRecord) {
-    navigate(`${path}?caseId=${encodeURIComponent(record.id)}`);
+    openInNewTab(`${path}?tab=1&caseId=${encodeURIComponent(record.id)}`);
   }
 
   function goToPage(index: number) {
@@ -252,16 +250,15 @@ function FindingsLedgerBody({
   const pageCount = Math.max(1, page.pageCount);
 
   return (
-    <div className={`ledger-layout ${selectedFindingId || reporting ? "ledger-with-detail" : ""}`}>
-      {/* 上报面板打开时主区域不可交互，避免带着未提交内容切换到别的记录或筛选。 */}
-      <section className="ledger-main" aria-label={title} inert={reporting}>
+    <div className={`ledger-layout ${standalone ? "ledger-standalone" : ""}`}>
+      {!standalone && <section className="ledger-main" aria-label={title}>
         <div className="page-heading">
           <div>
             <h1>{view === "all" ? definition?.title ?? title : title}</h1>
             <p>{description}</p>
           </div>
           {showReport && (
-            <button ref={reportButtonRef} type="button" className="button button-primary" onClick={openReport}>
+            <button type="button" className="button button-primary" onClick={() => openReport()}>
               新建上报
             </button>
           )}
@@ -350,16 +347,17 @@ function FindingsLedgerBody({
           </div>
         </div>
         )}
-      </section>
+      </section>}
 
       {reporting && submitAdapter && (
         <FindingReportForm
           adapter={submitAdapter}
-          onClose={closeReport}
+          onClose={closeTab}
           onSubmitted={handleSubmitted}
           onOpenSubmitted={openSubmitted}
           onUnauthenticated={onUnauthenticated}
           draftKey={draftKey}
+          {...(relatedTo ? { relatedTo } : {})}
         />
       )}
 
@@ -369,9 +367,12 @@ function FindingsLedgerBody({
           finding={detail}
           loading={detailLoading}
           error={detailError}
-          onClose={() => navigate(path, true)}
+          onClose={closeTab}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}
+          evidenceAdapter={evidenceAdapter}
+          onOpenRelated={(id) => openInNewTab(`${path}?tab=1&caseId=${encodeURIComponent(id)}`)}
+          {...(submitAdapter ? { onCreateRelated: (record: FindingRecord) => openReport({ id: record.id, code: record.code }) } : {})}
           onForbidden={() => { setDetailSnapshot({ record: null, definition: null }); setDetailError("forbidden"); }}
           onCommandChanged={() => {
             setDetailRefreshKey((value) => value + 1);

@@ -37,8 +37,12 @@ final class NativePublicationReadJdbc {
     }
 
     Object query(RiskPublicationSqlCatalog.Operation operation, Object[] arguments, ResultSetExtractor<?> extractor) {
+        return query(operation,arguments,extractor,null);
+    }
+    Object query(RiskPublicationSqlCatalog.Operation operation,Object[] arguments,ResultSetExtractor<?> extractor,NativeRiskRecovery recovery){
         if (extractor == null || operation.kind() == RiskPublicationSqlCatalog.Kind.UPDATE) throw unavailable();
         var lease = new ReadLease(invocation.get(), TransactionSynchronizationManager.getResource(canonical));
+        lease.recovery=recovery;
         Connection connection = null;
         PreparedStatement statement = null;
         ResultSet rows = null;
@@ -49,7 +53,8 @@ final class NativePublicationReadJdbc {
             statement = connection.prepareStatement(operation.sql());
             PreparedStatement guarded = wrap(statement, PreparedStatement.class, lease);
             if (ordinary.getFetchSize() != -1) guarded.setFetchSize(ordinary.getFetchSize());
-            if (ordinary.getMaxRows() != -1) guarded.setMaxRows(ordinary.getMaxRows());
+            if(recovery!=null)guarded.setMaxRows(257);
+            else if (ordinary.getMaxRows() != -1) guarded.setMaxRows(ordinary.getMaxRows());
             DataSourceUtils.applyTimeout(guarded, canonical, ordinary.getQueryTimeout());
             new ArgumentPreparedStatementSetter(arguments).setValues(guarded);
             lease.require();
@@ -128,6 +133,7 @@ final class NativePublicationReadJdbc {
 
     private final class ReadLease {
         final Object frame;
+        NativeRiskRecovery recovery;
         final Object initialHolder;
         final Thread thread = Thread.currentThread();
         Object holder;
@@ -195,6 +201,7 @@ final class NativePublicationReadJdbc {
                 try {
                     if (name.equals("close")) closed.sent = true;
                     Object result = method.invoke(raw, args);
+                    if(lease.recovery!=null&&type==ResultSet.class&&name.equals("getString")&&args.length==1&&"SERIALIZED_EVENT".equals(args[0])&&result instanceof String text)lease.recovery.serialized(text);
                     if (type == ResultSet.class && name.equals("next") && Boolean.TRUE.equals(result)) {
                         inventory.requireRow(((ResultSet) raw).getString("EVENT_TYPE"), ((ResultSet) raw).getString("LISTENER_ID"));
                     }

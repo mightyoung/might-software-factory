@@ -45,9 +45,27 @@ export const findingUrgencyLabels: Record<FindingUrgency, string> = {
 export const workflowSteps = ["发现上报", "一人确认", "安全部门确认", "安全部门派单", "整改", "安全验收"] as const;
 
 export interface FindingHistoryEntry {
+  /** 服务端持久轨迹 ID；合成数据可不提供。 */
+  id?: string;
   at: string;
   title: string;
   note: string;
+}
+
+export interface SubmittedRemediation {
+  id: string;
+  roundNo: number;
+  statement: string;
+  submittedAt: string;
+  submitterMemberId: string;
+  /** 当前成员名称；缺失时不推断历史姓名。 */
+  submitterName: string | null;
+  evidence: readonly {
+    itemId: string;
+    fileId: string;
+    sha256: string;
+    verificationLevel: "CONTENT" | "SCANNED_CONTENT_V2";
+  }[];
 }
 
 export interface FindingRecord {
@@ -71,12 +89,19 @@ export interface FindingRecord {
   reviewCycle?: number;
   reviewProtocol?: "LEGACY" | "CYCLE_V1";
   history: readonly FindingHistoryEntry[];
+  /** 服务端详情返回有界轨迹，为 true 时还有更早记录。 */
+  historyTruncated?: boolean;
+  /** 详情提供的持久整改提交与该次提交固定的证据引用。旧服务可缺省。 */
+  submittedRemediations?: readonly SubmittedRemediation[];
+  submittedRemediationsTruncated?: boolean;
   /** 以下字段只有通过上报表单创建的记录才有；发现时间与上报时间分开保存，补报不改写发现时间。 */
   foundAt?: string;
   source?: FindingSource;
   urgency?: FindingUrgency;
   interimMeasure?: string;
   backfill?: boolean;
+  /** 本记录是基于哪条“未成立”记录补充新证据创建的。 */
+  relatedFindingId?: string;
 }
 
 export interface FindingAction {

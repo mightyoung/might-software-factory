@@ -3,14 +3,23 @@ import { classifyHttpError } from "../api/classifyError";
 import { ApiError, type HttpClient } from "../api/httpClient";
 import { SessionError, type AppMenu, type ApplicationId, type SessionBootstrap } from "../domain/session";
 import type { Credentials, SessionAdapter } from "./sessionAdapter";
+import { applicationPath } from "../routing/entityPaths";
 
 type BootstrapResponse = components["schemas"]["SessionBootstrapResponse"];
 type MenuResponse = components["schemas"]["ApplicationMenuResponse"];
 const UI_PERMISSIONS: Readonly<Record<string, string>> = {
   "finding.read": "safety.finding.read",
   "finding.create": "safety.finding.report",
+  "equipment.read": "equipment.overview.read",
+  "platform.permission.read": "platform.permission.read",
+  "platform.permission.manage": "platform.permission.manage",
 };
-const APPLICATIONS = new Set<string>(["safety", "equipment", "platform"]);
+const LEGACY_ENTRY: Readonly<Record<string, string>> = { safety: "safety/", equipment: "equipment/", platform: "platform/" };
+const KEY = /^[a-z][a-z0-9_-]{0,63}$/;
+const CANONICAL = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
+function validApplication(app: { id: string; entryPath: string }) {
+  return KEY.test(app.id) && (applicationPath(app.id, app.entryPath) || (Object.hasOwn(LEGACY_ENTRY, app.id) && app.entryPath.startsWith(LEGACY_ENTRY[app.id]!) && !/[?%#\\\u0000-\u001f]/.test(app.entryPath) && !app.entryPath.split("/").includes("..")));
+}
 function permission(value: string): string | undefined {
   return Object.hasOwn(UI_PERMISSIONS, value) ? UI_PERMISSIONS[value] : undefined;
 }
@@ -42,8 +51,9 @@ function toBootstrap(body: BootstrapResponse["data"]): SessionBootstrap {
     actor: { id: current.actorId, displayName: current.displayName },
     identityScope: { accountId: current.accountId, memberId: current.memberId },
     tenant: { id: current.tenantId, name: current.tenantName },
-    applications: body.applications.filter((app) => APPLICATIONS.has(app.id)).map((app) => ({ ...app, id: app.id as ApplicationId })),
+    applications: body.applications.filter(validApplication).map((app) => ({ ...app, id: app.id as ApplicationId })),
     permissions: permissions(body.permissions),
+    canonicalPermissions: body.permissions.filter(value => CANONICAL.test(value)),
   };
 }
 
@@ -115,8 +125,11 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
         if (data.applicationId !== applicationId) throw new SessionError("unavailable", false);
         const granted = new Set(permissions(data.permissions));
         const nodes = data.nodes.flatMap((node) => {
+          if (!validApplication({ id: applicationId, entryPath: node.path })) return [];
           const mapped = permission(node.permission);
-          return mapped && granted.has(mapped) ? [{ ...node, permission: mapped }] : [];
+          if (mapped && granted.has(mapped)) return [{ ...node, permission: mapped }];
+          if (applicationPath(applicationId, node.path) && CANONICAL.test(node.permission) && data.permissions.includes(node.permission)) return [{ ...node }];
+          return [];
         });
         return { applicationId, title: data.title, nodes } satisfies AppMenu;
       } catch (error) {

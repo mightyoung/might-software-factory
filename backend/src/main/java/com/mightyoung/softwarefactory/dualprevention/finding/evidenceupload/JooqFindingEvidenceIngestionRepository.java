@@ -64,8 +64,14 @@ public final class JooqFindingEvidenceIngestionRepository implements FindingEvid
                     select id from public.finding_evidence_upload_intent where tenant_id=cast(? as uuid)
                       and (cast(? as uuid) is null or id>cast(? as uuid))
                       and ((state='INTENT_CREATED' and (cancel_requested or expires_at<=current_timestamp))
-                        or (state='QUARANTINED') or (state='RETRY_WAIT' and next_attempt_at<=current_timestamp)
+                        or state in ('QUARANTINED','VERIFIED_PENDING_FINALIZATION') or (state='RETRY_WAIT' and next_attempt_at<=current_timestamp)
                         or state in ('FAILED','REJECTED','CANCELLED','EXPIRED')
+                        or (state='FINALIZED' and exists(select 1 from public.file_ingestion_allocation a
+                            left join lateral(select event_kind,retained_bytes from public.file_ingestion_allocation_event
+                                where tenant_id=a.tenant_id and allocation_id=a.id order by event_no desc limit 1) e on true
+                            where a.tenant_id=finding_evidence_upload_intent.tenant_id and a.intent_id=finding_evidence_upload_intent.id
+                              and coalesce(e.retained_bytes,a.reserved_bytes)>0
+                              and coalesce(e.event_kind,'RETAIN') not in ('TRANSFER_FINALIZED','DISPOSAL_CONFIRMED')))
                         or (state in ('RECEIVING','SCANNING') and lease_until<=current_timestamp)
                         or (state in ('QUARANTINED','RETRY_WAIT','VERIFIED_PENDING_FINALIZATION')
                             and (cancel_requested or expires_at<=current_timestamp)))
@@ -83,6 +89,36 @@ public final class JooqFindingEvidenceIngestionRepository implements FindingEvid
         @Override public TechnicalIntent compareAndSet(TechnicalIntent expected,Change c,UUID auditActor,String policyVersion){
             try { return persistChange(expected,c,auditActor,policyVersion); }
             catch(RuntimeException failure){invalidate();throw failure;}
+        }
+        @Override public TechnicalIntent finalizeEvidence(TechnicalIntent expected,
+                com.mightyoung.softwarefactory.files.VerifiedContentCheckpoint verified,
+                UUID evidenceItemId,UUID fileLinkId,UUID actor){
+            try {
+                requireOpen();var r=verified.receipt();var declaration=expected.declaration();
+                if(intent!=expected||intent.phase()!=Phase.VERIFIED_PENDING_FINALIZATION||intent.cancelRequested()
+                        ||!now().isBefore(declaration.expiresAt())||!tenantId.equals(r.tenantId())
+                        ||!declaration.id().equals(r.intentId())||!expected.contentReceiptId().equals(r.receiptId())
+                        ||!expected.scanProofId().equals(r.scanProofId()))throw conflict();
+                var finding=finding(declaration.findingId()).orElseThrow(FindingNotVisibleException::new);
+                var set=evidenceSet(declaration.evidenceSetId()).orElseThrow(FindingNotVisibleException::new);
+                if(finding.version()!=expected.expectedFindingVersion()||set.revision()!=expected.expectedEvidenceRevision()||set.sealed())throw conflict();
+                if(!Boolean.TRUE.equals(dsl.fetchValue("""
+                    select exists(select 1 from public.file_ingestion_publication
+                        where tenant_id=? and intent_id=? and evidence_item_id=? and file_link_id=?
+                          and file_id=? and content_receipt_id=? and publication_actor_id=?
+                          and append_transaction_id=pg_current_xact_id())
+                    """,tenantId,declaration.id(),evidenceItemId,fileLinkId,r.fileId(),r.receiptId(),actor)))throw conflict();
+                if(dsl.execute("""
+                    insert into public.evidence_item(tenant_id,id,evidence_set_id,source_kind,file_id,sha256,state,captured_at,verification_level)
+                    values(?,?,?,'FILE',?,?,'READY',cast(? as timestamptz),'SCANNED_CONTENT_V2')
+                    """,tenantId,evidenceItemId,declaration.evidenceSetId(),r.fileId(),r.sha256(),offset(r.issuedAt()))!=1)throw conflict();
+                if(dsl.execute("update public.evidence_set set state='READY',verified_at=cast(? as timestamptz) where tenant_id=? and id=? and submission_sealed_at is null",
+                        offset(r.issuedAt()),tenantId,declaration.evidenceSetId())!=1)throw conflict();
+                var c=Change.unchanged(expected);
+                return persistChange(expected,new Change(Phase.FINALIZED,c.leaseEpoch(),c.attemptNo(),c.attemptId(),c.reservedScanAttemptId(),
+                        c.leaseToken(),c.leaseUntil(),c.heartbeatAt(),c.nextAttemptAt(),c.quarantineAllocationId(),c.immutableAllocationId(),
+                        c.scanProofId(),c.contentReceiptId(),c.scannerGeneration(),c.lastErrorCode(),c.cancelRequested(),c.currentExecutionId()),actor,expected.policyVersion());
+            }catch(RuntimeException failure){invalidate();throw failure;}
         }
         private TechnicalIntent persistChange(TechnicalIntent expected,Change c,UUID auditActor,String policyVersion){
             requireOpen();Objects.requireNonNull(c);Objects.requireNonNull(auditActor);Objects.requireNonNull(policyVersion);

@@ -1,0 +1,14 @@
+services:
+  backend:
+    image: might-software-factory-backend:local
+    build:
+      context: ../..
+      dockerfile: deploy/nas/Dockerfile
+    environment:
+      LAN_PG_APP_JDBC_URL: ${LAN_PG_APP_JDBC_URL:?Set LAN_PG_APP_JDBC_URL in .env.nas}
+      LAN_PG_APP_USERNAME: ${LAN_PG_APP_USERNAME:?Set LAN_PG_APP_USERNAME in .env.nas}
+      LAN_PG_APP_PASSWORD: ${LAN_PG_APP_PASSWORD:?Set LAN_PG_APP_PASSWORD in .env.nas}
+      TZ: Asia/Shanghai
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-18080}:8080"
+    restart: "no"

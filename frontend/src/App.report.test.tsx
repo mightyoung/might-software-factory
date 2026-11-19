@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { setTabOpener } from "./routing/router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { createSyntheticSessionAdapter } from "./adapters/sessionAdapter";
@@ -76,36 +77,24 @@ describe("上报流程", () => {
     expect(within(panel).getByText("已拉警戒线")).toBeInTheDocument();
     expect(within(panel).getByText("本人（演示）")).toBeInTheDocument();
     expect(within(panel).getAllByText("待一人确认").length).toBeGreaterThan(0);
-    expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000008");
-
-    expect(await screen.findByText("共 8 条演示记录")).toBeInTheDocument();
-    const rows = screen.getAllByRole("row");
-    expect(within(rows[1]!).getByText("DEMO-HZ-008")).toBeInTheDocument();
+    expect(window.location.search).toBe("?tab=1&caseId=00000000-0000-4000-8000-000000000008");
   });
 
-  it("上报面板打开时主区域不可交互，关闭后恢复并把焦点还给“新建上报”按钮", async () => {
+  it("新建上报在新标签页打开：当前台账不变，不出现右侧面板", async () => {
+    const opened: string[] = [];
+    setTabOpener((url) => { opened.push(url); });
     renderAs("demo.safety");
     await screen.findByRole("heading", { name: "隐患台账" });
-    const main = document.querySelector(".ledger-main")!;
-    expect(main).not.toHaveAttribute("inert");
-
     fireEvent.click(openButton()!);
-    expect(main).toHaveAttribute("inert");
-    expect(screen.getByRole("complementary", { name: "新建上报面板" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "关闭上报" }));
-    await waitFor(() => expect(main).not.toHaveAttribute("inert"));
+    expect(opened).toEqual([`${window.location.pathname}?tab=1&report=1`]);
     expect(screen.queryByRole("complementary", { name: "新建上报面板" })).not.toBeInTheDocument();
-    expect(openButton()).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "隐患台账" })).toBeInTheDocument();
   });
 
-  it("上报与详情共用右侧面板：已打开详情时点“新建上报”会先关闭详情", async () => {
-    renderAs("demo.safety", `${T}/safety/findings?caseId=00000000-0000-4000-8000-000000000001`);
-    expect(await screen.findByRole("complementary", { name: "隐患详情面板" })).toBeInTheDocument();
-    fireEvent.click(openButton()!);
-    expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "新建上报面板" })).toBeInTheDocument();
-    expect(window.location.search).toBe("");
+  it("独立标签页打开上报页：整页只有上报表单，没有台账", async () => {
+    renderAs("demo.safety", `${T}/safety/findings?tab=1&report=1`);
+    expect(await screen.findByRole("complementary", { name: "新建上报面板" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "隐患台账" })).not.toBeInTheDocument();
   });
 
   it("补报：发现时间早于 24 小时，详情里显示“补报”标记，发现时间保持原值", async () => {
@@ -187,7 +176,7 @@ describe("真实后端会话（非合成）", () => {
     noDemoWording();
 
     fireEvent.click(screen.getByRole("button", { name: "关闭详情" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建上报/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /新建上报/ }));
     expect(await screen.findByRole("option", { name: "一车间" })).toBeInTheDocument();
     expect(screen.queryByText("后端暂未接入")).not.toBeInTheDocument();
     // 适配器声明的紧急程度：没有后端不接受的“紧急”档
@@ -329,13 +318,15 @@ describe("会话被动失效后的草稿恢复", () => {
     fireEvent.change(screen.getByLabelText("账号"), { target: { value: user } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
-    await screen.findByRole("heading", { name: "隐患台账" });
+    // 登录后回到失效前所在的地址：在上报标签页里是那张上报表单，否则是台账。
+    await waitFor(() => expect(
+      screen.queryByRole("complementary", { name: "新建上报面板" }) ?? screen.queryByRole("heading", { name: "隐患台账" }),
+    ).toBeTruthy());
   }
 
   it("同一个人重新登录后，上报表单恢复未提交的内容并提示", async () => {
     await fillAndExpire("demo.manager");
     await signInAs("demo.manager");
-    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
     expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("护栏连接件松动");
     expect(screen.getByLabelText(/所在位置/)).toHaveValue("北侧通道");
     expect(screen.getByText(/已恢复登录失效前还没提交的内容/)).toBeInTheDocument();
@@ -344,7 +335,6 @@ describe("会话被动失效后的草稿恢复", () => {
   it("换成另一个账号登录，看不到上一个人的草稿", async () => {
     await fillAndExpire("demo.manager");
     await signInAs("demo.admin");
-    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
     expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("");
     expect(screen.queryByText(/已恢复登录失效前/)).not.toBeInTheDocument();
   });
@@ -358,7 +348,8 @@ describe("会话被动失效后的草稿恢复", () => {
     fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
     await screen.findByRole("heading", { name: "登录" });
     await signInAs("demo.manager");
-    fireEvent.click(screen.getByRole("button", { name: "新建上报" }));
+    const open = screen.queryByRole("button", { name: "新建上报" });
+    if (open) fireEvent.click(open);
     expect(await screen.findByLabelText(/隐患描述/)).toHaveValue("");
   });
 });
