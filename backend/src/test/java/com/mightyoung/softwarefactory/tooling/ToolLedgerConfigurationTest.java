@@ -18,26 +18,35 @@ class ToolLedgerConfigurationTest {
     private final LedgerBinding binding=new ToolLedgerConfiguration().toolLedgerBinding();
     private final LedgerInputValidator inputs=new LedgerInputValidator();
     private final JsonMapper json=JsonMapper.builder().build();
-    @Test void registrationUsesOnlyTheGenericContractAndCreateOnlyScopeReference() {
+    @Test void registrationUsesTheGenericContractAndAuthorizedScopeReferenceForCreateAndEdit() {
         new LedgerBindingValidator().validate(binding);
         assertThat(binding.definition().appKey()).isEqualTo("tooling");
         assertThat(binding.storage().createDefaults()).containsEntry("itemState","NORMAL");
         assertThat(binding.storage().derivedFields()).containsExactly("organizationId");
-        assertThat(binding.referenceProviders().get("custodyScope").allowedUses()).containsExactly(LedgerDefinition.Use.CREATE);
+        assertThat(binding.referenceProviders().get("custodyScope").allowedUses()).containsExactlyInAnyOrder(LedgerDefinition.Use.CREATE,LedgerDefinition.Use.EDIT);
         assertThat(binding.referenceProviders().get("custodyScope").contextFields()).isEmpty();
         assertThat(new ToolLedgerConfiguration().toolingApplication().nodes().getFirst().permissions()).containsExactly("tool.read","tool.create","tool.update");
+    }
+    @Test void custodyScopeIsRequiredOnCreateAndOptionalForLegacyEdit() {
+        assertThat(binding.definitionFor(LedgerDefinition.Use.CREATE).inputFields().get("custodyScopeId").required()).isTrue();
+        assertThat(binding.definitionFor(LedgerDefinition.Use.EDIT).inputFields().get("custodyScopeId").required()).isFalse();
+        assertThatThrownBy(()->inputs.validate(binding,LedgerDefinition.Use.CREATE,"1",Map.of("code",node("TOOL-1"),"name",node("Fixture"))))
+                .isInstanceOf(LedgerInputException.class);
     }
     @Test void createNormalizesDescriptionFieldsAndKeepsOptionalNulls() {
         var result=inputs.validate(binding,LedgerDefinition.Use.CREATE,"1",Map.of("code",node("  TOOL-1  "),"name",node("  Fixture  "),"custodyScopeId",node(UUID.randomUUID().toString())));
         assertThat(result).containsEntry("code","TOOL-1").containsEntry("name","Fixture").containsEntry("model",null).containsEntry("description",null);
         assertThat(result).doesNotContainKeys("organizationId","itemState","tenantId");
     }
-    @Test void editCannotChangeCodeScopeStateOrIdentity() {
-        for(String key:List.of("code","custodyScopeId","organizationId","itemState","tenantId","id","version")) {
+    @Test void editCannotForgeCodeOrganizationStateOrIdentity() {
+        for(String key:List.of("code","organizationId","itemState","tenantId","id","version")) {
             assertThatThrownBy(()->inputs.validate(binding,LedgerDefinition.Use.EDIT,"1",Map.of("name",node("Changed"),key,node("injected")))).isInstanceOf(LedgerInputException.class);
         }
         var result=inputs.validate(binding,LedgerDefinition.Use.EDIT,"1",Map.of("name",node("Changed")));
-        assertThat(result).containsEntry("name","Changed").containsEntry("model",null).containsEntry("description",null);
+        assertThat(result).containsEntry("name","Changed").containsEntry("model",null).containsEntry("description",null).containsEntry("custodyScopeId",null);
+        UUID target=UUID.randomUUID();
+        assertThat(inputs.validate(binding,LedgerDefinition.Use.EDIT,"1",Map.of("name",node("Changed"),"custodyScopeId",node(target.toString()))))
+                .containsEntry("custodyScopeId",target);
     }
     @Test void lengthsUseUnicodeCodePointsAndUnknownDefinitionsFailClosed() {
         var body=new HashMap<String,JsonNode>();body.put("code",node("TOOL-2"));body.put("name",node("𝌆".repeat(200)));body.put("custodyScopeId",node(UUID.randomUUID().toString()));

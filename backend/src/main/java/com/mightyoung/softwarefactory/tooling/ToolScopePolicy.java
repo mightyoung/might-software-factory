@@ -10,8 +10,11 @@ import static org.jooq.impl.DSL.*;
 
 /** Normal catalog reads need RBAC organization scope, never keeper membership.
  * Writes additionally require the current keeper. NORMAL is a catalog state, not a promise of availability;
- * D1 has no borrowing/occupancy model. Qualification writers must use the tenant security writer lock. */
+ * Scope transfers share the locked tool row with issuance. Qualification writers use the tenant security writer lock. */
 final class ToolScopePolicy implements LedgerBinding.ScopePolicy {
+    @Override public Set<String> requiredFields(LedgerDefinition.Use use) {
+        return use==LedgerDefinition.Use.CREATE?Set.of("custodyScopeId"):Set.of();
+    }
     @Override public Condition visible(LedgerExecution execution) {
         var decision=execution.decision();
         Condition scoped=field(name("root","organization_id"),UUID.class).in(decision.organizationIds())
@@ -23,6 +26,7 @@ final class ToolScopePolicy implements LedgerBinding.ScopePolicy {
         return scoped.and(exists(selectOne().from(table(name("public","tool_custody_scope")).as("s")).where(scope)));
     }
     @Override public Map<String,Object> prepareCreate(LedgerExecution execution,Map<String,Object> values) {
+        if(values.get("custodyScopeId")==null) throw new LedgerInputException("custodyScopeId","required");
         UUID scope=uuid(values.get("custodyScopeId"));
         UUID organization=execution.dsl().select(field(name("s","organization_id"),UUID.class))
                 .from(table(name("public","tool_custody_scope")).as("s"))
@@ -32,13 +36,30 @@ final class ToolScopePolicy implements LedgerBinding.ScopePolicy {
         if(organization==null) throw new LedgerInputException("custodyScopeId","reference_not_visible");
         return Map.of("organizationId",organization);
     }
+    @Override public Map<String,Object> prepareUpdate(LedgerExecution execution,UUID id,Map<String,Object> current,Map<String,Object> values) {
+        Object requested=values.get("custodyScopeId");
+        UUID scope=uuid(requested==null?current.get("custodyScopeId"):requested);
+        Map<String,Object> prepared=new LinkedHashMap<>(values);
+        prepared.put("custodyScopeId",scope);
+        prepared.putAll(prepareCreate(execution,Map.of("custodyScopeId",scope)));
+        return Collections.unmodifiableMap(prepared);
+    }
     @Override public void requireUpdate(LedgerExecution execution,UUID id,Map<String,Object> current,Map<String,Object> proposed) {
-        for(String protectedKey:List.of("code","custodyScopeId","organizationId","itemState")) {
+        for(String protectedKey:List.of("code","itemState")) {
             if(!Objects.equals(current.get(protectedKey),proposed.get(protectedKey))) throw new AccessDeniedException("Tool identity and state cannot be edited");
         }
         if(!"NORMAL".equals(current.get("itemState"))) throw new AccessDeniedException("Tool is outside the normal catalog");
         Map<String,Object> derived=prepareCreate(execution,Map.of("custodyScopeId",uuid(current.get("custodyScopeId"))));
         if(!derived.get("organizationId").equals(uuid(current.get("organizationId")))) throw new AccessDeniedException("Tool scope organization changed");
+        Map<String,Object> destination=prepareCreate(execution,Map.of("custodyScopeId",uuid(proposed.get("custodyScopeId"))));
+        if(!destination.get("organizationId").equals(uuid(proposed.get("organizationId")))) throw new AccessDeniedException("Tool scope organization is invalid");
+        if(!uuid(current.get("custodyScopeId")).equals(uuid(proposed.get("custodyScopeId")))
+                && execution.dsl().fetchExists(selectOne().from(table(name("public","tool_loan_item")))
+                    .where(field(name("tenant_id"),UUID.class).eq(execution.decision().context().tenantId()))
+                    .and(field(name("tool_id"),UUID.class).eq(id))
+                    .and(field(name("issued_at")).isNotNull()).and(field(name("settled_at")).isNull()))) {
+            throw new LedgerException(409,"TOOL_IN_USE");
+        }
     }
     LedgerContracts.ReferenceData queryScopes(LedgerExecution execution,LedgerContracts.ReferenceRequest request) {
         int size=request.size()==null?20:request.size();

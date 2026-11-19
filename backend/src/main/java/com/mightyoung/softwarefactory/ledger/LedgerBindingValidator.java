@@ -55,6 +55,12 @@ public final class LedgerBindingValidator {
                 && !id.nullable() && id.selectable() && id.sortable(),"Invalid reserved query ID");
         for(var field:definition.querySchema().fields().values()) require(!field.operators().contains(
                 com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.FilterOperator.IN_SUBTREE),"Subtree queries are not supported by the standard ledger");
+        for(var use:java.util.List.of(LedgerDefinition.Use.CREATE,LedgerDefinition.Use.EDIT)) {
+            for(String field:binding.scopePolicy().requiredFields(use)) {
+                require(definition.inputFields().containsKey(field) && definition.inputFields().get(field).uses().contains(use),
+                        "Required field is unavailable for use");
+            }
+        }
         var queryFields=new HashSet<>(definition.querySchema().fields().keySet()); queryFields.remove("id");
         require(definition.fields().keySet().containsAll(queryFields),"Query field not registered for display");
         for(String name:queryFields) {

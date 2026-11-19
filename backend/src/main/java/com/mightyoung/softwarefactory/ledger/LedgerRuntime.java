@@ -11,6 +11,7 @@ import com.mightyoung.softwarefactory.identity.SessionSensitiveRequests;
 import jakarta.servlet.http.HttpServletRequest;
 import java.sql.Connection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -63,7 +64,7 @@ public final class LedgerRuntime {
                 try {var extra=actions.authorization().requireRead(captured,boundary,action(binding,other));execution(extra).requireCurrent();effective.add(extra.action().permissionCode());}
                 catch(AccessDeniedException denied) { /* Presentation omits an ungranted action; required action above still fails closed. */ }
             }
-            context.requireCurrent();return new LedgerContracts.DefinitionData(binding.definition(),use,effective);
+            context.requireCurrent();return new LedgerContracts.DefinitionData(binding.definitionFor(use),use,effective);
         });
     }
     public LedgerContracts.QueryData query(HttpServletRequest request,String app,String entity,LedgerContracts.QueryRequest input) {
@@ -149,7 +150,7 @@ public final class LedgerRuntime {
                 else {
                     current=repository.find(binding,context,id,true);
                     if(current.version()!=expected)throw new LedgerException(409,"VERSION_CONFLICT");
-                    requireUpdate(binding,context,current,values);writeValues=values;
+                    writeValues=requireUpdate(binding,context,current,values);
                 }
                 UUID commandId=UUID.randomUUID(),eventId=UUID.randomUUID();UUID target=id==null?UUID.randomUUID():id;
                 var row=verb.equals("CREATE")?repository.create(binding,context,target,writeValues):repository.update(binding,context,target,expected,writeValues);
@@ -167,9 +168,15 @@ public final class LedgerRuntime {
         Map<String,Object> prepared=new LinkedHashMap<>(binding.storage().createDefaults());prepared.putAll(values);prepared.putAll(derived);
         return Collections.unmodifiableMap(prepared);
     }
-    private void requireUpdate(LedgerBinding binding,LedgerExecution context,LedgerRepository.Row row,Map<String,Object> values) {
-        Map<String,Object> proposed=new LinkedHashMap<>(row.values());proposed.putAll(values);
+    private Map<String,Object> requireUpdate(LedgerBinding binding,LedgerExecution context,LedgerRepository.Row row,Map<String,Object> values) {
+        var prepared=binding.scopePolicy().prepareUpdate(context,row.id(),row.values(),values);
+        context.requireCurrent();
+        Set<String> writable=new HashSet<>(values.keySet());
+        writable.addAll(binding.storage().derivedFields());
+        if(prepared==null || !writable.containsAll(prepared.keySet()))throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
+        Map<String,Object> proposed=new LinkedHashMap<>(row.values());proposed.putAll(prepared);
         binding.scopePolicy().requireUpdate(context,row.id(),row.values(),Collections.unmodifiableMap(proposed));context.requireCurrent();
+        return Collections.unmodifiableMap(new LinkedHashMap<>(prepared));
     }
     private <T>T reading(HttpServletRequest request,BiFunction<CapturedHumanRequest,HumanSessionAuthorityTransaction.ReadBoundary,T> work) {
         if(TransactionSynchronizationManager.isActualTransactionActive())throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");

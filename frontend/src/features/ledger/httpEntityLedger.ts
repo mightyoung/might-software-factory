@@ -55,6 +55,7 @@ export function ledgerFailure(error: unknown): string {
   if (error.status === 401) return "会话已失效，输入已保留，请重新登录。";
   if (error.status === 403 || error.status === 404) return "当前没有执行权限，或记录不可见。输入已保留。";
   if (error.code === "DEFINITION_CONFLICT") return "字段定义已更新，输入已保留。请刷新定义并核对后重新提交。";
+  if (error.code === "TOOL_IN_USE") return "工装仍在借用中。请先完成归还接收，再调整保管范围。";
   if (error.code === "VERSION_CONFLICT") return "记录已被其他人修改，输入已保留。请读取最新记录并核对后重新提交。";
   if (error.code === "IDEMPOTENCY_CONFLICT") return "此次请求与原提交内容不一致，输入已保留，请核对原提交。";
   if (error.status === 409) return "记录或操作状态冲突，输入已保留，请刷新核对。";

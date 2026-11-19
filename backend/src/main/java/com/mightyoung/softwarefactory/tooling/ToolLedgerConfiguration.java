@@ -26,7 +26,7 @@ public class ToolLedgerConfiguration {
                 "code","code","name","name","model","model","description","description",
                 "custodyScopeId","custody_scope_id","organizationId","organization_id","itemState","item_state"),
                 Map.of("itemState","NORMAL"),Set.of("organizationId"),Set.of("organizationId","itemState")),
-                policy,Map.of("custodyScope",new LedgerBinding.ReferenceRegistration(Set.of(Use.CREATE),Set.of(),policy::queryScopes)));
+                policy,Map.of("custodyScope",new LedgerBinding.ReferenceRegistration(Set.of(Use.CREATE,Use.EDIT),Set.of(),policy::queryScopes)));
     }
     @Bean public ApplicationContribution toolingApplication() {
         return new ApplicationContribution("tooling","工装管理",List.of(new ApplicationContribution.Node(
@@ -47,7 +47,7 @@ public class ToolLedgerConfiguration {
             "name",input("名称",Type.TEXT,true,200,null,Set.of(Use.CREATE,Use.EDIT)),
             "model",input("型号",Type.TEXT,false,200,null,Set.of(Use.CREATE,Use.EDIT)),
             "description",input("说明",Type.MULTILINE_TEXT,false,4000,null,Set.of(Use.CREATE,Use.EDIT)),
-            "custodyScopeId",input("保管范围",Type.REFERENCE,true,0,"custodyScope",Set.of(Use.CREATE)));
+            "custodyScopeId",input("保管范围",Type.REFERENCE,false,0,"custodyScope",Set.of(Use.CREATE,Use.EDIT)));
         Map<String,FieldSchema> query=Map.of(
             "id",schema(FieldType.UUID,false,true,0,Set.of(FilterOperator.EQ,FilterOperator.IN),Set.of()),
             "code",schema(FieldType.TEXT,false,true,64,Set.of(FilterOperator.EQ,FilterOperator.CONTAINS),Set.of()),
@@ -60,7 +60,7 @@ public class ToolLedgerConfiguration {
         return new LedgerDefinition("tooling","tool","1","正常工装档案",fields,inputs,
             new EntitySchema("tool","1","id",List.of("code","name","model","custodyScopeId","itemState"),query),
             new LedgerDefinition.Layout(List.of("code","name","model","itemState"),List.of("code","name","model","description","custodyScopeId","organizationId","itemState"),
-                List.of("code","name","model","description","custodyScopeId"),List.of("name","model","description"),List.of("code","name","model","custodyScopeId","itemState")),
+                List.of("code","name","model","description","custodyScopeId"),List.of("name","model","description","custodyScopeId"),List.of("code","name","model","custodyScopeId","itemState")),
             new LedgerDefinition.Actions(new LedgerDefinition.Action("查看","tool.read"),new LedgerDefinition.Action("新增","tool.create"),new LedgerDefinition.Action("编辑","tool.update")),
             Map.of("custodyScope",new LedgerDefinition.Reference("保管范围")));
     }
