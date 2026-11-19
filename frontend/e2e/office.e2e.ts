@@ -1,6 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+// Univer waits 3 seconds after rendering before entering Steady, in addition to cold asset loading.
+const officeStartupTimeout = 15_000;
+
 async function signIn(page: Page) {
   await page.goto("/");
   await page.getByLabel("租户编码").fill("demo");
@@ -45,7 +48,7 @@ test("在线表格按需加载，导出的原生工作簿可以重新导入", as
   const dialog = page.getByRole("dialog", { name: "在线表格" });
   const editor = dialog.frameLocator("iframe");
   const save = editor.getByRole("button", { name: "导出工作簿 JSON" });
-  await expect(save).toBeEnabled();
+  await expect(save).toBeEnabled({ timeout: officeStartupTimeout });
   const exportWorkbook = () => downloadSnapshot(page, save);
   const original = await exportWorkbook();
   const sheet = original.sheets[original.sheetOrder[0]];
@@ -94,7 +97,7 @@ test("工装作业指导书可以在在线文档中重新打开、切换主题�
   const dialog = page.getByRole("dialog", { name: "在线文档" });
   const frame = dialog.frameLocator('iframe[title="在线文档编辑器"]');
   const save = frame.getByRole("button", { name: "导出文档 JSON" });
-  await expect(save).toBeEnabled();
+  await expect(save).toBeEnabled({ timeout: officeStartupTimeout });
   expect(requestedEditors).toEqual(["/office/docs.html"]);
   const exportDocument = () => downloadSnapshot(page, save);
   const sample = await exportDocument();
