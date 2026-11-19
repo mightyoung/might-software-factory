@@ -171,3 +171,53 @@ test("键盘：改密对话框的焦点陷阱在真实浏览器里成立，Esc �
   await expect(dialog).toHaveCount(0);
   await expect(menuButton).toBeFocused();
 });
+
+test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
+  // Test-owned admin contract projection; this checks UI interaction, not server authorization.
+  const permissionCodes = ["finding.read", "platform.permission.read", "platform.permission.manage"];
+  await page.route("**/api/v1/session/bootstrap", async route => {
+    const response = await route.fetch();
+    if (!response.ok()) { await route.fulfill({ response }); return; }
+    const body = await response.json();
+    body.data.permissions = [...new Set([...body.data.permissions, ...permissionCodes])];
+    body.data.applications.push({ id: "platform", name: "系统设置", entryPath: "platform/permissions" });
+    await route.fulfill({ response, json: body });
+  });
+  await page.route("**/api/v1/applications/platform/menu", route => route.fulfill({ json: { data: {
+    schemaVersion: 1, applicationId: "platform", title: "系统设置",
+    nodes: [{ id: "permissions", label: "权限配置", path: "platform/permissions", permission: "platform.permission.read" }],
+    permissions: permissionCodes, authorization: { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: 1 },
+  } } }));
+  await page.route("**/api/v1/admin/permissions", route => route.fulfill({ json: { items: [
+    { code: "finding.read", application: "safety", label: "查看隐患" },
+    { code: "risk.read", application: "safety", label: "查看风险管控" },
+  ] } }));
+  await page.route("**/api/v1/admin/roles", route => route.fulfill({ json: { roles: [
+    { id: "ui-role", code: "reporter", name: "上报人", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
+  ] } }));
+  const writes: string[] = [];
+  page.on("request", request => {
+    if (request.method() === "PUT" && request.url().includes("/api/v1/admin/")) writes.push(request.url());
+  });
+  await signIn(page);
+  await page.goto(new URL(page.url()).pathname.replace("safety/findings", "platform/permissions"));
+  await expect(page.getByRole("heading", { name: "上报人" })).toBeVisible();
+  const permission = page.getByRole("checkbox", { name: "查看风险管控" });
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(save).toBeDisabled();
+    await permission.focus();
+    await page.keyboard.press("Space");
+    await expect(permission).toBeChecked();
+    await expect(save).toBeEnabled();
+    await scan(page, `权限配置（${theme}）`);
+    const discard = page.getByRole("button", { name: "放弃修改" });
+    await discard.focus();
+    await page.keyboard.press("Enter");
+    await expect(permission).not.toBeChecked();
+    await expect(save).toBeDisabled();
+  }
+  expect(writes).toEqual([]);
+});

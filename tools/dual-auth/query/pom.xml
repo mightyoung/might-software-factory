@@ -1,0 +1,15 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.mightyoung</groupId><artifactId>might-software-factory</artifactId>
+        <version>0.1.0-SNAPSHOT</version><relativePath>../../../pom.xml</relativePath>
+    </parent>
+    <artifactId>dual-auth-query-probe</artifactId>
+    <dependencies>
+        <dependency><groupId>org.casbin</groupId><artifactId>jcasbin</artifactId><version>1.99.0</version><scope>test</scope></dependency>
+        <dependency><groupId>org.jooq</groupId><artifactId>jooq</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+    </dependencies>
+</project>
