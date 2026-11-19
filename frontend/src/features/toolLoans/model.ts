@@ -22,6 +22,7 @@ export interface LoanRecord {
   organizationId: string;
   custodyScopeId: string;
   purpose: string;
+  usageLocation?: string | null;
   toolIds: string[];
   tools?: { id: string; label: string }[];
   awaitingOtherCustodian?: boolean;
@@ -29,10 +30,12 @@ export interface LoanRecord {
   createdAt: string;
   updatedAt: string;
 }
-export interface LoanInput { definitionVersion: string; organizationId: string; custodyScopeId: string; purpose: string; toolIds: string[]; expectedVersion?: number }
+export interface LoanInput { definitionVersion: string; organizationId: string; custodyScopeId: string; purpose: string; usageLocation?: string; toolIds: string[]; expectedVersion?: number }
 export interface LoanScope { id: string; label: string; organizationId: string }
 export interface LoanCandidates { departments: { id: string; label: string }[]; scopes: LoanScope[]; tools: { id: string; label: string }[] }
+export interface LoanDefinition { definitionVersion: "1" | "2"; usageLocationRequired: boolean; usageLocationMaxLength: number }
 export interface LoanAdapter {
+  definition(signal?: AbortSignal): Promise<LoanDefinition>;
   lossQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
   lossDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   receiveQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
@@ -56,6 +59,8 @@ function record(value: unknown): LoanRecord {
     && UUID.test(String(value.organizationId)) && UUID.test(String(value.custodyScopeId)) && typeof value.purpose === "string"
     && Array.isArray(value.toolIds) && value.toolIds.every(id => typeof id === "string" && UUID.test(id))
     && typeof value.createdAt === "string" && typeof value.updatedAt === "string");
+  requireProtocol(value.usageLocation === undefined || value.usageLocation === null || (typeof value.usageLocation === "string" && value.usageLocation.trim().length > 0 && [...value.usageLocation].length <= 200));
+  requireProtocol(value.definitionVersion !== "2" || typeof value.usageLocation === "string");
   requireProtocol(value.awaitingOtherCustodian === undefined || typeof value.awaitingOtherCustodian === "boolean");
   const toolIds = value.toolIds as string[];
   if (value.tools !== undefined) requireProtocol(Array.isArray(value.tools) && value.tools.length === toolIds.length && value.tools.every((tool, index) => object(tool) && tool.id === toolIds[index] && typeof tool.label === "string"));
@@ -73,6 +78,12 @@ function record(value: unknown): LoanRecord {
 export function createHttpLoans(client: HttpClient): LoanAdapter {
   const base = "/api/v1/tooling/loan-applications";
   return {
+    async definition(signal) {
+      const value = unwrap(await client.get(`${base}/definition`, { signal }));
+      requireProtocol(object(value) && ["1", "2"].includes(String(value.definitionVersion))
+        && value.usageLocationRequired === (value.definitionVersion === "2") && value.usageLocationMaxLength === 200);
+      return value as unknown as LoanDefinition;
+    },
     async lossQueue(signal) {
       const value = unwrap(await client.get(`${base}/loss-queue`, { signal }));
       requireProtocol(object(value) && Array.isArray(value.records));

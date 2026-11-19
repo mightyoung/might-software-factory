@@ -24,6 +24,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tooling/loan-applications/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Published creation fields, requiring current create permission. Cache-Control is no-store. */
+        get: operations["toolLoanDefinition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tooling/loan-applications/candidates": {
         parameters: {
             query?: never;
@@ -335,6 +352,8 @@ export interface components {
             definitionVersion: string;
             organizationId: unknown;
             custodyScopeId: unknown;
+            /** @description Required for V2; V1 retains its original definition without this field. */
+            usageLocation?: string | null;
             purpose: string;
             toolIds: unknown[];
             /** Format: date-time */
@@ -348,26 +367,30 @@ export interface components {
             returnItems?: components["schemas"]["ReturnItem"][];
         };
         CreateRequest: {
-            /** @constant */
-            definitionVersion: "1";
+            /** @enum {string} */
+            definitionVersion: "1" | "2";
             organizationId: unknown;
             custodyScopeId: unknown;
+            /** @description Required for V2; V1 retains its original definition without this field. */
+            usageLocation?: string;
             purpose: string;
             toolIds: unknown[];
-        };
+        } & unknown;
         ReviseRequest: {
-            /** @constant */
-            definitionVersion: "1";
+            /** @enum {string} */
+            definitionVersion: "1" | "2";
             organizationId: unknown;
             custodyScopeId: unknown;
+            /** @description Required for V2; V1 retains its original definition without this field. */
+            usageLocation?: string;
             purpose: string;
             toolIds: unknown[];
             /** Format: int64 */
             expectedVersion: number;
-        };
+        } & unknown;
         CancelRequest: {
-            /** @constant */
-            definitionVersion: "1";
+            /** @enum {string} */
+            definitionVersion: "1" | "2";
             /** Format: int64 */
             expectedVersion: number;
         };
@@ -395,6 +418,16 @@ export interface components {
         ListResponse: {
             data: {
                 records: components["schemas"]["ListRecord"][];
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        LoanDefinitionResponse: {
+            data: {
+                /** @enum {string} */
+                definitionVersion: "1" | "2";
+                usageLocationRequired: boolean;
+                /** @constant */
+                usageLocationMaxLength: 200;
             };
             meta: components["schemas"]["Meta"];
         };
@@ -435,8 +468,8 @@ export interface components {
             updatedAt: string;
         };
         IssueRequest: {
-            /** @constant */
-            definitionVersion: "1";
+            /** @enum {string} */
+            definitionVersion: "1" | "2";
             /** Format: int64 */
             expectedVersion: number;
         };
@@ -638,6 +671,53 @@ export interface operations {
                 };
             };
             /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    toolLoanDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current creation definition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanDefinitionResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Current create permission required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Dependency unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
