@@ -25,7 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Fixed owned CI fixture. Bootstrap is not a human producer; SERVICE attach has no HUMAN state. */
 public final class CiPg18RecoveryFixture implements AutoCloseable {
     static final String DATABASE="msf_ci_risk_recovery",CANONICAL="msf_ci_recovery_runtime",CAPTURE="msf_ci_recovery_capture_runtime";
-    private static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35");
+    private static final List<String> VERSIONS=List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36");
     private static final String EXTRA="/ci-pg18-recovery/canonical-extra-grants.sql",CAPTURE_GRANTS="/ci-pg18-recovery/capture-grants.sql";
     private final DataSource canonical,capture,admin;
     private final String imageDigest;

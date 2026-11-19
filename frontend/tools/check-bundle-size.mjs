@@ -4,8 +4,12 @@ import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 
 const dist = join(import.meta.dirname, "..", "dist");
+const editorChunk = file => file.startsWith("LedgerConfigPage-");
 const bundles = [
-  { name: "工作台（含 Astryx）", directory: "assets", limits: { js: 202, css: 56 } },
+  { name: "工作台核心（含 Astryx）", directory: "assets", include: file => !editorChunk(file) && !file.startsWith("OfficeDialog-"), limits: { js: 202, css: 56 } },
+  { name: "按需载入的 Office 对话框", directory: "assets", include: file => file.startsWith("OfficeDialog-"), limits: { js: 1.5, css: 1 } },
+  { name: "按需载入的台账配置页", directory: "assets", include: editorChunk, limits: { js: 6, css: 1.5 } },
+  { name: "工作台合计", directory: "assets", limits: { js: 208, css: 56 } },
   { name: "Office 表格及文档（共享资源只计一次）", directory: "office/assets", limits: { js: 2880, css: 36 } },
 ];
 
@@ -14,6 +18,7 @@ for (const bundle of bundles) {
   const dir = join(dist, bundle.directory);
   const totals = { js: 0, css: 0 };
   for (const file of readdirSync(dir)) {
+    if (bundle.include && !bundle.include(file)) continue;
     const kind = file.split(".").pop();
     if (kind === "js" || kind === "css") {
       totals[kind] += gzipSync(readFileSync(join(dir, file))).length;

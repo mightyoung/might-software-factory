@@ -1,0 +1,102 @@
+.config-page {
+  max-width: 1280px;
+  padding: 24px;
+}
+.config-layout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 24px;
+}
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.config-list button {
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  background: var(--white);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.config-list button[aria-current] {
+  border-color: var(--petrol);
+  background: var(--tint);
+}
+.config-page small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.config-editor {
+  min-width: 0;
+}
+.config-editor fieldset {
+  margin: 0 0 16px;
+  border: 1px solid var(--rule);
+  padding: 16px;
+  min-width: 0;
+}
+.config-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.config-editor input,
+.config-editor select {
+  padding: 8px;
+  min-height: 40px;
+  border: 1px solid var(--field-edge);
+  background: var(--white);
+  color: var(--ink);
+  width: 100%;
+  box-sizing: border-box;
+}
+.config-field {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.config-actions,
+.config-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.config-history {
+  padding: 0;
+  list-style: none;
+}
+.config-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.config-preview {
+  overflow-x: auto;
+}
+.config-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.config-preview th,
+.config-preview td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--rule);
+}
+@media (max-width: 720px) {
+  .config-page {
+    padding: 16px;
+  }
+  .config-layout,
+  .config-field,
+  .config-comparison {
+    grid-template-columns: 1fr;
+  }
+}
