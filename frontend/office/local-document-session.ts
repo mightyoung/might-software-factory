@@ -3,6 +3,8 @@ import type { FUniver } from "@univerjs/core/facade";
 
 interface LocalDocumentUnit<Snapshot> {
   getId(): string;
+  getName(): string;
+  setName(name: string): unknown;
   save(): Snapshot;
 }
 
@@ -37,6 +39,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
   const error = document.querySelector<HTMLElement>("#error")!;
   const fileInput = document.querySelector<HTMLInputElement>("#file")!;
   const importButton = document.querySelector<HTMLButtonElement>("#import")!;
+  const nameInput = document.querySelector<HTMLInputElement>("#name")!;
   const exportButton = document.querySelector<HTMLButtonElement>("#export")!;
   let unit = session.unit;
   let baseline = JSON.stringify(unit.save());
@@ -50,16 +53,19 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     if (parent !== window) parent.postMessage({ channel, type, ...extra }, location.origin);
   }
   function update() {
-    dirty = JSON.stringify(unit.save()) !== baseline;
+    if (document.activeElement !== nameInput) nameInput.value = unit.getName();
+    dirty = JSON.stringify(unit.save()) !== baseline || nameInput.value.trim() !== unit.getName();
     const contentState = dirty ? "有尚未导出的修改" : `${name}已就绪`;
     status.textContent = importedFile ? `已导入 ${importedFile}，${contentState}` : contentState;
     post("state", { dirty });
   }
   function ready() {
     baseline = JSON.stringify(unit.save());
+    nameInput.value = unit.getName();
     update();
     importButton.disabled = false;
     exportButton.disabled = false;
+    nameInput.disabled = false;
     post("ready");
   }
   function showError(message: string) {
@@ -79,6 +85,31 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       ready();
     }
   });
+  function rename() {
+    const nextName = nameInput.value.trim();
+    if (!nextName) {
+      nameInput.value = unit.getName();
+      showError(`${name}名称不能为空。`);
+      return;
+    }
+    try {
+      unit.setName(nextName);
+      nameInput.value = unit.getName();
+      error.hidden = true;
+      update();
+    } catch {
+      nameInput.value = unit.getName();
+      showError(`${name}重命名失败，请重试。`);
+    }
+  }
+  nameInput.addEventListener("input", update);
+  nameInput.addEventListener("change", rename);
+  nameInput.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      rename();
+    }
+  });
   importButton.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files?.[0];
@@ -88,6 +119,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     busy = true;
     importButton.disabled = true;
     exportButton.disabled = true;
+    nameInput.disabled = true;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error(`请选择不超过 5 MiB 的${name} JSON 文件。`);
       const snapshot = session.validate(JSON.parse(await file.text()));
@@ -102,6 +134,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
         throw failure;
       }
       baseline = JSON.stringify(unit.save());
+      nameInput.value = unit.getName();
       importedFile = file.name;
       update();
     } catch (failure) {
@@ -110,6 +143,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       busy = false;
       importButton.disabled = false;
       exportButton.disabled = false;
+      nameInput.disabled = false;
     }
   });
   exportButton.addEventListener("click", () => {
@@ -118,7 +152,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       const url = URL.createObjectURL(new Blob([session.serialize(snapshot)], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${session.filename(snapshot).replace(/[\\/:*?"<>|]/g, "_") || name}.json`;
+      link.download = `${session.filename(snapshot).replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, "_").replace(/[. ]+$/g, "") || name}.json`;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       baseline = JSON.stringify(snapshot);
@@ -130,7 +164,10 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
   });
   window.addEventListener("message", event => {
     if (event.origin !== location.origin || event.source !== parent || event.data?.channel !== channel) return;
-    if (event.data.type === "close-check") { update();post("close-state", { dirty }); }
+    if (event.data.type === "close-check") {
+      if (nameInput.value.trim() !== unit.getName()) rename();
+      update();post("close-state", { dirty });
+    }
     if (event.data.type === "theme" && (event.data.theme === "dark" || event.data.theme === "light")) {
       document.documentElement.dataset.theme = event.data.theme;
       univerAPI.toggleDarkMode(event.data.theme === "dark");
@@ -140,7 +177,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     if (event.key === "Escape") post("close-request");
   });
   window.addEventListener("beforeunload", event => {
-    if (dirty) { event.preventDefault();event.returnValue = ""; }
+    if (dirty || nameInput.value.trim() !== unit.getName()) { event.preventDefault();event.returnValue = ""; }
   });
   window.addEventListener("pagehide", () => {
     window.clearTimeout(comparisonTimer);

@@ -48,6 +48,26 @@ test("台账、详情、上报表单、改密对话框", async ({ page }) => {
   await scan(page, "改密对话框");
 });
 
+test("台账支持键盘逐行勾选、查看部分选中状态及整页切换", async ({ page }) => {
+  await signIn(page);
+  const first = page.locator(".ledger-row").first().getByRole("checkbox");
+  const selectPage = page.getByRole("checkbox", { name: "选择本页记录" });
+  for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await first.focus();
+    await page.keyboard.press("Space");
+    await expect(first).toBeChecked();
+    await expect(selectPage).toBeChecked({ indeterminate: true });
+    await scan(page, `台账部分选中（${theme}）`);
+    await selectPage.focus();
+    await page.keyboard.press("Space");
+    await expect(selectPage).toBeChecked();
+    await page.keyboard.press("Space");
+    await expect(first).not.toBeChecked();
+  }
+});
+
 test("流程命令表单（验收：退回整改）", async ({ page }) => {
   await signIn(page);
   await page.getByLabel("状态").selectOption("ACCEPTANCE_PENDING");

@@ -39,6 +39,43 @@ try {
     assert.equal(issued.state, 'ISSUED');
     await writeFile(`${directory}/loan.json`, JSON.stringify(issued));
     console.log(JSON.stringify({ phase: 'create', loan: issued.id }));
+  } else if (['return-transferred', 'former-keeper-denied', 'former-keeper-permission-denied', 'successor-without-custody', 'successor-receive'].includes(process.env.D2_SCOPE_PHASE)) {
+    const loan = JSON.parse(await readFile(`${directory}/loan.json`, 'utf8'));
+    const phase = process.env.D2_SCOPE_PHASE;
+    if (phase === 'return-transferred') {
+      const borrower = await login('reader');
+      const detail = success(await api(borrower, `${base}/${loan.id}`));
+      assert.equal(detail.organizationId, process.env.D2_ORG_A);
+      const returned = success(await api(borrower, `${base}/${loan.id}/return-requests`, {
+        definitionVersion: '1', expectedVersion: detail.version, toolIds: detail.toolIds,
+      }));
+      assert.equal(returned.state, 'ISSUED');
+      assert.equal(returned.version, loan.version + 1);
+      assert.ok(returned.returnItems.every(item => item.state === 'REQUESTED'));
+      await writeFile(`${directory}/returned.json`, JSON.stringify(returned));
+    } else {
+      const returned = JSON.parse(await readFile(`${directory}/returned.json`, 'utf8'));
+      const actor = await login(phase.startsWith('former-keeper') ? 'keeper' : 'nonkeeper');
+      const queueResponse = await api(actor, `${base}/receive-queue`);
+      const allowed = phase === 'successor-receive';
+      if (phase === 'former-keeper-permission-denied') assert.equal(queueResponse.status, 403);
+      else assert.equal(success(queueResponse).records.some(item => item.id === loan.id), allowed);
+      assert.equal((await api(actor, `${base}/${loan.id}/receive-detail`)).status, allowed ? 200 : 403);
+      const response = await api(actor, `${base}/${loan.id}/receive`, {
+        definitionVersion: '1', expectedVersion: returned.version,
+        items: returned.toolIds.map(toolId => ({ toolId, condition: 'NORMAL' })),
+      });
+      if (allowed) {
+        const received = success(response);
+        assert.equal(received.state, 'SETTLED');
+        assert.equal(received.version, returned.version + 1);
+        assert.equal(received.organizationId, loan.organizationId);
+        assert.equal(received.custodyScopeId, loan.custodyScopeId);
+        assert.ok(received.returnItems.every(item => item.state === 'RECEIVED' && item.condition === 'NORMAL'));
+        await writeFile(`${directory}/received.json`, JSON.stringify(received));
+      } else assert.equal(response.status, 403);
+    }
+    console.log(JSON.stringify({ phase, loan: loan.id, passed: true }));
   } else if (process.env.D2_SCOPE_PHASE === 'permission-revoked') {
     const supervisor = await login('nonkeeper');
     assert.equal((await api(supervisor, `${base}/visibility/department`)).status, 403);
