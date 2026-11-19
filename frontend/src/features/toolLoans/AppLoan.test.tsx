@@ -9,7 +9,7 @@ function setup(grants: string[], tenant = "t") {
   window.history.replaceState(null, "", `/t/${tenant}/apps/tooling/entities/tool_loan`);
   const session: SessionBootstrap = { actor: { id: "a", displayName: "借用人" }, identityScope: { accountId: "a", memberId: "m" }, tenant: { id: "t", name: "工厂" }, applications: [{ id: "tooling", name: "工装管理", entryPath: "apps/tooling/entities/tool_loan" }], permissions: [], canonicalPermissions: grants };
   const sessions: SessionAdapter = { restore: vi.fn(async () => session), login: vi.fn(async () => session), logout: vi.fn(async () => {}), loadMenu: vi.fn(async () => ({ applicationId: "tooling", title: "工装管理", nodes: [{ id: "loans", label: "借用申请", path: "apps/tooling/entities/tool_loan", permission: grants.includes("tool_loan.read") ? "tool_loan.read" : "tool_loan.issue" }] })) };
-  const loans: LoanAdapter = { issueQueue: vi.fn(async () => []), issueDetail: vi.fn(), list: vi.fn(async () => []), detail: vi.fn(), candidates: vi.fn(), command: vi.fn() };
+  const loans: LoanAdapter = { receiveQueue: vi.fn(async () => []), receiveDetail: vi.fn(), issueQueue: vi.fn(async () => []), issueDetail: vi.fn(), list: vi.fn(async () => []), detail: vi.fn(), candidates: vi.fn(), command: vi.fn() };
   const entities = vi.fn();render(<App mode="http" sessionAdapter={sessions} createLoans={() => loans} createEntityLedger={entities} />);
   return { loans, entities };
 }

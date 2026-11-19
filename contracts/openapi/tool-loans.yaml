@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: Tool loan applications
-  version: 1.1.0
-  description: Applicant-owned multi-item loan applications and keeper-authorized atomic whole-order issuance.
-    Application submission does not occupy tools. Issuance requires tool_loan.issue, current keeper qualification
-    and non-self handling. Every command rechecks current authorization and supports exact idempotent
-    replay.
+  version: 1.2.0
+  description: Applicant-owned multi-item loan applications, atomic whole-order issuance, borrower partial
+    return requests, and keeper normal or damaged receipt. Return requests retain occupancy. Receipt releases
+    only the selected requested items. Current authorization, no self handling, expected version and exact
+    idempotency apply to each command.
 security:
 - sessionCookie: []
 paths:
@@ -556,6 +556,259 @@ paths:
         schema:
           type: string
         description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/{id}/return-requests:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: &id004
+        type: string
+        format: uuid
+    post:
+      operationId: requestPartialToolReturn
+      description: Borrower selects issued outstanding tools with no pending return request. Append a
+        return batch and ordered items, increment loan version, preserve occupancy and keep state ISSUED.
+        Requires tool_loan.create and current borrower eligibility.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequestInput'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id004
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/{id}/receive:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: &id005
+        type: string
+        format: uuid
+    post:
+      operationId: receiveReturnedTools
+      description: Current eligible custody keeper selects pending return items for NORMAL or DAMAGED
+        receipt. Requires tool_loan.receive and forbids self handling. DAMAGED requires a nonblank reason
+        and records tool DAMAGED. Atomically release only selected occupancy, append per-item receipt
+        and history, and increment loan version. State becomes SETTLED only when every issued item is
+        received. A failure rolls back all selected receipts. Unknown outcomes retain the original request
+        key and payload.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiveInput'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id005
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/receive-queue:
+    get:
+      operationId: listKeeperPendingReturns
+      description: At most 100 loans in currently eligible keeper custody scopes with pending return items.
+        Requires tool_loan.receive, excludes own loans and retains exact resource/tenant boundaries.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Requested application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/receive-detail:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getKeeperReturnDetail
+      description: Current ISSUED or SETTLED loan and ordered returnItems for an eligible non-borrower
+        keeper with tool_loan.receive. SETTLED detail remains readable for reconciliation of an uncertain
+        receipt.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     sessionCookie:
@@ -580,7 +833,7 @@ components:
       - tools
       properties:
         id: *id001
-        version: &id007
+        version: &id009
           type: integer
           format: int64
           minimum: 1
@@ -591,9 +844,14 @@ components:
           - PENDING_ISSUE
           - WITHDRAWN
           - ISSUED
+          - SETTLED
         definitionVersion:
           type: string
-          const: '1'
+          minLength: 1
+          maxLength: 64
+          pattern: .*\S.*
+          description: Nonblank historical definition version bound to this loan. Return and receipt use
+            the stored version without rebinding the loan to the current creation definition.
         organizationId: *id001
         custodyScopeId: *id001
         purpose:
@@ -620,9 +878,18 @@ components:
             $ref: '#/components/schemas/Option'
         awaitingOtherCustodian:
           type: boolean
-          description: Optional own PENDING_ISSUE detail signal. True when the current custody scope has
-            no other effective keeper eligible to issue this application. Current authorization and the
-            self-handling restriction still apply to every command.
+          description: Optional own pending/issued detail signal. True when no other currently eligible
+            keeper can issue or receive this loan. No self handling remains enforced for commands.
+        returnItems:
+          type: array
+          minItems: 0
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ReturnItem'
+          description: Ordered per-tool return progress in issued or settled detail and command responses.
+            Missing optional item fields are omitted. Counts distinguish still occupied, awaiting receipt
+            and received items. Old issued records are projected as outstanding until a return request
+            or receipt exists.
     CreateRequest:
       type: object
       additionalProperties: false
@@ -633,16 +900,16 @@ components:
       - purpose
       - toolIds
       properties:
-        definitionVersion: &id004
+        definitionVersion: &id006
           type: string
           const: '1'
         organizationId: *id001
         custodyScopeId: *id001
-        purpose: &id005
+        purpose: &id007
           type: string
           minLength: 1
           maxLength: 4000
-        toolIds: &id006
+        toolIds: &id008
           type: array
           items: *id001
           minItems: 1
@@ -659,12 +926,12 @@ components:
       - toolIds
       - expectedVersion
       properties:
-        definitionVersion: *id004
+        definitionVersion: *id006
         organizationId: *id001
         custodyScopeId: *id001
-        purpose: *id005
-        toolIds: *id006
-        expectedVersion: *id007
+        purpose: *id007
+        toolIds: *id008
+        expectedVersion: *id009
     CancelRequest:
       type: object
       additionalProperties: false
@@ -675,7 +942,7 @@ components:
         definitionVersion:
           type: string
           const: '1'
-        expectedVersion: *id007
+        expectedVersion: *id009
     Option:
       type: object
       additionalProperties: false
@@ -809,7 +1076,7 @@ components:
       - createdAt
       - updatedAt
       properties:
-        id: &id008
+        id: &id010
           type: string
           format: uuid
         version:
@@ -823,18 +1090,23 @@ components:
           - PENDING_ISSUE
           - WITHDRAWN
           - ISSUED
+          - SETTLED
         definitionVersion:
           type: string
-          const: '1'
-        organizationId: *id008
-        custodyScopeId: *id008
+          minLength: 1
+          maxLength: 64
+          pattern: .*\S.*
+          description: Nonblank historical definition version bound to this loan. Return and receipt use
+            the stored version without rebinding the loan to the current creation definition.
+        organizationId: *id010
+        custodyScopeId: *id010
         purpose:
           type: string
           minLength: 1
           maxLength: 4000
         toolIds:
           type: array
-          items: *id008
+          items: *id010
           minItems: 1
           maxItems: 100
           uniqueItems: true
@@ -859,3 +1131,120 @@ components:
           format: int64
           minimum: 1
           maximum: 9223372036854775806
+    ReturnItem:
+      type: object
+      additionalProperties: false
+      required:
+      - toolId
+      - label
+      - state
+      properties:
+        toolId:
+          type: string
+          format: uuid
+        label:
+          type: string
+        state:
+          type: string
+          enum:
+          - OUTSTANDING
+          - REQUESTED
+          - RECEIVED
+        requestId:
+          type: string
+          format: uuid
+        condition:
+          type: string
+          enum:
+          - NORMAL
+          - DAMAGED
+        reason:
+          type: string
+          maxLength: 4000
+    ReturnRequestInput:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      - toolIds
+      properties:
+        definitionVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: .*\S.*
+          description: Nonblank historical definition version bound to this loan. Return and receipt use
+            the stored version without rebinding the loan to the current creation definition.
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
+        toolIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+    ReceiveItem:
+      type: object
+      additionalProperties: false
+      required:
+      - toolId
+      - condition
+      properties:
+        toolId:
+          type: string
+          format: uuid
+        condition:
+          type: string
+          enum:
+          - NORMAL
+          - DAMAGED
+        reason:
+          type: string
+          maxLength: 4000
+      allOf:
+      - if:
+          properties:
+            condition:
+              const: DAMAGED
+        then:
+          required:
+          - reason
+          properties:
+            reason:
+              type: string
+              minLength: 1
+              maxLength: 4000
+    ReceiveInput:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      - items
+      properties:
+        definitionVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: .*\S.*
+          description: Nonblank historical definition version bound to this loan. Return and receipt use
+            the stored version without rebinding the loan to the current creation definition.
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ReceiveItem'
+          description: Unique toolId per command. The server resolves the unique current pending request
+            for each selected tool.

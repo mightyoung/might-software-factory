@@ -4,6 +4,7 @@ import com.mightyoung.softwarefactory.applicationregistry.navigation.Application
 import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.*;
 import com.mightyoung.softwarefactory.ledger.*;
 import java.util.*;
+import com.mightyoung.softwarefactory.workflow.WorkflowTaskClaim;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import static com.mightyoung.softwarefactory.ledger.LedgerDefinition.Type;
@@ -12,6 +13,9 @@ import static com.mightyoung.softwarefactory.ledger.LedgerDefinition.Use;
 /** Ordinary entity registration; the generic ledger owns transport, validation and persistence. */
 @Configuration(proxyBeanMethods=false)
 public class ToolLedgerConfiguration {
+    @Bean WorkflowTaskClaim.Pool receiptTaskPool() {
+        return new WorkflowTaskClaim.Pool("tool_loan", "toolLoanV1", "receive");
+    }
     @Bean public LedgerBinding toolLedgerBinding() {
         var policy=new ToolScopePolicy();
         return new LedgerBinding(definition(),new LedgerBinding.Storage("tool",Map.of(
@@ -24,7 +28,7 @@ public class ToolLedgerConfiguration {
         return new ApplicationContribution("tooling","工装管理",List.of(new ApplicationContribution.Node(
                 "tools","正常工装档案","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update")),
                 new ApplicationContribution.Node("loans", "我的工装借用单", "apps/tooling/entities/tool_loan", "tool_loan",
-                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue"))));
+                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue", "tool_loan.receive"))));
     }
     static LedgerDefinition definition() {
         Map<String,LedgerDefinition.Field> fields=Map.of(

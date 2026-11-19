@@ -39,3 +39,26 @@ it("uses keeper-only queue/detail endpoints and posts one versioned issue comman
   await h.adapter.command("issue", id, { definitionVersion: "1", expectedVersion: 2 }, id);
   expect(h.post).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/issue`, { body: { definitionVersion: "1", expectedVersion: 2 }, headers: { "Idempotency-Key": id } });
 });
+it("parses issued and settled return progress and uses distinct return and receipt commands", async () => {
+  const progress = { ...row, state: "SETTLED", returnItems: [{ toolId: id, label: "工装", state: "RECEIVED", condition: "DAMAGED", reason: "断裂" }] };
+  const h = http({ records: [progress] });expect((await h.adapter.receiveQueue())[0]!.state).toBe("SETTLED");
+  expect(h.get).toHaveBeenCalledWith("/api/v1/tooling/loan-applications/receive-queue", { signal: undefined });
+  h.get.mockResolvedValue({ data: progress, meta: { traceId: "t" } });expect((await h.adapter.receiveDetail(id)).returnItems![0]!.condition).toBe("DAMAGED");
+  expect(h.get).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/receive-detail`, { signal: undefined });
+  await h.adapter.command("return-requests", id, { definitionVersion: "1", expectedVersion: 3, toolIds: [id] }, id);
+  await h.adapter.command("receive", id, { definitionVersion: "1", expectedVersion: 4, items: [{ toolId: id, condition: "DAMAGED", reason: "断裂" }] }, id);
+  expect(h.post.mock.calls[0]).toEqual([`/api/v1/tooling/loan-applications/${id}/return-requests`, { body: { definitionVersion: "1", expectedVersion: 3, toolIds: [id] }, headers: { "Idempotency-Key": id } }]);
+  expect(h.post.mock.calls[1]).toEqual([`/api/v1/tooling/loan-applications/${id}/receive`, { body: { definitionVersion: "1", expectedVersion: 4, items: [{ toolId: id, condition: "DAMAGED", reason: "断裂" }] }, headers: { "Idempotency-Key": id } }]);
+});
+it("accepts empty pre-issue progress but rejects mismatched per-tool projections", async () => {
+  const h = http({ records: [{ ...row, returnItems: [] }] });expect((await h.adapter.list())[0]!.returnItems).toEqual([]);
+  h.get.mockResolvedValue({ data: { ...row, state: "ISSUED", returnItems: [{ toolId: "bad", label: "工装", state: "OUTSTANDING" }] }, meta: { traceId: "t" } });
+  await expect(h.adapter.detail(id)).rejects.toThrow();
+});
+it("preserves a bound historical definition version for return and receipt", async () => {
+  const historical = { ...row, state: "ISSUED", definitionVersion: "legacy-v0.9", returnItems: [{ toolId: id, label: "旧工装", state: "OUTSTANDING" }] };
+  const h = http({ records: [historical] });expect((await h.adapter.list())[0]!.definitionVersion).toBe("legacy-v0.9");
+  await h.adapter.command("return-requests", id, { definitionVersion: "legacy-v0.9", expectedVersion: 4, toolIds: [id] }, id);
+  expect(h.post).toHaveBeenCalledWith(`/api/v1/tooling/loan-applications/${id}/return-requests`, expect.objectContaining({ body: { definitionVersion: "legacy-v0.9", expectedVersion: 4, toolIds: [id] } }));
+  h.get.mockResolvedValue({ data: { ...historical, definitionVersion: " " }, meta: { traceId: "t" } });await expect(h.adapter.detail(id)).rejects.toThrow();
+});
