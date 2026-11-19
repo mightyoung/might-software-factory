@@ -17,6 +17,7 @@ interface LocalDocumentSession<Snapshot> {
   validate(value: unknown): Snapshot;
   serialize(snapshot: Snapshot): string;
   filename(snapshot: Snapshot): string;
+  plainText?(snapshot: Snapshot): string;
 }
 
 export function validateJsonStructure(value: unknown, name: string) {
@@ -41,6 +42,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
   const importButton = document.querySelector<HTMLButtonElement>("#import")!;
   const nameInput = document.querySelector<HTMLInputElement>("#name")!;
   const exportButton = document.querySelector<HTMLButtonElement>("#export")!;
+  const textButton = document.querySelector<HTMLButtonElement>("#export-text");
   let unit = session.unit;
   let baseline = JSON.stringify(unit.save());
   let dirty = false;
@@ -65,6 +67,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     update();
     importButton.disabled = false;
     exportButton.disabled = false;
+    if (textButton) textButton.disabled = false;
     nameInput.disabled = false;
     post("ready");
   }
@@ -119,6 +122,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     busy = true;
     importButton.disabled = true;
     exportButton.disabled = true;
+    if (textButton) textButton.disabled = true;
     nameInput.disabled = true;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error(`请选择不超过 5 MiB 的${name} JSON 文件。`);
@@ -143,18 +147,35 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       busy = false;
       importButton.disabled = false;
       exportButton.disabled = false;
+      if (textButton) textButton.disabled = false;
       nameInput.disabled = false;
     }
   });
+  function download(snapshot: Snapshot, content: string, mimeType: string, extension: string) {
+    const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${session.filename(snapshot).replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, "_").replace(/[. ]+$/g, "") || name}.${extension}`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const plainText = session.plainText;
+  if (textButton && plainText) {
+    textButton.addEventListener("click", () => {
+      try {
+        const snapshot = unit.save();
+        download(snapshot, plainText(snapshot), "text/plain;charset=utf-8", "txt");
+        update();
+        status.textContent = `已发起 TXT 本机下载，请确认文件已保存。${dirty ? "文档仍有尚未导出为 JSON 的修改。" : ""}`;
+      } catch {
+        showError("纯文本导出失败，请重试。");
+      }
+    });
+  }
   exportButton.addEventListener("click", () => {
     try {
       const snapshot = unit.save();
-      const url = URL.createObjectURL(new Blob([session.serialize(snapshot)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${session.filename(snapshot).replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, "_").replace(/[. ]+$/g, "") || name}.json`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      download(snapshot, session.serialize(snapshot), "application/json", "json");
       baseline = JSON.stringify(snapshot);
       update();
       status.textContent = "已发起本机文件下载，请确认文件已保存";

@@ -500,7 +500,6 @@ select:focus-visible {
   font-size: 11.5px;
   font-weight: 590;
   white-space: nowrap;
-  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
 .button-primary {

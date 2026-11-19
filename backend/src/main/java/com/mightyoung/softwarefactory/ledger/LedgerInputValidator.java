@@ -20,7 +20,7 @@ public final class LedgerInputValidator {
         if (use == null || use == LedgerDefinition.Use.READ) throw invalid("values", "invalid_use");
         if (!binding.definition().definitionVersion().equals(definitionVersion)) throw invalid("definitionVersion", "definition_conflict");
         if (supplied == null || supplied.size() > 64) throw invalid("values", "invalid_object");
-        var accepted = binding.definition().inputFields();
+        var accepted = binding.definitionFor(use).inputFields();
         for (String key : supplied.keySet()) {
             if (key == null) throw invalid("values", "unknown_field");
             if (CORE_PROTECTED.contains(key) || binding.storage().protectedFields().contains(key)

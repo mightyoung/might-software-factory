@@ -1,7 +1,15 @@
 import type { FormEvent } from "react";
+import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import "./LedgerQueryForm.css";
 import type { DateRange, LedgerQueryField, LedgerSchema, QueryValue, QueryValues } from "../domain/ledger";
+
+const queryControlMessages = {
+  "zh-CN": {
+    "@astryx.textInput.clearLabel": "清除 {label}",
+    "@astryx.inputClearButton.tooltip": "清除",
+  },
+};
 
 interface LedgerQueryFormProps<T> {
   schema: LedgerSchema<T>;
@@ -29,6 +37,7 @@ function QueryFieldControl<T>({
       <TextInput
         key={field.key}
         type="search"
+        hasClear
         label={field.label}
         value={typeof value === "string" ? value : ""}
         placeholder={field.placeholder}
@@ -132,25 +141,27 @@ export function LedgerQueryForm<T>({ schema, values, onChange, onSearch, onReset
   }
 
   return (
-    <form className="query-panel" onSubmit={handleSubmit}>
-      <div className="query-fields">
-        {schema.queryFields.map((field) => (
-          <QueryFieldControl
-            key={field.key}
-            field={field}
-            value={values[field.key]}
-            onChange={onChange}
-          />
-        ))}
-      </div>
-      <div className="query-actions">
-        <button className="button button-primary" type="submit">
-          查询
-        </button>
-        <button className="button button-subtle" type="button" onClick={onReset}>
-          重置
-        </button>
-      </div>
-    </form>
+    <InternationalizationProvider locale="zh-CN" overrides={queryControlMessages}>
+      <form className="query-panel" onSubmit={handleSubmit}>
+        <div className="query-fields">
+          {schema.queryFields.map((field) => (
+            <QueryFieldControl
+              key={field.key}
+              field={field}
+              value={values[field.key]}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+        <div className="query-actions">
+          <button className="button button-primary" type="submit">
+            查询
+          </button>
+          <button className="button button-subtle" type="button" onClick={onReset}>
+            重置
+          </button>
+        </div>
+      </form>
+    </InternationalizationProvider>
   );
 }

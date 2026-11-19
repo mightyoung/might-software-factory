@@ -173,3 +173,49 @@ for (const kind of ["工作簿", "文档"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+test("作业指导书可导出中文多段落 TXT，关闭前仍提醒保存完整文档", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "在线文档", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "在线文档" });
+  const editor = dialog.frameLocator("iframe");
+  const saveJson = editor.getByRole("button", { name: "导出文档 JSON" });
+  const saveText = editor.getByRole("button", { name: "导出纯文本 TXT" });
+  await expect(saveText).toBeEnabled({ timeout: officeStartupTimeout });
+  const sample = await downloadSnapshot(page, saveJson);
+  const paragraphs = ["工装点检指导书", "\t确认定位销完好。", "", "记录工装编号并交接。"];
+  sample.document.body.dataStream = paragraphs.join("\r") + "\r\n";
+  let offset = 0;
+  sample.document.body.paragraphs = paragraphs.map(text => {
+    offset += text.length;
+    const paragraph = { startIndex: offset };
+    offset += 1;
+    return paragraph;
+  });
+  sample.document.body.textRuns = [{ st: 0, ed: paragraphs[0].length, ts: { bl: 1 } }];
+  await editor.locator('input[type="file"]').setInputFiles({
+    name: "作业指导书.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(sample)),
+  });
+  const name = editor.getByRole("textbox", { name: "文档名称" });
+  await name.fill("工装/点检:交接");
+  await name.press("Enter");
+  const [download] = await Promise.all([page.waitForEvent("download"), saveText.click()]);
+  expect(download.suggestedFilename()).toBe("工装_点检_交接.txt");
+  const path = await download.path();
+  if (!path) throw Error("无法读取纯文本文件");
+  const text = await readFile(path, "utf8");
+  expect(text).toBe(paragraphs.join("\n"));
+  expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
+  await expect(editor.getByRole("status")).toContainText("尚未导出为 JSON");
+  const cancel = page.waitForEvent("dialog").then(prompt => prompt.dismiss());
+  await dialog.getByRole("button", { name: "关闭文档" }).click();
+  await cancel;
+  await expect(dialog).toBeVisible();
+  const complete = await downloadSnapshot(page, saveJson);
+  expect(complete.document.body.dataStream).toBe(sample.document.body.dataStream);
+  expect(complete.document.body.textRuns).toEqual(expect.arrayContaining([
+    expect.objectContaining({ st: 0, ed: paragraphs[0].length, ts: expect.objectContaining({ bl: 1 }) }),
+  ]));
+  await dialog.getByRole("button", { name: "关闭文档" }).click();
+  await expect(dialog).toHaveCount(0);
+});

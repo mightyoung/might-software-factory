@@ -1,7 +1,7 @@
 import { createUniver, LocaleType, mergeLocales } from "@univerjs/presets";
 import { UniverDocsCorePreset } from "@univerjs/preset-docs-core";
 import zhCN from "@univerjs/preset-docs-core/locales/zh-CN";
-import { getDocsEmptySnapshot, type IDocumentData } from "@univerjs/core";
+import { getDocsEmptySnapshot, getPlainText, type IDocumentData } from "@univerjs/core";
 import "@univerjs/preset-docs-core/lib/index.css";
 import "./office.css";
 
@@ -61,4 +61,7 @@ startLocalDocumentSession({
   validate: validateSnapshot,
   serialize: snapshot => JSON.stringify({ format: "might-office-document", version: 1, sdkVersion, document: snapshot }, null, 2),
   filename: snapshot => snapshot.title ?? "文档",
+  plainText: snapshot => getPlainText(snapshot.body?.dataStream ?? "")
+    .replace(/\r\n?|\v|\f|\u2028|\u2029/g, "\n")
+    .replace(/[\u0000-\u0008\u000e-\u001f\u007f]/g, ""),
 });

@@ -65,7 +65,7 @@ describe("stable standard write requests", () => {
     expect(vi.mocked(a.update).mock.calls[0]![3]).toBe(vi.mocked(a.update).mock.calls[1]![3]);
     expect(vi.mocked(a.update).mock.calls[0]![2]).toEqual(vi.mocked(a.update).mock.calls[1]![2]);
   });
-  it.each([[403, "ACCESS_DENIED", "没有执行权限"], [409, "VERSION_CONFLICT", "其他人修改"], [409, "DEFINITION_CONFLICT", "字段定义已更新"]] as const)("HTTP%s/%s retains the original values", async (status, code, message) => {
+  it.each([[403, "ACCESS_DENIED", "没有执行权限"], [409, "VERSION_CONFLICT", "其他人修改"], [409, "DEFINITION_CONFLICT", "字段定义已更新"], [409, "TOOL_IN_USE", "请先完成归还接收"]] as const)("HTTP%s/%s retains the original values", async (status, code, message) => {
     const a = adapter();vi.mocked(a.update).mockRejectedValue(new ApiError(status, code, null, false));form(a);fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "kept" } });fireEvent.click(screen.getByRole("button", { name: "保存" }));expect(await screen.findByRole("alert")).toHaveTextContent(message);expect(screen.getByLabelText("编号 *")).toHaveValue("kept");expect(a.update).toHaveBeenCalledTimes(1);
   });
 });
