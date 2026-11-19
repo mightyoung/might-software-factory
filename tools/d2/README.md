@@ -30,3 +30,9 @@
 V31 延续发放时绑定的 `toolLoanV1` 流程定义。首个归还申请将借用人的 `returnRequest` 推进至 `receive`。多个批次可以同时等待接收，共用这个待办，业务记录分别保留每批、每件和实际办理人。最后一件待接收明细办理时，当前保管人认领并完成任务。若仍有在借工装，流程回到该借用人的归还任务；全部结清时流程结束。业务状态、逐件占用、审计回执与引擎变更使用同一数据库事务。
 
 验收环境使用 `msf_d2_return_test`。在最终 V30 基线上执行 V31 及 `db/operator/d2-return-runtime-grants.sql`，用专用运行账号启动后端；验收种子见 [seed.sql](../d2-return/seed.sql)。旧的已发放单使用原流程实例，无需重建或重新发放。
+
+### 逐件遗失结案
+
+在专用 V32 测试库按 [遗失结案验收](../d2-loss/README.md) 配置业务数据和测试身份。浏览器脚本使用 `D2_ORIGIN`、`D2_DATABASE=msf_d2_loss_test`、`D2_ACK=isolated-loss-acceptance:msf_d2_loss_test`、`D2_EVIDENCE_DIR`（本机私有临时目录）、`D2_LOSS_SCOPE_ID` 和 `D2_LOSS_TOOL_IDS`（两件当前可借工装的 UUID JSON 数组），以及前述两名用户的密码变量。
+
+运行 `node tools/d2/loss-browser.mjs`。两个独立 Chrome 会话分别办理申请、发放、一件申请归还和逐件报失。脚本在真实服务首次结案提交后替换响应，再通过界面重试原请求，核对幂等键、请求正文、借用单版本、被取代的归还记录及最终借用人所见结论。每次运行会消耗两件合成工装。

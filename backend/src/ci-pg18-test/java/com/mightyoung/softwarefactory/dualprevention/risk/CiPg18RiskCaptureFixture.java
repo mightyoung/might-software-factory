@@ -13,7 +13,7 @@ import org.springframework.jdbc.datasource.AbstractDataSource;
 
 /** Ephemeral CI only. Does not disable, replace or repair any production migration or constraint. */
 final class CiPg18RiskCaptureFixture implements AutoCloseable {
-    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31");
+    private static final List<String> VERSIONS = List.of("2","3","4","5","6","7","8","11","12","13","14","15","16","17","18","18.1","18.2","18.3","19","20","21","22","23","24","25","26","27","28","29","30","31","32");
     private static final String HISTORY = "flyway_schema_history_app";
     private static final Set<String> PHASES=Set.of("migrate","open","admin-connect","runtime-connect","target-version","target-marker","empty-schema","empty-runtime","seed-tenant","seed-template","seed-graph","history","schema","cause-table","cause-fks","cause-triggers","cause-key","cause-columns","cause-checks","cause-policy","runtime-role","runtime-columns","runtime-required","runtime-rights","runtime-login","runtime-table","instant-function","cause-count","source-snapshot","closed","unknown");
     private static final Map<String, Set<String>> READ_COLUMNS = Map.of(

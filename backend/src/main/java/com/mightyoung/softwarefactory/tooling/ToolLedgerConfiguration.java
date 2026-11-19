@@ -13,6 +13,10 @@ import static com.mightyoung.softwarefactory.ledger.LedgerDefinition.Use;
 /** Ordinary entity registration; the generic ledger owns transport, validation and persistence. */
 @Configuration(proxyBeanMethods=false)
 public class ToolLedgerConfiguration {
+    @Bean com.mightyoung.softwarefactory.workflow.WorkflowExceptionalEnd.Route lossTerminalRoute() {
+        return new com.mightyoung.softwarefactory.workflow.WorkflowExceptionalEnd.Route("tool_loan","toolLoanV1","returnRequest","end");
+    }
+
     @Bean WorkflowTaskClaim.Pool receiptTaskPool() {
         return new WorkflowTaskClaim.Pool("tool_loan", "toolLoanV1", "receive");
     }
@@ -28,7 +32,7 @@ public class ToolLedgerConfiguration {
         return new ApplicationContribution("tooling","工装管理",List.of(new ApplicationContribution.Node(
                 "tools","正常工装档案","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update")),
                 new ApplicationContribution.Node("loans", "我的工装借用单", "apps/tooling/entities/tool_loan", "tool_loan",
-                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue", "tool_loan.receive"))));
+                        List.of("tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue", "tool_loan.receive", "tool_loan.close_lost"))));
     }
     static LedgerDefinition definition() {
         Map<String,LedgerDefinition.Field> fields=Map.of(

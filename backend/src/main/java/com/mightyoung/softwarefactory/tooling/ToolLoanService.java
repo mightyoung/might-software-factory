@@ -52,6 +52,33 @@ public final class ToolLoanService {
     public record ReceiveItem(UUID toolId,String condition,String reason) { }
     public record ReceiveInput(String definitionVersion,Long expectedVersion,List<ReceiveItem> items) { }
 
+    public Object lossQueue(HttpServletRequest request) {
+        return execute(request,"close_lost",false,e -> {
+            var context=e.decision.context();
+            String organizations="{"+String.join(",",e.decision.organizationIds().stream().map(UUID::toString).toList())+"}";
+            var rows=e.db.fetch("""
+                    select l.*,array(select i.tool_id from public.tool_loan_item i
+                        where i.tenant_id=l.tenant_id and i.loan_id=l.id and i.version=l.version
+                        order by i.line_no) as tool_ids
+                    from public.tool_loan l
+                    join public.tool_custody_scope s on s.tenant_id=l.tenant_id and s.id=l.custody_scope_id and s.active
+                    where s.organization_id=any(cast(? as uuid[])) and l.tenant_id=? and l.state='ISSUED'
+                      and l.applicant_member_id<>? and exists(select 1 from public.tool_custodian k
+                        where k.tenant_id=s.tenant_id and k.custody_scope_id=s.id and k.member_id=?
+                          and k.valid_from<=current_timestamp and (k.valid_to is null or k.valid_to>current_timestamp))
+                      and exists(select 1 from public.tool_loan_item r
+                        where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.issued_at is not null and r.settled_at is null)
+                    order by l.created_at,l.id limit 100
+                    """,organizations,context.tenantId(),context.memberId(),context.memberId());
+            return Map.of("records",rows.map(row -> Map.of(
+                    "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
+                    "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
+                    "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
+                    "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+        });
+    }
+
     public Object receiveQueue(HttpServletRequest request) {
         return execute(request,"receive",false,e -> {
             var context=e.decision.context();
@@ -67,7 +94,7 @@ public final class ToolLoanService {
                         where k.tenant_id=s.tenant_id and k.custody_scope_id=s.id and k.member_id=?
                           and k.valid_from<=current_timestamp and (k.valid_to is null or k.valid_to>current_timestamp))
                       and exists(select 1 from public.tool_return_request_item r
-                        where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.received_at is null)
+                        where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.received_at is null and r.superseded_at is null)
                     order by l.created_at,l.id limit 100
                     """,organizations,context.tenantId(),context.memberId(),context.memberId());
             return Map.of("records",rows.map(row -> Map.of(
@@ -76,6 +103,55 @@ public final class ToolLoanService {
                     "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
                     "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
                     "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+        });
+    }
+
+    public record LossInput(String definitionVersion,Long expectedVersion,UUID toolId,String reason) { }
+
+    public Object lossDetail(HttpServletRequest request,UUID id) {
+        return execute(request,"close_lost",false,e -> record(e,id,null));
+    }
+
+    static void validateLoss(LossInput input) {
+        if(input==null) throw new LedgerInputException("request","required");
+        validateReturnHeader(input.definitionVersion(),input.expectedVersion());
+        if(input.toolId()==null) throw new LedgerInputException("toolId","required");
+        if(input.reason()==null || input.reason().isBlank() || input.reason().length()>4000)
+            throw new LedgerInputException("reason","invalid_reason");
+    }
+
+    public Object closeLost(HttpServletRequest request,UUID id,UUID key,LossInput input) {
+        validateLoss(input);
+        return execute(request,"close_lost",true,e -> {
+            var context=e.decision.context();
+            lockReturnKey(e,"CLOSE_LOST",key);
+            String hash=fingerprint(id,"CLOSE_LOST",input);
+            var previous=returnReceipt(e,"CLOSE_LOST",key,hash);
+            var loan=keeperLoan(e,id,true);
+            requireBoundDefinition(loan.get("definition_version",String.class),input.definitionVersion());
+            if(previous!=null) return record(e,id,previous);
+            requireIssuedVersion(loan,input.expectedVersion());
+            e.db.fetchOne("select id from public.tool where tenant_id=? and id=? for update",context.tenantId(),input.toolId());
+            outstanding(e,id,input.toolId(),true);
+            boolean hadPending=pendingReturns(e,id);
+            UUID command=UUID.randomUUID();
+            String now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC).toString();
+            e.db.execute("""
+                    insert into public.tool_loan_loss(tenant_id,loan_id,tool_id,command_id,actor_member_id,occurred_at,reason)
+                    values(?,?,?,?,?,cast(? as timestamptz),?)
+                    """,context.tenantId(),id,input.toolId(),command,context.memberId(),now,input.reason().trim());
+            e.db.execute("""
+                    update public.tool_return_request_item set superseded_at=cast(? as timestamptz),superseded_by_command_id=?
+                    where tenant_id=? and loan_id=? and tool_id=? and received_at is null and superseded_at is null
+                    """,now,command,context.tenantId(),id,input.toolId());
+            e.db.execute("""
+                    update public.tool_loan_item set settled_at=cast(? as timestamptz)
+                    where tenant_id=? and loan_id=? and tool_id=? and issued_at is not null and settled_at is null
+                    """,now,context.tenantId(),id,input.toolId());
+            e.db.fetch("select public.mark_lost_tool(?::uuid,?::uuid,cast(? as timestamptz),?::uuid)",context.tenantId(),input.toolId(),now,context.actorId());
+            boolean allSettled=e.db.fetchOne("select 1 from public.tool_loan_item where tenant_id=? and loan_id=? and issued_at is not null and settled_at is null limit 1",context.tenantId(),id)==null;
+            workflow.closeLost(context.tenantId(),id,context.memberId(),loan.get("applicant_member_id",UUID.class),hadPending,pendingReturns(e,id),allSettled);
+            return appendReturnCommand(e,loan,"CLOSE_LOST",key,hash,now,allSettled,command);
         });
     }
 
@@ -133,7 +209,7 @@ public final class ToolLoanService {
             ordered.sort(java.util.Comparator.naturalOrder());
             for(UUID tool:ordered) {
                 outstanding(e,id,tool,true);
-                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null",context.tenantId(),id,tool)!=null)
+                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null and superseded_at is null",context.tenantId(),id,tool)!=null)
                     throw new LedgerException(409,"RETURN_ALREADY_REQUESTED");
             }
             workflow.requestReturn(context.tenantId(),id,context.memberId(),firstPending);
@@ -162,7 +238,7 @@ public final class ToolLoanService {
             for(var item:ordered) {
                 e.db.fetchOne("select id from public.tool where tenant_id=? and id=? for update",context.tenantId(),item.toolId());
                 outstanding(e,id,item.toolId(),true);
-                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null for update",context.tenantId(),id,item.toolId())==null)
+                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null and superseded_at is null for update",context.tenantId(),id,item.toolId())==null)
                     throw new LedgerException(409,"RETURN_NOT_REQUESTED");
             }
             UUID command=UUID.randomUUID();
@@ -170,7 +246,7 @@ public final class ToolLoanService {
             for(var item:ordered) {
                 e.db.execute("""
                         update public.tool_return_request_item set received_at=cast(? as timestamptz),outcome=?,reason=?,received_by_member_id=?,command_id=?
-                        where tenant_id=? and loan_id=? and tool_id=? and received_at is null
+                        where tenant_id=? and loan_id=? and tool_id=? and received_at is null and superseded_at is null
                         """,now,item.condition(),item.reason()==null?null:item.reason().trim(),context.memberId(),command,context.tenantId(),id,item.toolId());
                 e.db.execute("update public.tool_loan_item set settled_at=cast(? as timestamptz) where tenant_id=? and loan_id=? and tool_id=? and issued_at is not null and settled_at is null",now,context.tenantId(),id,item.toolId());
                 if("DAMAGED".equals(item.condition())) e.db.fetch("select public.mark_received_tool_damaged(?::uuid,?::uuid,cast(? as timestamptz),?::uuid)",context.tenantId(),item.toolId(),now,context.actorId());
@@ -193,7 +269,7 @@ public final class ToolLoanService {
     }
 
     private boolean pendingReturns(Execution e,UUID id) {
-        return e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and received_at is null limit 1",e.decision.context().tenantId(),id)!=null;
+        return e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and received_at is null and superseded_at is null limit 1",e.decision.context().tenantId(),id)!=null;
     }
 
     private void lockReturnKey(Execution e,String verb,UUID key) {
@@ -238,7 +314,7 @@ public final class ToolLoanService {
 
     private List<Map<String,Object>> returnItems(Execution e,UUID id,long version) {
         var rows=e.db.fetch("""
-                select i.tool_id,t.code,t.name,r.request_id,
+                select i.tool_id,t.code,t.name,r.request_id,loss.command_id as loss_command,loss.reason as loss_reason,
                        received.version as received_version,
                        case when received.version is not null then r.outcome end as outcome,
                        case when received.version is not null then r.reason end as reason
@@ -251,17 +327,22 @@ public final class ToolLoanService {
                 left join public.tool_loan_revision received on received.tenant_id=r.tenant_id
                     and received.loan_id=r.loan_id and received.command_id=r.command_id
                     and received.action='RECEIVE' and received.version<=?
+                left join (public.tool_loan_loss loss join public.tool_loan_revision lost
+                    on lost.tenant_id=loss.tenant_id and lost.loan_id=loss.loan_id and lost.command_id=loss.command_id
+                    and lost.action='CLOSE_LOST' and lost.version<=?)
+                    on loss.tenant_id=i.tenant_id and loss.loan_id=i.loan_id and loss.tool_id=i.tool_id
                 where i.tenant_id=? and i.loan_id=? and i.issued_at is not null and i.version<=?
                 order by i.line_no
-                """,version,version,e.decision.context().tenantId(),id,version);
+                """,version,version,version,e.decision.context().tenantId(),id,version);
         return rows.map(row -> {
             Map<String,Object> item=new LinkedHashMap<>();
             item.put("toolId",row.get("tool_id"));
             item.put("label",row.get("code")+" · "+row.get("name"));
-            item.put("state",row.get("received_version")!=null?"RECEIVED":row.get("request_id")!=null?"REQUESTED":"OUTSTANDING");
+            item.put("state",row.get("loss_command")!=null?"LOST":row.get("received_version")!=null?"RECEIVED":row.get("request_id")!=null?"REQUESTED":"OUTSTANDING");
             if(row.get("request_id")!=null) item.put("requestId",row.get("request_id"));
-            if(row.get("outcome")!=null) item.put("condition",row.get("outcome"));
-            if(row.get("reason")!=null) item.put("reason",row.get("reason"));
+            if(row.get("loss_command")==null && row.get("outcome")!=null) item.put("condition",row.get("outcome"));
+            if(row.get("loss_reason")!=null) item.put("reason",row.get("loss_reason"));
+            else if(row.get("reason")!=null) item.put("reason",row.get("reason"));
             return item;
         });
     }
@@ -502,7 +583,7 @@ public final class ToolLoanService {
     private List<UUID> items(Execution e,UUID id,long version) {return e.db.fetch("select tool_id from public.tool_loan_item where tenant_id=? and loan_id=? and version=? order by line_no",e.decision.context().tenantId(),id,version).getValues(0,UUID.class);
     }
     private Object record(Execution e,UUID id,Long historical) {
-        var row=Set.of("issue","receive").contains(e.decision.action().action())? keeperLoan(e,id,false):owned(e,id,false);
+        var row=Set.of("issue","receive","close_lost").contains(e.decision.action().action())? keeperLoan(e,id,false):owned(e,id,false);
         long version=historical==null?row.get("version",Long.class):historical;
         var revision=e.db.fetchOne("select state,purpose,occurred_at from public.tool_loan_revision where tenant_id=? and loan_id=? and version=?",e.decision.context().tenantId(),id,version);
         var result = new LinkedHashMap<String,Object>();
