@@ -1879,7 +1879,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Application not visible to current applicant */
+            /** @description Application not visible in the authorized scope */
             404: {
                 headers: {
                     [name: string]: unknown;
