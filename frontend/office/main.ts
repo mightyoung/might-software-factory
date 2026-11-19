@@ -24,15 +24,22 @@ let workbook = univerAPI.createWorkbook({ name: "未命名工作簿" });
 const workbookVersion = workbook.save().appVersion;
 let baseline = JSON.stringify(workbook.save());
 let dirty = false;
+let importedFile = "";
+let comparisonTimer = 0;
 let busy = false;
 let settled = univerAPI.getCurrentLifecycleStage() >= univerAPI.Enum.LifecycleStages.Steady;
 
 function post(type: string, extra: Record<string, unknown> = {}) {
   if (parent !== window) parent.postMessage({ channel, type, ...extra }, location.origin);
 }
+function ready() {
+  baseline = JSON.stringify(workbook.save());
+  update();importButton.disabled = false;exportButton.disabled = false;post("ready");
+}
 function update() {
   dirty = JSON.stringify(workbook.save()) !== baseline;
-  status.textContent = dirty ? "有尚未导出的修改" : "工作簿已就绪";
+  const contentState = dirty ? "有尚未导出的修改" : "工作簿已就绪";
+  status.textContent = importedFile ? `已导入 ${importedFile}，${contentState}` : contentState;
   post("state", { dirty });
 }
 function showError(message: string) {
@@ -88,12 +95,13 @@ function validateSnapshot(value: unknown): IWorkbookData {
 const listener = univerAPI.addEvent(univerAPI.Event.CommandExecuted, event => {
   if (event.type !== CommandType.MUTATION || !settled || busy) return;
   dirty = true;
-  status.textContent = "有尚未导出的修改";
-  post("state", { dirty });
+  // A mutation can also be an internal recalculation. Compare after its batch settles.
+  window.clearTimeout(comparisonTimer);
+  comparisonTimer = window.setTimeout(update, 80);
 });
 const lifecycle = univerAPI.addEvent(univerAPI.Event.LifeCycleChanged, ({ stage }) => {
   if (!settled && stage === univerAPI.Enum.LifecycleStages.Steady) {
-    settled = true;baseline = JSON.stringify(workbook.save());update();
+    settled = true;ready();
   }
 });
 importButton.addEventListener("click", () => fileInput.click());
@@ -117,7 +125,8 @@ fileInput.addEventListener("change", async () => {
       throw failure;
     }
     baseline = JSON.stringify(workbook.save());
-    update();status.textContent = `已导入 ${file.name}`;
+    importedFile = file.name;
+    update();
   } catch (failure) {
     showError(failure instanceof Error ? failure.message : "工作簿导入失败，请核对文件。");
   } finally {
@@ -154,6 +163,7 @@ window.addEventListener("beforeunload", event => {
   if (dirty) { event.preventDefault();event.returnValue = ""; }
 });
 window.addEventListener("pagehide", () => {
+  window.clearTimeout(comparisonTimer);
   listener.dispose();lifecycle.dispose();univer.dispose();
 });
-update();importButton.disabled = false;exportButton.disabled = false;post("ready");
+if (settled) ready();

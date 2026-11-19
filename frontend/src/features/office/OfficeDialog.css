@@ -27,3 +27,8 @@
   .office-dialog { width: 100%; height: 100%; max-height: none; border-radius: 0; }
   .office-dialog-heading { padding: 12px; }
 }
+@media (max-width: 360px) {
+  .office-dialog-heading { flex-wrap: wrap; gap: 8px; }
+  .office-dialog-actions { flex-basis: 100%; justify-content: space-between; }
+  .office-dialog-heading h2, .office-dialog-actions .theme-selector { white-space: nowrap; }
+}
