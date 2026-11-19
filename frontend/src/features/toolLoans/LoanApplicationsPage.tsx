@@ -53,20 +53,20 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
   }, [adapter, permissions, revision, onUnauthenticated, view]);
   const read = permissions.includes("tool_loan.read");
   const identityKey = JSON.stringify([identityScope?.accountId, identityScope?.memberId]);
-  const tabs = (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive") || permissions.includes("tool_loan.close_lost")) && <nav aria-label="借用申请工作区">
+  const tabs = (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive") || permissions.includes("tool_loan.close_lost")) && <nav className="operational-tabs" aria-label="借用申请工作区">
     {(read || permissions.includes("tool_loan.create")) && <button aria-pressed={view === "own"} onClick={() => setView("own")}>本人申请</button>}
     {permissions.includes("tool_loan.issue") && <button aria-pressed={view === "issue"} onClick={() => setView("issue")}>待发放工作</button>}
     {permissions.includes("tool_loan.receive") && <button aria-pressed={view === "receive"} onClick={() => setView("receive")}>待接收工作</button>}
     {permissions.includes("tool_loan.close_lost") && <button aria-pressed={view === "loss"} onClick={() => setView("loss")}>遗失结案</button>}
   </nav>;
-  if ((view === "receive" && permissions.includes("tool_loan.receive")) || (view === "loss" && permissions.includes("tool_loan.close_lost"))) return <section className="ledger-main">
-    <h1>工装借用申请</h1>{tabs}<LoanReceiveQueue key={view} mode={view} adapter={adapter} owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} />
+  if ((view === "receive" && permissions.includes("tool_loan.receive")) || (view === "loss" && permissions.includes("tool_loan.close_lost"))) return <section className="ledger-main operational-page loan-page">
+    <div className="page-heading"><h1>工装借用申请</h1></div>{tabs}<LoanReceiveQueue key={view} mode={view} adapter={adapter} owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} />
   </section>;
-  if (view === "issue" && permissions.includes("tool_loan.issue")) return <section className="ledger-main">
-    <h1>工装借用申请</h1>{tabs}<LoanIssueQueue adapter={adapter} owner={owner}
+  if (view === "issue" && permissions.includes("tool_loan.issue")) return <section className="ledger-main operational-page loan-page">
+    <div className="page-heading"><h1>工装借用申请</h1></div>{tabs}<LoanIssueQueue adapter={adapter} owner={owner}
       identityKey={JSON.stringify([identityScope?.accountId, identityScope?.memberId])} onUnauthenticated={onUnauthenticated} />
   </section>;
-  return <section className="ledger-main">
+  return <section className="ledger-main operational-page loan-page">
     <div className="page-heading"><h1>工装借用申请</h1>
       {permissions.includes("tool_loan.create") && !form && <button className="button button-primary" onClick={() => { readGeneration.current++;setDetailBusy(false);setSelected(null);setForm("create"); }}>新建借用申请</button>}
     </div>
@@ -77,11 +77,11 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
       {read && <button onClick={() => setRevision(value => value + 1)} disabled={loading}>刷新申请</button>}
       {loading && <p role="status">正在读取申请…</p>}
       {read && !loading && records.length === 0 && <p>暂无本人借用申请。</p>}
-      {records.length > 0 && <table><caption>本人借用申请（最多显示最近 100 条）</caption><thead><tr><th>用途</th><th>件数</th><th>状态</th><th>申请时间</th><th>操作</th></tr></thead>
+      {records.length > 0 && <div className="operational-table-scroll"><table><caption>本人借用申请（最多显示最近 100 条）</caption><thead><tr><th>用途</th><th>件数</th><th>状态</th><th>申请时间</th><th>操作</th></tr></thead>
         <tbody>{records.map(record => <tr key={record.id}><td>{record.purpose}</td><td>{record.toolIds.length}</td><td>{stateLabel(record.state)}</td><td>{new Date(record.createdAt).toLocaleString()}</td>
-          <td><button onClick={() => void openRecord(record.id)}>查看申请</button></td></tr>)}</tbody></table>}
+          <td><button onClick={() => void openRecord(record.id)}>查看申请</button></td></tr>)}</tbody></table></div>}
       {detailBusy && <p role="status">正在读取申请详情…</p>}
-      {selected && <section aria-label="借用申请详情"><h2>申请详情</h2><p>{stateLabel(selected.state)} · 第 {selected.version} 版</p><p>{selected.purpose}</p>
+      {selected && <section className="operational-detail" aria-label="借用申请详情"><h2>申请详情</h2><p>{stateLabel(selected.state)} · 第 {selected.version} 版</p><p>{selected.purpose}</p>
         {selected.state === "PENDING_ISSUE" && selected.awaitingOtherCustodian === true && <p role="status">对应保管范围目前无人可办（需另一名有效保管人发放）</p>}
         <p>申请工装 {selected.toolIds.length} 件</p><ol>{selected.toolIds.map(id => <li key={id}>{selected.tools?.find(tool => tool.id === id)?.label ?? id}</li>)}</ol>
         {selected.returnItems && ["ISSUED", "SETTLED"].includes(selected.state) && (
@@ -170,7 +170,7 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
       }
     } finally { if (mine === lifetime.current) setBusy(false); }
   }
-  return <form aria-label={action === "create" ? "新建借用申请" : action === "revise" ? "修订借用申请" : "撤销借用申请"} onSubmit={event => { event.preventDefault();void submit(); }}>
+  return <form className="operational-form" aria-label={action === "create" ? "新建借用申请" : action === "revise" ? "修订借用申请" : "撤销借用申请"} onSubmit={event => { event.preventDefault();void submit(); }}>
     <h2>{action === "create" ? "新建借用申请" : action === "revise" ? "修订借用申请" : "确认撤销申请"}</h2>
     {action !== "cancel" && <>
       <label>申请部门<select value={draft.department} disabled={locked || loading || action === "revise"} onChange={event => change({ department: event.target.value })}>

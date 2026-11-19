@@ -7,6 +7,10 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "postinstall": "npm ci --prefix office --ignore-scripts --no-audit --no-fund",
+    "build:office": "npm run build --prefix office",
+    "prebuild": "npm run build:office",
+    "predev": "npm run build:office",
     "dev": "vite --host 127.0.0.1",
     "mock": "node tools/mock-server/server.mjs",
     "typecheck": "tsc --noEmit",
@@ -18,6 +22,8 @@
     "check:bundle": "node tools/check-bundle-size.mjs"
   },
   "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@stylexjs/stylex": "0.19.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

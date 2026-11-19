@@ -106,10 +106,10 @@ export function EntityLedgerPage({ adapter, route, tenantId, actorId, identitySc
   }, [adapter, definition, canRead, route.page, use, applied, page, size, queryAttempt]);
   function go(tail = "") { navigate(tenantPath(tenantId, `${route.base}${tail}`)); }
   const title = definition?.definition.title ?? "通用台账";
-  if (loading) return <section className="ledger-main" role="status">正在加载台账…</section>;
-  if (error || !definition || !schema) return <section className="ledger-main"><h1>{title}</h1><p role="alert">{error || "台账定义不可用。"}</p><button type="button" onClick={() => setAttempt(v => v + 1)}>重新加载</button></section>;
+  if (loading) return <section className="ledger-main operational-page entity-ledger-page" role="status">正在加载台账…</section>;
+  if (error || !definition || !schema) return <section className="ledger-main operational-page entity-ledger-page"><h1>{title}</h1><p role="alert">{error || "台账定义不可用。"}</p><button type="button" onClick={() => setAttempt(v => v + 1)}>重新加载</button></section>;
   const d = definition.definition;
-  return <section className="ledger-main">
+  return <section className="ledger-main operational-page entity-ledger-page">
     <div className="page-heading"><h1>{d.title}</h1><div>
       {canRead && route.page !== "entry" && <button type="button" className="button button-subtle" onClick={() => go()}>返回台账</button>}
       {canCreate && (route.page !== "create" || command) && <button type="button" className="button button-primary" onClick={() => { if (route.page === "create") setAttempt(v => v + 1); else go("/create"); }}>{d.actions.create.label}</button>}
@@ -118,7 +118,7 @@ export function EntityLedgerPage({ adapter, route, tenantId, actorId, identitySc
     {command ? <div role="status"><h2>保存成功</h2><p>版本 {command.version}{command.replay ? "（原请求结果）" : ""}</p>{canRead && <button type="button" onClick={() => go(`/records/${command.id}`)}>查看已保存记录</button>}</div>
       : use === "EDIT" && current === null ? <p role="status">当前仅有修改权限，无法浏览或加载档案。</p>
       : (use === "CREATE" || use === "EDIT") ? <EntityLedgerForm key={draftKey} definition={d} use={use} adapter={adapter} record={current ?? undefined} owner={owner} draftKey={draftKey} onUnauthenticated={onUnauthenticated} onSuccess={setCommand} onRefresh={() => setAttempt(v => v + 1)} />
-        : current ? <dl>{d.layout.detail.map(key => <div key={key}><dt>{d.fields[key]!.label}</dt><dd>{display(current, d, key)}</dd></div>)}</dl>
+        : current ? <dl className="operational-facts">{d.layout.detail.map(key => <div key={key}><dt>{d.fields[key]!.label}</dt><dd>{display(current, d, key)}</dd></div>)}</dl>
           : <>
             <LedgerQueryForm schema={schema} values={filters} onChange={(key, value) => setFilters(previous => ({ ...previous, [key]: value }))} onSearch={() => { setApplied({ ...filters }); setPage(1); setQueryAttempt(v => v + 1); }} onReset={() => { setFilters(createEmptyQuery(schema.queryFields)); setApplied({}); setPage(1); setQueryAttempt(v => v + 1); }} />
             {querying && <p role="status">查询中…</p>}{queryError && <p role="alert">{queryError}</p>}

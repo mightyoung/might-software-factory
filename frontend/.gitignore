@@ -4,3 +4,4 @@ coverage/
 .vite/
 test-results/
 playwright-report/
+public/office/

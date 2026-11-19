@@ -1,0 +1,103 @@
+/* Hallmark v2.0.0 · app · Astryx component tokens bound to the shared platform palette */
+/* Critique: use the library's real button states while keeping the existing page hierarchy. */
+:root {
+  --color-accent: var(--petrol);
+  --color-on-accent: var(--white);
+  --color-text-accent: var(--petrol);
+  --color-accent-muted: var(--tint);
+  --color-neutral: var(--surface-soft);
+  --color-background-surface: var(--white);
+  --color-background-body: var(--paper);
+  --color-text-primary: var(--ink);
+  --color-text-secondary: var(--muted);
+  --color-text-disabled: var(--disabled-ink);
+  --color-border: var(--rule);
+  --font-family-body: var(--body-face);
+  --font-family-heading: var(--body-face);
+  --font-family-code: var(--mono);
+  --radius-element: 3px;
+  --focus-outline-color: var(--focus);
+  --focus-outline-offset: 3px;
+}
+
+.theme-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.theme-selector select {
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--field-edge);
+  border-radius: 3px;
+  background: var(--white);
+  color: var(--ink);
+}
+
+.theme-selector select:hover {
+  border-color: var(--petrol);
+}
+
+.theme-selector select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.theme-selector select:active {
+  border-color: var(--petrol);
+}
+
+.login-theme {
+  display: flex;
+  justify-content: flex-end;
+  width: min(100%, 1040px);
+  margin-bottom: 16px;
+}
+
+.topbar .theme-selector {
+  color: var(--shell-light-muted);
+}
+
+.topbar .office-open {
+  --color-text-primary: var(--shell-light);
+  --color-neutral: var(--shell-hover);
+  --color-text-disabled: var(--shell-light-muted);
+  min-height: 36px;
+  border: 1px solid var(--shell-dark-rule);
+  background: var(--shell-hover);
+  color: var(--shell-light);
+}
+
+.login-submit {
+  min-height: 44px;
+}
+
+@media (max-width: 760px) {
+  .login-theme {
+    max-width: 480px;
+  }
+
+  .topbar .theme-selector > span {
+    display: none;
+  }
+
+  .topbar .theme-selector select {
+    max-width: 104px;
+  }
+
+  .topbar-right {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+.topbar .office-open:hover {
+  border-color: var(--shell-light-muted);
+  background: var(--shell-graphite);
+}
+
+.topbar .office-open:active {
+  border-color: var(--signal);
+}

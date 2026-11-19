@@ -82,3 +82,13 @@ Playwright 使用本机已有 Chrome，不下载浏览器；自动启动模拟�
 - 面板打开时主区域 `inert`；有未提交内容时 Esc / 关闭先确认。应用内导航离开时不会拦截未提交草稿，提交时会话失效会丢失草稿。
 - 查询：关键词只匹配隐患编号（后端的描述字段不可筛选）；过滤组只有 AND。`src/adapters/entityQueryContract.ts` 把界面查询映射为共享 Entity Query Contract 的请求，字段注册表在 HTTP 模式下取自 `GET /entities/finding/schema`；日期输入只映射到 `DATE` 字段，不把无时区日期擅自转成时间点。
 - 契约类型由 `contracts/openapi/*.yaml` 生成（`npm run gen:api`，`npm run check:api` 只比对），生成物不手改；`minimum` / `maxLength` / `pattern` 不进入类型，这类变化仍靠契约评审和后端测试。
+
+## 主题和公共在线表格
+
+登录页和工作台的“主题”支持浅色、深色和跟随系统。本机浏览器保存界面偏好。工作台品牌文字使用 Astryx Text，在线表格对话框使用 Astryx Button。组件颜色与业务台账共用主题变量。
+
+登录后选择“在线表格”会加载独立的 Univer Sheets 编辑器。工作簿在浏览器内编辑，可显式导出为原生 JSON，下次再导入。当前交付范围是单人本地文档。多人编辑、服务器文档版本及 Excel 原文件转换仍属于后续能力。
+
+`npm ci` 会按两个锁文件安装工作台和编辑器依赖。`npm run dev` 与 `npm run build` 都先构建编辑器到 `public/office/`。部署时发布整个 `dist/`，包括 `office/`。工作台与编辑器各自统计所有 JS/CSS 产物的 gzip 体积，登录和台账访问仅加载工作台。
+
+按仓库 gzip 校验口径，工作台引入 Astryx 官方 Button 子入口及核心样式后约为 188 KiB JS、52 KiB CSS（先前预算 130/12 KiB）。本版工作台预算设为 192/56 KiB，Office 的全部编辑器及语言资源另设 2880/24 KiB。远程构建会检查两组上限。

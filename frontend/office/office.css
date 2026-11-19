@@ -1,0 +1,37 @@
+/* Hallmark v2.0.0 | scope: app | theme: industrial workbench | signature: live workbook */
+/* Critique: keep local document actions outside the worksheet and expose export state. */
+:root {
+  --office-paper: #f7f6f0;
+  --office-ink: #182725;
+  --office-rule: #cad2ca;
+  --office-white: #ffffff;
+  --office-accent: #0d6259;
+  --office-danger: #b33d2d;
+  --office-font: "Source Sans 3", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color-scheme: light;
+  font-family: var(--office-font);
+  color: var(--office-ink);
+  background: var(--office-paper);
+}
+:root[data-theme="dark"] {
+  --office-paper: #152120;
+  --office-ink: #e6ece6;
+  --office-rule: #40524c;
+  --office-white: #243631;
+  --office-accent: #89d5c5;
+  --office-danger: #ffb1a4;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow-x: clip; margin: 0; }
+body { display: flex; flex-direction: column; font-size: 14px; }
+.office-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--office-rule); }
+.office-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.office-toolbar button { padding: 8px 12px; border: 1px solid var(--office-rule); border-radius: 3px; background: var(--office-white); color: var(--office-ink); font: inherit; cursor: pointer; }
+.office-toolbar button:hover { border-color: var(--office-accent); }
+.office-toolbar button:active { background: var(--office-paper); }
+.office-toolbar button:focus-visible { outline: 3px solid var(--office-accent); outline-offset: 2px; }
+.office-toolbar button:disabled { opacity: 0.5; cursor: wait; }
+.office-storage-note { margin: 0; padding: 8px 16px; font-size: 12px; line-height: 1.5; }
+#error { margin: 0; padding: 8px 16px; color: var(--office-danger); }
+#editor { flex: 1; min-height: 0; min-width: 0; }

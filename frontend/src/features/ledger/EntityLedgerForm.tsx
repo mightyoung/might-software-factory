@@ -79,7 +79,7 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
     } finally { if (lifetime.current === generation) setBusy(false); }
   }
   const layout = definition.layout[use === "CREATE" ? "create" : "edit"];
-  return <form className="report-form" onSubmit={submit} noValidate>
+  return <form className="report-form operational-form" onSubmit={submit} noValidate>
     <h2>{use === "CREATE" ? definition.actions.create.label : definition.actions.update.label}</h2>
     {(definitionMismatch && !reviewed) && <p role="alert">字段定义与保留输入的版本不同，请逐项核对。<button type="button" onClick={() => setReviewed(true)}>已核对当前定义</button></p>}
     {layout.map(key => {

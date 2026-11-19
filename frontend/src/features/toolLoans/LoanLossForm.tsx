@@ -75,7 +75,7 @@ export function LoanLossForm({ adapter, record, owner, identityKey, onSaved, onU
       if (error instanceof ApiError && error.status === 401) onUnauthenticated();
     } finally { if (active.current) setBusy(false); }
   }
-  return <section aria-label="逐件遗失结案">
+  return <section className="operational-form" aria-label="逐件遗失结案">
     <ReturnProgress items={items} />
     {items.filter(item => item.state === "LOST").map(item => <p key={item.toolId}>{item.label} · 已遗失结案 · {item.reason}</p>)}
     {(eligible.length > 0 || draft.request) && <>

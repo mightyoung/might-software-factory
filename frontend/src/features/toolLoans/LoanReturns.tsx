@@ -22,7 +22,7 @@ export function ReturnProgress({ items }: { items: ReturnItem[] }) {
   const lost = items.filter(item => item.state === "LOST").length;
   const unsettled = items.length - received - lost;
   const requested = items.filter(item => item.state === "REQUESTED").length;
-  return <p role="status">尚未结清 {unsettled} 件，待接收 {requested} 件，已接收 {received} 件{lost > 0 && `，遗失结案 ${lost} 件`}</p>;
+  return <p className="operational-progress" role="status">尚未结清 {unsettled} 件，待接收 {requested} 件，已接收 {received} 件{lost > 0 && `，遗失结案 ${lost} 件`}</p>;
 }
 
 export function LoanReturnForm({ adapter, action, record, owner, identityKey, onUnauthenticated, onSaved }: {
@@ -106,12 +106,12 @@ export function LoanReturnForm({ adapter, action, record, owner, identityKey, on
       if (failure instanceof ApiError && failure.status === 401) onUnauthenticated();
     } finally { if (mine === generation.current) setBusy(false); }
   }
-  return <form aria-label={action === "receive" ? "接收归还工装" : "申请分批归还"} onSubmit={event => { event.preventDefault();void submit(); }}>
+  return <form className="operational-form" aria-label={action === "receive" ? "接收归还工装" : "申请分批归还"} onSubmit={event => { event.preventDefault();void submit(); }}>
     <h3>{action === "receive" ? "接收归还工装" : "申请分批归还"}</h3>
     <p>{current.state === "SETTLED" ? "借用单已结清" : "借用单未结清"} · 第 {current.version} 版</p>
     <ReturnProgress items={items} />
     {current.awaitingOtherCustodian === true && current.state === "ISSUED" && <p role="status">对应保管范围目前无人可办（需另一名有效保管人接收）</p>}
-    <ul>{items.map(item => {
+    <ul className="operational-items">{items.map(item => {
       const choice = draft.choices[item.toolId];
       return <li key={item.toolId}>
         <label><input type="checkbox" checked={choice?.selected ?? false} disabled={locked || !eligible(item) || current.state === "SETTLED"}
