@@ -28,7 +28,7 @@ jobs:
           POSTGRES_PASSWORD: ci_configuration_admin_only
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U postgres -d ledger_configuration_test'
+          --health-cmd "pg_isready -U postgres -d ledger_configuration_test"
           --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       PGHOST: 127.0.0.1
