@@ -9,9 +9,9 @@ public record WorkflowDefinitionPin(UUID tenantId, String definitionId, String e
     public WorkflowDefinitionPin {
         Objects.requireNonNull(tenantId, "Tenant required");
         if (tenantId.equals(new UUID(0, 0)) || definitionId == null || definitionId.isBlank()
-                || !"findingRemediationV3".equals(expectedKey) || resourceSha256 == null
+                || (expectedKey == null || !PackagedWorkflowDefinitions.RESOURCES.containsKey(expectedKey)) || resourceSha256 == null
                 || !resourceSha256.matches("[0-9a-f]{64}")) {
-            throw new IllegalArgumentException("Invalid exact finding review definition pin");
+            throw new IllegalArgumentException("Invalid exact workflow definition pin");
         }
     }
 }

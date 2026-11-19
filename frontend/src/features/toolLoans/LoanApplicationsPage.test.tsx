@@ -8,7 +8,7 @@ const scope = "11111111-1111-4111-8111-111111111111", org = "22222222-2222-4222-
 const row: LoanRecord = { id: "55555555-5555-4555-8555-555555555555", version: 1, state: "PENDING_ISSUE", definitionVersion: "1", organizationId: org, custodyScopeId: scope, purpose: "装配使用", toolIds: [tool, tool2], createdAt: "2026-11-18T00:00:00Z", updatedAt: "2026-11-18T00:00:00Z" };
 const grants = ["tool_loan.read", "tool_loan.create", "tool_loan.update"];
 function setup(records: LoanRecord[] = []) {
-  const adapter: LoanAdapter = { list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
+  const adapter: LoanAdapter = { issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
   const expire = vi.fn();
   const view = render(<LoanApplicationsPage adapter={adapter} owner="tenant/member" permissions={grants} onUnauthenticated={expire} />);
   return { adapter, expire, view };
@@ -71,4 +71,14 @@ it("keeps the submitted department fixed when the owner now belongs to another d
   fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
   await waitFor(() => expect(adapter.command).toHaveBeenCalled());
   expect(vi.mocked(adapter.command).mock.calls[0]![2]).toMatchObject({ organizationId: org, custodyScopeId: scope, expectedVersion: 1 });
+});
+it("shows that another eligible custodian is needed only when the pending detail explicitly says so", async () => {
+  const { adapter } = setup([row]);
+  vi.mocked(adapter.detail).mockResolvedValueOnce({ ...row, awaitingOtherCustodian: true }).mockResolvedValueOnce(row);
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  expect(await screen.findByText("对应保管范围目前无人可办（需另一名有效保管人发放）")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "查看申请" }));
+  await waitFor(() => expect(adapter.detail).toHaveBeenCalledTimes(2));
+  await screen.findByRole("heading", { name: "申请详情" });
+  expect(screen.queryByText("对应保管范围目前无人可办（需另一名有效保管人发放）")).not.toBeInTheDocument();
 });

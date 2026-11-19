@@ -18,9 +18,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 @Configuration(proxyBeanMethods=false)
 class ApplicationActionConfiguration {
-    @Bean ApplicationActionRuntime applicationActionRuntime(DataSource source,PlatformTransactionManager manager,SessionSensitiveKeyProvider keys) {
+    @Bean ApplicationActionRuntime applicationActionRuntime(DataSource source,PlatformTransactionManager manager,
+            SessionSensitiveKeyProvider keys, PostgresAuthorizationWriteGuard guard) {
         var db=DSL.using(new TransactionAwareDataSourceProxy(source),SQLDialect.POSTGRES,new Settings().withExecuteLogging(false).withFetchWarnings(false));
-        var guard=new PostgresAuthorizationWriteGuard(source);
         var callers=new ManagedSessionSensitiveSecurityTransaction(source,manager,guard);
         var human=new JooqCurrentHumanSessionAuthority(source,callers,keys);
         var authority=new PersistentEntityActionAuthorization(source,callers,human,guard,new JooqAccountStatusReadRepository(db),

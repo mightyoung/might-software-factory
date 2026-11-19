@@ -43,7 +43,7 @@ class ModuleArchitectureTest {
                     "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")),
             Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication")),
             Map.entry("Entity ledger", Set.of("Application registry", "Authorization", "Identity and authentication", "Audit and operations")),
-            Map.entry("Tooling catalog", Set.of("Entity ledger", "Authorization", "Identity and authentication", "Application registry", "Audit and operations"))
+            Map.entry("Tooling catalog", Set.of("Workflow", "Entity ledger", "Authorization", "Identity and authentication", "Application registry", "Audit and operations"))
     );
 
     @Test

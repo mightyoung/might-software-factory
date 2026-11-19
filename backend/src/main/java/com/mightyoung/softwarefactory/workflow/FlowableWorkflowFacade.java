@@ -104,7 +104,7 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
         try {
             managementService.executeCommand(context -> {
                 requireEngineConnection(context, connection);
-                PinnedFindingReviewDefinitionResolver.verify(repositoryService, definition);
+                PackagedWorkflowDefinitions.verify(repositoryService, definition);
                 ProcessInstance instance = runtimeService.createProcessInstanceBuilder()
                         .processDefinitionId(definition.definitionId()).tenantId(tenantId.toString())
                         .businessKey(businessType + ":" + businessId).variables(variables).start();

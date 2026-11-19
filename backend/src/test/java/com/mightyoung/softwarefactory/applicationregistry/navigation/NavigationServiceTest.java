@@ -42,6 +42,19 @@ class NavigationServiceTest {
         return context;
     }
 
+    @Test void issueOnlyKeeperGetsItsApplicationAndNodeWithoutCatalogRead() {
+        var context=session();
+        var contribution=new com.mightyoung.softwarefactory.tooling.ToolLedgerConfiguration().toolingApplication();
+        var contributed=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"tool_loan.issue")).thenReturn(true);
+        assertThat(contributed.bootstrap().applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("tooling");
+        assertThat(contributed.bootstrap().permissions()).containsExactly("tool_loan.issue");
+        assertThat(contributed.menu("tooling").nodes()).extracting(NavigationService.MenuNode::permission).containsExactly("tool_loan.issue");
+        when(permissions.has(context,"tool_loan.issue")).thenReturn(false);
+        assertThat(contributed.bootstrap().applications()).isEmpty();
+    }
+
     @Test void differentTenantsOnlyReceiveTheirEntitledAndScopedApplication() {
         var first = session();
         when(applications.findCurrent(first.tenantId(),"safety")).thenReturn(Optional.of(new TenantApplicationState(true, 4)));

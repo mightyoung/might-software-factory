@@ -18,10 +18,10 @@ class PinnedFindingReviewDefinitionResolverTest {
     private byte[] bytes;
     private String digest;
     @BeforeEach void setup() throws Exception {
-        try (var stream = getClass().getResourceAsStream("/" + PinnedFindingReviewDefinitionResolver.RESOURCE)) {
+        try (var stream = getClass().getResourceAsStream("/" + PackagedWorkflowDefinitions.RESOURCES.get("findingRemediationV3"))) {
             bytes = stream.readAllBytes();
         }
-        digest = PinnedFindingReviewDefinitionResolver.sha256(bytes);
+        digest = PackagedWorkflowDefinitions.sha256(bytes);
         var query = mock(ProcessDefinitionQuery.class, RETURNS_SELF);
         when(repository.createProcessDefinitionQuery()).thenReturn(query);
         when(query.singleResult()).thenReturn(definition);

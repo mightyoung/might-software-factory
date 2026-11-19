@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LoanIssueQueue } from "./LoanIssueQueue";
 import { ApiError } from "../../api/httpClient";
 import { MultiItemRows } from "../../components/MultiItemRows";
 import { ledgerFailure } from "../ledger/httpEntityLedger";
@@ -9,11 +10,12 @@ type Action = "create" | "revise" | "cancel";
 interface Pending { action: Action; id?: string; input: LoanInput | { definitionVersion: string; expectedVersion: number }; key: string }
 interface Draft { department: string; scope: string; purpose: string; tools: string[]; pending: Pending | null; uncertain: boolean }
 const EMPTY: LoanCandidates = { departments: [], scopes: [], tools: [] };
-const stateLabel = (state: LoanRecord["state"]) => state === "PENDING_ISSUE" ? "待发放" : "已撤销";
+const stateLabel = (state: LoanRecord["state"]) => ({ PENDING_ISSUE: "待发放", WITHDRAWN: "已撤销", ISSUED: "已发放" })[state];
 
 export function LoanApplicationsPage({ adapter, owner, identityScope, permissions, onUnauthenticated }: {
   adapter: LoanAdapter; owner: string; identityScope?: { accountId: string; memberId: string }; permissions: readonly string[]; onUnauthenticated(): void;
 }) {
+  const [view, setView] = useState<"own" | "issue">(permissions.includes("tool_loan.read") || permissions.includes("tool_loan.create") ? "own" : "issue");
   const [records, setRecords] = useState<LoanRecord[]>([]);
   const [selected, setSelected] = useState<LoanRecord | null>(null);
   const [form, setForm] = useState<Action | null>(null);
@@ -39,19 +41,28 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);setError("");
-    if (!permissions.includes("tool_loan.read")) { setRecords([]);setLoading(false);return; }
+    if (view !== "own" || !permissions.includes("tool_loan.read")) { setRecords([]);setLoading(false);return; }
     void adapter.list(controller.signal).then(rows => { if (!controller.signal.aborted) setRecords(rows); }, failure => {
       if (controller.signal.aborted) return;
       setError(ledgerFailure(failure));
       if (failure instanceof ApiError && failure.status === 401) onUnauthenticated();
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [adapter, permissions, revision, onUnauthenticated]);
+  }, [adapter, permissions, revision, onUnauthenticated, view]);
   const read = permissions.includes("tool_loan.read");
+  const tabs = permissions.includes("tool_loan.issue") && <nav aria-label="借用申请工作区">
+    {(read || permissions.includes("tool_loan.create")) && <button aria-pressed={view === "own"} onClick={() => setView("own")}>本人申请</button>}
+    <button aria-pressed={view === "issue"} onClick={() => setView("issue")}>待发放工作</button>
+  </nav>;
+  if (view === "issue" && permissions.includes("tool_loan.issue")) return <section className="ledger-main">
+    <h1>工装借用申请</h1>{tabs}<LoanIssueQueue adapter={adapter} owner={owner}
+      identityKey={JSON.stringify([identityScope?.accountId, identityScope?.memberId])} onUnauthenticated={onUnauthenticated} />
+  </section>;
   return <section className="ledger-main">
     <div className="page-heading"><h1>工装借用申请</h1>
       {permissions.includes("tool_loan.create") && !form && <button className="button button-primary" onClick={() => { readGeneration.current++;setDetailBusy(false);setSelected(null);setForm("create"); }}>新建借用申请</button>}
     </div>
+    {tabs}
     {error && <p role="alert">{error}</p>}
     {form ? <LoanForm key={`${selected?.id ?? "new"}/${form}`} adapter={adapter} owner={owner} identityKey={JSON.stringify([identityScope?.accountId, identityScope?.memberId])} action={form} record={selected}
       onUnauthenticated={onUnauthenticated} onClose={() => setForm(null)} onSaved={record => { setSelected(record);setForm(null);setRevision(value => value + 1); }} /> : <>
@@ -63,6 +74,7 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
           <td><button onClick={() => void openRecord(record.id)}>查看申请</button></td></tr>)}</tbody></table>}
       {detailBusy && <p role="status">正在读取申请详情…</p>}
       {selected && <section aria-label="借用申请详情"><h2>申请详情</h2><p>{stateLabel(selected.state)} · 第 {selected.version} 版</p><p>{selected.purpose}</p>
+        {selected.state === "PENDING_ISSUE" && selected.awaitingOtherCustodian === true && <p role="status">对应保管范围目前无人可办（需另一名有效保管人发放）</p>}
         <p>申请工装 {selected.toolIds.length} 件</p><ol>{selected.toolIds.map(id => <li key={id}>{selected.tools?.find(tool => tool.id === id)?.label ?? id}</li>)}</ol>
         {selected.state === "PENDING_ISSUE" && permissions.includes("tool_loan.update") && <>
           <button onClick={() => setForm("revise")}>修订申请</button><button onClick={() => setForm("cancel")}>撤销申请</button>

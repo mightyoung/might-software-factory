@@ -4,13 +4,14 @@ import { object, UUID, requireProtocol, safeInteger } from "../ledger/model";
 export interface LoanRecord {
   id: string;
   version: number;
-  state: "PENDING_ISSUE" | "WITHDRAWN";
+  state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED";
   definitionVersion: string;
   organizationId: string;
   custodyScopeId: string;
   purpose: string;
   toolIds: string[];
   tools?: { id: string; label: string }[];
+  awaitingOtherCustodian?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -18,10 +19,12 @@ export interface LoanInput { definitionVersion: string; organizationId: string; 
 export interface LoanScope { id: string; label: string; organizationId: string }
 export interface LoanCandidates { departments: { id: string; label: string }[]; scopes: LoanScope[]; tools: { id: string; label: string }[] }
 export interface LoanAdapter {
+  issueQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  issueDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   list(signal?: AbortSignal): Promise<LoanRecord[]>;
   detail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   candidates(scope?: string, signal?: AbortSignal, loanId?: string): Promise<LoanCandidates>;
-  command(action: "create" | "revise" | "cancel", id: string | undefined, input: LoanInput | { definitionVersion: string; expectedVersion: number }, key: string): Promise<LoanRecord>;
+  command(action: "create" | "revise" | "cancel" | "issue", id: string | undefined, input: LoanInput | { definitionVersion: string; expectedVersion: number }, key: string): Promise<LoanRecord>;
 }
 export type LoanFactory = () => LoanAdapter;
 function unwrap(value: unknown): unknown {
@@ -30,10 +33,11 @@ function unwrap(value: unknown): unknown {
 }
 function record(value: unknown): LoanRecord {
   requireProtocol(object(value) && UUID.test(String(value.id)) && safeInteger(value.version) && value.version > 0
-    && ["PENDING_ISSUE", "WITHDRAWN"].includes(String(value.state)) && typeof value.definitionVersion === "string"
+    && ["PENDING_ISSUE", "WITHDRAWN", "ISSUED"].includes(String(value.state)) && typeof value.definitionVersion === "string"
     && UUID.test(String(value.organizationId)) && UUID.test(String(value.custodyScopeId)) && typeof value.purpose === "string"
     && Array.isArray(value.toolIds) && value.toolIds.every(id => typeof id === "string" && UUID.test(id))
     && typeof value.createdAt === "string" && typeof value.updatedAt === "string");
+  requireProtocol(value.awaitingOtherCustodian === undefined || typeof value.awaitingOtherCustodian === "boolean");
   const toolIds = value.toolIds as string[];
   if (value.tools !== undefined) requireProtocol(Array.isArray(value.tools) && value.tools.length === toolIds.length && value.tools.every((tool, index) => object(tool) && tool.id === toolIds[index] && typeof tool.label === "string"));
   return value as unknown as LoanRecord;
@@ -41,6 +45,15 @@ function record(value: unknown): LoanRecord {
 export function createHttpLoans(client: HttpClient): LoanAdapter {
   const base = "/api/v1/tooling/loan-applications";
   return {
+    async issueQueue(signal) {
+      const value = unwrap(await client.get(`${base}/issue-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async issueDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/issue-detail`, { signal })));
+    },
     async list(signal) {
       const value = unwrap(await client.get(base, { signal }));
       requireProtocol(object(value) && Array.isArray(value.records));

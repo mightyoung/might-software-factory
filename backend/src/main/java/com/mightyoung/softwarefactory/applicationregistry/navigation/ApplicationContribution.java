@@ -18,7 +18,7 @@ public record ApplicationContribution(String appKey, String label, List<Node> no
                     || !entityKey.matches("[a-z][a-z0-9_]{0,63}")) throw new IllegalArgumentException("Invalid contribution node");
             permissions=List.copyOf(permissions);
             if (permissions.isEmpty() || permissions.stream().distinct().count()!=permissions.size()
-                    || permissions.stream().anyMatch(p -> !p.matches(java.util.regex.Pattern.quote(entityKey)+"\\.(read|create|update)"))) {
+                    || permissions.stream().anyMatch(p -> !p.matches(java.util.regex.Pattern.quote(entityKey)+"\\.(read|create|update|issue)"))) {
                 throw new IllegalArgumentException("Invalid contribution capabilities");
             }
         }

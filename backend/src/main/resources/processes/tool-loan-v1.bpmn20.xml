@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://mightyoung.com/software-factory/workflow">
+  <process id="toolLoanV1" name="工装借还" isExecutable="true">
+    <startEvent id="start"/>
+    <sequenceFlow id="startIssue" sourceRef="start" targetRef="issue"/>
+    <userTask id="issue" name="保管人确认发放" flowable:assignee="${issuerMemberId}"/>
+    <sequenceFlow id="issued" sourceRef="issue" targetRef="returnRequest"/>
+    <userTask id="returnRequest" name="借用人申请归还" flowable:assignee="${applicantMemberId}"/>
+    <sequenceFlow id="requested" sourceRef="returnRequest" targetRef="receive"/>
+    <userTask id="receive" name="保管人验收接收" flowable:assignee="${receiverMemberId}"/>
+    <sequenceFlow id="received" sourceRef="receive" targetRef="settlement"/>
+    <exclusiveGateway id="settlement" default="remaining"/>
+    <sequenceFlow id="remaining" sourceRef="settlement" targetRef="returnRequest"/>
+    <sequenceFlow id="settled" sourceRef="settlement" targetRef="end">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${allItemsSettled}]]></conditionExpression>
+    </sequenceFlow>
+    <endEvent id="end"/>
+  </process>
+</definitions>
