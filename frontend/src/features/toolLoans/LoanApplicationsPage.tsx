@@ -17,7 +17,7 @@ const stateLabel = (state: LoanRecord["state"]) => ({ PENDING_ISSUE: "待发放"
 export function LoanApplicationsPage({ adapter, owner, identityScope, permissions, onUnauthenticated }: {
   adapter: LoanAdapter; owner: string; identityScope?: { accountId: string; memberId: string }; permissions: readonly string[]; onUnauthenticated(): void;
 }) {
-  const [view, setView] = useState<"own" | "issue" | "receive">(permissions.includes("tool_loan.read") || permissions.includes("tool_loan.create") ? "own" : permissions.includes("tool_loan.issue") ? "issue" : "receive");
+  const [view, setView] = useState<"own" | "issue" | "receive" | "loss">(permissions.includes("tool_loan.read") || permissions.includes("tool_loan.create") ? "own" : permissions.includes("tool_loan.issue") ? "issue" : permissions.includes("tool_loan.receive") ? "receive" : "loss");
   const [records, setRecords] = useState<LoanRecord[]>([]);
   const [selected, setSelected] = useState<LoanRecord | null>(null);
   const [form, setForm] = useState<Action | null>(null);
@@ -53,13 +53,14 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
   }, [adapter, permissions, revision, onUnauthenticated, view]);
   const read = permissions.includes("tool_loan.read");
   const identityKey = JSON.stringify([identityScope?.accountId, identityScope?.memberId]);
-  const tabs = (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive")) && <nav aria-label="借用申请工作区">
+  const tabs = (permissions.includes("tool_loan.issue") || permissions.includes("tool_loan.receive") || permissions.includes("tool_loan.close_lost")) && <nav aria-label="借用申请工作区">
     {(read || permissions.includes("tool_loan.create")) && <button aria-pressed={view === "own"} onClick={() => setView("own")}>本人申请</button>}
     {permissions.includes("tool_loan.issue") && <button aria-pressed={view === "issue"} onClick={() => setView("issue")}>待发放工作</button>}
     {permissions.includes("tool_loan.receive") && <button aria-pressed={view === "receive"} onClick={() => setView("receive")}>待接收工作</button>}
+    {permissions.includes("tool_loan.close_lost") && <button aria-pressed={view === "loss"} onClick={() => setView("loss")}>遗失结案</button>}
   </nav>;
-  if (view === "receive" && permissions.includes("tool_loan.receive")) return <section className="ledger-main">
-    <h1>工装借用申请</h1>{tabs}<LoanReceiveQueue adapter={adapter} owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} />
+  if ((view === "receive" && permissions.includes("tool_loan.receive")) || (view === "loss" && permissions.includes("tool_loan.close_lost"))) return <section className="ledger-main">
+    <h1>工装借用申请</h1>{tabs}<LoanReceiveQueue key={view} mode={view} adapter={adapter} owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} />
   </section>;
   if (view === "issue" && permissions.includes("tool_loan.issue")) return <section className="ledger-main">
     <h1>工装借用申请</h1>{tabs}<LoanIssueQueue adapter={adapter} owner={owner}
@@ -86,7 +87,8 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
         {selected.returnItems && ["ISSUED", "SETTLED"].includes(selected.state) && (
           permissions.includes("tool_loan.create") ? <LoanReturnForm key={selected.id} adapter={adapter} action="return-requests" record={selected}
             owner={owner} identityKey={identityKey} onUnauthenticated={onUnauthenticated} onSaved={record => { setSelected(record);setRevision(value => value + 1); }} />
-            : <ReturnProgress items={selected.returnItems} />
+            : <><ReturnProgress items={selected.returnItems} />{selected.returnItems.filter(item => item.state === "LOST").map(item =>
+              <p key={item.toolId}>{item.label} · 已遗失结案 · {item.reason}</p>)}</>
         )}
         {selected.state === "PENDING_ISSUE" && permissions.includes("tool_loan.update") && <>
           <button onClick={() => setForm("revise")}>修订申请</button><button onClick={() => setForm("cancel")}>撤销申请</button>

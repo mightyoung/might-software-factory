@@ -9,7 +9,7 @@ const id = "11111111-1111-4111-8111-111111111111", tool2 = "22222222-2222-4222-8
 const items: ReturnItem[] = [id, tool2, tool3].map((toolId, index) => ({ toolId, label: `工装${index + 1}`, state: "OUTSTANDING" }));
 const loan: LoanRecord = { id, definitionVersion: "1", version: 2, state: "ISSUED", organizationId: id, custodyScopeId: id, purpose: "归还验收", toolIds: [id, tool2, tool3], returnItems: items, createdAt: "2026-11-20T00:00:00Z", updatedAt: "2026-11-20T00:00:00Z" };
 function adapter(): LoanAdapter {
-  return { receiveQueue: vi.fn(async () => [loan]), receiveDetail: vi.fn(async () => loan), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => [loan]), detail: vi.fn(async () => loan), candidates: vi.fn(), command: vi.fn(async () => loan) };
+  return { lossQueue: vi.fn(), lossDetail: vi.fn(), receiveQueue: vi.fn(async () => [loan]), receiveDetail: vi.fn(async () => loan), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => [loan]), detail: vi.fn(async () => loan), candidates: vi.fn(), command: vi.fn(async () => loan) };
 }
 function form(a: LoanAdapter, action: "return-requests" | "receive", record = loan) {
   return render(<LoanReturnForm adapter={a} action={action} record={record} owner="tenant/actor" identityKey="account/member" onUnauthenticated={vi.fn()} onSaved={vi.fn()} />);

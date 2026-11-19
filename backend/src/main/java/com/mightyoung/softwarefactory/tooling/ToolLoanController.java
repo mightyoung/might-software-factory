@@ -53,6 +53,23 @@ public final class ToolLoanController {
                 parser.read(request, ToolLoanService.IssueInput.class)));
     }
 
+    @GetMapping("/loss-queue")
+    public ResponseEntity<?> lossQueue(HttpServletRequest request) {
+        return response(service.lossQueue(request));
+    }
+
+    @GetMapping("/{id}/loss-detail")
+    public ResponseEntity<?> lossDetail(HttpServletRequest request,@PathVariable UUID id) {
+        return response(service.lossDetail(request,id));
+    }
+
+    @PostMapping("/{id}/close-lost")
+    public ResponseEntity<?> closeLost(HttpServletRequest request,@PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String key) {
+        return response(service.closeLost(request,id,LedgerHttpParser.uuid(key,"Idempotency-Key"),
+                parser.read(request,ToolLoanService.LossInput.class)));
+    }
+
     @GetMapping("/receive-queue")
     public ResponseEntity<?> receiveQueue(HttpServletRequest request) {
         return response(service.receiveQueue(request));

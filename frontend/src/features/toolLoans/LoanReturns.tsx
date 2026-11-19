@@ -7,7 +7,7 @@ type ReturnAction = "return-requests" | "receive";
 interface Pending { key: string; input: ReturnRequestInput | ReceiveInput }
 interface ItemChoice { selected: boolean; condition: "NORMAL" | "DAMAGED"; reason: string }
 interface StoredReturnDraft { pending: Pending | null; choices: Record<string, ItemChoice>; uncertain: boolean }
-const itemState = { OUTSTANDING: "在借", REQUESTED: "待接收", RECEIVED: "已接收" };
+const itemState = { OUTSTANDING: "在借", REQUESTED: "待接收", RECEIVED: "已接收", LOST: "已遗失结案" };
 function failureMessage(error: unknown) {
   if (!(error instanceof ApiError) || error.status === 0 || error.status >= 500) return "提交结果尚未确认，所选明细和原请求标识已保留。请核对后重试原请求。";
   if (error.status === 401) return "会话已失效，请重新登录后核对。";
@@ -18,9 +18,11 @@ function failureMessage(error: unknown) {
   return error.fieldErrors.length ? error.fieldErrors.map(field => field.reason).join("；") : "输入未通过检查，请核对所选明细和损坏说明。";
 }
 export function ReturnProgress({ items }: { items: ReturnItem[] }) {
-  const unsettled = items.filter(item => item.state !== "RECEIVED").length;
+  const received = items.filter(item => item.state === "RECEIVED").length;
+  const lost = items.filter(item => item.state === "LOST").length;
+  const unsettled = items.length - received - lost;
   const requested = items.filter(item => item.state === "REQUESTED").length;
-  return <p role="status">尚未结清 {unsettled} 件，待接收 {requested} 件，已接收 {items.length - unsettled} 件</p>;
+  return <p role="status">尚未结清 {unsettled} 件，待接收 {requested} 件，已接收 {received} 件{lost > 0 && `，遗失结案 ${lost} 件`}</p>;
 }
 
 export function LoanReturnForm({ adapter, action, record, owner, identityKey, onUnauthenticated, onSaved }: {

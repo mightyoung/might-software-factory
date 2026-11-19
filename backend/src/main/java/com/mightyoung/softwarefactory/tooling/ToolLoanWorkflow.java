@@ -27,8 +27,10 @@ public final class ToolLoanWorkflow {
     private final WorkflowFacade workflow;
     private final Definitions definitions;
     private final WorkflowTaskClaim taskClaim;
+    private final com.mightyoung.softwarefactory.workflow.WorkflowExceptionalEnd exceptionalEnd;
 
-    public ToolLoanWorkflow(WorkflowFacade workflow, Definitions definitions, WorkflowTaskClaim taskClaim) {
+    public ToolLoanWorkflow(WorkflowFacade workflow, Definitions definitions, WorkflowTaskClaim taskClaim,com.mightyoung.softwarefactory.workflow.WorkflowExceptionalEnd exceptionalEnd) {
+        this.exceptionalEnd=exceptionalEnd;
         this.workflow = workflow;
         this.definitions = definitions;
         this.taskClaim = taskClaim;
@@ -74,6 +76,17 @@ public final class ToolLoanWorkflow {
                 throw unavailable("Missing active return task for the borrower");
             }
         }
+    }
+
+    public void closeLost(UUID tenantId,UUID loanId,UUID keeper,UUID applicant,boolean hadPending,boolean pendingRemains,boolean allSettled) {
+        if(hadPending) {
+            receive(tenantId,loanId,keeper,applicant,pendingRemains,allSettled);
+            return;
+        }
+        var task=workflow.readCurrentTask(tenantId,"tool_loan",loanId,"returnRequest");
+        if(!task.active() || !"toolLoanV1".equals(task.processDefinitionKey()) || !applicant.toString().equals(task.assignee()))
+            throw unavailable("Missing borrower handoff for exceptional closure");
+        if(allSettled) exceptionalEnd.end(task,"end");
     }
 
     private WorkflowTaskReadSnapshot pendingReceipt(UUID tenantId, UUID loanId) {

@@ -809,6 +809,178 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/close-lost:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: closeLostLoanItem
+      description: A current eligible custodian other than the borrower closes one outstanding or requested item as LOST. The command records a reason, closes any pending return for this item, releases its occupancy and advances the bound workflow in one transaction. Requires tool_loan.close_lost.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseLostInput'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: *id005
+      - name: X-XSRF-TOKEN
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Current CSRF token from the authenticated session.
+  /api/v1/tooling/loan-applications/loss-queue:
+    get:
+      operationId: listKeeperLossQueue
+      description: List loans containing unsettled items in the current custodian’s scope. Requires tool_loan.close_lost.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Requested application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/tooling/loan-applications/{id}/loss-detail:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getKeeperLossDetail
+      description: Current loan and item detail for an authorized non-borrower custodian, including settled loans for command reconciliation.
+      responses:
+        '200':
+          description: Success. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponse'
+        '400':
+          description: Invalid input, unknown or protected field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication or current session authority required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Application or action denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Application is not visible under current keeper qualification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version, definition, idempotency, state or command conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Authority or dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     sessionCookie:
@@ -1150,6 +1322,7 @@ components:
           - OUTSTANDING
           - REQUESTED
           - RECEIVED
+          - LOST
         requestId:
           type: string
           format: uuid
@@ -1161,6 +1334,35 @@ components:
         reason:
           type: string
           maxLength: 4000
+    CloseLostInput:
+      type: object
+      additionalProperties: false
+      required:
+      - definitionVersion
+      - expectedVersion
+      - toolId
+      - reason
+      properties:
+        definitionVersion:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: .*\S.*
+          description: Nonblank historical definition version bound to this loan. Return and receipt use
+            the stored version without rebinding the loan to the current creation definition.
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775806
+        toolId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          pattern: .*\S.*
     ReturnRequestInput:
       type: object
       additionalProperties: false

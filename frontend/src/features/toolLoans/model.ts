@@ -4,15 +4,16 @@ import { object, UUID, requireProtocol, safeInteger } from "../ledger/model";
 export interface ReturnItem {
   toolId: string;
   label: string;
-  state: "OUTSTANDING" | "REQUESTED" | "RECEIVED";
+  state: "OUTSTANDING" | "REQUESTED" | "RECEIVED" | "LOST";
   requestId?: string;
   condition?: "NORMAL" | "DAMAGED";
   reason?: string;
 }
 export interface VersionInput { definitionVersion: string; expectedVersion: number }
 export interface ReturnRequestInput extends VersionInput { toolIds: string[] }
+export interface LossInput extends VersionInput { toolId: string; reason: string }
 export interface ReceiveInput extends VersionInput { items: { toolId: string; condition: "NORMAL" | "DAMAGED"; reason?: string }[] }
-export type LoanCommandInput = LoanInput | VersionInput | ReturnRequestInput | ReceiveInput;
+export type LoanCommandInput = LoanInput | VersionInput | ReturnRequestInput | ReceiveInput | LossInput;
 export interface LoanRecord {
   id: string;
   version: number;
@@ -32,6 +33,8 @@ export interface LoanInput { definitionVersion: string; organizationId: string; 
 export interface LoanScope { id: string; label: string; organizationId: string }
 export interface LoanCandidates { departments: { id: string; label: string }[]; scopes: LoanScope[]; tools: { id: string; label: string }[] }
 export interface LoanAdapter {
+  lossQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  lossDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   receiveQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
   receiveDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   issueQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
@@ -39,7 +42,7 @@ export interface LoanAdapter {
   list(signal?: AbortSignal): Promise<LoanRecord[]>;
   detail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   candidates(scope?: string, signal?: AbortSignal, loanId?: string): Promise<LoanCandidates>;
-  command(action: "create" | "revise" | "cancel" | "issue" | "return-requests" | "receive", id: string | undefined, input: LoanCommandInput, key: string): Promise<LoanRecord>;
+  command(action: "create" | "revise" | "cancel" | "issue" | "return-requests" | "receive" | "close-lost", id: string | undefined, input: LoanCommandInput, key: string): Promise<LoanRecord>;
 }
 export type LoanFactory = () => LoanAdapter;
 function unwrap(value: unknown): unknown {
@@ -58,9 +61,10 @@ function record(value: unknown): LoanRecord {
   if (value.returnItems !== undefined) {
     requireProtocol(Array.isArray(value.returnItems) && value.returnItems.length === (["PENDING_ISSUE", "WITHDRAWN"].includes(String(value.state)) ? 0 : toolIds.length));
     requireProtocol(value.returnItems.every((item, index) => object(item) && item.toolId === toolIds[index]
-      && typeof item.label === "string" && ["OUTSTANDING", "REQUESTED", "RECEIVED"].includes(String(item.state))
+      && typeof item.label === "string" && ["OUTSTANDING", "REQUESTED", "RECEIVED", "LOST"].includes(String(item.state))
       && (item.requestId === undefined || UUID.test(String(item.requestId)))
       && (item.condition === undefined || ["NORMAL", "DAMAGED"].includes(String(item.condition)))
+      && (item.state !== "LOST" || (typeof item.reason === "string" && item.reason.trim().length > 0 && item.condition === undefined))
       && (item.reason === undefined || typeof item.reason === "string")));
   }
   return value as unknown as LoanRecord;
@@ -68,6 +72,15 @@ function record(value: unknown): LoanRecord {
 export function createHttpLoans(client: HttpClient): LoanAdapter {
   const base = "/api/v1/tooling/loan-applications";
   return {
+    async lossQueue(signal) {
+      const value = unwrap(await client.get(`${base}/loss-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async lossDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/loss-detail`, { signal })));
+    },
     async receiveQueue(signal) {
       const value = unwrap(await client.get(`${base}/receive-queue`, { signal }));
       requireProtocol(object(value) && Array.isArray(value.records));
