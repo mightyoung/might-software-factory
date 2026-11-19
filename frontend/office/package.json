@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@univerjs/core": "1.5.2",
+    "@univerjs/preset-docs-core": "1.5.2",
     "@univerjs/preset-sheets-core": "1.5.2",
     "@univerjs/presets": "1.5.2",
     "react": "19.3.1",

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { ThemeSelector } from "../theme/ThemeProvider";
+import { officeEditors, type OfficeEditorKind } from "./editors";
 import "./OfficeDialog.css";
 
 const channel = "might-office-v1";
-export function OfficeDialog({ onClose, theme }: { onClose(): void; theme: "light" | "dark" }) {
+export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind; onClose(): void; theme: "light" | "dark" }) {
+  const editor = officeEditors[kind];
   const dialog = useRef<HTMLDialogElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -17,7 +19,7 @@ export function OfficeDialog({ onClose, theme }: { onClose(): void; theme: "ligh
   close.current = onClose;
 
   function finishClose() {
-    if (!dirty.current || window.confirm("工作簿有尚未导出的修改。确认丢弃并关闭？")) close.current();
+    if (!dirty.current || window.confirm(editor.discardPrompt)) close.current();
   }
   function requestClose() {
     if (loaded) frame.current?.contentWindow?.postMessage({ channel, type: "close-check" }, location.origin);
@@ -46,7 +48,7 @@ export function OfficeDialog({ onClose, theme }: { onClose(): void; theme: "ligh
       element.close();
       if (opener?.isConnected) opener.focus();
     };
-  }, []);
+  }, [editor]);
   useEffect(() => {
     frame.current?.contentWindow?.postMessage({ channel, type: "theme", theme }, location.origin);
   }, [theme]);
@@ -54,11 +56,11 @@ export function OfficeDialog({ onClose, theme }: { onClose(): void; theme: "ligh
   return <dialog ref={dialog} className="office-dialog" aria-labelledby="office-dialog-heading" onCancel={event => {
     event.preventDefault();requestClose();
   }}>
-    <header className="office-dialog-heading"><h2 id="office-dialog-heading">在线表格</h2>
-      <div className="office-dialog-actions"><ThemeSelector /><Button ref={closeButton} onClick={requestClose} label="关闭表格" /></div>
+    <header className="office-dialog-heading"><h2 id="office-dialog-heading">{editor.title}</h2>
+      <div className="office-dialog-actions"><ThemeSelector /><Button ref={closeButton} onClick={requestClose} label={editor.closeLabel} /></div>
     </header>
-    {!loaded && <p className="office-dialog-loading" role="status">正在加载表格编辑器…</p>}
-    <iframe ref={frame} src={`/office/index.html?theme=${initialTheme.current}`} title="在线工作簿编辑器"
+    {!loaded && <p className="office-dialog-loading" role="status">正在加载{editor.frameTitle}…</p>}
+    <iframe ref={frame} src={`${editor.page}?theme=${initialTheme.current}`} title={editor.frameTitle}
       sandbox="allow-scripts allow-same-origin allow-downloads allow-modals" />
   </dialog>;
 }

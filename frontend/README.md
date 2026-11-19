@@ -83,12 +83,12 @@ Playwright 使用本机已有 Chrome，不下载浏览器；自动启动模拟�
 - 查询：关键词只匹配隐患编号（后端的描述字段不可筛选）；过滤组只有 AND。`src/adapters/entityQueryContract.ts` 把界面查询映射为共享 Entity Query Contract 的请求，字段注册表在 HTTP 模式下取自 `GET /entities/finding/schema`；日期输入只映射到 `DATE` 字段，不把无时区日期擅自转成时间点。
 - 契约类型由 `contracts/openapi/*.yaml` 生成（`npm run gen:api`，`npm run check:api` 只比对），生成物不手改；`minimum` / `maxLength` / `pattern` 不进入类型，这类变化仍靠契约评审和后端测试。
 
-## 主题和公共在线表格
+## 主题、台账查询和公共 Office 编辑器
 
-登录页和工作台的“主题”支持浅色、深色和跟随系统。本机浏览器保存界面偏好。工作台品牌文字使用 Astryx Text，在线表格对话框使用 Astryx Button。组件颜色与业务台账共用主题变量。
+登录页、工作台和 Office 对话框支持浅色、深色或跟随系统。浏览器只保存主题偏好。工作台品牌使用 Astryx Text，公共台账的文本查询字段使用 Astryx TextInput，编辑器关闭操作使用 Astryx Button。查询字段保留 Enter 提交、重置和键盘焦点提示。
 
-登录后选择“在线表格”会加载独立的 Univer Sheets 编辑器。工作簿在浏览器内编辑，可显式导出为原生 JSON，下次再导入。当前交付范围是单人本地文档。多人编辑、服务器文档版本及 Excel 原文件转换仍属于后续能力。
+登录后可选择“在线表格”或“在线文档”。两者分别按需加载 Univer Sheets 或 Docs 1.5.2，共用主题和关闭保护。编辑内容保存在当前浏览器会话的内存中，离开前可导出 JSON，下次在相应编辑器中导入。表格沿用原生工作簿 JSON；文字文档文件包含应用格式版本、SDK 版本和原生文档快照。服务端文档版本、多人协作及 XLSX/DOCX 转换仍待实施。
 
-`npm ci` 会按两个锁文件安装工作台和编辑器依赖。`npm run dev` 与 `npm run build` 都先构建编辑器到 `public/office/`。部署时发布整个 `dist/`，包括 `office/`。工作台与编辑器各自统计所有 JS/CSS 产物的 gzip 体积，登录和台账访问仅加载工作台。
+`npm ci` 按工作台和编辑器各自的锁文件安装依赖。`npm run dev` 和 `npm run build` 都先构建两个编辑器入口到 `public/office/`。部署整个 `dist/`，包括 `office/index.html`、`office/docs.html` 和共享资源。
 
-按仓库 gzip 校验口径，工作台引入 Astryx 官方 Button 子入口及核心样式后约为 188 KiB JS、52 KiB CSS（先前预算 130/12 KiB）。本版工作台预算设为 192/56 KiB，Office 的全部编辑器及语言资源另设 2880/24 KiB。远程构建会检查两组上限。
+`npm run check:bundle` 以 KiB gzip 校验所有生成的 JS 和 CSS。共用查询输入增加约 6 KiB JS，工作台预算由 192/56 调整为 198/56。文字文档使用独立的编辑器样式，Office 预算由 2880/24 调整为 2880/36；表格和文档共享的文件只计一次。
