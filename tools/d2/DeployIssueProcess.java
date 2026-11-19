@@ -10,7 +10,7 @@ import org.flowable.engine.impl.cfg.StandaloneProcessEngineConfiguration;
 class DeployIssueProcess {
     public static void main(String[] args) throws Exception {
         String url = System.getenv("D2_URL");
-        if (url == null || !url.matches("jdbc:postgresql://127\\.0\\.0\\.1:[0-9]+/msf_d2_issue_test")) {
+        if (url == null || !url.matches("jdbc:postgresql://127\\.0\\.0\\.1:[0-9]+/msf_d2_(?:issue|return)_test")) {
             throw new IllegalArgumentException("Expected loopback D2 issue database");
         }
         String user = System.getenv("D2_USER");
@@ -22,7 +22,7 @@ class DeployIssueProcess {
             context.execute();
             try (var q = c.createStatement();
                  var rows = q.executeQuery("""
-                         select id from public.tenant where current_database()='msf_d2_issue_test'
+                         select id from public.tenant where current_database() in ('msf_d2_issue_test','msf_d2_return_test')
                            and code='d1seed' and name='D1 isolated tooling seed v1'
                          """)) {
                 if (!rows.next()) throw new IllegalStateException("Missing acceptance tenant");

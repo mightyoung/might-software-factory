@@ -153,6 +153,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tooling/loan-applications/{id}/return-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Borrower selects issued outstanding tools with no pending return request. Append a return batch and ordered items, increment loan version, preserve occupancy and keep state ISSUED. Requires tool_loan.create and current borrower eligibility. */
+        post: operations["requestPartialToolReturn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tooling/loan-applications/{id}/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Current eligible custody keeper selects pending return items for NORMAL or DAMAGED receipt. Requires tool_loan.receive and forbids self handling. DAMAGED requires a nonblank reason and records tool DAMAGED. Atomically release only selected occupancy, append per-item receipt and history, and increment loan version. State becomes SETTLED only when every issued item is received. A failure rolls back all selected receipts. Unknown outcomes retain the original request key and payload. */
+        post: operations["receiveReturnedTools"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tooling/loan-applications/receive-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description At most 100 loans in currently eligible keeper custody scopes with pending return items. Requires tool_loan.receive, excludes own loans and retains exact resource/tenant boundaries. */
+        get: operations["listKeeperPendingReturns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tooling/loan-applications/{id}/receive-detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Current ISSUED or SETTLED loan and ordered returnItems for an eligible non-borrower keeper with tool_loan.receive. SETTLED detail remains readable for reconciliation of an uncertain receipt. */
+        get: operations["getKeeperReturnDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -163,9 +237,9 @@ export interface components {
             /** Format: int64 */
             version: number;
             /** @enum {string} */
-            state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED";
-            /** @constant */
-            definitionVersion: "1";
+            state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
+            /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
+            definitionVersion: string;
             /** Format: uuid */
             organizationId: string;
             /** Format: uuid */
@@ -177,8 +251,10 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             tools: components["schemas"]["Option"][];
-            /** @description Optional own PENDING_ISSUE detail signal. True when the current custody scope has no other effective keeper eligible to issue this application. Current authorization and the self-handling restriction still apply to every command. */
+            /** @description Optional own pending/issued detail signal. True when no other currently eligible keeper can issue or receive this loan. No self handling remains enforced for commands. */
             awaitingOtherCustodian?: boolean;
+            /** @description Ordered per-tool return progress in issued or settled detail and command responses. Missing optional item fields are omitted. Counts distinguish still occupied, awaiting receipt and received items. Old issued records are projected as outstanding until a return request or receipt exists. */
+            returnItems?: components["schemas"]["ReturnItem"][];
         };
         CreateRequest: {
             /** @constant */
@@ -260,9 +336,9 @@ export interface components {
             /** Format: int64 */
             version: number;
             /** @enum {string} */
-            state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED";
-            /** @constant */
-            definitionVersion: "1";
+            state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
+            /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
+            definitionVersion: string;
             /** Format: uuid */
             organizationId: string;
             /** Format: uuid */
@@ -279,6 +355,40 @@ export interface components {
             definitionVersion: "1";
             /** Format: int64 */
             expectedVersion: number;
+        };
+        ReturnItem: {
+            /** Format: uuid */
+            toolId: string;
+            label: string;
+            /** @enum {string} */
+            state: "OUTSTANDING" | "REQUESTED" | "RECEIVED";
+            /** Format: uuid */
+            requestId?: string;
+            /** @enum {string} */
+            condition?: "NORMAL" | "DAMAGED";
+            reason?: string;
+        };
+        ReturnRequestInput: {
+            /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
+            definitionVersion: string;
+            /** Format: int64 */
+            expectedVersion: number;
+            toolIds: string[];
+        };
+        ReceiveItem: {
+            /** Format: uuid */
+            toolId: string;
+            /** @enum {string} */
+            condition: "NORMAL" | "DAMAGED";
+            reason?: string;
+        } & unknown;
+        ReceiveInput: {
+            /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
+            definitionVersion: string;
+            /** Format: int64 */
+            expectedVersion: number;
+            /** @description Unique toolId per command. The server resolves the unique current pending request for each selected tool. */
+            items: components["schemas"]["ReceiveItem"][];
         };
     };
     responses: never;
@@ -934,6 +1044,324 @@ export interface operations {
                 "application/json": components["schemas"]["IssueRequest"];
             };
         };
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application is not visible under current keeper qualification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    requestPartialToolReturn: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                /** @description Current CSRF token from the authenticated session. */
+                "X-XSRF-TOKEN": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnRequestInput"];
+            };
+        };
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application is not visible under current keeper qualification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    receiveReturnedTools: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                /** @description Current CSRF token from the authenticated session. */
+                "X-XSRF-TOKEN": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiveInput"];
+            };
+        };
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoanResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application is not visible under current keeper qualification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listKeeperPendingReturns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success. Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse"];
+                };
+            };
+            /** @description Invalid input, unknown or protected field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authentication or current session authority required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Application or action denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Requested application is not visible under current keeper qualification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Version, definition, idempotency, state or command conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Authority or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getKeeperReturnDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Success. Cache-Control is no-store. */
             200: {

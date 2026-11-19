@@ -129,7 +129,8 @@ class FlowableWorkflowTaskReadTest {
         when(task.getTaskDefinitionKey()).thenReturn("remediation");
         when(task.getAssignee()).thenReturn("member-1");
         facade = new FlowableWorkflowFacade(runtime, tasks, repository,
-                mock(org.jooq.DSLContext.class), lock, source, management, guard, history);
+                mock(org.jooq.DSLContext.class), lock, source, management, guard, history,
+                java.util.Set.of(new WorkflowTaskClaim.Pool("tool_loan", "toolLoanV1", "receive")));
     }
 
     @AfterEach void end() {
@@ -272,6 +273,16 @@ class FlowableWorkflowTaskReadTest {
         assertThat(read().assignee()).isNull();
         when(task.isSuspended()).thenReturn(true);
         assertThat(read().active()).isFalse();
+    }
+
+    @Test void unresolvedIndividualTaskCannotBeClaimedAsAPooledTask() throws Exception {
+        UUID actor = UUID.randomUUID();
+        commandMode(actor);
+        when(task.getAssignee()).thenReturn(null);
+        var unassigned = read();
+        assertThatThrownBy(() -> facade.claimAndComplete(unassigned, actor, java.util.Map.of()))
+                .isInstanceOf(WorkflowTaskStateConflictException.class);
+        verify(tasks, never()).claim(anyString(), anyString());
     }
 
     @Test void authorityLocksOnlyAfterExistingGuardAndCompletesExactTaskOnSameConnection() throws Exception {

@@ -48,6 +48,224 @@ public final class ToolLoanService {
     private record Execution(DSLContext db,ApplicationActionAuthorization.Decision decision) { }
     public record IssueInput(String definitionVersion, Long expectedVersion) { }
 
+    public record ReturnInput(String definitionVersion,Long expectedVersion,List<UUID> toolIds) { }
+    public record ReceiveItem(UUID toolId,String condition,String reason) { }
+    public record ReceiveInput(String definitionVersion,Long expectedVersion,List<ReceiveItem> items) { }
+
+    public Object receiveQueue(HttpServletRequest request) {
+        return execute(request,"receive",false,e -> {
+            var context=e.decision.context();
+            String organizations="{"+String.join(",",e.decision.organizationIds().stream().map(UUID::toString).toList())+"}";
+            var rows=e.db.fetch("""
+                    select l.*,array(select i.tool_id from public.tool_loan_item i
+                        where i.tenant_id=l.tenant_id and i.loan_id=l.id and i.version=l.version
+                        order by i.line_no) as tool_ids
+                    from public.tool_loan l
+                    join public.tool_custody_scope s on s.tenant_id=l.tenant_id and s.id=l.custody_scope_id and s.active
+                    where s.organization_id=any(cast(? as uuid[])) and l.tenant_id=? and l.state='ISSUED'
+                      and l.applicant_member_id<>? and exists(select 1 from public.tool_custodian k
+                        where k.tenant_id=s.tenant_id and k.custody_scope_id=s.id and k.member_id=?
+                          and k.valid_from<=current_timestamp and (k.valid_to is null or k.valid_to>current_timestamp))
+                      and exists(select 1 from public.tool_return_request_item r
+                        where r.tenant_id=l.tenant_id and r.loan_id=l.id and r.received_at is null)
+                    order by l.created_at,l.id limit 100
+                    """,organizations,context.tenantId(),context.memberId(),context.memberId());
+            return Map.of("records",rows.map(row -> Map.of(
+                    "id",row.get("id"),"version",row.get("version"),"state",row.get("state"),
+                    "definitionVersion",row.get("definition_version"),"organizationId",row.get("organization_id"),
+                    "custodyScopeId",row.get("custody_scope_id"),"purpose",row.get("purpose"),
+                    "toolIds",Arrays.asList(row.get("tool_ids",UUID[].class)),
+                    "createdAt",row.get("created_at"),"updatedAt",row.get("updated_at"))));
+        });
+    }
+
+    public Object receiveDetail(HttpServletRequest request,UUID id) {
+        return execute(request,"receive",false,e -> record(e,id,null));
+    }
+
+    static void validateReturnHeader(String definitionVersion,Long expectedVersion) {
+        if(definitionVersion==null || definitionVersion.isBlank() || definitionVersion.length()>64)
+            throw new LedgerInputException("definitionVersion","invalid_version");
+        if(expectedVersion==null || expectedVersion<1 || expectedVersion==Long.MAX_VALUE)
+            throw new LedgerInputException("expectedVersion","invalid_version");
+    }
+
+    static void requireBoundDefinition(String bound,String supplied) {
+        if(!Objects.equals(bound,supplied)) throw new LedgerException(409,"DEFINITION_CONFLICT");
+    }
+
+    static void validateReturn(ReturnInput input) {
+        if(input==null) throw new LedgerInputException("request","required");
+        validateReturnHeader(input.definitionVersion(),input.expectedVersion());
+        LedgerDetailValidation.validate("toolIds",input.toolIds(),100,(index,id)->{});
+    }
+
+    static void validateReceive(ReceiveInput input) {
+        if(input==null) throw new LedgerInputException("request","required");
+        validateReturnHeader(input.definitionVersion(),input.expectedVersion());
+        if(input.items()==null) throw new LedgerInputException("items","required");
+        var ids=new ArrayList<UUID>();
+        for(int i=0;i<input.items().size();i++) {
+            var item=input.items().get(i);
+            if(item==null) throw new LedgerInputException("items["+i+"]","required");
+            ids.add(item.toolId());
+            if(!Set.of("NORMAL","DAMAGED").contains(item.condition()==null?"":item.condition()))
+                throw new LedgerInputException("items["+i+"].condition","invalid_condition");
+            if(item.reason()!=null && item.reason().length()>4000 || "DAMAGED".equals(item.condition()) && (item.reason()==null || item.reason().isBlank()))
+                throw new LedgerInputException("items["+i+"].reason","invalid_reason");
+        }
+        LedgerDetailValidation.validate("items",ids,100,(index,id)->{});
+    }
+
+    public Object requestReturn(HttpServletRequest request,UUID id,UUID key,ReturnInput input) {
+        validateReturn(input);
+        return execute(request,"create",true,e -> {
+            var context=e.decision.context();
+            lockReturnKey(e,"RETURN",key);
+            String hash=fingerprint(id,"RETURN",input);
+            var previous=returnReceipt(e,"RETURN",key,hash);
+            var loan=owned(e,id,true);
+            requireBoundDefinition(loan.get("definition_version",String.class),input.definitionVersion());
+            if(previous!=null) return record(e,id,previous);
+            requireIssuedVersion(loan,input.expectedVersion());
+            boolean firstPending=!pendingReturns(e,id);
+            var ordered=new ArrayList<>(input.toolIds());
+            ordered.sort(java.util.Comparator.naturalOrder());
+            for(UUID tool:ordered) {
+                outstanding(e,id,tool,true);
+                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null",context.tenantId(),id,tool)!=null)
+                    throw new LedgerException(409,"RETURN_ALREADY_REQUESTED");
+            }
+            workflow.requestReturn(context.tenantId(),id,context.memberId(),firstPending);
+            UUID requestId=UUID.randomUUID();
+            var now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC).toString();
+            e.db.execute("insert into public.tool_return_request(tenant_id,id,loan_id,created_by_member_id,created_at) values(?,?,?,?,cast(? as timestamptz))",
+                    context.tenantId(),requestId,id,context.memberId(),now);
+            for(UUID tool:input.toolIds()) e.db.execute("insert into public.tool_return_request_item(tenant_id,request_id,loan_id,tool_id) values(?,?,?,?)",context.tenantId(),requestId,id,tool);
+            return appendReturnCommand(e,loan,"RETURN",key,hash,now,false,requestId);
+        });
+    }
+
+    public Object receive(HttpServletRequest request,UUID id,UUID key,ReceiveInput input) {
+        validateReceive(input);
+        return execute(request,"receive",true,e -> {
+            var context=e.decision.context();
+            lockReturnKey(e,"RECEIVE",key);
+            String hash=fingerprint(id,"RECEIVE",input);
+            var previous=returnReceipt(e,"RECEIVE",key,hash);
+            var loan=keeperLoan(e,id,true);
+            requireBoundDefinition(loan.get("definition_version",String.class),input.definitionVersion());
+            if(previous!=null) return record(e,id,previous);
+            requireIssuedVersion(loan,input.expectedVersion());
+            var ordered=new ArrayList<>(input.items());
+            ordered.sort(java.util.Comparator.comparing(ReceiveItem::toolId));
+            for(var item:ordered) {
+                e.db.fetchOne("select id from public.tool where tenant_id=? and id=? for update",context.tenantId(),item.toolId());
+                outstanding(e,id,item.toolId(),true);
+                if(e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and tool_id=? and received_at is null for update",context.tenantId(),id,item.toolId())==null)
+                    throw new LedgerException(409,"RETURN_NOT_REQUESTED");
+            }
+            UUID command=UUID.randomUUID();
+            var now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC).toString();
+            for(var item:ordered) {
+                e.db.execute("""
+                        update public.tool_return_request_item set received_at=cast(? as timestamptz),outcome=?,reason=?,received_by_member_id=?,command_id=?
+                        where tenant_id=? and loan_id=? and tool_id=? and received_at is null
+                        """,now,item.condition(),item.reason()==null?null:item.reason().trim(),context.memberId(),command,context.tenantId(),id,item.toolId());
+                e.db.execute("update public.tool_loan_item set settled_at=cast(? as timestamptz) where tenant_id=? and loan_id=? and tool_id=? and issued_at is not null and settled_at is null",now,context.tenantId(),id,item.toolId());
+                if("DAMAGED".equals(item.condition())) e.db.fetch("select public.mark_received_tool_damaged(?::uuid,?::uuid,cast(? as timestamptz),?::uuid)",context.tenantId(),item.toolId(),now,context.actorId());
+            }
+            boolean allSettled=e.db.fetchOne("select 1 from public.tool_loan_item where tenant_id=? and loan_id=? and issued_at is not null and settled_at is null limit 1",context.tenantId(),id)==null;
+            workflow.receive(context.tenantId(),id,context.memberId(),loan.get("applicant_member_id",UUID.class),pendingReturns(e,id),allSettled);
+            return appendReturnCommand(e,loan,"RECEIVE",key,hash,now,allSettled,command);
+        });
+    }
+
+    private void requireIssuedVersion(org.jooq.Record loan,long expected) {
+        if(loan.get("version",Long.class)!=expected) throw new LedgerException(409,"VERSION_CONFLICT");
+        if(!"ISSUED".equals(loan.get("state"))) throw new LedgerException(409,"STATE_CONFLICT");
+    }
+
+    private org.jooq.Record outstanding(Execution e,UUID loan,UUID tool,boolean lock) {
+        var row=e.db.fetchOne("select * from public.tool_loan_item where tenant_id=? and loan_id=? and tool_id=? and issued_at is not null and settled_at is null"+(lock?" for update":""),e.decision.context().tenantId(),loan,tool);
+        if(row==null) throw new LedgerException(409,"ITEM_ALREADY_SETTLED");
+        return row;
+    }
+
+    private boolean pendingReturns(Execution e,UUID id) {
+        return e.db.fetchOne("select 1 from public.tool_return_request_item where tenant_id=? and loan_id=? and received_at is null limit 1",e.decision.context().tenantId(),id)!=null;
+    }
+
+    private void lockReturnKey(Execution e,String verb,UUID key) {
+        var context=e.decision.context();
+        e.db.fetch("select pg_advisory_xact_lock(hashtextextended(?,0))",context.tenantId()+":"+context.actorId()+":"+verb+":"+key);
+    }
+
+    private Long returnReceipt(Execution e,String verb,UUID key,String hash) {
+        var context=e.decision.context();
+        var row=e.db.fetchOne("select request_hash,result_version from public.tool_loan_command_receipt where tenant_id=? and actor_id=? and action=? and idempotency_key=?",context.tenantId(),context.actorId(),verb,key);
+        if(row==null) return null;
+        if(!hash.equals(row.get(0,String.class))) throw new LedgerException(409,"IDEMPOTENCY_CONFLICT");
+        return row.get(1,Long.class);
+    }
+
+    private Object appendReturnCommand(Execution e,org.jooq.Record loan,String verb,UUID key,String hash,String now,boolean settled) {
+        return appendReturnCommand(e,loan,verb,key,hash,now,settled,UUID.randomUUID());
+    }
+
+    private Object appendReturnCommand(Execution e,org.jooq.Record loan,String verb,UUID key,String hash,String now,boolean settled,UUID command) {
+        var context=e.decision.context();
+        UUID id=loan.get("id",UUID.class);
+        long version=loan.get("version",Long.class)+1;
+        String state=settled?"SETTLED":"ISSUED";
+        e.db.execute("update public.tool_loan set version=?,state=?,updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,state,now,command,context.tenantId(),id);
+        e.db.execute("""
+                insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,command_id,action,occurred_at,actor_id)
+                values(?,?,?,?,?,?,?,cast(? as timestamptz),?)
+                """,context.tenantId(),id,version,state,loan.get("purpose"),command,verb,now,context.actorId());
+        e.db.execute("""
+                insert into public.tool_loan_item(tenant_id,loan_id,version,line_no,tool_id)
+                select tenant_id,loan_id,?,line_no,tool_id from public.tool_loan_item
+                where tenant_id=? and loan_id=? and version=? order by line_no
+                """,version,context.tenantId(),id,loan.get("version"));
+        UUID event=audit.appendSuccess(e.decision,command,id,UUID.randomUUID(),Set.of("state","toolIds"));
+        e.db.execute("""
+                insert into public.tool_loan_command_receipt(tenant_id,actor_id,idempotency_key,action,request_hash,loan_id,result_version,command_id,event_id,occurred_at)
+                values(?,?,?,?,?,?,?,?,?,cast(? as timestamptz))
+                """,context.tenantId(),context.actorId(),key,verb,hash,id,version,command,event,now);
+        return record(e,id,version);
+    }
+
+    private List<Map<String,Object>> returnItems(Execution e,UUID id,long version) {
+        var rows=e.db.fetch("""
+                select i.tool_id,t.code,t.name,r.request_id,
+                       received.version as received_version,
+                       case when received.version is not null then r.outcome end as outcome,
+                       case when received.version is not null then r.reason end as reason
+                from public.tool_loan_item i join public.tool t on t.tenant_id=i.tenant_id and t.id=i.tool_id
+                left join (
+                    public.tool_return_request_item r join public.tool_loan_revision requested
+                      on requested.tenant_id=r.tenant_id and requested.loan_id=r.loan_id
+                      and requested.command_id=r.request_id and requested.action='RETURN' and requested.version<=?
+                ) on r.tenant_id=i.tenant_id and r.loan_id=i.loan_id and r.tool_id=i.tool_id
+                left join public.tool_loan_revision received on received.tenant_id=r.tenant_id
+                    and received.loan_id=r.loan_id and received.command_id=r.command_id
+                    and received.action='RECEIVE' and received.version<=?
+                where i.tenant_id=? and i.loan_id=? and i.issued_at is not null and i.version<=?
+                order by i.line_no
+                """,version,version,e.decision.context().tenantId(),id,version);
+        return rows.map(row -> {
+            Map<String,Object> item=new LinkedHashMap<>();
+            item.put("toolId",row.get("tool_id"));
+            item.put("label",row.get("code")+" · "+row.get("name"));
+            item.put("state",row.get("received_version")!=null?"RECEIVED":row.get("request_id")!=null?"REQUESTED":"OUTSTANDING");
+            if(row.get("request_id")!=null) item.put("requestId",row.get("request_id"));
+            if(row.get("outcome")!=null) item.put("condition",row.get("outcome"));
+            if(row.get("reason")!=null) item.put("reason",row.get("reason"));
+            return item;
+        });
+    }
+
     public Object issueQueue(HttpServletRequest request) {
         return execute(request,"issue",false,e -> {
             var context=e.decision.context();
@@ -119,7 +337,7 @@ public final class ToolLoanService {
             workflow.issue(context.tenantId(),id,context.memberId(),loan.get("applicant_member_id",UUID.class));
             long version=input.expectedVersion()+1;
             UUID command=UUID.randomUUID();
-            var now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC);
+            var now=OffsetDateTime.ofInstant(e.decision.observedAt(),java.time.ZoneOffset.UTC).toString();
             e.db.execute("update public.tool_loan set version=?,state='ISSUED',updated_at=cast(? as timestamptz),last_command_id=? where tenant_id=? and id=?",version,now,command,context.tenantId(),id);
             e.db.execute("""
                     insert into public.tool_loan_revision(tenant_id,loan_id,version,state,purpose,command_id,action,occurred_at,actor_id)
@@ -160,7 +378,7 @@ public final class ToolLoanService {
             var identity=new CurrentTenantContext(candidate.get("actor_id",UUID.class),candidate.get("account_id",UUID.class),
                     context.tenantId(),candidate.get("member_id",UUID.class),candidate.get("tenant_epoch",Long.class),
                     candidate.get("member_epoch",Long.class),candidate.get("credential_version",Long.class));
-            if(effectivePermissions.readableOrganizations(identity,"tool_loan.issue").contains(organization)) return true;
+            if(effectivePermissions.readableOrganizations(identity,"ISSUED".equals(loan.get("state"))?"tool_loan.receive":"tool_loan.issue").contains(organization)) return true;
         }
         return false;
     }
@@ -178,7 +396,7 @@ public final class ToolLoanService {
         UUID organization=scopeRow==null?null:scopeRow.get(0,UUID.class);
         if(organization==null || !e.decision.organizationIds().contains(organization) || e.db.fetchOne("""
                 select 1 from public.tool_custodian where tenant_id=? and custody_scope_id=? and member_id=?
-                  and valid_from<=current_timestamp and (valid_to is null or valid_to>current_timestamp)
+                  and valid_from<=current_timestamp and (valid_to is null or valid_to>current_timestamp) limit 1
                 """,context.tenantId(),scope,context.memberId())==null)
             throw new org.springframework.security.access.AccessDeniedException("Current custodian required");
         return loan;
@@ -271,7 +489,7 @@ public final class ToolLoanService {
     }
     private void validateReferences(Execution e,Input input,boolean creation) {
         var c=e.decision.context();
-        if(creation&&e.db.fetchOne("select 1 from public.member_org mo join public.org_unit o on o.tenant_id=mo.tenant_id and o.id=mo.org_id and o.active where mo.tenant_id=? and mo.member_id=? and mo.org_id=? and mo.valid_from<=current_timestamp and (mo.valid_to is null or mo.valid_to>current_timestamp)",c.tenantId(),c.memberId(),input.organizationId())==null)throw new LedgerInputException("organizationId","reference_not_visible");
+        if(creation&&e.db.fetchOne("select 1 from public.member_org mo join public.org_unit o on o.tenant_id=mo.tenant_id and o.id=mo.org_id and o.active where mo.tenant_id=? and mo.member_id=? and mo.org_id=? and mo.valid_from<=current_timestamp and (mo.valid_to is null or mo.valid_to>current_timestamp) limit 1",c.tenantId(),c.memberId(),input.organizationId())==null)throw new LedgerInputException("organizationId","reference_not_visible");
         var custody=e.db.fetchOne("select organization_id from public.tool_custody_scope where tenant_id=? and id=? and active",c.tenantId(),input.custodyScopeId());
         if(custody==null||!e.decision.organizationIds().contains(custody.get(0,UUID.class)))throw new LedgerInputException("custodyScopeId","reference_not_visible");
         LedgerDetailValidation.validate("toolIds",input.toolIds(),100,(i,tool)->{if(e.db.fetchOne("select 1 from public.tool where tenant_id=? and id=? and custody_scope_id=? and organization_id=? and item_state='NORMAL'",c.tenantId(),tool,input.custodyScopeId(),custody.get(0,UUID.class))==null)throw new LedgerInputException("toolIds["+i+"]","reference_not_visible");});
@@ -284,7 +502,7 @@ public final class ToolLoanService {
     private List<UUID> items(Execution e,UUID id,long version) {return e.db.fetch("select tool_id from public.tool_loan_item where tenant_id=? and loan_id=? and version=? order by line_no",e.decision.context().tenantId(),id,version).getValues(0,UUID.class);
     }
     private Object record(Execution e,UUID id,Long historical) {
-        var row=e.decision.action().action().equals("issue")? keeperLoan(e,id,false):owned(e,id,false);
+        var row=Set.of("issue","receive").contains(e.decision.action().action())? keeperLoan(e,id,false):owned(e,id,false);
         long version=historical==null?row.get("version",Long.class):historical;
         var revision=e.db.fetchOne("select state,purpose,occurred_at from public.tool_loan_revision where tenant_id=? and loan_id=? and version=?",e.decision.context().tenantId(),id,version);
         var result = new LinkedHashMap<String,Object>();
@@ -296,8 +514,9 @@ public final class ToolLoanService {
         result.put("custodyScopeId",row.get("custody_scope_id"));
         result.put("purpose",revision.get("purpose"));
         result.put("toolIds",items(e,id,version));
-        if(e.decision.context().memberId().equals(row.get("applicant_member_id")) && "PENDING_ISSUE".equals(revision.get("state")))
+        if(e.decision.context().memberId().equals(row.get("applicant_member_id")) && Set.of("PENDING_ISSUE","ISSUED").contains(revision.get("state")))
             result.put("awaitingOtherCustodian",!otherCustodianExists(e,row));
+        result.put("returnItems",returnItems(e,id,version));
         result.put("createdAt",row.get("created_at"));
         result.put("updatedAt",revision.get("occurred_at"));
         result.put("tools",e.db.fetch("""
@@ -308,7 +527,7 @@ public final class ToolLoanService {
         "id",item.get("id"),"label",item.get("code")+" · "+item.get("name"))));
         return Collections.unmodifiableMap(result);
     }
-    private String fingerprint(UUID id,String verb,Input input) {try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(Arrays.asList(verb,id,input)).getBytes(StandardCharsets.UTF_8)));
+    private String fingerprint(UUID id,String verb,Object input) {try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(Arrays.asList(verb,id,input)).getBytes(StandardCharsets.UTF_8)));
         }catch(Exception failure){throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
         }}
     private <T>T execute(HttpServletRequest request,String operation,boolean mutation,Function<Execution,T> work) {

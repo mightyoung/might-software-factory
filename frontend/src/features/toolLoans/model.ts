@@ -1,10 +1,22 @@
 import { ApiError, type HttpClient } from "../../api/httpClient";
 import { object, UUID, requireProtocol, safeInteger } from "../ledger/model";
 
+export interface ReturnItem {
+  toolId: string;
+  label: string;
+  state: "OUTSTANDING" | "REQUESTED" | "RECEIVED";
+  requestId?: string;
+  condition?: "NORMAL" | "DAMAGED";
+  reason?: string;
+}
+export interface VersionInput { definitionVersion: string; expectedVersion: number }
+export interface ReturnRequestInput extends VersionInput { toolIds: string[] }
+export interface ReceiveInput extends VersionInput { items: { toolId: string; condition: "NORMAL" | "DAMAGED"; reason?: string }[] }
+export type LoanCommandInput = LoanInput | VersionInput | ReturnRequestInput | ReceiveInput;
 export interface LoanRecord {
   id: string;
   version: number;
-  state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED";
+  state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
   definitionVersion: string;
   organizationId: string;
   custodyScopeId: string;
@@ -12,6 +24,7 @@ export interface LoanRecord {
   toolIds: string[];
   tools?: { id: string; label: string }[];
   awaitingOtherCustodian?: boolean;
+  returnItems?: ReturnItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -19,12 +32,14 @@ export interface LoanInput { definitionVersion: string; organizationId: string; 
 export interface LoanScope { id: string; label: string; organizationId: string }
 export interface LoanCandidates { departments: { id: string; label: string }[]; scopes: LoanScope[]; tools: { id: string; label: string }[] }
 export interface LoanAdapter {
+  receiveQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
+  receiveDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   issueQueue(signal?: AbortSignal): Promise<LoanRecord[]>;
   issueDetail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   list(signal?: AbortSignal): Promise<LoanRecord[]>;
   detail(id: string, signal?: AbortSignal): Promise<LoanRecord>;
   candidates(scope?: string, signal?: AbortSignal, loanId?: string): Promise<LoanCandidates>;
-  command(action: "create" | "revise" | "cancel" | "issue", id: string | undefined, input: LoanInput | { definitionVersion: string; expectedVersion: number }, key: string): Promise<LoanRecord>;
+  command(action: "create" | "revise" | "cancel" | "issue" | "return-requests" | "receive", id: string | undefined, input: LoanCommandInput, key: string): Promise<LoanRecord>;
 }
 export type LoanFactory = () => LoanAdapter;
 function unwrap(value: unknown): unknown {
@@ -33,18 +48,35 @@ function unwrap(value: unknown): unknown {
 }
 function record(value: unknown): LoanRecord {
   requireProtocol(object(value) && UUID.test(String(value.id)) && safeInteger(value.version) && value.version > 0
-    && ["PENDING_ISSUE", "WITHDRAWN", "ISSUED"].includes(String(value.state)) && typeof value.definitionVersion === "string"
+    && ["PENDING_ISSUE", "WITHDRAWN", "ISSUED", "SETTLED"].includes(String(value.state)) && typeof value.definitionVersion === "string" && value.definitionVersion.trim().length > 0 && [...value.definitionVersion].length <= 64
     && UUID.test(String(value.organizationId)) && UUID.test(String(value.custodyScopeId)) && typeof value.purpose === "string"
     && Array.isArray(value.toolIds) && value.toolIds.every(id => typeof id === "string" && UUID.test(id))
     && typeof value.createdAt === "string" && typeof value.updatedAt === "string");
   requireProtocol(value.awaitingOtherCustodian === undefined || typeof value.awaitingOtherCustodian === "boolean");
   const toolIds = value.toolIds as string[];
   if (value.tools !== undefined) requireProtocol(Array.isArray(value.tools) && value.tools.length === toolIds.length && value.tools.every((tool, index) => object(tool) && tool.id === toolIds[index] && typeof tool.label === "string"));
+  if (value.returnItems !== undefined) {
+    requireProtocol(Array.isArray(value.returnItems) && value.returnItems.length === (["PENDING_ISSUE", "WITHDRAWN"].includes(String(value.state)) ? 0 : toolIds.length));
+    requireProtocol(value.returnItems.every((item, index) => object(item) && item.toolId === toolIds[index]
+      && typeof item.label === "string" && ["OUTSTANDING", "REQUESTED", "RECEIVED"].includes(String(item.state))
+      && (item.requestId === undefined || UUID.test(String(item.requestId)))
+      && (item.condition === undefined || ["NORMAL", "DAMAGED"].includes(String(item.condition)))
+      && (item.reason === undefined || typeof item.reason === "string")));
+  }
   return value as unknown as LoanRecord;
 }
 export function createHttpLoans(client: HttpClient): LoanAdapter {
   const base = "/api/v1/tooling/loan-applications";
   return {
+    async receiveQueue(signal) {
+      const value = unwrap(await client.get(`${base}/receive-queue`, { signal }));
+      requireProtocol(object(value) && Array.isArray(value.records));
+      return value.records.map(record);
+    },
+    async receiveDetail(id, signal) {
+      requireProtocol(UUID.test(id));
+      return record(unwrap(await client.get(`${base}/${id}/receive-detail`, { signal })));
+    },
     async issueQueue(signal) {
       const value = unwrap(await client.get(`${base}/issue-queue`, { signal }));
       requireProtocol(object(value) && Array.isArray(value.records));

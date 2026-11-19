@@ -264,7 +264,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   } else if (entityRoute?.appKey === "tooling" && entityRoute.entityKey === "tool_loan" && entityRoute.page === "entry") {
     title = "工装借用申请";
     const grants = session.canonicalPermissions ?? session.permissions;
-    content = !authorizedApplication || !grants.some(code => ["tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue"].includes(code))
+    content = !authorizedApplication || !grants.some(code => ["tool_loan.read", "tool_loan.create", "tool_loan.update", "tool_loan.issue", "tool_loan.receive"].includes(code))
       ? <StatusPage title="无权访问" description="当前账号没有借用申请权限。" />
       : !loanAdapter || mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用借用申请。" />
         : <LoanApplicationsPage key={identityKey} adapter={loanAdapter} owner={draftOwnerKey(session.tenant.id, session.actor.id)} identityScope={session.identityScope} permissions={grants} onUnauthenticated={expire} />;

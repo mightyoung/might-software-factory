@@ -53,6 +53,30 @@ public final class ToolLoanController {
                 parser.read(request, ToolLoanService.IssueInput.class)));
     }
 
+    @GetMapping("/receive-queue")
+    public ResponseEntity<?> receiveQueue(HttpServletRequest request) {
+        return response(service.receiveQueue(request));
+    }
+
+    @GetMapping("/{id}/receive-detail")
+    public ResponseEntity<?> receiveDetail(HttpServletRequest request,@PathVariable UUID id) {
+        return response(service.receiveDetail(request,id));
+    }
+
+    @PostMapping("/{id}/return-requests")
+    public ResponseEntity<?> requestReturn(HttpServletRequest request,@PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String key) {
+        return response(service.requestReturn(request,id,LedgerHttpParser.uuid(key,"Idempotency-Key"),
+                parser.read(request,ToolLoanService.ReturnInput.class)));
+    }
+
+    @PostMapping("/{id}/receive")
+    public ResponseEntity<?> receive(HttpServletRequest request,@PathVariable UUID id,
+            @RequestHeader("Idempotency-Key") String key) {
+        return response(service.receive(request,id,LedgerHttpParser.uuid(key,"Idempotency-Key"),
+                parser.read(request,ToolLoanService.ReceiveInput.class)));
+    }
+
     @PostMapping
     public ResponseEntity<?> create(HttpServletRequest request, @RequestHeader("Idempotency-Key") String key) {
         return response(service.command(request, null, LedgerHttpParser.uuid(key, "Idempotency-Key"),

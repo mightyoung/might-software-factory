@@ -8,7 +8,7 @@ const scope = "11111111-1111-4111-8111-111111111111", org = "22222222-2222-4222-
 const row: LoanRecord = { id: "55555555-5555-4555-8555-555555555555", version: 1, state: "PENDING_ISSUE", definitionVersion: "1", organizationId: org, custodyScopeId: scope, purpose: "装配使用", toolIds: [tool, tool2], createdAt: "2026-11-18T00:00:00Z", updatedAt: "2026-11-18T00:00:00Z" };
 const grants = ["tool_loan.read", "tool_loan.create", "tool_loan.update"];
 function setup(records: LoanRecord[] = []) {
-  const adapter: LoanAdapter = { issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
+  const adapter: LoanAdapter = { receiveQueue: vi.fn(), receiveDetail: vi.fn(), issueQueue: vi.fn(), issueDetail: vi.fn(), list: vi.fn(async () => records), detail: vi.fn(async () => row), candidates: vi.fn(async () => ({ departments: [{ id: org, label: "申请部门" }], scopes: [{ id: scope, organizationId: org, label: "一车间库房" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] })), command: vi.fn(async () => row) };
   const expire = vi.fn();
   const view = render(<LoanApplicationsPage adapter={adapter} owner="tenant/member" permissions={grants} onUnauthenticated={expire} />);
   return { adapter, expire, view };

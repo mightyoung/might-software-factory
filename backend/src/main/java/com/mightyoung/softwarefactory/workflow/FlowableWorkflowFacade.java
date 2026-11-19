@@ -25,11 +25,12 @@ import java.sql.SQLException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Tenant-checking adapter around the embedded Flowable engine and the shared PostgreSQL transaction. */
 @Component
-public final class FlowableWorkflowFacade implements WorkflowFacade {
+public final class FlowableWorkflowFacade implements WorkflowFacade, WorkflowTaskClaim {
 
     private final org.flowable.engine.HistoryService historyService;
     private final RuntimeService runtimeService;
@@ -40,12 +41,14 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
     private final DataSource dataSource;
     private final ManagementService managementService;
     private final AuthorizationWriteGuard authorizationGuard;
+    private final Set<Pool> taskPools;
 
     public FlowableWorkflowFacade(RuntimeService runtimeService, TaskService taskService,
                                   RepositoryService repositoryService, DSLContext dsl,
                                   WorkflowBindingTransactionLock bindingLock, DataSource dataSource,
                                   ManagementService managementService, AuthorizationWriteGuard authorizationGuard,
-                                  org.flowable.engine.HistoryService historyService) {
+                                  org.flowable.engine.HistoryService historyService, Set<Pool> taskPools) {
+        this.taskPools = Set.copyOf(taskPools);
         this.historyService = historyService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
@@ -160,6 +163,26 @@ public final class FlowableWorkflowFacade implements WorkflowFacade {
                     requireAssignedActive(actual, expected.assignee());
                     taskService.complete(actual.taskId(), variables);
                     authority.invalidated = true;
+                    return null;
+                });
+    }
+
+    @Override
+    public void claimAndComplete(WorkflowTaskReadSnapshot expected, UUID memberId, Map<String, Object> variables) {
+        Objects.requireNonNull(memberId, "Claiming member required");
+        Connection connection = commandConnection(expected.tenantId());
+        bindingLock.acquire(expected.tenantId(), expected.businessType(), expected.businessId());
+        withCurrentTask(expected.tenantId(), expected.businessType(), expected.businessId(),
+                expected.taskDefinitionKey(), connection, (actual, task) -> {
+                    // Unassigned individual tasks (for example a missing finding assignee)
+                    // are unresolved, and must never become claimable through this operation.
+                    var pool = new Pool(actual.businessType(), actual.processDefinitionKey(), actual.taskDefinitionKey());
+                    if (!taskPools.contains(pool)
+                            || !expected.equals(actual) || !actual.active() || !blank(actual.assignee())) {
+                        throw new WorkflowTaskStateConflictException();
+                    }
+                    taskService.claim(actual.taskId(), memberId.toString());
+                    taskService.complete(actual.taskId(), variables);
                     return null;
                 });
     }
