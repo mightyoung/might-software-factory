@@ -1,0 +1,42 @@
+name: Ledger event registry
+on:
+  pull_request:
+    paths:
+      - 'tools/event-registry/**'
+      - '.github/workflows/ledger-event-ci.yml'
+      - 'pom.xml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'tools/event-registry/**'
+      - '.github/workflows/ledger-event-ci.yml'
+      - 'pom.xml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flowable-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: event_probe
+          POSTGRES_PASSWORD: probe_local
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d event_probe"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw -B -ntp -f tools/event-registry/pom.xml test
+        env:
+          EVENT_PG_URL: jdbc:postgresql://127.0.0.1:5432/event_probe
+          EVENT_PG_USER: postgres
+          EVENT_PG_PASSWORD: probe_local
