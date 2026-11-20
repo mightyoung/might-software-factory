@@ -4,8 +4,10 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RouteLink } from "../../routing/router";
 import { ApiError } from "../../api/httpClient";
 import { LedgerConfigPage } from "./LedgerConfigPage";
 import {
@@ -119,12 +121,116 @@ describe("LedgerConfigPage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await screen.findByText(/操作未确认成功/);
-    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
     await screen.findByText(/配置已被其他人更新/);
     expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请新版");
     expect(vi.mocked(api.save).mock.calls[0]?.[3]).toBe(
       vi.mocked(api.save).mock.calls[1]?.[3],
     );
+  });
+  it("warns before discarding dirty configuration and confirms route navigation", async () => {
+    const api = adapter();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <>
+        <RouteLink to="/safety/findings">隐患台账</RouteLink>
+        <LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.change(await screen.findByLabelText("台账名称"), {
+      target: { value: "采购申请新版" },
+    });
+    const departure = new Event("beforeunload", { cancelable: true });
+    expect(window.dispatchEvent(departure)).toBe(false);
+    fireEvent.click(screen.getByRole("link", { name: "隐患台账" }));
+    expect(ask).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "新建台账" }));
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请新版");
+  });
+
+  it.each(["save", "restore", "publish"] as const)(
+    "keeps the original %s request until confirmed and doesn't replace it via a different action",
+    async (action) => {
+      const api = adapter();
+      const call = vi.mocked(api[action]);
+      call.mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true));
+      render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+      fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+      await screen.findByRole("button", { name: "比较版本 1" });
+      const actionLabel = {
+        save: "保存草稿",
+        restore: "恢复版本 1为新草稿",
+        publish: "发布当前版本",
+      }[action];
+      if (action === "save")
+        fireEvent.change(screen.getByLabelText("台账名称"), {
+          target: { value: "采购申请新版" },
+        });
+      fireEvent.click(screen.getByRole("button", { name: actionLabel }));
+      expect(await screen.findByText(/操作未确认成功/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "新建台账" })).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByLabelText("台账名称")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /采购申请.*最新/ })).toBeDisabled();
+      expect(call).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+      await waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+      expect(call.mock.calls[1]).toEqual(call.mock.calls[0]);
+      await waitFor(() => expect(screen.getByRole("button", { name: "新建台账" })).not.toHaveAttribute("aria-disabled", "true"));
+    },
+  );
+
+  it("reads back a lost publish response when a newer draft conflicts with an exact retry", async () => {
+    const api = adapter();
+    const newer = {
+      ...first,
+      version: 2,
+      publishedVersion: 1,
+      definition: { ...first.definition, name: "后来保存的草稿" },
+    };
+    vi.mocked(api.versions).mockResolvedValueOnce([first]).mockResolvedValueOnce([newer, { ...first, publishedVersion: 1 }]);
+    vi.mocked(api.publish)
+      .mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true))
+      .mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    await screen.findByRole("button", { name: "比较版本 1" });
+    fireEvent.click(screen.getByRole("button", { name: "发布当前版本" }));
+    await screen.findByText(/操作未确认成功/);
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+    expect(await screen.findByText("版本 1 已发布；已载入最新草稿版本 2。")).toBeInTheDocument();
+    expect(screen.getByLabelText("台账名称")).toHaveValue("后来保存的草稿");
+    expect(api.publish).toHaveBeenNthCalledWith(1, "purchase", 1, null);
+    expect(api.publish).toHaveBeenNthCalledWith(2, "purchase", 1, null);
+    expect(api.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows both lists' actual field order when only their order changes", async () => {
+    const api = adapter();
+    const fields = [
+      ...first.definition.fields,
+      { key: "unit", label: "单位", type: "text", required: false } as const,
+    ];
+    const oldDefinition = { ...first.definition, fields, listFields: ["quantity", "unit"], queryFields: ["unit", "quantity"] };
+    const newDefinition = { ...oldDefinition, listFields: ["unit", "quantity"], queryFields: ["quantity", "unit"] };
+    vi.mocked(api.versions).mockResolvedValue([
+      { ...first, version: 2, definition: newDefinition },
+      { ...first, definition: oldDefinition },
+    ]);
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "比较版本 1" }));
+    const comparison = screen.getByRole("region", { name: "版本比较" });
+    expect(within(comparison).getByText("列表字段顺序已变化。")).toBeInTheDocument();
+    expect(within(comparison).getByText("查询字段顺序已变化。")).toBeInTheDocument();
+    const orders = within(comparison).getAllByRole("list");
+    expect(orders.map((order) => within(order).getAllByRole("listitem").map(item => item.textContent))).toEqual([
+      ["数量（quantity）", "单位（unit）"],
+      ["单位（unit）", "数量（quantity）"],
+      ["单位（unit）", "数量（quantity）"],
+      ["数量（quantity）", "单位（unit）"],
+    ]);
   });
   it("lets a publisher inspect and publish while structural editing stays disabled", async () => {
     const api = adapter();
