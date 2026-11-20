@@ -77,7 +77,7 @@ public final class JooqRuntimeLedgerReadRepository implements RuntimeLedgerReadR
         String definition = db.fetchValue("select definition::text from ledger_configuration_snapshot where tenant_id=? and configuration_key=? and version=?",
                 tenant, key, row.get("definition_version", Long.class)).toString();
         Definition pinned = json.readValue(definition, Definition.class);
-        return new Detail(record(row, pinned.fields().stream().map(LedgerConfigurationModels.Field::key).toList()), pinned, capabilities);
+        return new Detail(record(row, pinned.fields().stream().map(LedgerConfigurationModels.Field::key).toList()), PublicDefinition.from(pinned), capabilities);
     }
     private RecordView record(Record row, List<String> allowed) {
         Map<String, Object> raw = json.readValue(row.get("values_json", String.class), VALUES);

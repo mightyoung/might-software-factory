@@ -190,6 +190,30 @@ paths:
                 $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
 components:
   schemas:
+    Definition:
+      type: object
+      required:
+      - name
+      - fields
+      - listFields
+      - queryFields
+      properties:
+        name:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: ./ledger-configurations.yaml#/components/schemas/Field
+        listFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
+        queryFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
     Capabilities:
       type: object
       required:
@@ -233,7 +257,7 @@ components:
           type: integer
           minimum: 1
         definition:
-          $ref: ./ledger-configurations.yaml#/components/schemas/Definition
+          $ref: '#/components/schemas/Definition'
         capabilities:
           $ref: '#/components/schemas/Capabilities'
         organizations:
@@ -300,7 +324,7 @@ components:
         record:
           $ref: '#/components/schemas/Record'
         definition:
-          $ref: ./ledger-configurations.yaml#/components/schemas/Definition
+          $ref: '#/components/schemas/Definition'
         capabilities:
           $ref: '#/components/schemas/Capabilities'
     Filter:

@@ -51,13 +51,26 @@ afterEach(() => {
 describe("LedgerConfigPage", () => {
   it("copies a saved historical version into an independent first draft", async () => {
     const api = adapter();
+    const historical = {
+      ...first,
+      definition: {
+        ...first.definition,
+        workflow: {
+          nodes: [
+            { id: "start", kind: "start", label: "登记", x: 0, y: 0 },
+            { id: "end", kind: "end", label: "完成", x: 1000, y: 1000 },
+          ],
+          edges: [{ from: "start", to: "end" }],
+        },
+      },
+    } satisfies ConfigurationSnapshot;
     const second = {
       ...first,
       version: 2,
       publishedVersion: 2,
       definition: { ...first.definition, name: "新版采购" },
     };
-    vi.mocked(api.versions).mockResolvedValue([second, first]);
+    vi.mocked(api.versions).mockResolvedValue([second, historical]);
     vi.mocked(api.save).mockImplementation(async (key, definition) => ({
       ...first,
       key,
@@ -100,7 +113,7 @@ describe("LedgerConfigPage", () => {
     expect(api.save).toHaveBeenCalledWith(
       "purchase_copy",
       {
-        ...first.definition,
+        ...historical.definition,
         name: "采购申请副本",
         fields: [{ ...first.definition.fields[0], label: "复制数量" }],
       },

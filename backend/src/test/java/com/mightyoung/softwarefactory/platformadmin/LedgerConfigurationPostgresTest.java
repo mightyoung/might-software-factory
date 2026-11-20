@@ -100,6 +100,56 @@ class LedgerConfigurationPostgresTest {
         assertThat(targetHistory.getLast()).isEqualTo(created);
         assertThat(repository.versions(tenant, key)).isEqualTo(originalHistory);
     }
+    @Test void oldOmittedWorkflowRequestReplaysAfterGraphVersionsAndGraphRestore() {
+        final String legacyDefinition = """
+                {"name":"采购","fields":[{"key":"quantity","label":"数量","type":"number","required":true}],
+                 "listFields":["quantity"],"queryFields":["quantity"]}
+                """;
+        final UUID legacyId = UUID.randomUUID();
+        final String legacyPayload = """
+                {"requestId":"%s","expectedVersion":0,"definition":%s}
+                """.formatted(legacyId, legacyDefinition);
+        tx.execute(status -> {
+            dsl.fetchValue("select set_config('app.tenant_id',?,true)", tenant.toString());
+            dsl.execute("insert into public.ledger_configuration(tenant_id,configuration_key) values (?,?)", tenant, key);
+            dsl.execute("""
+                    insert into public.ledger_configuration_snapshot
+                    (tenant_id,configuration_key,version,request_id,request_payload,definition,actor_member_id)
+                    values (?,?,1,?,cast(? as jsonb),cast(? as jsonb),?)
+                    """, tenant, key, legacyId, legacyPayload, legacyDefinition, actor);
+            dsl.execute("update public.ledger_configuration set latest_version=1 where tenant_id=? and configuration_key=?", tenant, key);
+            assertThat(repository.publish(tenant, actor, key, new PublishRequest(1L, 1L, null)).publishedVersion()).isEqualTo(1L);
+
+            var graph = LedgerConfigurationWorkflowTest.withWorkflow(LedgerConfigurationWorkflowTest.linear());
+            var saveGraph = new SaveRequest(UUID.randomUUID(), 1L, graph);
+            assertThat(repository.save(tenant, actor, key, saveGraph).definition()).isEqualTo(graph);
+            assertThat(repository.save(tenant, actor, key, saveGraph).version()).isEqualTo(2L);
+            assertThat(repository.publish(tenant, actor, key, new PublishRequest(2L, 2L, 1L)).publishedVersion()).isEqualTo(2L);
+            var incomplete = LedgerConfigurationWorkflowTest.withWorkflow(new Workflow(graph.workflow().nodes(), List.of()));
+            repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 2L, incomplete));
+            assertThatThrownBy(() -> repository.publish(tenant, actor, key, new PublishRequest(3L, 3L, 2L)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            var restored = repository.restore(tenant, actor, key, new RestoreRequest(UUID.randomUUID(), 3L, 2L));
+            assertThat(restored.definition()).isEqualTo(graph);
+            assertThat(restored.sourceVersion()).isEqualTo(2L);
+            assertThat(restored.publishedVersion()).isEqualTo(2L);
+            var copy = repository.save(tenant, actor, key + "_flow_copy", new SaveRequest(UUID.randomUUID(), 0L, restored.definition()));
+            assertThat(copy.definition()).isEqualTo(graph);
+            assertThat(copy.publishedVersion()).isNull();
+
+            var legacy = new SaveRequest(legacyId, 0L, complete());
+            var replayed = repository.save(tenant, actor, key, legacy);
+            assertThat(replayed.version()).isEqualTo(1L);
+            assertThat(replayed.definition()).isEqualTo(complete());
+            assertThat(replayed.publishedVersion()).isEqualTo(2L);
+            assertThatThrownBy(() -> repository.save(tenant, actor, key, new SaveRequest(legacyId, 0L, graph)))
+                    .isInstanceOfSatisfying(LedgerConfigurationException.class,
+                            conflict -> assertThat(conflict.reason()).isEqualTo(LedgerConfigurationException.Reason.REQUEST_CONFLICT));
+            assertThat(repository.versions(tenant, key)).extracting(Snapshot::version).containsExactly(4L, 3L, 2L, 1L);
+            status.setRollbackOnly();
+            return null;
+        });
+    }
     @Test void twoEditorsCompeteForOneExpectedVersion() throws Exception {
         tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 0L, complete())));
         CountDownLatch start = new CountDownLatch(1);
