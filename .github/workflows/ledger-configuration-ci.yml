@@ -53,4 +53,4 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f backend/src/main/resources/db/migration/V36__ledger_configuration_versions.sql
           psql -v ON_ERROR_STOP=1 -f backend/src/main/resources/db/operator/V36-runtime-grants.sql
       - name: Verify permissions, version history, concurrency and tenant isolation
-        run: ./mvnw -B -ntp -pl backend -am test -Dtest=LedgerConfigurationServiceTest,LedgerConfigurationPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -ntp -pl backend -am test -Dtest=LedgerConfigurationServiceTest,LedgerConfigurationWorkflowTest,LedgerConfigurationPostgresTest -Dsurefire.failIfNoSpecifiedTests=false

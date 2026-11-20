@@ -11,6 +11,8 @@ import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantApplicationState;
 
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
@@ -106,9 +108,52 @@ public final class LedgerConfigurationService {
         }
         validColumns(definition.listFields(), keys, "definition.listFields");
         validColumns(definition.queryFields(), keys, "definition.queryFields");
+        validWorkflow(definition.workflow(), publishing);
         if (publishing && (definition.name().isBlank() || keys.isEmpty() || definition.listFields().isEmpty() || definition.queryFields().isEmpty())) {
             invalid("definition", "incomplete_configuration");
         }
+    }
+    private static void validWorkflow(Workflow workflow, boolean publishing) {
+        if (workflow == null) return;
+        String path = "definition.workflow";
+        if (workflow.nodes() == null || workflow.nodes().size() > 32
+                || workflow.edges() == null || workflow.edges().size() > 31) invalid(path, "invalid_graph");
+        Map<String, Node> nodes = new HashMap<>();
+        for (Node node : workflow.nodes()) {
+            if (node == null || node.id() == null || !node.id().matches("[a-z][a-z0-9_]{0,63}")
+                    || node.kind() == null || !Set.of("start", "step", "end").contains(node.kind())
+                    || node.label() == null || node.label().length() > 120
+                    || node.x() == null || node.x() < 0 || node.x() > 1000
+                    || node.y() == null || node.y() < 0 || node.y() > 1000) invalid(path, "invalid_node");
+            if (nodes.putIfAbsent(node.id(), node) != null) invalid(path, "duplicate_node");
+            if (publishing && node.label().isBlank()) invalid(path, "incomplete_node");
+        }
+        Set<Edge> edges = new HashSet<>();
+        Map<String, Integer> incoming = new HashMap<>();
+        Map<String, Integer> outgoing = new HashMap<>();
+        Map<String, String> next = new HashMap<>();
+        for (Edge edge : workflow.edges()) {
+            if (edge == null || !nodes.containsKey(edge.from()) || !nodes.containsKey(edge.to())
+                    || edge.from().equals(edge.to())) invalid(path, "invalid_edge");
+            if (!edges.add(edge)) invalid(path, "duplicate_edge");
+            incoming.merge(edge.to(), 1, Integer::sum);
+            outgoing.merge(edge.from(), 1, Integer::sum);
+            next.put(edge.from(), edge.to());
+        }
+        if (!publishing) return;
+        List<Node> starts = workflow.nodes().stream().filter(node -> node.kind().equals("start")).toList();
+        long ends = workflow.nodes().stream().filter(node -> node.kind().equals("end")).count();
+        if (starts.size() != 1 || ends != 1) invalid(path, "incomplete_graph");
+        for (Node node : workflow.nodes()) {
+            int expectedIncoming = node.kind().equals("start") ? 0 : 1;
+            int expectedOutgoing = node.kind().equals("end") ? 0 : 1;
+            if (incoming.getOrDefault(node.id(), 0) != expectedIncoming
+                    || outgoing.getOrDefault(node.id(), 0) != expectedOutgoing) invalid(path, "nonlinear_graph");
+        }
+        Set<String> visited = new HashSet<>();
+        String current = starts.getFirst().id();
+        while (current != null && visited.add(current)) current = next.get(current);
+        if (current != null || visited.size() != nodes.size()) invalid(path, "unreachable_node");
     }
     private static void validColumns(List<String> columns, Set<String> keys, String path) {
         if (columns == null || columns.size() > 100) invalid(path, "invalid");

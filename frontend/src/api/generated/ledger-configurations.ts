@@ -110,6 +110,22 @@ export interface components {
             fields: components["schemas"]["Field"][];
             listFields: string[];
             queryFields: string[];
+            workflow?: components["schemas"]["Workflow"];
+        };
+        Workflow: {
+            nodes: components["schemas"]["WorkflowNode"][];
+            edges: {
+                from: string;
+                to: string;
+            }[];
+        };
+        WorkflowNode: {
+            id: string;
+            /** @enum {string} */
+            kind: "start" | "step" | "end";
+            label: string;
+            x: number;
+            y: number;
         };
         Snapshot: {
             key: string;

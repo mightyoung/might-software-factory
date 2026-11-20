@@ -60,6 +60,7 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     fields: { key: string; label: string; type: string; required: boolean }[];
     listFields: string[];
     queryFields: string[];
+    workflow?: { nodes: { id: string; kind: string; label: string; x: number; y: number }[]; edges: { from: string; to: string }[] };
   };
   type Snapshot = {
     key: string;
@@ -70,6 +71,12 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     savedAt: string;
     savedBy: string;
   };
+  const legacy: Snapshot = {
+    key: "legacy_ledger", version: 1,
+    definition: { name: "历史台账", fields: [], listFields: [], queryFields: [] },
+    publishedVersion: null, sourceVersion: null,
+    savedAt: "2026-11-19T00:00:00Z", savedBy: "配置员",
+  };
   const versions: Snapshot[] = [];
   let published: number | null = null;
   let loseNextSaveResponse = false;
@@ -78,7 +85,9 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "GET") {
       await route.fulfill({
-        json: path.endsWith("/versions")
+        json: path.includes("/legacy_ledger/")
+          ? { versions: [legacy] }
+          : path.endsWith("/versions")
           ? { versions }
           : {
               items: versions.length
@@ -89,7 +98,7 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
                       publishedVersion: published,
                     },
                   ]
-                : [],
+                : [{ ...legacy, latestVersion: 1 }],
             },
       });
       return;
@@ -144,6 +153,11 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
       "platform/ledger-configurations",
     ),
   );
+  await page.getByRole("navigation", { name: "已配置台账" })
+    .getByRole("button").filter({ hasText: "历史台账" }).click();
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
+  expect(legacy.definition.workflow).toBeUndefined();
+  await page.getByRole("button", { name: "新建台账" }).click();
   await page.getByLabel("台账标识").fill("purchase");
   expect(editorRequests.length).toBeGreaterThan(0);
   await page.getByLabel("台账名称").fill("采购申请");
@@ -182,6 +196,7 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     await expect(query.getByLabel("已确认（查询预览）")).toBeDisabled();
   };
   await assertPreview();
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
   expect(versions).toEqual([]);
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
@@ -194,10 +209,39 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     .getByRole("button").filter({ hasText: "采购申请" }).click();
   await assertPreview();
   await page.getByLabel("台账名称").fill("采购申请新版");
+  await page.getByRole("button", { name: "插入办理节点" }).click();
+  await page.getByLabel("节点名称").fill("主管确认");
+  const node = page.getByRole("button", { name: "流程节点 主管确认", exact: true });
+  const originalX = await page.getByLabel("节点横坐标").inputValue();
+  const originalY = await page.getByLabel("节点纵坐标").inputValue();
+  await node.scrollIntoViewIfNeeded();
+  const beforeDrag = await node.boundingBox();
+  expect(beforeDrag).not.toBeNull();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 35, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByLabel("节点横坐标")).not.toHaveValue(originalX);
+  await expect(page.getByLabel("节点纵坐标")).not.toHaveValue(originalY);
+  const savedX = Number(await page.getByLabel("节点横坐标").inputValue());
+  const savedY = Number(await page.getByLabel("节点纵坐标").inputValue());
+  await node.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 主管确认 → 完成");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 2" }),
   ).toBeVisible();
+  const editedFlow = versions[0].definition.workflow!;
+  expect(editedFlow.nodes.find(node => node.kind === "step")).toMatchObject({ label: "主管确认", x: savedX + 25, y: savedY });
+  expect(editedFlow.edges).toHaveLength(2);
+  await page.reload();
+  await page.getByRole("navigation", { name: "已配置台账" })
+    .getByRole("button").filter({ hasText: "采购申请新版" }).click();
+  await page.getByRole("button", { name: "流程节点 主管确认", exact: true }).click();
+  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
+  await expect(page.getByLabel("节点纵坐标")).toHaveValue(String(savedY));
   await page.getByRole("button", { name: "比较版本 1", exact: true }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText(
     "配置内容不同",
@@ -207,6 +251,9 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
     page.getByRole("status").filter({ hasText: "新草稿 3" }),
   ).toBeVisible();
   expect(published).toBeNull();
+  expect(versions[0].definition.workflow).toEqual(versions.find(version => version.version === 1)!.definition.workflow);
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
+  await expect(page.getByRole("button", { name: "流程节点 主管确认", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("台账名称")).toHaveValue("采购申请");
   await page.getByRole("button", { name: "发布当前版本" }).focus();
   await page.keyboard.press("Enter");
