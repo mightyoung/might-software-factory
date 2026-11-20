@@ -46,6 +46,29 @@ it("retains the original payload and key across uncertain response and form remo
   fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
   await waitFor(() => expect(adapter.command).toHaveBeenCalledTimes(2));expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(first);
 });
+it("preserves the pending request when the route unmounts before the response", async () => {
+  const { adapter, expire, view } = setup();
+  let completeFirst!: (result: LoanRecord) => void;
+  vi.mocked(adapter.command).mockImplementationOnce(() => new Promise(resolve => { completeFirst = resolve; }));
+  await fill();
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  expect(adapter.command).toHaveBeenCalledTimes(1);
+  const first = vi.mocked(adapter.command).mock.calls[0];
+
+  view.unmount();
+  render(<LoanApplicationsPage adapter={adapter} owner="tenant/member" permissions={grants} onUnauthenticated={expire} />);
+  fireEvent.click(await screen.findByRole("button", { name: "新建借用申请" }));
+  const retry = await screen.findByRole("button", { name: "核对后重试原请求" });
+  expect(screen.getByText("此次提交结果尚未确认。请核对后使用原请求重试。")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "读取最新版本并核对后重新提交" })).not.toBeInTheDocument();
+
+  await act(async () => { completeFirst(row); });
+  await waitFor(() => expect(retry).not.toBeDisabled());
+  fireEvent.click(retry);
+  await screen.findByRole("heading", { name: "申请详情" });
+  expect(adapter.command).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(first);
+});
 it("reconciles a definitive stale version before sending a new revision", async () => {
   const { adapter } = setup([row]);vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));vi.mocked(adapter.detail).mockResolvedValue({ ...row, version: 2 });
   fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));fireEvent.click(await screen.findByRole("button", { name: "修订申请" }));

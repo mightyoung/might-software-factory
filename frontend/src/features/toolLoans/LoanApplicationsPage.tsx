@@ -11,6 +11,15 @@ import { unknownOutcome, type LoanAdapter, type LoanCandidates, type LoanDefinit
 type Action = "create" | "revise" | "cancel";
 interface Pending { action: Action; id?: string; input: LoanInput | { definitionVersion: string; expectedVersion: number }; key: string }
 interface Draft { department: string; scope: string; purpose: string; usageLocation: string; tools: string[]; pending: Pending | null; uncertain: boolean }
+function stashLoanDraft(owner: string, draftKey: string, draft: Draft, fallbackVersion: string) {
+  stashEntityDraft(owner, draftKey, {
+    values: { loan: JSON.stringify(draft) },
+    definitionVersion: draft.pending?.input.definitionVersion ?? fallbackVersion,
+    key: draft.pending?.key ?? null,
+    fingerprint: null,
+    locked: draft.uncertain,
+  });
+}
 const EMPTY: LoanCandidates = { departments: [], scopes: [], tools: [] };
 const stateLabel = (state: LoanRecord["state"]) => ({ PENDING_ISSUE: "待发放", WITHDRAWN: "已撤销", ISSUED: "已发放", SETTLED: "已结清" })[state];
 
@@ -144,9 +153,10 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const lifetime = useRef(0);
   useEffect(() => () => { lifetime.current++; }, []);
+  const draftVersion = record?.definitionVersion ?? definition?.definitionVersion ?? "1";
   useEffect(() => {
-    stashEntityDraft(owner, draftKey, { values: { loan: JSON.stringify(draft) }, definitionVersion: draft.pending?.input.definitionVersion ?? record?.definitionVersion ?? definition?.definitionVersion ?? "1", key: draft.pending?.key ?? null, fingerprint: null, locked: draft.uncertain });
-  }, [draft, owner, draftKey, record?.definitionVersion, definition?.definitionVersion]);
+    stashLoanDraft(owner, draftKey, draft, draftVersion);
+  }, [draft, owner, draftKey, draftVersion]);
   useEffect(() => {
     if (action === "cancel") return;
     const controller = new AbortController();setLoading(true);setCandidates(EMPTY);
@@ -194,7 +204,10 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
         : { definitionVersion: definitionVersion!, organizationId: draft.department, custodyScopeId: draft.scope, purpose: draft.purpose, ...(locationRequired ? { usageLocation: draft.usageLocation } : {}), toolIds: [...draft.tools], ...(currentRecord ? { expectedVersion: currentRecord.version } : {}) },
     };
     const mine = lifetime.current;
-    setBusy(true);setError("");setDraft(current => ({ ...current, pending: request }));
+    const inFlight = { ...draft, pending: request, uncertain: true };
+    // Persist before dispatch: navigation can unmount the form before a response or effect.
+    stashLoanDraft(owner, draftKey, inFlight, draftVersion);
+    setBusy(true);setError("");setDraft(inFlight);
     try {
       const result = await adapter.command(request.action, request.id, request.input, request.key);
       if (mine !== lifetime.current) return;
@@ -231,7 +244,7 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
     {action === "cancel" && <p>撤销后保留申请历史。用途为“{record?.purpose}”，共 {record?.toolIds.length} 件。</p>}
     {error && <p role="alert">{error}</p>}
     {definitionLoading && <p role="status">正在读取申请字段…</p>}
-    {draft.uncertain && <p role="status">此次提交结果尚未确认。请核对后使用原请求重试。</p>}
+    {draft.uncertain && !busy && <p role="status">此次提交结果尚未确认。请核对后使用原请求重试。</p>}
     <div className="form-actions">
       <button type="submit" className="button button-primary" disabled={busy || loading || (!draft.pending && action === "create" && !definition)}>{busy ? "提交中…" : draft.pending ? "核对后重试原请求" : action === "cancel" ? "确认撤销" : "提交申请"}</button>
       {draft.pending && !draft.uncertain && <button type="button" disabled={busy} onClick={async () => {
