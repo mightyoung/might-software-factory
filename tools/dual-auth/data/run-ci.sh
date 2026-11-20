@@ -4,6 +4,7 @@ set -euo pipefail
 : "${AUTHZ_PLAN_FILE:?Set AUTHZ_PLAN_FILE to the output JSON file}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python3 -B -m unittest discover -s "$script_dir" -p 'test_verify.py'
 cerbos_version=0.57.0
 case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)

@@ -23,18 +23,35 @@ class PlanDatabaseTest {
         try (var connection = DriverManager.getConnection(env("AUTHZ_PG_URL"), env("AUTHZ_PG_USER"), env("AUTHZ_PG_PASSWORD"))) {
             connection.setAutoCommit(false);
             DSLContext db = DSL.using(connection, SQLDialect.POSTGRES);
-            db.execute("create temporary table authz_probe_records (id text primary key, tenant text not null, owner text not null, department text not null, quantity int not null, price int not null) on commit drop");
+            db.execute("create temporary table authz_probe_records (id text primary key, tenant text not null, owner text, department text, quantity int not null, price int not null) on commit drop");
             db.execute("create temporary table receipt_links (order_id text, receipt_id text, primary key(order_id,receipt_id)) on commit drop");
             db.execute("insert into receipt_links values ('A','own'), ('A','other-dept'), ('B','peer'), ('B','other-tenant')");
-            for (JsonNode row : evidence.get("records")) {
-                db.execute("insert into authz_probe_records values (?, ?, ?, ?, ?, ?)", row.required("id").asString(),
-                    row.required("tenant").asString(), row.required("owner").asString(), row.required("department").asString(),
-                    row.required("quantity").asInt(), row.required("price").asInt());
-            }
+            insertRecords(db, evidence.required("records"));
             for (JsonNode sample : evidence.get("cases")) compare(db, sample);
             verifyProjectionAndTabs(db, evidence.get("cases"));
+
+            // The secondary fixture uses the same SQL compiler and prepared statements,
+            // but never changes baseline projection, link or role expectations.
+            db.deleteFrom(ROWS).execute();
+            insertRecords(db, evidence.required("nullableRecords"));
+            assertEquals(2, evidence.required("nullableCases").size());
+            for (JsonNode sample : evidence.get("nullableCases")) compare(db, sample);
             connection.rollback();
         }
+    }
+
+    private static void insertRecords(DSLContext db, JsonNode records) {
+        for (JsonNode row : records) {
+            db.execute("insert into authz_probe_records values (?, ?, ?, ?, ?, ?)", row.required("id").asString(),
+                    row.required("tenant").asString(), optionalText(row.get("owner")), optionalText(row.get("department")),
+                    row.required("quantity").asInt(), row.required("price").asInt());
+        }
+    }
+
+    private static String optionalText(JsonNode field) {
+        if (field == null || field.isNull()) return null;
+        if (!field.isString()) throw new IllegalArgumentException("Malformed nullable fixture attribute");
+        return field.asString();
     }
 
     private static void verifyProjectionAndTabs(DSLContext db, JsonNode cases) {
