@@ -316,7 +316,24 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       await field.getByRole("checkbox", { name: "列表显示" }).click();
       await field.getByRole("checkbox", { name: "允许查询" }).click();
     }
-    await page.getByRole("button", { name: "上移列表字段 到期日期（due）", exact: true }).click();
+    const moveQuantityDown = page.getByRole("button", { name: "下移列表字段 数量（quantity）", exact: true });
+    const moveQuantityUp = page.getByRole("button", { name: "上移列表字段 数量（quantity）", exact: true });
+    const columns = page.getByRole("table", { name: "列表预览" }).getByRole("columnheader");
+    await moveQuantityDown.focus();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "数量", "已确认"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "已确认", "数量"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await expect(moveQuantityDown).toBeDisabled();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "已确认", "数量"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(moveQuantityUp).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(moveQuantityUp).toBeFocused();
     await page.getByRole("button", { name: "上移查询字段 已确认（approved）", exact: true }).focus();
     await page.keyboard.press("Enter");
     const assertPreview = async () => {

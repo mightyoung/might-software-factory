@@ -42,6 +42,23 @@ describe("LedgerViewOrder", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("keeps duplicate unknown keys distinct without dropping a legacy row", () => {
+    const onChange = vi.fn();
+    const legacy = { ...definition, listFields: ["missing", "date", "missing"] };
+    const { rerender } = render(<LedgerViewOrder definition={legacy} disabled={false} onChange={onChange} />);
+    const list = screen.getByRole("list", { name: "列表字段" });
+    const earlier = within(list).getAllByRole("button", { name: "下移列表字段 missing" })[0];
+    earlier.focus();
+    fireEvent.click(earlier);
+    expect(onChange).toHaveBeenCalledWith("listFields", ["date", "missing", "missing"]);
+    rerender(<LedgerViewOrder definition={{ ...legacy, listFields: ["date", "missing", "missing"] }} disabled={false} onChange={onChange} />);
+    const results = within(list).getAllByRole("button", { name: "下移列表字段 missing" });
+    expect(results).toHaveLength(2);
+    expect(results[0]).toBe(earlier);
+    expect(results[0]).toHaveFocus();
+    expect(results[1]).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("keeps incomplete draft keys intact and prompts for empty selections", () => {
     const onChange = vi.fn();
     render(
