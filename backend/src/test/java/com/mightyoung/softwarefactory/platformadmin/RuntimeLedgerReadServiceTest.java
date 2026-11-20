@@ -25,7 +25,7 @@ class RuntimeLedgerReadServiceTest {
         public void requireActive(CurrentTenantContext c) {}
     };
     final RuntimeLedgerReadService service = new RuntimeLedgerReadService(resolver,transaction,permissions,applications,repository);
-    final Published published = new Published("purchase",1,LedgerConfigurationServiceTest.complete());
+    final Published published = new Published("purchase",1,LedgerConfigurationWorkflowTest.withWorkflow(LedgerConfigurationWorkflowTest.linear()));
     RuntimeLedgerReadServiceTest() {
         when(resolver.currentTenant()).thenReturn(context);
         when(applications.findCurrentInCaller(context.tenantId(),"platform")).thenAnswer(call -> {
@@ -41,6 +41,16 @@ class RuntimeLedgerReadServiceTest {
         when(applications.findCurrentInCaller(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(false,1)));
         assertThatThrownBy(service::catalog).isInstanceOf(AccessDeniedException.class);
     }
+    @Test void catalogAndItemHaveOnlyTheEstablishedOrdinaryDefinitionFields() {
+        when(permissions.has(context,"ledger.record.purchase.read")).thenReturn(true);
+        when(repository.published(context.tenantId())).thenReturn(List.of(published));
+        assertOrdinaryDefinition(service.catalog().items().getFirst().definition());
+        assertOrdinaryDefinition(service.definition("purchase").definition());
+    }
+    private static void assertOrdinaryDefinition(Object definition) {
+        var mapper = tools.jackson.databind.json.JsonMapper.builder().build();
+        assertThat(mapper.<tools.jackson.databind.JsonNode>valueToTree(definition)).isEqualTo(mapper.valueToTree(LedgerConfigurationServiceTest.complete()));
+    }
     @Test void detailReadScopeDoesNotGrantOtherOrganizationsUpdateOrDelete() {
         UUID organization = UUID.randomUUID();
         when(permissions.has(context,"ledger.record.purchase.read")).thenReturn(true);
@@ -50,8 +60,9 @@ class RuntimeLedgerReadServiceTest {
         UUID id = UUID.randomUUID();
         RecordView record = new RecordView(id,"purchase",1,organization,Map.of("quantity",1),1,Instant.now(),Instant.now());
         when(repository.detail(eq(context.tenantId()),eq("purchase"),eq(id),eq(Set.of(organization)),any()))
-                .thenReturn(new Detail(record,published.definition(),new Capabilities(true,false,true,true)));
+                .thenReturn(new Detail(record,PublicDefinition.from(published.definition()),new Capabilities(true,false,true,true)));
         Detail detail = service.detail("purchase",id);
+        assertOrdinaryDefinition(detail.definition());
         assertThat(detail.capabilities()).isEqualTo(new Capabilities(true,false,false,false));
     }
     @Test void filtersRejectNonQueryFieldsWrongTypesAndOperators() {

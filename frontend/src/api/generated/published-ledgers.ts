@@ -118,6 +118,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        Definition: {
+            name: string;
+            fields: components["schemas"]["Field"][];
+            listFields: string[];
+            queryFields: string[];
+        };
         Capabilities: {
             read: boolean;
             create: boolean;
@@ -219,12 +225,6 @@ export interface components {
             /** @enum {string} */
             type: "text" | "number" | "date" | "boolean";
             required: boolean;
-        };
-        Definition: {
-            name: string;
-            fields: components["schemas"]["Field"][];
-            listFields: string[];
-            queryFields: string[];
         };
     };
     responses: never;

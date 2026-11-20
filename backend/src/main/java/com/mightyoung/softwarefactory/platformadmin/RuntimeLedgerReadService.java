@@ -65,7 +65,7 @@ public final class RuntimeLedgerReadService {
         });
     }
     private Item item(CurrentTenantContext context, Published published, Capabilities capabilities) {
-        return new Item(published.key(), published.definitionVersion(), published.definition(), capabilities,
+        return new Item(published.key(), published.definitionVersion(), PublicDefinition.from(published.definition()), capabilities,
                 repository.organizations(context.tenantId(), permissions.readableOrganizations(context, code(published.key(), "create"))));
     }
     private Capabilities capabilities(CurrentTenantContext context, String key) {

@@ -32,7 +32,7 @@ class RuntimeLedgerReadPostgresTest {
     final String key = "read_" + UUID.randomUUID().toString().replace("-","");
     final Definition initial = new Definition("采购",
             List.of(new Field("amount","金额","number",true),new Field("secret","备注","text",false)),
-            List.of("amount"),List.of("amount"));
+            List.of("amount"),List.of("amount"),LedgerConfigurationWorkflowTest.linear());
 
     @Test void scopedPagesCountsAndProjectionUseTheSameSqlAndHistoricalDetailKeepsItsDefinition() {
         tx.execute(status -> {
@@ -42,6 +42,7 @@ class RuntimeLedgerReadPostgresTest {
             commands.create(tenant,member,key,new CreateRequest(UUID.randomUUID(),1L,organization,Map.of("amount",3)));
             commands.create(tenant,member,key,new CreateRequest(UUID.randomUUID(),1L,other,Map.of("amount",1)));
             var published = reads.published(tenant,key);
+            assertThat(published.definition().workflow()).isEqualTo(initial.workflow());
             Query request = new Query(1,1,List.of(new Filter("amount","gte",2)),new Sort("amount","asc"));
             var first = reads.query(tenant,published,Set.of(organization),request);
             assertThat(first.total()).isEqualTo(2);
@@ -58,7 +59,9 @@ class RuntimeLedgerReadPostgresTest {
             Definition newType = new Definition("采购新版",List.of(new Field("amount","数量说明","text",true)),List.of("amount"),List.of("amount"));
             configurations.save(tenant,member,key,new SaveRequest(UUID.randomUUID(),1L,newType));
             configurations.publish(tenant,member,key,new PublishRequest(2L,2L,1L));
-            assertThat(reads.detail(tenant,key,one.id(),Set.of(organization),new Capabilities(true,false,false,false)).definition()).isEqualTo(initial);
+            var detail = reads.detail(tenant,key,one.id(),Set.of(organization),new Capabilities(true,false,false,false));
+            assertThat(detail.definition()).isEqualTo(PublicDefinition.from(initial));
+            assertThat(json.<tools.jackson.databind.JsonNode>valueToTree(detail.definition()).has("workflow")).isFalse();
             assertThat(reads.query(tenant,reads.published(tenant,key),Set.of(organization),
                     new Query(1,20,List.of(new Filter("amount","eq","2")),new Sort("amount","asc"))).total()).isZero();
             status.setRollbackOnly();
