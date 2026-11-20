@@ -73,15 +73,17 @@ export function PublishedLedgersPage({
     active,
   );
   function failed(cause: unknown) {
-    if (cause instanceof ApiError && cause.status === 401) {
+    const status = cause instanceof ApiError ? cause.status : 0;
+    if (status === 401) {
       onUnauthenticated();
       return;
     }
-    if (cause instanceof ApiError && cause.status === 403)
-      setError("当前授权不允许此操作，请刷新台账核对权限。");
-    else if (cause instanceof ApiError && cause.status === 409)
+    // Denial of this attempt does not confirm an earlier uncertain result.
+    if (status === 403)
+      setError("当前授权不允许此操作，" + (uncertain ? "原结果未确认。" : "请刷新台账核对权限。"));
+    else if (status === 409)
       setError("记录或台账定义已更新。输入已保留，请重新打开记录核对。");
-    else if (cause instanceof ApiError && [400, 422].includes(cause.status))
+    else if (status === 400 || status === 422)
       setError("请检查必填字段、数值、日期和所属组织。");
     else setError("操作未确认成功。请重试，写入重试会沿用原请求标识。");
   }
