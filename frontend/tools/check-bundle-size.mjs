@@ -30,7 +30,10 @@ for (const bundle of bundles) {
     const size = totals[kind] / 1024;
     const ok = size > 0 && size <= bundle.limits[kind];
     failed ||= !ok;
-    console.log(`${ok ? "OK" : "FAIL"}  ${bundle.name} ${kind.toUpperCase()} ${size.toFixed(1)} / ${bundle.limits[kind]} KiB gzip`);
+    const limitBytes = bundle.limits[kind] * 1024;
+    const marginBytes = limitBytes - totals[kind];
+    const signedMargin = `${marginBytes >= 0 ? "+" : ""}${marginBytes}`;
+    console.log(`${ok ? "OK" : "FAIL"}  ${bundle.name} ${kind.toUpperCase()} ${size.toFixed(1)} / ${bundle.limits[kind]} KiB gzip (${totals[kind]} / ${limitBytes} B; margin ${signedMargin} B)`);
   }
 }
 if (failed) process.exitCode = 1;
