@@ -39,9 +39,21 @@ try {
   await page.getByLabel("字段名称").fill("批次");
   await page.getByRole("checkbox", { name: "列表显示" }).check();
   await page.getByRole("checkbox", { name: "允许查询" }).check();
-  assert.equal((await action("保存草稿", "versions")).version, 1);
+  await page.getByRole("button", { name: "添加字段" }).click();
+  await page.getByLabel("字段标识").nth(1).fill("quantity");
+  await page.getByLabel("字段名称").nth(1).fill("数量");
+  await page.getByLabel("字段类型").nth(1).selectOption("number");
+  await page.getByRole("checkbox", { name: "列表显示" }).nth(1).check();
+  await page.getByRole("checkbox", { name: "允许查询" }).nth(1).check();
+  await page.getByRole("button", { name: "上移列表字段 数量（quantity）" }).click();
+  const columns = page.getByRole("table", { name: "列表预览" }).getByRole("columnheader");
+  await expect(columns).toHaveText(["数量", "批次"]);
+  const first = await action("保存草稿", "versions");
+  assert.equal(first.version, 1);
+  assert.deepEqual(first.definition.listFields, ["quantity", "batch"]);
+  assert.deepEqual(first.definition.queryFields, ["batch", "quantity"]);
   assert.equal((await action("发布当前版本", "publish")).publishedVersion, 1);
-  await page.getByLabel("字段名称").fill("到货批次");
+  await page.getByLabel("字段名称").first().fill("到货批次");
   assert.equal((await action("保存草稿", "versions")).version, 2);
   await page.getByRole("button", { name: "比较版本 1" }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText("到货批次");
@@ -54,6 +66,8 @@ try {
   await page.reload();
   await page.getByRole("navigation", { name: "已配置台账" }).getByRole("button").filter({ hasText: name }).click();
   await expect(page.getByText("版本 3 · 已发布", {exact:false}).first()).toBeVisible();
+  await expect(columns).toHaveText(["数量", "批次"]);
+  await expect(page.getByRole("group", { name: "查询条件预览" }).getByRole("spinbutton")).toBeDisabled();
   assert.deepEqual(errors, []);
   console.log("Real HTTPS and Chrome: saved drafts 1/2, compared 1, restored draft 3, explicitly published and reopened history.", key);
 } finally {

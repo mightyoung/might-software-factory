@@ -155,10 +155,44 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
   await page.keyboard.press("Space");
   await expect(page.getByRole("checkbox", { name: "列表显示" })).toBeChecked();
   await page.getByRole("checkbox", { name: "允许查询" }).click();
+  for (const [key, label, type] of [
+    ["due", "到期日期", "date"],
+    ["approved", "已确认", "boolean"],
+  ]) {
+    await page.getByRole("button", { name: "添加字段" }).click();
+    const field = page.locator(".config-field").last();
+    await field.getByLabel("字段标识").fill(key);
+    await field.getByLabel("字段名称").fill(label);
+    await field.getByLabel("字段类型").selectOption(type);
+    await field.getByRole("checkbox", { name: "列表显示" }).click();
+    await field.getByRole("checkbox", { name: "允许查询" }).click();
+  }
+  await page.getByRole("button", { name: "上移列表字段 到期日期（due）", exact: true }).click();
+  await page.getByRole("button", { name: "上移查询字段 已确认（approved）", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  const assertPreview = async () => {
+    await expect(page.getByRole("table", { name: "列表预览" }).getByRole("columnheader"))
+      .toHaveText(["到期日期", "数量", "已确认"]);
+    const query = page.getByRole("group", { name: "查询条件预览" });
+    expect(await query.locator("input, select").evaluateAll((controls) =>
+      controls.map((control) => control.getAttribute("type") ?? control.tagName.toLowerCase()),
+    )).toEqual(["number", "select", "date"]);
+    await expect(query.getByLabel("数量（查询预览）")).toHaveAttribute("type", "number");
+    await expect(query.getByLabel("到期日期（查询预览）")).toHaveAttribute("type", "date");
+    await expect(query.getByLabel("已确认（查询预览）")).toBeDisabled();
+  };
+  await assertPreview();
+  expect(versions).toEqual([]);
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 1" }),
   ).toBeVisible();
+  expect(versions[0].definition.listFields).toEqual(["due", "quantity", "approved"]);
+  expect(versions[0].definition.queryFields).toEqual(["quantity", "approved", "due"]);
+  await page.reload();
+  await page.getByRole("navigation", { name: "已配置台账" })
+    .getByRole("button").filter({ hasText: "采购申请" }).click();
+  await assertPreview();
   await page.getByLabel("台账名称").fill("采购申请新版");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
