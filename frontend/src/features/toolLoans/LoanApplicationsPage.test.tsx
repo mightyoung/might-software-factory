@@ -119,6 +119,30 @@ it("requires explicit withdrawal confirmation and sends the confirmed version", 
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "确认撤销" })); });
   expect(adapter.command).toHaveBeenCalledWith("cancel", row.id, { definitionVersion: "1", expectedVersion: 1 }, expect.any(String));
 });
+it("shows the refreshed withdrawal details and waits for a new confirmation after a version conflict", async () => {
+  const { adapter } = setup([row]);
+  const latest = { ...row, version: 2, purpose: "校准使用", toolIds: [tool2] };
+  vi.mocked(adapter.detail).mockResolvedValueOnce(row).mockResolvedValue(latest);
+  vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "撤销申请" }));
+  expect(screen.getByText(/装配使用.*共 2 件/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
+  expect(adapter.command).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(await screen.findByRole("button", { name: "读取最新版本并核对后重新提交" }));
+  const confirm = await screen.findByRole("button", { name: "确认撤销" });
+  expect(screen.getByText(/校准使用.*共 1 件.*申请版本：2/)).toBeVisible();
+  expect(screen.queryByText(/装配使用.*共 2 件/)).not.toBeInTheDocument();
+  expect(adapter.command).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(confirm);
+  await screen.findByRole("heading", { name: "申请详情" });
+  expect(adapter.command).toHaveBeenCalledTimes(2);
+  const [previous, current] = vi.mocked(adapter.command).mock.calls;
+  expect(current).toEqual(["cancel", row.id, { definitionVersion: latest.definitionVersion, expectedVersion: latest.version }, expect.any(String)]);
+  expect(current![3]).not.toBe(previous![3]);
+});
 it("keeps the submitted department fixed when the owner now belongs to another department", async () => {
   const { adapter } = setup([row]);
   vi.mocked(adapter.candidates).mockResolvedValue({ departments: [{ id: tool2, label: "现部门" }], scopes: [{ id: scope, organizationId: org, label: "原保管范围" }], tools: [{ id: tool, label: "工装一" }, { id: tool2, label: "工装二" }] });
