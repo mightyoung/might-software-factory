@@ -28,7 +28,7 @@ import java.util.UUID;
  */
 @Repository
 public final class PersistentFindingReadAuthorizationRepository
-        implements PersistentEntityReadAuthorizationRepository {
+        implements PersistentEntityReadAuthorizationRepository, OrdinaryLedgerQueryAuthorization {
 
     private final DSLContext dsl;
     private final AccountStatusReadRepository accountStatusRepository;
@@ -60,6 +60,30 @@ public final class PersistentFindingReadAuthorizationRepository
     @Override
     public Optional<FindingReadAuthorizationSnapshot> loadFindingReadSnapshot(
             CurrentTenantContext context, String permissionCode) {
+        return evaluate(context, permissionCode).map(Evaluation::snapshot);
+    }
+
+    @Override
+    public Optional<Set<UUID>> queryOrganizations(CurrentTenantContext context, String ledgerKey) {
+        if (ledgerKey == null || !ledgerKey.matches("[a-z][a-z0-9_]{0,63}")) return Optional.empty();
+        return evaluate(context, "ledger.record." + ledgerKey + ".read").flatMap(result -> {
+            Set<UUID> organizations = result.snapshot().organizationIds();
+            // Preserve the historically supported nonempty union. Unsupported scopes add no authority.
+            if (!organizations.isEmpty()) return Optional.of(organizations);
+            // Only DEPT and DEPT_TREE have a new, unambiguous authorized-empty interpretation.
+            // No matching grant (or an invalid/stale identity) leaves no role scope descriptors.
+            if (!result.roleScopes().isEmpty() && result.roleScopes().stream().allMatch(
+                    scope -> scope.scopeRuleId() != null && scope.explicitOrganizationId() == null
+                            && ("DEPT".equals(scope.kind()) || "DEPT_TREE".equals(scope.kind())))) {
+                return Optional.of(organizations);
+            }
+            return Optional.empty();
+        });
+    }
+
+    private record Evaluation(FindingReadAuthorizationSnapshot snapshot, List<RoleScopeDescriptor> roleScopes) {}
+
+    private Optional<Evaluation> evaluate(CurrentTenantContext context, String permissionCode) {
         return readTransaction.execute(status -> {
             setLocalTenant(context.tenantId());
 
@@ -79,16 +103,17 @@ public final class PersistentFindingReadAuthorizationRepository
             }
 
             Set<UUID> organizationIds = Set.of();
+            List<RoleScopeDescriptor> roleScopes = List.of();
             if (canResolveRoles(context, principal, accountStatus, membership)) {
                 MemberDirectorySnapshot directory = directoryRepository.findCurrentMemberships(
                         context.tenantId(), context.memberId());
-                var roleScopes = roleScopeRepository.findActiveScopes(
+                roleScopes = roleScopeRepository.findActiveScopes(
                         context.tenantId(), context.memberId(), directory.organizationIds(),
                         directory.positionIds(), directory.groupIds(), permissionCode);
                 organizationIds = resolveOrganizationScope(context, directory, roleScopes);
             }
 
-            return Optional.of(new FindingReadAuthorizationSnapshot(
+            var snapshot = new FindingReadAuthorizationSnapshot(
                     principal.principalId(),
                     principal.accountId(),
                     principal.kind(),
@@ -98,7 +123,8 @@ public final class PersistentFindingReadAuthorizationRepository
                     membership.memberStatus(),
                     membership.tenantAuthEpoch(),
                     membership.memberAuthEpoch(),
-                    organizationIds));
+                    organizationIds);
+            return Optional.of(new Evaluation(snapshot, roleScopes));
         });
     }
 

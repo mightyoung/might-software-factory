@@ -31,6 +31,9 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class PersistentFindingReadAuthorizationRepositoryTest {
 
@@ -173,6 +176,72 @@ class PersistentFindingReadAuthorizationRepositoryTest {
         assertThat(snapshot.orElseThrow().organizationIds()).isEmpty();
         assertThat(directoryCalls.get()).isZero();
         assertThat(roleCalls.get()).isZero();
+    }
+
+    @Test
+    void ordinaryQueryAllowsOnlyExplicitSupportedEmptyScopesWithoutChangingScopedHas() {
+        var dept = new RoleScopeDescriptor(DEPT_SCOPE_ID, "DEPT", null);
+        var tree = new RoleScopeDescriptor(TREE_SCOPE_ID, "DEPT_TREE", null);
+        var self = new RoleScopeDescriptor(SELF_SCOPE_ID, "SELF", null);
+        var relation = new RoleScopeDescriptor(RELATION_SCOPE_ID, "RELATION", null);
+        var explicit = new RoleScopeDescriptor(EXPLICIT_SCOPE_ID, "EXPLICIT", EXPLICIT_ORG_ID);
+        var malformedDept = new RoleScopeDescriptor(null, "DEPT", null);
+        var unexpected = new RoleScopeDescriptor(UUID.randomUUID(), "FUTURE_MODE", null);
+        var context = currentContext();
+        for (var supported : List.of(List.of(dept), List.of(tree), List.of(dept, tree))) {
+            var repo = ordinaryRepository(Set.of(), supported, "ACTIVE", 17L, 1L);
+            assertThat(repo.queryOrganizations(context, "purchase")).isPresent().contains(Set.of());
+            assertThat(new PersistentEffectivePermissions(repo).has(context, "ledger.record.purchase.read")).isFalse();
+        }
+        for (var denied : List.of(List.<RoleScopeDescriptor>of(), List.of(self), List.of(relation),
+                List.of(dept, self), List.of(dept, explicit), List.of(malformedDept), List.of(dept, unexpected))) {
+            assertThat(ordinaryRepository(Set.of(), denied, "ACTIVE", 17L, 1L)
+                    .queryOrganizations(context, "purchase")).isEmpty();
+        }
+        var previous = ordinaryRepository(Set.of(ORG_ID), List.of(dept, self), "ACTIVE", 17L, 1L);
+        assertThat(previous.queryOrganizations(context, "purchase")).contains(Set.of(ORG_ID));
+        assertThat(new PersistentEffectivePermissions(previous).has(context, "ledger.record.purchase.read")).isTrue();
+    }
+
+    @Test
+    void ordinaryQueryDoesNotAcceptStaleInactiveOrUnavailableAuthority() {
+        var context = currentContext();
+        // A null fixture grant response throws if role resolution is ever attempted.
+        assertThat(ordinaryRepository(Set.of(), null, "INACTIVE", 17L, 1L)
+                .queryOrganizations(context, "purchase")).isEmpty();
+        assertThat(ordinaryRepository(Set.of(), null, "ACTIVE", 18L, 1L)
+                .queryOrganizations(context, "purchase")).isEmpty();
+        assertThat(ordinaryRepository(Set.of(), null, "ACTIVE", 17L, 2L)
+                .queryOrganizations(context, "purchase")).isEmpty();
+        assertThatThrownBy(() -> ordinaryRepository(Set.of(), null, "ACTIVE", 17L, 1L)
+                .queryOrganizations(context, "purchase")).isInstanceOf(IllegalStateException.class);
+    }
+
+    private static CurrentTenantContext currentContext() {
+        return new CurrentTenantContext(ACTOR_ID, ACCOUNT_ID, TENANT_ID, MEMBER_ID, 17L, 23L, 1L);
+    }
+
+    private static PersistentFindingReadAuthorizationRepository ordinaryRepository(
+            Set<UUID> organizations, List<RoleScopeDescriptor> scopes, String memberStatus, long epoch, long credential) {
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        DSLContext dsl = DSL.using(new MockConnection(context -> {
+            assertThat(context.bindings()).containsExactly("app.tenant_id", TENANT_ID.toString());
+            return new MockResult[] {singleValue(values, "set_config", String.class, TENANT_ID.toString())};
+        }), SQLDialect.POSTGRES);
+        var directory = mock(MemberDirectoryReadRepository.class);
+        when(directory.findCurrentMemberships(TENANT_ID, MEMBER_ID))
+                .thenReturn(new MemberDirectorySnapshot(organizations, Set.of(), Set.of()));
+        when(directory.expandDepartmentTree(TENANT_ID, MEMBER_ID)).thenReturn(Set.of());
+        return repository(dsl, ignored -> Optional.of(activeHumanPrincipal()),
+                ignored -> Optional.of(new AccountSecurityState("ACTIVE", credential)),
+                (tenant, account, member) -> Optional.of(new TenantMembershipState("ACTIVE", memberStatus, epoch, 23L)),
+                directory, (tenant, member, orgs, positions, groups, permission) -> {
+                    assertThat(permission).isEqualTo("ledger.record.purchase.read");
+                    assertThat(tenant).isEqualTo(TENANT_ID);
+                    assertThat(member).isEqualTo(MEMBER_ID);
+                    if (scopes == null) throw new IllegalStateException("Unavailable fixture role source");
+                    return scopes;
+                }, new CapturingTransactionManager());
     }
 
     private static PersistentFindingReadAuthorizationRepository repository(
