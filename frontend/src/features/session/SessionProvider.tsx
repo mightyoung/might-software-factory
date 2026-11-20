@@ -32,11 +32,11 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function SessionProvider({
-  adapter = syntheticSessionAdapter,
+export function SessionProviderWithAdapter({
+  adapter,
   children,
 }: {
-  adapter?: SessionAdapter;
+  adapter: SessionAdapter;
   children: ReactNode;
 }) {
   const [state, setState] = useState<SessionState>({ status: "restoring" });
@@ -158,4 +158,12 @@ export function useSession(): SessionContextValue {
   const value = useContext(SessionContext);
   if (!value) throw new Error("useSession must be used inside SessionProvider");
   return value;
+}
+
+/** Standalone demo provider; production composition always supplies its adapter. */
+export function SessionProvider({ adapter = syntheticSessionAdapter, children }: {
+  adapter?: SessionAdapter;
+  children: ReactNode;
+}) {
+  return <SessionProviderWithAdapter adapter={adapter}>{children}</SessionProviderWithAdapter>;
 }

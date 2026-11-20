@@ -1,9 +1,13 @@
+import type { ComponentProps } from "react";
+import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
+import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
+import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
-import { FindingsLedger } from "./features/findings/FindingsLedger";
+import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
 import { FindingReportForm } from "./components/FindingReportForm";
 import { LoginPage } from "./features/session/LoginPage";
-import { SessionProvider, useSession } from "./features/session/SessionProvider";
+import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
@@ -12,8 +16,6 @@ import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
 import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
-import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
-import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
@@ -418,32 +420,46 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   );
 }
 
-export function App({
+export function AppCore({
   sessionAdapter,
-  findingStore = syntheticFindingStore,
   createFindingStore,
   createPermissionAdmin,
   createEntityLedger,
   createLoans,
-  mode = "synthetic",
+  mode,
 }: {
-  sessionAdapter?: SessionAdapter;
-  /** 固定的适配器对（测试、合成演示）。 */
-  findingStore?: FindingStore;
-  /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
-  createFindingStore?: () => FindingStore;
-  /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
-  createPermissionAdmin?: () => PermissionAdminAdapter;
+  sessionAdapter: SessionAdapter;
+  /** 每个登录身份新建适配器。 */
+  createFindingStore: () => FindingStore;
+  /** 每个登录身份新建的权限配置适配器。 */
+  createPermissionAdmin: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
   createLoans?: LoanFactory;
-  /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
-  mode?: AppMode;
+  /** 运行模式决定界面是否标注演示。 */
+  mode: AppMode;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        <AppRouter createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
       </SessionProvider>
     </ModeProvider>
   );
+}
+
+type AppProps = Partial<ComponentProps<typeof AppCore>> & {
+  findingStore?: FindingStore;
+};
+
+/** Embeddable demo defaults; the production entry supplies its mode's adapters directly. */
+export function App({
+  sessionAdapter = syntheticSessionAdapter,
+  findingStore = syntheticFindingStore,
+  createFindingStore = () => findingStore,
+  createPermissionAdmin = createSyntheticPermissionAdmin,
+  mode = "synthetic",
+  ...props
+}: AppProps) {
+  return <AppCore {...props} mode={mode} sessionAdapter={sessionAdapter}
+    createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} />;
 }
