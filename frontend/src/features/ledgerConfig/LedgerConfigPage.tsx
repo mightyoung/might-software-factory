@@ -3,6 +3,8 @@ import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
+import { LedgerViewPreview } from "./LedgerViewPreview";
+import { LedgerViewOrder } from "./LedgerViewOrder";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
   ConfigurationSnapshot,
@@ -527,6 +529,14 @@ export function LedgerConfigPage({
               />
             )}
           </fieldset>
+          <LedgerViewOrder
+            definition={draft}
+            disabled={!canManage || locked || loading}
+            onChange={(property, keys) =>
+              setDraft((current) => ({ ...current, [property]: keys }))
+            }
+          />
+          <LedgerViewPreview definition={draft} />
           {recovery && (
             <Button
               label="重试原操作"
