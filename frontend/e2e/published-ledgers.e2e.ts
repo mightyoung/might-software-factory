@@ -7,12 +7,12 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     const response = await route.fetch();
     if (!response.ok()) return route.fulfill({ response });
     const body = await response.json();
-    body.data.permissions.push(...permissions);
-    body.data.applications.push({
+    body.data.permissions = permissions;
+    body.data.applications = [{
       id: "platform",
       name: "系统设置",
       entryPath: "platform/ledgers",
-    });
+    }];
     await route.fulfill({ response, json: body });
   });
   await page.route("**/api/v1/applications/platform/menu", (route) =>
@@ -108,13 +108,10 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   });
   await page.goto("/login");
   await page.getByLabel("租户编码").fill("demo");
-  await page.getByLabel("账号", { exact: true }).fill("demo");
+  await page.getByLabel("账号", { exact: true }).fill("mock-person");
   await page.getByLabel("密码", { exact: true }).fill("demo");
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.locator(".ledger-row").first()).toBeVisible();
-  await page.goto(
-    new URL(page.url()).pathname.replace("safety/findings", "platform/ledgers"),
-  );
+  await expect(page.getByRole("link", { name: "业务台账", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "采购申请", exact: true }).click();
   await expect(page.getByText("共 0 条记录")).toBeVisible();
   await page.getByRole("button", { name: "新增记录", exact: true }).click();
