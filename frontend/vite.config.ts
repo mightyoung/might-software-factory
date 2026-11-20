@@ -9,11 +9,11 @@ export default defineConfig(({ mode }) => ({
       output: {
         codeSplitting: {
           groups: [{
-            // Compress the already-eager Astryx modules together. Do not pull
+            // Compress the already-eager Astryx and React modules together. Do not pull
             // page-only modules or their other dependencies into the initial graph.
-            name: "astryx-core",
+            name: "ui-core",
             tags: ["$initial"],
-            test: /node_modules[\\/]@astryxdesign[\\/]core[\\/]/,
+            test: /node_modules[\\/](?:@astryxdesign[\\/]core|@stylexjs[\\/]stylex|react|react-dom|scheduler)[\\/]/,
             includeDependenciesRecursively: false,
           }],
         },

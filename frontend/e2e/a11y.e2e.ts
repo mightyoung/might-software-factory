@@ -107,6 +107,84 @@ test("查询框可用键盘清除编号并保留状态与日期条件", async ({
   ]);
 });
 
+test.describe("通用台账触屏查询", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 900 } });
+
+  test("从通用台账触摸清除搜索项，保留其它筛选并等待明确提交", async ({ page }) => {
+    const path = "apps/inventory/entities/widget";
+    const permission = "widget.read";
+    await page.route("**/api/v1/session/bootstrap", async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) { await route.fulfill({ response }); return; }
+      const body = await response.json();
+      body.data.applications.push({ id: "inventory", name: "库存", entryPath: path });
+      body.data.permissions.push(permission);
+      body.data.canonicalPermissions?.push(permission);
+      await route.fulfill({ response, json: body });
+    });
+    const operation = "/api/v1/apps/inventory/entities/widget";
+    const meta = { traceId: "test" };
+    const queryShape = { nullable: false, selectable: true, sortable: true, maxLength: 36, enumValues: [] };
+    await page.route(`**${operation}/definition?use=READ`, (route) => route.fulfill({
+      json: {
+        meta,
+        data: {
+          use: "READ", effectiveActions: [permission],
+          definition: {
+            appKey: "inventory", entityKey: "widget", definitionVersion: "1", title: "通用物品",
+            fields: {
+              code: { label: "编号", type: "TEXT", nullable: false, valueLabels: {} },
+              state: { label: "状态", type: "ENUM", nullable: false, valueLabels: { NORMAL: "正常" } },
+            },
+            inputFields: {}, references: {},
+            querySchema: {
+              key: "widget", schemaVersion: "1", idField: "id", defaultFields: ["code", "state"],
+              fields: {
+                id: { ...queryShape, type: "UUID", operators: ["EQ"] },
+                code: { ...queryShape, type: "TEXT", operators: ["CONTAINS"] },
+                state: { ...queryShape, type: "ENUM", operators: ["EQ"], enumValues: ["NORMAL"] },
+              },
+            },
+            layout: { list: ["code", "state"], detail: ["code"], create: [], edit: [], query: ["code", "state"] },
+            actions: {
+              read: { label: "查看", permission },
+              create: { label: "新增", permission: "widget.create" },
+              update: { label: "修改", permission: "widget.update" },
+            },
+          },
+        },
+      },
+    }));
+    const filters: unknown[] = [];
+    await page.route(`**${operation}/query`, (route) => {
+      filters.push(route.request().postDataJSON().query.filterAST);
+      return route.fulfill({ json: { meta, data: { records: [], page: 1, size: 20, total: 0, hasMore: false } } });
+    });
+
+    await signIn(page);
+    await page.getByRole("link", { name: "库存" }).click();
+    await expect(page.getByRole("heading", { name: "通用物品" })).toBeVisible();
+    await expect(page.getByText("共 0 条，第 1 页")).toBeVisible();
+    await page.getByRole("combobox", { name: "主题" }).selectOption("dark");
+    const search = page.getByRole("searchbox", { name: "编号" });
+    const status = page.getByRole("combobox", { name: "状态", exact: true });
+    await search.fill("WG-01");
+    await status.selectOption("NORMAL");
+    const clear = page.getByRole("button", { name: "清除 编号", exact: true });
+    await expect(clear).toBeVisible();
+    await scan(page, "通用台账触屏清除");
+    await clear.tap();
+    await expect(search).toHaveValue("");
+    await expect(search).toBeFocused();
+    await expect(status).toHaveValue("NORMAL");
+    await expect(clear).toHaveCount(0);
+    expect(filters).toHaveLength(1);
+    await search.press("Enter");
+    await expect.poll(() => filters.length).toBe(2);
+    expect(filters[1]).toMatchObject({ conditions: [{ field: "state", operator: "EQ", value: "NORMAL" }] });
+  });
+});
+
 test("查询和重置可由键盘激活并在两种主题保持可访问", async ({ page }) => {
   await signIn(page);
   const firstCode = (await page.locator(".ledger-row").first().locator("td").nth(1).textContent())!.trim();

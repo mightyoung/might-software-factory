@@ -1,16 +1,8 @@
-import type { FormEvent } from "react";
-import { InternationalizationProvider } from "@astryxdesign/core/i18n";
+import { useId, useRef, type FormEvent } from "react";
 import { Button } from "@astryxdesign/core/Button";
-import { TextInput } from "@astryxdesign/core/TextInput";
+import { Icon } from "@astryxdesign/core/Icon";
 import "./LedgerQueryForm.css";
 import type { DateRange, LedgerQueryField, LedgerSchema, QueryValue, QueryValues } from "../domain/ledger";
-
-const queryControlMessages = {
-  "zh-CN": {
-    "@astryx.textInput.clearLabel": "清除 {label}",
-    "@astryx.inputClearButton.tooltip": "清除",
-  },
-};
 
 interface LedgerQueryFormProps<T> {
   schema: LedgerSchema<T>;
@@ -33,21 +25,43 @@ function QueryFieldControl<T>({
   value: QueryValue | undefined;
   onChange: (key: string, value: QueryValue) => void;
 }) {
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
   if (field.kind === "text") {
+    const text = typeof value === "string" ? value : "";
     return (
-      <TextInput
-        key={field.key}
-        type="search"
-        hasClear
-        label={field.label}
-        value={typeof value === "string" ? value : ""}
-        placeholder={field.placeholder}
-        enterKeyHint="search"
-        size="lg"
-        containerClassName="query-field ledger-search-field"
-        controlClassName="ledger-search-control"
-        onChange={(next) => onChange(field.key, next)}
-      />
+      <div className="query-field ledger-search-field">
+        <label htmlFor={id}>{field.label}</label>
+        <div className="ledger-search-control" onClick={(event) => {
+          if (event.target === event.currentTarget) input.current?.focus({ preventScroll: true });
+        }}>
+          <input
+            ref={input}
+            id={id}
+            type="search"
+            value={text}
+            placeholder={field.placeholder}
+            enterKeyHint="search"
+            onChange={(event) => onChange(field.key, event.currentTarget.value)}
+          />
+          {text && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              label={`清除 ${field.label}`}
+              tooltip="清除"
+              icon={<Icon icon="close" size="sm" color="secondary" />}
+              isIconOnly
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onChange(field.key, "");
+                input.current?.focus({ preventScroll: true });
+              }}
+            />
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -142,23 +156,21 @@ export function LedgerQueryForm<T>({ schema, values, onChange, onSearch, onReset
   }
 
   return (
-    <InternationalizationProvider locale="zh-CN" overrides={queryControlMessages}>
-      <form className="query-panel" onSubmit={handleSubmit}>
-        <div className="query-fields">
-          {schema.queryFields.map((field) => (
-            <QueryFieldControl
-              key={field.key}
-              field={field}
-              value={values[field.key]}
-              onChange={onChange}
-            />
-          ))}
-        </div>
-        <div className="query-actions">
-          <Button className="ledger-query-action" label="查询" variant="primary" size="lg" type="submit" />
-          <Button className="ledger-query-action" label="重置" variant="secondary" size="lg" type="button" onClick={onReset} />
-        </div>
-      </form>
-    </InternationalizationProvider>
+    <form className="query-panel" onSubmit={handleSubmit}>
+      <div className="query-fields">
+        {schema.queryFields.map((field) => (
+          <QueryFieldControl
+            key={field.key}
+            field={field}
+            value={values[field.key]}
+            onChange={onChange}
+          />
+        ))}
+      </div>
+      <div className="query-actions">
+        <Button className="ledger-query-action" label="查询" variant="primary" size="lg" type="submit" />
+        <Button className="ledger-query-action" label="重置" variant="secondary" size="lg" type="button" onClick={onReset} />
+      </div>
+    </form>
   );
 }
