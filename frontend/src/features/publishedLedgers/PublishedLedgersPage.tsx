@@ -1,6 +1,8 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useUnsavedGuard } from "../../components/useUnsavedGuard";
+import { unknownOutcome } from "../toolLoans/model";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type { LedgerConfiguration } from "../ledgerConfig/model";
 import { createPublishedLedgerAdapter } from "./model";
@@ -33,8 +35,10 @@ const display = (value: unknown) =>
 export function PublishedLedgersPage({
   adapter,
   onUnauthenticated,
+  active = true,
 }: {
   adapter: PublishedLedgerAdapter;
+  active?: boolean;
   onUnauthenticated(): void;
 }) {
   const [ledgers, setLedgers] = useState<PublishedLedger[]>([]);
@@ -55,11 +59,19 @@ export function PublishedLedgersPage({
   const [notice, setNotice] = useState("");
   const recordForm = useRef<HTMLFormElement>(null);
   const generation = useRef(0);
-  const command = useRef<{ signature: string; id: string } | null>(null);
+  const command = useRef<(() => Promise<unknown>) | null>(null);
+  const sending = useRef(false);
+  const [uncertain, setUncertain] = useState(false);
+  const locked = busy || uncertain;
   const original = editor?.detail?.record.values;
   const dirty =
     !!editor?.editing &&
     JSON.stringify(editor.values) !== JSON.stringify(original ?? {});
+  useUnsavedGuard(
+    dirty || sending.current || uncertain,
+    "当前编辑或操作尚未确认，可在当前标签页返回核对。确定离开吗？",
+    active,
+  );
   function failed(cause: unknown) {
     if (cause instanceof ApiError && cause.status === 401) {
       onUnauthenticated();
@@ -123,7 +135,7 @@ export function PublishedLedgersPage({
     return () => controller.abort();
   }, [adapter, ledger, query, attempt]);
   function mayDiscard() {
-    return !dirty || window.confirm("当前记录有未保存的修改，继续吗？");
+    return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
   }
   function select(next: PublishedLedger) {
     if (busy || !mayDiscard()) return;
@@ -133,7 +145,6 @@ export function PublishedLedgersPage({
     setResult(null);
     setNotice("");
     setError("");
-    command.current = null;
     setQuery({
       page: 1,
       size: 20,
@@ -156,7 +167,6 @@ export function PublishedLedgersPage({
     });
     setNotice("");
     setError("");
-    command.current = null;
   }
   async function open(id: string) {
     if (!ledger || busy || !mayDiscard()) return;
@@ -174,7 +184,6 @@ export function PublishedLedgersPage({
           organizationId: detail.record.organizationId,
           editing: false,
         });
-        command.current = null;
       }
     } catch (cause) {
       if (mine === generation.current) failed(cause);
@@ -207,52 +216,60 @@ export function PublishedLedgersPage({
     }
     setQuery((current) => ({ ...current, filters: next, page: 1 }));
   }
-  async function mutate(action: "save" | "delete") {
-    if (!ledger || !editor || busy) return;
+  function refreshRecords() {
+    setQuery((current) => ({ ...current }));
+  }
+  function endTracking() {
+    if (sending.current || !uncertain || !window.confirm(
+      "请先核对已有记录。原操作可能已成功，结束追踪不会撤销它。确认已经核对并结束？",
+    )) return;
+    command.current = null;
+    setUncertain(false);
+    setEditor(null);
+    setError("");
+  }
+  function mutate(action: "save" | "delete") {
+    if (!ledger || !editor || locked || sending.current) return;
     if (action === "delete" && !window.confirm("删除这条草稿记录吗？")) return;
-    const mine = generation.current;
+    const key = ledger.key;
     const record = editor.detail?.record;
-    const signature = JSON.stringify([
-      ledger.key,
-      action,
-      record?.id,
-      record?.version,
-      editor.organizationId,
-      editor.values,
-    ]);
-    if (command.current?.signature !== signature)
-      command.current = { signature, id: crypto.randomUUID() };
-    const requestId = command.current.id;
+    const requestId = crypto.randomUUID();
+    const values = editor.values;
+    const organizationId = editor.organizationId;
+    const definitionVersion = ledger.definitionVersion;
+    command.current = () => action === "delete"
+      ? adapter.remove(key, record!.id, { requestId, expectedVersion: record!.version })
+      : record
+        ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
+        : adapter.create(key, { requestId, definitionVersion, organizationId, values });
+    void send(action === "delete" ? "草稿已删除。" : "记录已保存。");
+  }
+  async function send(success: string) {
+    const operation = command.current;
+    if (!operation || sending.current) return;
+    const mine = generation.current;
+    sending.current = true;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      if (action === "delete")
-        await adapter.remove(ledger.key, record!.id, {
-          requestId,
-          expectedVersion: record!.version,
-        });
-      else if (record)
-        await adapter.update(ledger.key, record.id, {
-          requestId,
-          expectedVersion: record.version,
-          values: editor.values,
-        });
-      else
-        await adapter.create(ledger.key, {
-          requestId,
-          definitionVersion: ledger.definitionVersion,
-          organizationId: editor.organizationId,
-          values: editor.values,
-        });
+      await operation();
       if (mine !== generation.current) return;
       setEditor(null);
       command.current = null;
-      setNotice(action === "delete" ? "草稿已删除。" : "记录已保存。");
+      setUncertain(false);
+      setNotice(success);
       setQuery((current) => ({ ...current, page: 1 }));
     } catch (cause) {
-      if (mine === generation.current) failed(cause);
+      if (mine !== generation.current) return;
+      // The ledger command service checks the exact receipt before the version.
+      const noReceipt = cause instanceof ApiError && cause.status === 409 && cause.code === "VERSION_CONFLICT";
+      const unknown = unknownOutcome(cause) || (uncertain && !noReceipt);
+      setUncertain(unknown);
+      if (!unknown) command.current = null;
+      failed(cause);
     } finally {
+      sending.current = false;
       if (mine === generation.current) setBusy(false);
     }
   }
@@ -264,7 +281,7 @@ export function PublishedLedgersPage({
         <Button
           label="刷新台账"
           variant="secondary"
-          isDisabled={busy || loading}
+          isDisabled={locked || loading}
           onClick={() => {
             if (mayDiscard()) {
               setEditor(null);
@@ -275,6 +292,13 @@ export function PublishedLedgersPage({
       </div>
       {loading && <p role="status">正在读取已发布台账…</p>}
       {error && <p role="alert">{error}</p>}
+      {uncertain && (
+        <div className="published-actions">
+          <Button label="重试原操作" isDisabled={busy} onClick={() => void send("原操作已确认。")} />
+          {ledger?.capabilities.read && <Button label="只读刷新记录" variant="secondary" isDisabled={busy || querying} onClick={refreshRecords} />}
+          <Button label="结束追踪" variant="secondary" isDisabled={busy} onClick={endTracking} />
+        </div>
+      )}
       {notice && <p role="status">{notice}</p>}
       <div className="published-layout">
         <nav aria-label="已发布业务台账" className="published-list">
@@ -284,7 +308,7 @@ export function PublishedLedgersPage({
               type="button"
               key={item.key}
               aria-current={ledger?.key === item.key ? "true" : undefined}
-              disabled={busy}
+              disabled={locked}
               onClick={() => select(item)}
             >
               {item.definition.name}
@@ -299,7 +323,7 @@ export function PublishedLedgersPage({
                 {ledger.capabilities.create && (
                   <Button
                     label="新增记录"
-                    isDisabled={busy || loading}
+                    isDisabled={locked || loading}
                     onClick={create}
                   />
                 )}
@@ -392,7 +416,7 @@ export function PublishedLedgersPage({
                                   <Button
                                     label="查看记录"
                                     variant="secondary"
-                                    isDisabled={busy}
+                                    isDisabled={locked}
                                     onClick={() => void open(record.id)}
                                   />
                                 </td>
@@ -447,7 +471,7 @@ export function PublishedLedgersPage({
                     <Button
                       label="关闭记录"
                       variant="secondary"
-                      isDisabled={busy}
+                      isDisabled={locked}
                       onClick={() => {
                         if (mayDiscard()) setEditor(null);
                       }}
@@ -466,13 +490,13 @@ export function PublishedLedgersPage({
                       void mutate("save");
                     }}
                   >
-                    <fieldset disabled={busy || !editing}>
+                    <fieldset disabled={locked || !editing}>
                       <legend>记录内容</legend>
                       <label>
                         所属组织
                         <select
                           required
-                          disabled={!!editor.detail || !editing || busy}
+                          disabled={!!editor.detail || !editing || locked}
                           value={editor.organizationId}
                           onChange={(event) =>
                             setEditor(
@@ -506,7 +530,7 @@ export function PublishedLedgersPage({
                             <CheckboxInput
                               label={field.label}
                               value={editor.values[field.key] === true}
-                              isDisabled={busy || !editing}
+                              isDisabled={locked || !editing}
                               onChange={() =>
                                 setEditor(
                                   (current) =>
@@ -564,7 +588,7 @@ export function PublishedLedgersPage({
                       {editing && (
                         <Button
                           label={busy ? "处理中…" : "保存记录"}
-                          isDisabled={busy || !editor.organizationId}
+                          isDisabled={locked || !editor.organizationId}
                           onClick={() => {
                             if (recordForm.current?.reportValidity())
                               void mutate("save");
@@ -577,7 +601,7 @@ export function PublishedLedgersPage({
                           <Button
                             label="编辑草稿"
                             variant="secondary"
-                            isDisabled={busy}
+                            isDisabled={locked}
                             onClick={() =>
                               setEditor(
                                 (current) =>
@@ -590,7 +614,7 @@ export function PublishedLedgersPage({
                         <Button
                           label="删除草稿"
                           variant="secondary"
-                          isDisabled={busy}
+                          isDisabled={locked}
                           onClick={() => void mutate("delete")}
                         />
                       )}
@@ -607,8 +631,10 @@ export function PublishedLedgersPage({
 }
 export default function HttpPublishedLedgersPage({
   onUnauthenticated,
+  active,
 }: {
   onUnauthenticated(): void;
+  active?: boolean;
 }) {
   const adapter = useMemo(
     () => createPublishedLedgerAdapter(createHttpClient()),
@@ -617,6 +643,7 @@ export default function HttpPublishedLedgersPage({
   return (
     <PublishedLedgersPage
       adapter={adapter}
+      active={active}
       onUnauthenticated={onUnauthenticated}
     />
   );

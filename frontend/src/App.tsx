@@ -179,12 +179,7 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: 
 
 // Browser traversal cannot be cancelled reliably. Retain the editor in memory
 // after its first visit, only within this authorized AppShell identity.
-function LedgerConfigurationHost({ active, canManage, canPublish, onUnauthenticated }: {
-  active: boolean;
-  canManage: boolean;
-  canPublish: boolean;
-  onUnauthenticated: () => void;
-}) {
+function RetainedRoute({ active, children, loading }: { active: boolean; children: ReactNode; loading: string }) {
   const [visited, setVisited] = useState(active);
   useLayoutEffect(() => {
     if (active) setVisited(true);
@@ -192,13 +187,8 @@ function LedgerConfigurationHost({ active, canManage, canPublish, onUnauthentica
   if (!active && !visited) return null;
   return (
     <div hidden={!active}>
-      <Suspense fallback={<p role="status">正在载入配置页面…</p>}>
-        <LedgerConfigPage
-          active={active}
-          canManage={canManage}
-          canPublish={canPublish}
-          onUnauthenticated={onUnauthenticated}
-        />
+      <Suspense fallback={<p role="status">{loading}</p>}>
+        {children}
       </Suspense>
     </div>
   );
@@ -287,8 +277,11 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
 
   const canManageLedgerConfig = hasPermission(session, "ledger.configuration.manage");
   const canPublishLedgerConfig = hasPermission(session, "ledger.configuration.publish");
-  const canKeepLedgerConfig = mode === "http" &&
-    session.applications.some(app => app.id === "platform") &&
+  const platformHttp = mode === "http" && session.applications.some(app => app.id === "platform");
+  const activeLedgerPage = !routingTransition && authorizedApplication === "platform" && canReadRoute ? route?.page.kind : undefined;
+  const isConfigOpen = activeLedgerPage === "ledger-configurations";
+  const isRecordsOpen = activeLedgerPage === "published-ledgers";
+  const canKeepLedgerConfig = platformHttp &&
     (hasPermission(session, "ledger.configuration.read") || canManageLedgerConfig || canPublishLedgerConfig);
 
   let title: string;
@@ -367,7 +360,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     );
   } else if (route.page.kind === "published-ledgers") {
     title = route.page.title;
-    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用业务台账。" /> : <Suspense fallback={<p role="status">正在载入业务台账…</p>}><PublishedLedgersPage key={identityKey} onUnauthenticated={expire} /></Suspense>;
+    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用业务台账。" /> : null;
   } else if (route.page.kind === "ledger-configurations") {
     title = route.page.title;
     content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后配置台账。" /> : null;
@@ -409,12 +402,14 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     >
       {content}
       {canKeepLedgerConfig && (
-        <LedgerConfigurationHost
-          active={!routingTransition && route?.page.kind === "ledger-configurations" && authorizedApplication === "platform" && canReadRoute}
-          canManage={canManageLedgerConfig}
-          canPublish={canPublishLedgerConfig}
-          onUnauthenticated={expire}
-        />
+        <RetainedRoute active={isConfigOpen} loading="正在载入配置页面…">
+          <LedgerConfigPage active={isConfigOpen} canManage={canManageLedgerConfig} canPublish={canPublishLedgerConfig} onUnauthenticated={expire} />
+        </RetainedRoute>
+      )}
+      {platformHttp && hasPermission(session, "ledger.directory.open") && (
+        <RetainedRoute active={isRecordsOpen} loading="正在载入业务台账…">
+          <PublishedLedgersPage active={isRecordsOpen} onUnauthenticated={expire} />
+        </RetainedRoute>
       )}
     </AppShell>
   );

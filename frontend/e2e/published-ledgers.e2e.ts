@@ -66,6 +66,8 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     createdAt: string;
     updatedAt: string;
   } = null;
+  let creates = 0;
+  let firstCreate: unknown;
   await page.route("**/api/v1/ledgers**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/v1/ledgers")
@@ -92,6 +94,12 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
       expect(body.expectedVersion).toBe(1);
       record = { ...record!, values: body.values, version: 2 };
     } else {
+      if (firstCreate) {
+        expect(body).toEqual(firstCreate);
+        return route.fulfill({ json: record });
+      }
+      creates += 1;
+      firstCreate = body;
       expect(body.definitionVersion).toBe(2);
       expect(body.organizationId).toBe("org");
       record = {
@@ -103,6 +111,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
         createdAt: "2026-11-20T00:00:00Z",
         updatedAt: "2026-11-20T00:00:00Z",
       };
+      return route.abort();
     }
     await route.fulfill({ json: record });
   });
@@ -121,7 +130,18 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await page.keyboard.press("Space");
   await editor.getByRole("button", { name: "保存记录" }).focus();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("操作未确认成功");
+  await expect(editor.getByLabel("采购数量（必填）")).toBeDisabled();
+  await page.evaluate(() => {
+    window.history.pushState(null, "", "/t/demo/not-registered");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(editor).toBeHidden();
+  await page.goBack();
+  await expect(editor.getByLabel("采购数量（必填）")).toHaveValue("5");
+  await page.getByRole("button", { name: "重试原操作" }).click();
   await expect(page.getByText("共 1 条记录")).toBeVisible();
+  expect(creates).toBe(1);
   expect(record!.values).toEqual({ quantity: 5, confirmed: true });
   await page.getByRole("button", { name: "查看记录" }).click();
   await page.getByRole("button", { name: "编辑草稿" }).click();
