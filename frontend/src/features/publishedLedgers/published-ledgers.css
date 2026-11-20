@@ -1,0 +1,88 @@
+.published-ledgers {
+  max-width: 1280px;
+  padding: 24px;
+}
+.published-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 24px;
+}
+.published-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.published-list button {
+  text-align: left;
+  padding: 12px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+.published-list button[aria-current] {
+  background: var(--tint);
+  border-color: var(--petrol);
+}
+.published-content {
+  min-width: 0;
+}
+.published-query,
+.published-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 16px 0;
+}
+.published-ledgers label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.published-ledgers input,
+.published-ledgers select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--rule);
+}
+.published-table {
+  overflow-x: auto;
+}
+.published-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.published-table th,
+.published-table td {
+  text-align: left;
+  padding: 12px;
+  border-bottom: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+.published-editor {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+.published-editor fieldset {
+  min-width: 0;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--rule);
+}
+.published-ledgers button {
+  transition-property: opacity, transform;
+}
+@media (max-width: 700px) {
+  .published-ledgers {
+    padding: 16px;
+  }
+  .published-layout {
+    grid-template-columns: 1fr;
+  }
+}

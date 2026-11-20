@@ -12,3 +12,13 @@ CONFIG_UI_DATABASE=msf_config_test CONFIG_UI_ORIGIN=https://127.0.0.1:15640 node
 
 - 在实际 HTTPS 上，无配置权限的成员读取目录返回 403。撤回发布权限后，持原会话的设计者仍可保存下一版草稿，同一会话发布返回 403，已发布指针保持原值。
 - 分别演练了受限运行账号的数据读写和 Flyway 升级。后者从历史为 V34 的合成备份另建数据库，在迁移角色下依次安装 V35、V36，Flyway 全量校验通过。应用运行账号的最小授权需单独应用。
+
+## 已发布台账的业务记录
+
+`records-browser.mjs` 对接独立的 `msf_record_runtime_test` 数据库、HTTPS 服务及启用 HTTP 模式的前端。使用测试账号的环境变量 `RECORD_PASSWORD_KEEPER`、`RECORD_PASSWORD_READER`，以及 `RECORD_UI_ORIGIN` 和 `RECORD_UI_DATABASE`。测试管理员需具备配置维护、发布及角色管理资格；业务角色须有可继承的有效组织范围。
+
+```sh
+RECORD_UI_DATABASE=msf_record_runtime_test RECORD_UI_ORIGIN=https://127.0.0.1:15647 node tools/ledger-configuration/records-browser.mjs
+```
+
+脚本通过实际接口发布随机标识的台账，核对未授权时目录不可见，授予并在结束时收回本次业务动作。Chrome 操作草稿新增、编辑和删除；发布 v2 后编辑 v1 记录，撤权后以原会话验证写入被拒绝、数量未变。数据库需要安装 V37，并对运行角色应用配套授权。

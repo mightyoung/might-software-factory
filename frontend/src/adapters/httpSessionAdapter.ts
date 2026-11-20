@@ -8,6 +8,7 @@ import { applicationPath } from "../routing/entityPaths";
 type BootstrapResponse = components["schemas"]["SessionBootstrapResponse"];
 type MenuResponse = components["schemas"]["ApplicationMenuResponse"];
 const UI_PERMISSIONS: Readonly<Record<string, string>> = {
+  "ledger.directory.open": "ledger.directory.open",
   "finding.read": "safety.finding.read",
   "finding.create": "safety.finding.report",
   "equipment.read": "equipment.overview.read",
