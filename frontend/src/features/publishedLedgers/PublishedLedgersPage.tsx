@@ -337,10 +337,9 @@ export function PublishedLedgersPage({
                       applyFilters();
                     }}
                   >
-                    {ledger.definition.fields
-                      .filter((field) =>
-                        ledger.definition.queryFields.includes(field.key),
-                      )
+                    {ledger.definition.queryFields
+                      .map((key) => ledger.definition.fields.find((field) => field.key === key))
+                      .filter((field) => field !== undefined)
                       .map((field) => (
                         <label key={field.key}>
                           {field.label}
