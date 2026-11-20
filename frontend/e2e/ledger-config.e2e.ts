@@ -6,14 +6,22 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   page,
 }) => {
   const editorRequests: string[] = [];
+  const permissionReads: string[] = [];
+  const configurationReads: string[] = [];
   page.on("request", (request) => {
-    if (request.resourceType() === "script" && /\/ledgerConfig\/|\/assets\/LedgerConfigPage-[^/]+\.js$/.test(new URL(request.url()).pathname))
+    const path = new URL(request.url()).pathname;
+    if (request.resourceType() === "script" && /\/(?:ledgerConfig|platform)\/[^/]*ConfigPage\.|\/assets\/LedgerConfigPage-[^/]+\.js$/.test(path))
       editorRequests.push(request.url());
+    if (request.method() === "GET" && /^\/api\/v1\/admin\/(roles|permissions)$/.test(path))
+      permissionReads.push(path);
+    if (request.method() === "GET" && path.startsWith("/api/v1/admin/ledger-configurations"))
+      configurationReads.push(path);
   });
   const permissions = [
     "ledger.configuration.read",
     "ledger.configuration.manage",
     "ledger.configuration.publish",
+    "platform.permission.read",
   ];
   await page.route("**/api/v1/session/bootstrap", async (route) => {
     const response = await route.fetch();
@@ -55,6 +63,8 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       },
     }),
   );
+  await page.route("**/api/v1/admin/permissions", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route("**/api/v1/admin/roles", (route) => route.fulfill({ json: { roles: [] } }));
   type Definition = {
     name: string;
     fields: { key: string; label: string; type: string; required: boolean }[];
@@ -146,14 +156,19 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.locator(".ledger-row").first()).toBeVisible();
   expect(editorRequests).toEqual([]);
-  await page.goto(
-    new URL(page.url()).pathname.replace(
-      "safety/findings",
-      "platform/ledger-configurations",
-    ),
-  );
-  await page.getByLabel("台账标识").fill("purchase");
+  expect(permissionReads).toEqual([]);
+  expect(configurationReads).toEqual([]);
+  const settingsPath = new URL(page.url()).pathname.replace("safety/findings", "platform");
+  await page.goto(settingsPath + "/permissions");
+  await expect(page.getByText("暂无角色。")).toBeVisible();
   expect(editorRequests.length).toBeGreaterThan(0);
+  expect(permissionReads).toHaveLength(2);
+  expect(configurationReads).toEqual([]);
+
+  await page.goto(settingsPath + "/ledger-configurations");
+  await page.getByLabel("台账标识").fill("purchase");
+  expect(configurationReads).toEqual(["/api/v1/admin/ledger-configurations"]);
+  expect(permissionReads).toHaveLength(2);
   await page.getByLabel("台账名称").fill("采购申请");
   await page.getByRole("button", { name: "添加字段" }).click();
   await page.getByLabel("字段标识").fill("quantity");

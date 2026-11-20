@@ -26,9 +26,9 @@ import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
-const PermissionConfigPage = lazy(() => import("./features/platform/PermissionConfigPage").then(module => ({ default: module.PermissionConfigPage })));
+const PermissionConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.PermissionConfigPage })));
 const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
-const LedgerConfigPage = lazy(() => import("./features/ledgerConfig/LedgerConfigPage"));
+const LedgerConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.LedgerConfigPage })));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -56,11 +56,8 @@ interface PlaceholderPage {
   description: string;
 }
 
-interface PermissionsPage {
-  kind: "permissions" | "ledger-configurations" | "published-ledgers";
-  title: string;
-  description: string;
-}
+type SettingsKind = "permissions" | "ledger-configurations" | "published-ledgers";
+type SettingsPage = { [Kind in SettingsKind]: { kind: Kind; title: string } }[SettingsKind];
 
 interface RouteDef {
   /** 不含租户前缀的应用内路径。 */
@@ -68,16 +65,16 @@ interface RouteDef {
   application: ApplicationId;
   /** 仅用于界面呈现的权限摘要判断；服务端对每个请求仍须最终鉴权。 */
   permission: string;
-  page: LedgerPage | PlaceholderPage | PermissionsPage;
+  page: LedgerPage | PlaceholderPage | SettingsPage;
 }
 
 const ROUTES: readonly RouteDef[] = [
-  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账", description: "使用已发布台账。" } },
+  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账" } },
   {
     rest: "platform/ledger-configurations",
     application: "platform",
     permission: "ledger.configuration.read",
-    page: { kind: "ledger-configurations", title: "台账配置", description: "配置台账结构与版本。" },
+    page: { kind: "ledger-configurations", title: "台账配置" },
   },
   {
     rest: "safety/findings",
@@ -119,7 +116,7 @@ const ROUTES: readonly RouteDef[] = [
     rest: "platform/permissions",
     application: "platform",
     permission: "platform.permission.read",
-    page: { kind: "permissions", title: "权限配置", description: "按角色配置可使用的功能权限。" },
+    page: { kind: "permissions", title: "权限配置" },
   },
 ];
 
@@ -358,12 +355,9 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         onUnauthenticated={expire}
       />
     );
-  } else if (route.page.kind === "published-ledgers") {
+  } else if (route.page.kind === "published-ledgers" || route.page.kind === "ledger-configurations") {
     title = route.page.title;
-    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用业务台账。" /> : null;
-  } else if (route.page.kind === "ledger-configurations") {
-    title = route.page.title;
-    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后配置台账。" /> : null;
+    content = mode !== "http" ? <StatusPage title="需连接后端" description={route.page.kind === "published-ledgers" ? "请连接后端后使用业务台账。" : "请连接后端后配置台账。"} /> : null;
   } else if (route.page.kind === "permissions") {
     title = route.page.title;
     content = (
