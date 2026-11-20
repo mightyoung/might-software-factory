@@ -2,6 +2,15 @@
 
 使用工程锁定的 Flowable 8，在 PostgreSQL 18 的临时 schema 中创建事件模型、JSON 入站通道和验收流程。两个入站请求分别开启 A、B 两笔业务。A 的审批实例 ID 搭配 B 的批次不能推进流程，A 的正确组合只生成一项核对待办；另一笔仍在等待。
 
+
+入站样例使用合成的 CloudEvents 1.0 structured JSON。测试桥验证版本、类型、来源 URI 引用和事件 ID，并保留 `(source, id)` 供断言。它只把约定的 `data.instance`、`data.batch` 映射给 Flowable，不从事件数据授予租户或操作权限。无效信封在桥上拒绝；合规但实例和批次不匹配的事件不能唤醒节点。这不是生产入口，也不验证事件去重、持久投递或重试。
+
+只运行不访问数据库的信封契约测试：
+
+```sh
+./mvnw -o -f tools/event-registry/pom.xml -Dtest=StructuredReceiptEventTest test
+```
+
 在专用测试数据库上运行以下命令。账号须有建 schema 权限，测试结束会清理本次随机生成的 schema。
 
 ```sh
