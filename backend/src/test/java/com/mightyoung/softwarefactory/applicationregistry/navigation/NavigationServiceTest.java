@@ -200,6 +200,16 @@ class NavigationServiceTest {
         return new FindingReadAuthorizationSnapshot(c.actorId(),c.accountId(),"HUMAN","ACTIVE","ACTIVE","ACTIVE","ACTIVE",2,memberEpoch,scope);
     }
 
+    @Test void ledgerPublisherCanOpenConfigurationWithoutPermissionAdministration() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"ledger.configuration.publish")).thenReturn(true);
+        assertThat(service.bootstrap().applications()).extracting(NavigationService.ApplicationEntry::entryPath)
+                .containsExactly("platform/ledger-configurations");
+        assertThat(service.menu("platform").nodes()).extracting(NavigationService.MenuNode::permission)
+                .containsExactly("ledger.configuration.publish");
+    }
+
     @Test void configurablePermissionsDriveApplicationsAndMenuNodes() {
         var context = session();
         when(applications.findCurrent(context.tenantId(),"safety")).thenReturn(Optional.of(new TenantApplicationState(true,1)));

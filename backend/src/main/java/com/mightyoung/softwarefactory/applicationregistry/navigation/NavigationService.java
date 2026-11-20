@@ -39,7 +39,9 @@ public final class NavigationService {
     private static final List<NodeDef> NODES = List.of(
             new NodeDef("safety", "findings", "隐患管理", "safety/findings", "finding.read"),
             new NodeDef("equipment", "overview", "设备管理", "equipment/overview", "equipment.read"),
-            new NodeDef("platform", "permissions", "权限配置", "platform/permissions", "platform.permission.read"));
+            new NodeDef("platform", "permissions", "权限配置", "platform/permissions", "platform.permission.read"),
+            new NodeDef("platform", "ledger-configurations", "台账配置", "platform/ledger-configurations",
+                    List.of("ledger.configuration.read", "ledger.configuration.manage", "ledger.configuration.publish")));
     private final List<AppDef> apps;
     private final List<NodeDef> nodes;
     private final SessionContextResolver resolver;
