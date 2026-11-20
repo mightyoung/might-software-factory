@@ -61,6 +61,45 @@ class LedgerConfigurationPostgresTest {
         })).isInstanceOf(org.jooq.exception.DataAccessException.class);
         assertThat(repository.versions(tenant, key).getFirst().definition()).isEqualTo(complete());
     }
+    @Test void historicalDefinitionCanBeSavedAsAnIndependentUnpublishedLedger() {
+        String targetKey = key + "_copy";
+        Field quantity = new Field("quantity", "数量", "number", true);
+        Field note = new Field("note", "备注", "text", false);
+        var historical = new Definition("原台账", List.of(quantity, note), List.of("note", "quantity"), List.of("quantity"));
+        var latest = new Definition("源台账新版", List.of(note, new Field("quantity", "新数量", "number", true)),
+                List.of("quantity", "note"), List.of("note"));
+        tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 0L, historical)));
+        tx.execute(status -> repository.publish(tenant, actor, key, new PublishRequest(1L, 1L, null)));
+        tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 1L, latest)));
+        var originalHistory = repository.versions(tenant, key);
+        assertThat(originalHistory).extracting(Snapshot::version).containsExactly(2L, 1L);
+        assertThat(originalHistory.getFirst().definition()).isEqualTo(latest);
+        assertThat(originalHistory.getFirst().publishedVersion()).isEqualTo(1L);
+
+        var selected = originalHistory.getLast().definition();
+        // The copy UI submits the historical definition as a normal new-key save, not a same-ledger restore.
+        var copied = new Definition("独立副本", selected.fields(), selected.listFields(), selected.queryFields());
+        var saveCopy = new SaveRequest(UUID.randomUUID(), 0L, copied);
+        var created = tx.execute(status -> repository.save(tenant, actor, targetKey, saveCopy));
+        assertThat(created.key()).isEqualTo(targetKey);
+        assertThat(created.version()).isEqualTo(1L);
+        assertThat(created.definition()).isEqualTo(new Definition("独立副本", historical.fields(),
+                historical.listFields(), historical.queryFields()));
+        assertThat(created.publishedVersion()).isNull();
+        assertThat(created.sourceVersion()).isNull();
+        var replayed = tx.execute(status -> repository.save(tenant, actor, targetKey, saveCopy));
+        assertThat(replayed).isEqualTo(created);
+        assertThat(repository.versions(tenant, targetKey)).containsExactly(created);
+        assertThat(repository.versions(tenant, key)).isEqualTo(originalHistory);
+
+        var revisedCopy = new Definition("副本新版", copied.fields(), copied.listFields(), copied.queryFields());
+        tx.execute(status -> repository.save(tenant, actor, targetKey, new SaveRequest(UUID.randomUUID(), 1L, revisedCopy)));
+        var targetHistory = repository.versions(tenant, targetKey);
+        assertThat(targetHistory).extracting(Snapshot::version).containsExactly(2L, 1L);
+        assertThat(targetHistory.getFirst().publishedVersion()).isNull();
+        assertThat(targetHistory.getLast()).isEqualTo(created);
+        assertThat(repository.versions(tenant, key)).isEqualTo(originalHistory);
+    }
     @Test void twoEditorsCompeteForOneExpectedVersion() throws Exception {
         tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 0L, complete())));
         CountDownLatch start = new CountDownLatch(1);
