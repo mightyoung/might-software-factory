@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findingStates, type FindingState } from "../domain/finding";
 import type { components } from "./generated/finding-ledger";
+import type { components as ToolLoanContract, paths as ToolLoanPaths } from "./generated/tool-loans";
 
 /** 严格的类型相等：两边只要差一个成员，下面的赋值就无法通过类型检查。 */
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -31,3 +32,27 @@ describe("前端领域类型与后端契约对齐", () => {
     expect(frontendStateMatchesListContract && frontendStateMatchesDetailContract && pageSizesMatchContract).toBe(true);
   });
 });
+
+type LoanRecord = ToolLoanContract["schemas"]["LoanRecord"];
+type CreateLoan = ToolLoanContract["schemas"]["CreateRequest"];
+type ReviseLoan = ToolLoanContract["schemas"]["ReviseRequest"];
+type ScopedLoanPath = ToolLoanPaths["/api/v1/tooling/loan-applications/visibility/{visibility}/{id}"]["parameters"]["path"];
+
+export const loanRecordIdentifiersMatchContract: Equal<
+  Pick<LoanRecord, "id" | "organizationId" | "custodyScopeId" | "toolIds">,
+  { id: string; organizationId: string; custodyScopeId: string; toolIds: string[] }
+> = true;
+export const loanCommandIdentifiersMatchContract: Equal<
+  [
+    Pick<CreateLoan, "organizationId" | "custodyScopeId" | "toolIds">,
+    Pick<ReviseLoan, "organizationId" | "custodyScopeId" | "toolIds">,
+  ],
+  [
+    { organizationId: string; custodyScopeId: string; toolIds: string[] },
+    { organizationId: string; custodyScopeId: string; toolIds: string[] },
+  ]
+> = true;
+export const scopedLoanVisibilityMatchesContract: Equal<
+  ScopedLoanPath,
+  { visibility: "department" | "custody"; id: string }
+> = true;
