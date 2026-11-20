@@ -140,7 +140,8 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   expect(screen.getByRole("button", { name: "新增记录" })).toHaveAttribute("aria-disabled", "true");
   const retry = screen.getByRole("button", { name: "重试原操作" });
   fireEvent.click(retry);
-  await screen.findByText(/当前授权不允许/);
+  await screen.findByText("当前授权不允许此操作，原结果未确认。");
+  expect(screen.getByRole("button", { name: /^刷新台账$/ })).toHaveAttribute("aria-disabled", "true");
   expect(a.create).toHaveBeenCalledTimes(2);
   expect(vi.mocked(a.create).mock.calls[0]).toEqual(vi.mocked(a.create).mock.calls[1]);
   expect(quantity).toBeDisabled();
@@ -154,6 +155,47 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   expect(a.create).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("region", { name: "新增记录" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "新增记录" })).not.toHaveAttribute("aria-disabled", "true");
+});
+
+it("does not suggest refreshing an unresolved operation when the member cannot read records", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{ ...ledger, capabilities: { ...capabilities, read: false } }]);
+  vi.mocked(a.create)
+    .mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true))
+    .mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  render(<PublishedLedgersPage adapter={a} onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  const quantity = within(editor).getByLabelText("数量（必填）");
+  fireEvent.change(quantity, { target: { value: "7" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "保存记录" }));
+  fireEvent.click(await screen.findByRole("button", { name: "重试原操作" }));
+
+  await screen.findByText("当前授权不允许此操作，原结果未确认。");
+  expect(screen.queryByRole("button", { name: "只读刷新记录" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^刷新台账$/ })).toHaveAttribute("aria-disabled", "true");
+  expect(quantity).toBeDisabled();
+  expect(a.query).not.toHaveBeenCalled();
+  expect(a.create).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(a.create).mock.calls[1]).toEqual(vi.mocked(a.create).mock.calls[0]);
+});
+
+it("preserves the ordinary refresh guidance for a definitive first denial", async () => {
+  const a = adapter();
+  vi.mocked(a.create).mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  const quantity = within(editor).getByLabelText("数量（必填）");
+  fireEvent.change(quantity, { target: { value: "7" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "保存记录" }));
+
+  await screen.findByText("当前授权不允许此操作，请刷新台账核对权限。");
+  expect(screen.getByRole("button", { name: /^刷新台账$/ })).not.toHaveAttribute("aria-disabled", "true");
+  expect(screen.queryByRole("button", { name: "重试原操作" })).not.toBeInTheDocument();
+  expect(quantity).toBeEnabled();
+  expect(a.create).toHaveBeenCalledTimes(1);
 });
 
 it("does not offer writes to a reader", async () => {
