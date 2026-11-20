@@ -72,6 +72,8 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
   };
   const versions: Snapshot[] = [];
   let published: number | null = null;
+  let loseNextSaveResponse = false;
+  const receipts = new Map<string, { body: unknown; snapshot: Snapshot }>();
   await page.route("**/api/v1/admin/ledger-configurations**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "GET") {
@@ -101,6 +103,12 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
       });
       return;
     }
+    const existing = receipts.get(body.requestId);
+    if (existing) {
+      expect(body).toEqual(existing.body);
+      await route.fulfill({ json: existing.snapshot });
+      return;
+    }
     const definition = path.endsWith("/restore")
       ? versions.find((value) => value.version === body.sourceVersion)!
           .definition
@@ -115,6 +123,12 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
       savedBy: "配置员",
     };
     versions.unshift(next);
+    receipts.set(body.requestId, { body, snapshot: next });
+    if (loseNextSaveResponse) {
+      loseNextSaveResponse = false;
+      await route.abort();
+      return;
+    }
     await route.fulfill({ json: next });
   });
   await page.goto("/");
@@ -165,6 +179,35 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
   await expect(
     page.getByRole("status").filter({ hasText: "已发布版本 3" }),
   ).toBeVisible();
+  await page.getByLabel("台账名称").fill("回退后继续编辑");
+  const stay = page.waitForEvent("dialog");
+  await Promise.all([
+    stay.then((dialog) => dialog.dismiss()),
+    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
+  ]);
+  await expect(page.getByLabel("台账名称")).toHaveValue("回退后继续编辑");
+  const leave = page.waitForEvent("dialog");
+  await Promise.all([
+    leave.then((dialog) => dialog.accept()),
+    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
+  ]);
+  await expect(page.locator(".ledger-row").first()).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "台账配置" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "台账名称" })).toHaveValue("回退后继续编辑");
+
+  loseNextSaveResponse = true;
+  await page.getByRole("button", { name: "保存草稿" }).click();
+  await expect(page.getByRole("alert")).toContainText("操作未确认成功");
+  await page.goForward();
+  await expect(page.locator(".ledger-row").first()).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("textbox", { name: "台账名称" })).toHaveValue("回退后继续编辑");
+  await expect(page.getByRole("button", { name: "新建台账" })).toBeDisabled();
+  await page.getByRole("button", { name: "重试原操作" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "已保存草稿版本 4" })).toBeVisible();
+  expect(versions.map(({ version }) => version)).toEqual([4, 3, 2, 1]);
+
   for (const [theme, width] of [
     ["light", 1440],
     ["dark", 390],

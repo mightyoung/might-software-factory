@@ -1,6 +1,7 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLeaveGuard } from "../../routing/router";
 import { createHttpLedgerConfig } from "./model";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
@@ -24,6 +25,39 @@ const fieldTypes = {
   date: "日期",
   boolean: "是/否",
 };
+
+type Operation = {
+  action: "save" | "restore" | "publish";
+  key: string;
+  version: number;
+  sourceVersion?: number;
+  send: () => Promise<ConfigurationSnapshot>;
+};
+
+const orderedViews = [
+  { property: "listFields", label: "列表字段顺序" },
+  { property: "queryFields", label: "查询字段顺序" },
+] as const;
+
+function ConfigurationOrder({ definition }: { definition: LedgerConfiguration }) {
+  return (
+    <>
+      {orderedViews.map(({ property, label }) => (
+        <div className="config-order" key={property}>
+          <p>{label}</p>
+          {definition[property].length ? (
+            <ol aria-label={label}>
+              {definition[property].map((key, index) => {
+                const field = definition.fields.find((candidate) => candidate.key === key);
+                return <li key={index}>{field?.label ? `${field.label}（${key}）` : key}</li>;
+              })}
+            </ol>
+          ) : <p>无</p>}
+        </div>
+      ))}
+    </>
+  );
+}
 
 function ConfigurationPreview({
   definition,
@@ -62,6 +96,7 @@ function ConfigurationPreview({
           ))}
         </tbody>
       </table>
+      <ConfigurationOrder definition={definition} />
     </div>
   );
 }
@@ -71,8 +106,10 @@ export function LedgerConfigPage({
   canManage,
   canPublish,
   onUnauthenticated,
+  active = true,
 }: {
   adapter: LedgerConfigAdapter;
+  active?: boolean;
   canManage: boolean;
   canPublish: boolean;
   onUnauthenticated: () => void;
@@ -90,10 +127,25 @@ export function LedgerConfigPage({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const lifetime = useRef(0);
-  const pending = useRef<{ signature: string; id: string } | null>(null);
-  const dirty =
-    snapshot === null ||
-    JSON.stringify(draft) !== JSON.stringify(snapshot.definition);
+  const runningOperation = useRef(false);
+  const [recovery, setRecovery] = useState<Operation | null>(null);
+  const dirty = snapshot
+    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
+    : Boolean(key || draft.name || draft.fields.length);
+  const protectingOperation = runningOperation.current || recovery !== null;
+  const locked = busy || recovery !== null;
+  useLeaveGuard(
+    active && (dirty || protectingOperation),
+    protectingOperation
+      ? "配置操作尚未确认。继续浏览后，可在当前标签页返回台账配置核对或重试。确定离开吗？"
+      : "当前配置有未保存的修改。可在当前标签页返回继续编辑。确定离开吗？",
+  );
+  useLayoutEffect(() => {
+    if (!dirty && !protectingOperation) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [dirty, protectingOperation]);
 
   function failed(cause: unknown) {
     if (cause instanceof ApiError && cause.status === 401) {
@@ -108,7 +160,7 @@ export function LedgerConfigPage({
       );
     else if (cause instanceof ApiError && cause.status === 400)
       setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
-    else setError("操作未确认成功。请重试，保存重试会沿用同一请求标识。");
+    else setError("操作未确认成功，请稍后重试。");
   }
   useEffect(() => {
     const controller = new AbortController();
@@ -137,14 +189,11 @@ export function LedgerConfigPage({
   }, [adapter, loadAttempt]); // The adapter is recreated at the identity boundary.
 
   function discardAllowed() {
-    return (
-      !dirty ||
-      (!snapshot && !key && !draft.name && !draft.fields.length) ||
-      window.confirm("当前配置有未保存的修改，继续切换吗？")
-    );
+    if (locked || runningOperation.current) return false;
+    return !dirty || window.confirm("当前配置有未保存的修改，继续切换会丢弃输入。确定继续吗？");
   }
   async function select(item: ConfigurationSummary) {
-    if (busy || !discardAllowed()) return;
+    if (!discardAllowed()) return;
     const mine = lifetime.current;
     setBusy(true);
     setError("");
@@ -159,7 +208,6 @@ export function LedgerConfigPage({
       setDraft(latest.definition);
       setHistory(versions);
       setCompared(null);
-      pending.current = null;
     } catch (cause) {
       if (mine === lifetime.current) failed(cause);
     } finally {
@@ -167,7 +215,7 @@ export function LedgerConfigPage({
     }
   }
   function create() {
-    if (busy || !discardAllowed()) return;
+    if (!discardAllowed()) return;
     setKey("");
     setSnapshot(null);
     setDraft(empty());
@@ -175,7 +223,6 @@ export function LedgerConfigPage({
     setCompared(null);
     setError("");
     setNotice("");
-    pending.current = null;
   }
   function updateField(index: number, patch: Partial<LedgerField>) {
     setDraft((current) => {
@@ -203,51 +250,70 @@ export function LedgerConfigPage({
         : [...current[property], field],
     }));
   }
-  async function mutate(
-    action: "save" | "restore" | "publish",
-    sourceVersion?: number,
-  ) {
+  function mutate(action: Operation["action"], sourceVersion?: number) {
     if (
-      busy ||
+      locked || runningOperation.current ||
       !(action === "publish" ? canPublish : canManage) ||
       !key.trim() ||
       (action === "publish" && (dirty || !snapshot))
-    )
-      return;
-    const mine = lifetime.current;
+    ) return;
     const version = snapshot?.version ?? 0;
-    const signature = JSON.stringify([
-      action,
-      key,
-      version,
-      action === "save" ? draft : sourceVersion,
-    ]);
-    if (pending.current?.signature !== signature)
-      pending.current = { signature, id: crypto.randomUUID() };
+    const publishedVersion = snapshot?.publishedVersion ?? null;
+    // Capture the immutable request at the first explicit action. A retry cannot
+    // pick up another ledger, edited draft, new version, or idempotency key.
+    const id = action === "publish" ? null : crypto.randomUUID();
+    void runOperation({
+      action, key, version, sourceVersion,
+      send: () => action === "save"
+        ? adapter.save(key, draft, version, id!)
+        : action === "restore"
+          ? adapter.restore(key, sourceVersion!, version, id!)
+          : adapter.publish(key, version, publishedVersion),
+    });
+  }
+
+  async function runOperation(operation: Operation) {
+    const { action, key: operationKey, version, sourceVersion } = operation;
+    if (busy || runningOperation.current || !(action === "publish" ? canPublish : canManage)) return;
+    const mine = lifetime.current;
+    runningOperation.current = true;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const next =
-        action === "save"
-          ? await adapter.save(key, draft, version, pending.current.id)
-          : action === "restore"
-            ? await adapter.restore(
-                key,
-                sourceVersion!,
-                version,
-                pending.current.id,
-              )
-            : await adapter.publish(
-                key,
-                version,
-                snapshot?.publishedVersion ?? null,
-              );
+      let next;
+      try {
+        next = await operation.send();
+      } catch (cause) {
+        // Publish checks the draft head before its idempotent current-pointer test.
+        // A newer draft can therefore cause our previously successful retry to conflict.
+        if (!(recovery === operation && action === "publish" &&
+          cause instanceof ApiError && cause.status === 409 && cause.code === "VERSION_CONFLICT")) throw cause;
+        const versions = await adapter.versions(operationKey);
+        if (mine !== lifetime.current) return;
+        const latest = versions[0];
+        if (!latest) throw new Error("Empty configuration history");
+        setRecovery(null);
+        if (latest.publishedVersion !== version) {
+          setError("无法确认原发布结果，请重新打开此台账核对当前发布版本。");
+          return;
+        }
+        setSnapshot(latest);
+        setDraft(latest.definition);
+        setHistory(versions);
+        setCompared(null);
+        setItems((current) => [
+          { ...latest, latestVersion: latest.version },
+          ...current.filter((item) => item.key !== latest.key),
+        ]);
+        setNotice(`版本 ${version} 已发布；已载入最新草稿版本 ${latest.version}。`);
+        return;
+      }
       if (mine !== lifetime.current) return;
+      setRecovery(null);
       setSnapshot(next);
       setDraft(next.definition);
       setCompared(null);
-      pending.current = null;
       setHistory((current) =>
         action === "publish"
           ? current.map((entry) => ({
@@ -268,8 +334,21 @@ export function LedgerConfigPage({
             : `已保存草稿版本 ${next.version}。`,
       );
     } catch (cause) {
-      if (mine === lifetime.current) failed(cause);
+      if (mine !== lifetime.current) return;
+      const definitiveConflict =
+        cause instanceof ApiError && cause.status === 409 &&
+        cause.code === "VERSION_CONFLICT" && (action !== "publish" || recovery !== operation);
+      const unknownResult =
+        !(cause instanceof ApiError) || cause.status === 0 || cause.status >= 500 ||
+        (recovery === operation && !definitiveConflict);
+      setRecovery(unknownResult ? operation : null);
+      if (unknownResult && !(cause instanceof ApiError && cause.status === 401)) {
+        setError("操作未确认成功。重试将使用相同的版本、内容和请求标识（如适用）。");
+      } else {
+        failed(cause);
+      }
     } finally {
+      runningOperation.current = false;
       if (mine === lifetime.current) setBusy(false);
     }
   }
@@ -281,7 +360,7 @@ export function LedgerConfigPage({
           <Button
             label="新建台账"
             variant="secondary"
-            isDisabled={busy}
+            isDisabled={locked}
             onClick={create}
           />
         )}
@@ -291,6 +370,8 @@ export function LedgerConfigPage({
       {loadFailed && (
         <Button
           label="重新载入台账列表"
+          isDisabled={locked}
+
           variant="secondary"
           onClick={() => setLoadAttempt((value) => value + 1)}
         />
@@ -305,7 +386,7 @@ export function LedgerConfigPage({
             <button
               key={item.key}
               type="button"
-              disabled={busy}
+              disabled={locked}
               aria-current={snapshot?.key === item.key ? "true" : undefined}
               onClick={() => void select(item)}
             >
@@ -320,7 +401,7 @@ export function LedgerConfigPage({
           ))}
         </nav>
         <div className="config-editor">
-          <fieldset disabled={!canManage || busy || loading}>
+          <fieldset disabled={!canManage || locked || loading}>
             <legend>
               {snapshot ? `配置版本 ${snapshot.version}` : "新台账草稿"}
             </legend>
@@ -388,7 +469,7 @@ export function LedgerConfigPage({
                 <CheckboxInput
                   label="必填"
                   value={field.required}
-                  isDisabled={!canManage || busy}
+                  isDisabled={!canManage || locked}
                   onChange={() =>
                     updateField(index, { required: !field.required })
                   }
@@ -396,19 +477,19 @@ export function LedgerConfigPage({
                 <CheckboxInput
                   label="列表显示"
                   value={draft.listFields.includes(field.key)}
-                  isDisabled={!canManage || busy || !field.key}
+                  isDisabled={!canManage || locked || !field.key}
                   onChange={() => toggleView("listFields", field.key)}
                 />
                 <CheckboxInput
                   label="允许查询"
                   value={draft.queryFields.includes(field.key)}
-                  isDisabled={!canManage || busy || !field.key}
+                  isDisabled={!canManage || locked || !field.key}
                   onChange={() => toggleView("queryFields", field.key)}
                 />
                 <Button
                   label={`移除字段 ${index + 1}`}
                   variant="secondary"
-                  isDisabled={!canManage || busy}
+                  isDisabled={!canManage || locked}
                   onClick={() =>
                     setDraft((current) => ({
                       ...current,
@@ -430,7 +511,7 @@ export function LedgerConfigPage({
               <Button
                 label="添加字段"
                 variant="secondary"
-                isDisabled={busy || loading}
+                isDisabled={locked || loading}
                 onClick={() =>
                   setDraft((current) => ({
                     ...current,
@@ -443,12 +524,19 @@ export function LedgerConfigPage({
               />
             )}
           </fieldset>
+          {recovery && (
+            <Button
+              label="重试原操作"
+              isDisabled={busy || !(recovery.action === "publish" ? canPublish : canManage)}
+              onClick={() => void runOperation(recovery)}
+            />
+          )}
           {(canManage || canPublish) && (
             <div className="config-actions">
               {canManage && (
                 <Button
                   label={busy ? "处理中…" : "保存草稿"}
-                  isDisabled={busy || loading || !dirty || !key.trim()}
+                  isDisabled={locked || loading || !dirty || !key.trim()}
                   onClick={() => void mutate("save")}
                 />
               )}
@@ -457,7 +545,7 @@ export function LedgerConfigPage({
                   label="发布当前版本"
                   variant="secondary"
                   isDisabled={
-                    busy ||
+                    locked ||
                     dirty ||
                     !snapshot ||
                     snapshot.publishedVersion === snapshot.version
@@ -489,14 +577,14 @@ export function LedgerConfigPage({
                     <Button
                       label={`比较版本 ${entry.version}`}
                       variant="secondary"
-                      isDisabled={busy}
+                      isDisabled={locked}
                       onClick={() => setCompared(entry)}
                     />
                     {canManage && (
                       <Button
                         label={`恢复版本 ${entry.version}为新草稿`}
                         variant="secondary"
-                        isDisabled={busy}
+                        isDisabled={locked}
                         onClick={() => {
                           if (discardAllowed())
                             void mutate("restore", entry.version);
@@ -516,6 +604,10 @@ export function LedgerConfigPage({
                   ? "配置内容相同。"
                   : "配置内容不同，可核对下方两份配置。"}
               </p>
+              {orderedViews.map(({ property, label }) =>
+                JSON.stringify(compared.definition[property]) !== JSON.stringify(draft[property])
+                  ? <p key={property}>{label}已变化。</p> : null,
+              )}
               <div className="config-comparison">
                 <div>
                   <h3>历史版本 {compared.version}</h3>
@@ -535,6 +627,7 @@ export function LedgerConfigPage({
 }
 
 export default function HttpLedgerConfigPage(props: {
+  active?: boolean;
   canManage: boolean;
   canPublish: boolean;
   onUnauthenticated: () => void;
