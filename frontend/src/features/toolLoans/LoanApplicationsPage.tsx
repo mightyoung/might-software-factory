@@ -248,7 +248,7 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
       {loading && <p role="status">正在读取可借工装…</p>}
       <MultiItemRows itemLabel="工装" title="工装明细" addLabel="添加工装" emptyLabel="请选择工装" unavailableLabel="原选工装（请核对当前可借范围）" values={draft.tools} options={candidates.tools} disabled={locked || loading || !draft.scope} errors={rowErrors} onChange={tools => change({ tools })} />
     </>}
-    {action === "cancel" && <p>撤销后保留申请历史。用途为“{record?.purpose}”，共 {record?.toolIds.length} 件。</p>}
+    {action === "cancel" && currentRecord && <p>撤销后保留申请历史。用途为“{currentRecord.purpose}”，共 {currentRecord.toolIds.length} 件。申请版本：{currentRecord.version}。</p>}
     {error && <p role="alert">{error}</p>}
     {definitionLoading && <p role="status">正在读取申请字段…</p>}
     {draft.uncertain && !busy && <p role="status">此次提交结果尚未确认。请核对后使用原请求重试。</p>}
