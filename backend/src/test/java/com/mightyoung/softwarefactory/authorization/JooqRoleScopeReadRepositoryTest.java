@@ -53,6 +53,19 @@ class JooqRoleScopeReadRepositoryTest {
     }
 
     @Test
+    void generatedLedgerPermissionMatchesTheCatalogResourceAndFullLedgerCode() {
+        var bindings = new ArrayList<List<Object>>();
+        DSLContext values = DSL.using(SQLDialect.POSTGRES);
+        MockDataProvider provider = query -> {
+            bindings.add(Arrays.asList(query.bindings()));
+            return new MockResult[] {scopeRow(values)};
+        };
+        var repository = new JooqRoleScopeReadRepository(DSL.using(new MockConnection(provider), SQLDialect.POSTGRES));
+        repository.findActiveScopes(TENANT_ID, MEMBER_ID, Set.of(ORG_ID), Set.of(), Set.of(), "ledger.record.purchase.read");
+        assertThat(bindings.getFirst()).contains("ledger.record.purchase.read", "ledger_record", "read");
+    }
+
+    @Test
     void workflowActionScopesUseTheirOwnActionPermissionInsteadOfFindingRead() {
         List<String> statements = new ArrayList<>();
         List<List<Object>> bindings = new ArrayList<>();

@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.List;
 import java.util.UUID;
 
-@RestControllerAdvice(assignableTypes = LedgerConfigurationController.class)
+@RestControllerAdvice(assignableTypes = {LedgerConfigurationController.class, RuntimeLedgerCommandController.class, RuntimeLedgerReadController.class})
 public final class LedgerConfigurationExceptionHandler {
     @ExceptionHandler(LedgerConfigurationException.class)
     ResponseEntity<ErrorResponse> conflict(LedgerConfigurationException failure) {
