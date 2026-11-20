@@ -5,6 +5,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import com.mightyoung.softwarefactory.authorization.EffectivePermissions;
+import com.mightyoung.softwarefactory.authorization.OrdinaryLedgerQueryAuthorization;
 import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.IdentitySecurityTransaction;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
@@ -19,14 +20,17 @@ public final class RuntimeLedgerReadService {
     private final SessionContextResolver resolver;
     private final IdentitySecurityTransaction transaction;
     private final EffectivePermissions permissions;
+    private final OrdinaryLedgerQueryAuthorization queryAuthorization;
     private final TenantApplicationReadRepository applications;
     private final RuntimeLedgerReadRepository repository;
 
     public RuntimeLedgerReadService(SessionContextResolver resolver, IdentitySecurityTransaction transaction,
-            EffectivePermissions permissions, TenantApplicationReadRepository applications, RuntimeLedgerReadRepository repository) {
+            EffectivePermissions permissions, OrdinaryLedgerQueryAuthorization queryAuthorization,
+            TenantApplicationReadRepository applications, RuntimeLedgerReadRepository repository) {
         this.resolver = resolver;
         this.transaction = transaction;
         this.permissions = permissions;
+        this.queryAuthorization = queryAuthorization;
         this.applications = applications;
         this.repository = repository;
     }
@@ -46,8 +50,8 @@ public final class RuntimeLedgerReadService {
     public Page query(String key, Query query) {
         return guarded(context -> {
             Published published = repository.published(context.tenantId(), key);
-            if (!permissions.has(context, code(key, "read"))) throw denied();
-            Set<UUID> scope = permissions.readableOrganizations(context, code(key, "read"));
+            Set<UUID> scope = queryAuthorization.queryOrganizations(context, key)
+                    .orElseThrow(RuntimeLedgerReadService::denied);
             return repository.query(context.tenantId(), published, scope, query);
         });
     }

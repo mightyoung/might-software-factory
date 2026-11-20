@@ -1,6 +1,14 @@
 package com.mightyoung.softwarefactory.platformadmin;
 
-import java.time.Instant;
+import com.mightyoung.softwarefactory.applicationregistry.query.EntityQueryContract.ValidationException;
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
+import com.mightyoung.softwarefactory.authorization.EffectivePermissions;
+import com.mightyoung.softwarefactory.authorization.ManagedIdentitySecurityTransaction;
+import com.mightyoung.softwarefactory.authorization.OrdinaryLedgerQueryAuthorization;
+import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
+import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationState;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
@@ -14,6 +22,7 @@ import static com.mightyoung.softwarefactory.platformadmin.LedgerConfigurationMo
 import static com.mightyoung.softwarefactory.platformadmin.RuntimeLedgerCommandModels.*;
 import static com.mightyoung.softwarefactory.platformadmin.RuntimeLedgerReadModels.*;
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 @EnabledIfEnvironmentVariable(named="AUTHZ_CONFIG_PG_URL", matches=".+")
 class RuntimeLedgerReadPostgresTest {
@@ -68,4 +77,48 @@ class RuntimeLedgerReadPostgresTest {
             return null;
         });
     }
+
+    @Test void authorizedEmptyQueryValidatesNormallyAndCannotRevealAnyExistingRecord() {
+        tx.executeWithoutResult(status -> {
+            configurations.save(tenant, member, key, new SaveRequest(UUID.randomUUID(), 0L, initial));
+            configurations.publish(tenant, member, key, new PublishRequest(1L, 1L, null));
+            commands.create(tenant, member, key, new CreateRequest(UUID.randomUUID(), 1L, organization,
+                    Map.of("amount", 2, "secret", "first org")));
+            commands.create(tenant, member, key, new CreateRequest(UUID.randomUUID(), 1L, other,
+                    Map.of("amount", 3, "secret", "second org")));
+        });
+
+        // Real ordinary query/data transactions; this fixture supplies the authorization decision, not persisted RBAC.
+        var context = new CurrentTenantContext(UUID.randomUUID(), UUID.randomUUID(), tenant, member, 0, 0, 1);
+        var resolver = mock(SessionContextResolver.class);
+        when(resolver.currentTenant()).thenReturn(context);
+        var applications = mock(TenantApplicationReadRepository.class);
+        when(applications.findCurrentInCaller(tenant, "platform")).thenReturn(Optional.of(new TenantApplicationState(true, 1)));
+        var scopes = mock(OrdinaryLedgerQueryAuthorization.class);
+        when(scopes.queryOrganizations(context, key)).thenReturn(Optional.of(Set.of()));
+        var service = new RuntimeLedgerReadService(resolver,
+                new ManagedIdentitySecurityTransaction(source, manager, mock(AuthorizationWriteGuard.class)),
+                mock(EffectivePermissions.class), scopes, applications, reads);
+        var endpoint = new RuntimeLedgerReadController(service);
+
+        var filter = List.of(new Filter("amount", "gte", 1));
+        var sort = new Sort("amount", "asc");
+        var page = endpoint.query(key, new Query(2, 1, filter, sort));
+        assertThat(json.readTree(json.writeValueAsString(page))).isEqualTo(
+                json.readTree("""
+                        {"records":[],"total":0,"page":2,"size":1,"hasMore":false}
+                        """));
+        assertThatThrownBy(() -> endpoint.query(key, new Query(1, 1,
+                List.of(new Filter("secret", "eq", "ignored")), sort))).isInstanceOf(ValidationException.class);
+        assertThatThrownBy(() -> endpoint.query(key, new Query(1, 0, filter, sort))).isInstanceOf(ValidationException.class);
+
+        when(scopes.queryOrganizations(context, key)).thenReturn(Optional.of(Set.of(organization)));
+        var existing = endpoint.query(key, new Query(1, 1, filter, sort));
+        assertThat(existing.total()).isEqualTo(1);
+        assertThat(existing.records()).singleElement().satisfies(row -> {
+            assertThat(row.organizationId()).isEqualTo(organization);
+            assertThat(row.values()).containsExactlyEntriesOf(Map.of("amount", 2));
+        });
+    }
+
 }

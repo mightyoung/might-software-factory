@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.platformadmin;
 
 import com.mightyoung.softwarefactory.authorization.EffectivePermissions;
+import com.mightyoung.softwarefactory.authorization.OrdinaryLedgerQueryAuthorization;
 import com.mightyoung.softwarefactory.identity.*;
 import com.mightyoung.softwarefactory.tenancy.*;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ class RuntimeLedgerReadServiceTest {
     final CurrentTenantContext context = new CurrentTenantContext(UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),0,0,1);
     final SessionContextResolver resolver = mock(SessionContextResolver.class);
     final EffectivePermissions permissions = mock(EffectivePermissions.class);
+    final OrdinaryLedgerQueryAuthorization queryAuthorization = mock(OrdinaryLedgerQueryAuthorization.class);
     final TenantApplicationReadRepository applications = mock(TenantApplicationReadRepository.class);
     final RuntimeLedgerReadRepository repository = mock(RuntimeLedgerReadRepository.class);
     boolean guarded;
@@ -24,7 +26,7 @@ class RuntimeLedgerReadServiceTest {
         public <T> T execute(CurrentTenantContext c, Supplier<T> work) { guarded = true; return work.get(); }
         public void requireActive(CurrentTenantContext c) {}
     };
-    final RuntimeLedgerReadService service = new RuntimeLedgerReadService(resolver,transaction,permissions,applications,repository);
+    final RuntimeLedgerReadService service = new RuntimeLedgerReadService(resolver,transaction,permissions,queryAuthorization,applications,repository);
     final Published published = new Published("purchase",1,LedgerConfigurationWorkflowTest.withWorkflow(LedgerConfigurationWorkflowTest.linear()));
     RuntimeLedgerReadServiceTest() {
         when(resolver.currentTenant()).thenReturn(context);
@@ -41,6 +43,50 @@ class RuntimeLedgerReadServiceTest {
         when(applications.findCurrentInCaller(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(false,1)));
         assertThatThrownBy(service::catalog).isInstanceOf(AccessDeniedException.class);
     }
+    @Test void ordinaryQueryRoutePassesAnAuthorizedEmptyScopeThroughWithoutChangingOtherGrants() {
+        var request = new Query(2, 3, List.of(), null);
+        var empty = new Page(List.of(), 2, 3, 0, false);
+        when(queryAuthorization.queryOrganizations(context, "purchase")).thenReturn(Optional.of(Set.of()));
+        when(repository.query(context.tenantId(), published, Set.of(), request)).thenReturn(empty);
+
+        var response = new RuntimeLedgerReadController(service).query("purchase", request);
+        assertThat(response).isEqualTo(empty);
+        assertThat(response.page()).isEqualTo(2);
+        assertThat(response.size()).isEqualTo(3);
+        assertThat(response.total()).isZero();
+        assertThat(response.hasMore()).isFalse();
+        verify(queryAuthorization).queryOrganizations(context, "purchase");
+        verify(repository).query(context.tenantId(), published, Set.of(), request);
+        verifyNoInteractions(permissions);
+
+        when(repository.published(context.tenantId())).thenReturn(List.of(published));
+        assertThat(service.catalog().items()).isEmpty();
+        assertThatThrownBy(() -> service.definition("purchase")).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.detail("purchase", UUID.randomUUID())).isInstanceOf(AccessDeniedException.class);
+        verifyNoMoreInteractions(queryAuthorization);
+    }
+
+    @Test void ordinaryQueryUsesTheSingleDecisionWithoutFallbackOnDeniedUnavailableOrDisabled() {
+        var request = new Query(1, 20, List.of(), null);
+        var existingOrg = UUID.randomUUID();
+        when(queryAuthorization.queryOrganizations(context, "purchase"))
+                .thenReturn(Optional.empty()).thenThrow(new IllegalStateException("authority unavailable"))
+                .thenReturn(Optional.of(Set.of(existingOrg)));
+        assertThatThrownBy(() -> service.query("purchase", request)).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> service.query("purchase", request)).isInstanceOf(IllegalStateException.class);
+        verify(repository, never()).query(any(), any(), any(), any());
+        verifyNoInteractions(permissions);
+
+        var page = new Page(List.of(), 1, 20, 0, false);
+        when(repository.query(context.tenantId(), published, Set.of(existingOrg), request)).thenReturn(page);
+        assertThat(service.query("purchase", request)).isEqualTo(page);
+        verify(queryAuthorization, times(3)).queryOrganizations(context, "purchase");
+        when(applications.findCurrentInCaller(context.tenantId(), "platform"))
+                .thenReturn(Optional.of(new TenantApplicationState(false, 1)));
+        assertThatThrownBy(() -> service.query("purchase", request)).isInstanceOf(AccessDeniedException.class);
+        verifyNoMoreInteractions(queryAuthorization);
+    }
+
     @Test void catalogAndItemHaveOnlyTheEstablishedOrdinaryDefinitionFields() {
         when(permissions.has(context,"ledger.record.purchase.read")).thenReturn(true);
         when(repository.published(context.tenantId())).thenReturn(List.of(published));
