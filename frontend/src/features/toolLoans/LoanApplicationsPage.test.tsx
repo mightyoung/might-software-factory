@@ -69,6 +69,42 @@ it("preserves the pending request when the route unmounts before the response", 
   expect(adapter.command).toHaveBeenCalledTimes(2);
   expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(first);
 });
+it("refreshes a rejected in-flight creation after an authoritative definition conflict", async () => {
+  const { adapter, expire, view } = setup();
+  let failFirst!: (error: ApiError) => void;
+  const conflict = new ApiError(409, "DEFINITION_CONFLICT", null, false);
+  vi.mocked(adapter.command)
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+    .mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false))
+    .mockRejectedValueOnce(conflict);
+  await fill();
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  const first = vi.mocked(adapter.command).mock.calls[0];
+  view.unmount();
+  await act(async () => { failFirst(conflict); });
+
+  vi.mocked(adapter.definition).mockResolvedValue({ definitionVersion: "2", usageLocationRequired: true, usageLocationMaxLength: 200 });
+  render(<LoanApplicationsPage adapter={adapter} owner="tenant/member" permissions={grants} onUnauthenticated={expire} />);
+  fireEvent.click(await screen.findByRole("button", { name: "新建借用申请" }));
+  const retry = await screen.findByRole("button", { name: "核对后重试原请求" });
+  const refresh = "读取最新版本并核对后重新提交";
+  await waitFor(() => expect(retry).not.toBeDisabled());
+  fireEvent.click(retry);
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: refresh })).not.toBeInTheDocument();
+  expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(first);
+
+  fireEvent.click(retry);
+  fireEvent.click(await screen.findByRole("button", { name: refresh }));
+  expect(vi.mocked(adapter.command).mock.calls[2]).toEqual(first);
+  const location = await screen.findByLabelText("使用地点");
+  expect(screen.getByLabelText("借用用途")).toHaveValue("装配使用");
+  fireEvent.change(location, { target: { value: "二车间" } });
+  fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+  await screen.findByRole("heading", { name: "申请详情" });
+  expect(vi.mocked(adapter.command).mock.calls[3]![2]).toMatchObject({ definitionVersion: "2", usageLocation: "二车间" });
+  expect(vi.mocked(adapter.command).mock.calls[3]![3]).not.toEqual(first![3]);
+});
 it("reconciles a definitive stale version before sending a new revision", async () => {
   const { adapter } = setup([row]);vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));vi.mocked(adapter.detail).mockResolvedValue({ ...row, version: 2 });
   fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));fireEvent.click(await screen.findByRole("button", { name: "修订申请" }));

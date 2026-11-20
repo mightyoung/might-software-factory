@@ -214,7 +214,14 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
       discardEntityDraft(owner, draftKey);onSaved(result);
     } catch (failure) {
       if (mine !== lifetime.current) return;
-      setDraft(current => ({ ...current, pending: request, uncertain: unknownOutcome(failure) || (draft.uncertain && !(failure instanceof ApiError && failure.status === 409 && failure.code === "VERSION_CONFLICT" && action !== "create")) }));
+      // The server checks the same-key receipt before checking the published version
+      // for a supported create definition. Other errors may not have checked a receipt.
+      const knownCreateDefinition = request.action === "create" && (request.input.definitionVersion === "1" || request.input.definitionVersion === "2");
+      const canReconcile = failure instanceof ApiError && failure.status === 409 && (
+        (knownCreateDefinition && failure.code === "DEFINITION_CONFLICT")
+        || (request.action !== "create" && failure.code === "VERSION_CONFLICT")
+      );
+      setDraft(current => ({ ...current, pending: request, uncertain: unknownOutcome(failure) || (draft.uncertain && !canReconcile) }));
       setError(ledgerFailure(failure));
       if (failure instanceof ApiError) {
         const fields: Record<number, string> = {};
