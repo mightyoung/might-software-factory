@@ -1,17 +1,27 @@
 package com.mightyoung.softwarefactory.platformadmin;
 
+import com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard;
+import com.mightyoung.softwarefactory.authorization.EffectivePermissions;
+import com.mightyoung.softwarefactory.authorization.ManagedIdentitySecurityTransaction;
+import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
+import com.mightyoung.softwarefactory.identity.SessionContextResolver;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
+import com.mightyoung.softwarefactory.tenancy.TenantApplicationState;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.datasource.*;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import static com.mightyoung.softwarefactory.platformadmin.LedgerConfigurationModels.*;
 import static com.mightyoung.softwarefactory.platformadmin.RuntimeLedgerCommandModels.*;
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 @EnabledIfEnvironmentVariable(named="AUTHZ_CONFIG_PG_URL",matches=".+")
 class RuntimeLedgerCommandPostgresTest {
@@ -60,4 +70,60 @@ class RuntimeLedgerCommandPostgresTest {
             return dsl.execute("update public.ordinary_ledger_command set response_payload='{}' where tenant_id=? and configuration_key=?",tenant,key);
         })).isInstanceOf(org.jooq.exception.DataAccessException.class);
     }
+
+    @Test void recentlyChangedOrganizationScopeBlocksAnOldReceiptAndAnyNewWrite() {
+        UUID otherOrganization = UUID.fromString(System.getenv("AUTHZ_CONFIG_OTHER_ORG"));
+        assertThat(otherOrganization).isNotEqualTo(organization);
+        var definition = LedgerConfigurationServiceTest.complete();
+        tx.execute(status -> configurations.save(tenant, member, key, new SaveRequest(UUID.randomUUID(), 0L, definition)));
+        tx.execute(status -> configurations.publish(tenant, member, key, new PublishRequest(1L, 1L, null)));
+        var seeded = tx.execute(status -> records.create(tenant, member, key,
+                new CreateRequest(UUID.randomUUID(), 1L, organization, Map.of("quantity", 3))));
+
+        // This fixture supplies identities and current scopes, not a production policy engine or lock proof.
+        var context = new CurrentTenantContext(UUID.randomUUID(), UUID.randomUUID(), tenant, member, 0, 0, 1);
+        var resolver = mock(SessionContextResolver.class);
+        when(resolver.currentTenant()).thenReturn(context);
+        var applications = mock(TenantApplicationReadRepository.class);
+        when(applications.findCurrentInCaller(tenant, "platform")).thenReturn(Optional.of(new TenantApplicationState(true, 1)));
+        var permissions = mock(EffectivePermissions.class);
+        var scope = new AtomicReference<>(Set.of(organization));
+        when(permissions.readableOrganizations(context, RuntimeLedgerReadService.code(key, "update")))
+                .thenAnswer(invocation -> scope.get());
+        var guard = mock(AuthorizationWriteGuard.class);
+        var service = new RuntimeLedgerCommandService(resolver,
+                new ManagedIdentitySecurityTransaction(source, manager, guard), permissions, applications, records);
+
+        var original = new UpdateRequest(UUID.randomUUID(), 1L, Map.of("quantity", 7));
+        RecordView updated = service.update(key, seeded.id(), original);
+        assertThat(updated.version()).isEqualTo(2);
+        assertThat(updated.values()).containsEntry("quantity", 7);
+        assertStoredUpdateUnchanged(updated, original.requestId());
+
+        scope.set(Set.of(otherOrganization));
+        assertThatThrownBy(() -> service.update(key, seeded.id(), original)).isInstanceOf(AccessDeniedException.class);
+        assertStoredUpdateUnchanged(updated, original.requestId());
+
+        var newWrite = new UpdateRequest(UUID.randomUUID(), updated.version(), Map.of("quantity", 9));
+        assertThatThrownBy(() -> service.update(key, seeded.id(), newWrite)).isInstanceOf(AccessDeniedException.class);
+        assertStoredUpdateUnchanged(updated, original.requestId());
+
+        scope.set(Set.of(organization));
+        assertThat(service.update(key, seeded.id(), original)).isEqualTo(updated);
+        assertStoredUpdateUnchanged(updated, original.requestId());
+    }
+
+    private void assertStoredUpdateUnchanged(RecordView expected, UUID receiptId) {
+        tx.executeWithoutResult(status -> {
+            assertThat(records.lock(tenant, key, expected.id())).isEqualTo(expected);
+            var updateReceipts = dsl.fetch("select request_id from public.ordinary_ledger_command "
+                    + "where tenant_id=? and configuration_key=? and record_id=? and operation=?",
+                    tenant, key, expected.id(), "update:" + expected.id()).getValues(0, UUID.class);
+            assertThat(updateReceipts).containsExactly(receiptId);
+            assertThat(dsl.fetchCount(DSL.table("public.ordinary_ledger_command"),
+                    DSL.field("tenant_id", UUID.class).eq(tenant)
+                            .and(DSL.field("configuration_key", String.class).eq(key)))).isEqualTo(2);
+        });
+    }
+
 }
