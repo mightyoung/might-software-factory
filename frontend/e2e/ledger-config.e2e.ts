@@ -81,7 +81,6 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     savedBy: string;
   };
   const versions: Snapshot[] = [];
-  let published: number | null = null;
   let loseNextSaveResponse = false;
   const receipts = new Map<string, { body: unknown; snapshot: Snapshot }>();
   const histories = new Map<string, Snapshot[]>([["purchase", versions]]);
@@ -108,8 +107,8 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     const body = route.request().postDataJSON();
     expect(key).toBeTruthy();
     if (path.endsWith("/publish")) {
-      expect(body.expectedPublishedVersion).toBe(published);
-      published = body.version;
+      expect(body.expectedPublishedVersion).toBe(current[0]?.publishedVersion ?? null);
+      const published = body.version;
       current.forEach((entry) => { entry.publishedVersion = published; });
       await route.fulfill({
         json: { ...current[0], publishedVersion: published },
@@ -195,7 +194,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await expect(
     page.getByRole("status").filter({ hasText: "新草稿 3" }),
   ).toBeVisible();
-  expect(published).toBeNull();
+  expect(versions[0].publishedVersion).toBeNull();
   await expect(page.getByLabel("台账名称")).toHaveValue("采购申请");
   await page.getByRole("button", { name: "发布当前版本" }).focus();
   await page.keyboard.press("Enter");
@@ -299,4 +298,78 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       ),
     ).toBe(true);
   }
+  await test.step("独立调整列表与查询顺序，预览只读，保存后重新载入", async () => {
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "新建台账", exact: true }).click();
+    await page.getByLabel("台账标识").fill("ordered_purchase");
+    await page.getByLabel("台账名称").fill("排序采购验收");
+    for (const [key, label, type] of [
+      ["quantity", "数量", "number"],
+      ["due", "到期日期", "date"],
+      ["approved", "已确认", "boolean"],
+    ]) {
+      await page.getByRole("button", { name: "添加字段" }).click();
+      const field = page.locator(".config-field").last();
+      await field.getByLabel("字段标识").fill(key);
+      await field.getByLabel("字段名称").fill(label);
+      await field.getByLabel("字段类型").selectOption(type);
+      await field.getByRole("checkbox", { name: "列表显示" }).click();
+      await field.getByRole("checkbox", { name: "允许查询" }).click();
+    }
+    const moveQuantityDown = page.getByRole("button", { name: "下移列表字段 数量（quantity）", exact: true });
+    const moveQuantityUp = page.getByRole("button", { name: "上移列表字段 数量（quantity）", exact: true });
+    const columns = page.getByRole("table", { name: "列表预览" }).getByRole("columnheader");
+    await moveQuantityDown.focus();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "数量", "已确认"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "已确认", "数量"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await expect(moveQuantityDown).toBeDisabled();
+    await page.keyboard.press("Enter");
+    await expect(columns).toHaveText(["到期日期", "已确认", "数量"]);
+    await expect(moveQuantityDown).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(moveQuantityUp).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(moveQuantityUp).toBeFocused();
+    await page.getByRole("button", { name: "上移查询字段 已确认（approved）", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    const assertPreview = async () => {
+      await expect(page.getByRole("table", { name: "列表预览" }).getByRole("columnheader"))
+        .toHaveText(["到期日期", "数量", "已确认"]);
+      const query = page.getByRole("group", { name: "查询条件预览" });
+      expect(await query.locator("input, select").evaluateAll((controls) =>
+        controls.map((control) => control.getAttribute("type") ?? control.tagName.toLowerCase()),
+      )).toEqual(["number", "select", "date"]);
+      await expect(query.getByLabel("数量（查询预览）")).toHaveAttribute("type", "number");
+      await expect(query.getByLabel("到期日期（查询预览）")).toHaveAttribute("type", "date");
+      await expect(query.getByLabel("已确认（查询预览）")).toBeDisabled();
+    };
+    await assertPreview();
+    expect(histories.has("ordered_purchase")).toBe(false);
+    await page.getByRole("button", { name: "保存草稿" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "已保存草稿版本 1" })).toBeVisible();
+    expect(histories.get("ordered_purchase")![0].definition.listFields).toEqual(["due", "quantity", "approved"]);
+    expect(histories.get("ordered_purchase")![0].definition.queryFields).toEqual(["quantity", "approved", "due"]);
+    await page.reload();
+    await page.getByRole("navigation", { name: "已配置台账" })
+      .getByRole("button").filter({ hasText: "排序采购验收" }).click();
+    await assertPreview();
+    expect(histories.get("ordered_purchase")![0].publishedVersion).toBeNull();
+    await page.getByRole("button", { name: "发布当前版本" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "已发布版本 1" })).toBeVisible();
+    await page.reload();
+    await page.getByRole("navigation", { name: "已配置台账" })
+      .getByRole("button").filter({ hasText: "排序采购验收" }).click();
+    await assertPreview();
+    expect(histories.get("ordered_purchase")![0]).toMatchObject({
+      publishedVersion: 1,
+      definition: {
+        listFields: ["due", "quantity", "approved"],
+        queryFields: ["quantity", "approved", "due"],
+      },
+    });
+  });
 });

@@ -47,7 +47,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
       { key: "confirmed", label: "已确认", type: "boolean", required: false },
     ],
     listFields: ["quantity", "confirmed"],
-    queryFields: ["quantity"],
+    queryFields: ["confirmed", "quantity"],
   };
   const capabilities = { read: true, create: true, update: true, delete: true };
   const item = {
@@ -68,11 +68,13 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   } = null;
   let creates = 0;
   let firstCreate: unknown;
+  const queries: unknown[] = [];
   await page.route("**/api/v1/ledgers**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/v1/ledgers")
       return route.fulfill({ json: { items: [item] } });
-    if (path.endsWith("/query"))
+    if (path.endsWith("/query")) {
+      queries.push(route.request().postDataJSON());
       return route.fulfill({
         json: {
           records: record ? [record] : [],
@@ -82,6 +84,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
           hasMore: false,
         },
       });
+    }
     if (route.request().method() === "GET")
       return route.fulfill({ json: { record, definition, capabilities } });
     const body = route.request().postDataJSON();
@@ -123,6 +126,20 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await expect(page.getByRole("link", { name: "业务台账", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "采购申请", exact: true }).click();
   await expect(page.getByText("共 0 条记录")).toBeVisible();
+  const query = page.locator(".published-query");
+  await expect(query.locator("label").first().getByRole("combobox", { name: "已确认" })).toBeVisible();
+  await expect(query.locator("label").nth(1).getByRole("spinbutton", { name: "采购数量" })).toBeVisible();
+  await expect(page.getByRole("columnheader")).toHaveText(["采购数量", "已确认", "操作"]);
+  await query.getByRole("combobox", { name: "已确认" }).selectOption("false");
+  await query.getByRole("spinbutton", { name: "采购数量" }).fill("5");
+  await query.getByRole("button", { name: "查询", exact: true }).click();
+  await expect.poll(() => queries.at(-1)).toEqual({
+    page: 1, size: 20,
+    filters: [
+      { field: "quantity", operator: "eq", value: 5 },
+      { field: "confirmed", operator: "eq", value: false },
+    ],
+  });
   await page.getByRole("button", { name: "新增记录", exact: true }).click();
   let editor = page.getByRole("region", { name: "新增记录", exact: true });
   await editor.getByLabel("采购数量（必填）").fill("5");
