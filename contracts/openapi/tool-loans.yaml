@@ -1012,7 +1012,7 @@ paths:
                 $ref: '#/components/schemas/Error'
   /api/v1/tooling/loan-applications/visibility/{visibility}:
     parameters:
-    - &id001
+    - &scopedLoanVisibilityPathParameter
       name: visibility
       in: path
       required: true
@@ -1073,7 +1073,7 @@ paths:
                 $ref: '#/components/schemas/Error'
   /api/v1/tooling/loan-applications/visibility/{visibility}/{id}:
     parameters:
-    - *id001
+    - *scopedLoanVisibilityPathParameter
     - name: id
       in: path
       required: true

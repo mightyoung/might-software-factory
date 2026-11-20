@@ -343,19 +343,22 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         LoanRecord: {
-            id: unknown;
+            /** Format: uuid */
+            id: string;
             /** Format: int64 */
             version: number;
             /** @enum {string} */
             state: "PENDING_ISSUE" | "WITHDRAWN" | "ISSUED" | "SETTLED";
             /** @description Nonblank historical definition version bound to this loan. Return and receipt use the stored version without rebinding the loan to the current creation definition. */
             definitionVersion: string;
-            organizationId: unknown;
-            custodyScopeId: unknown;
+            /** Format: uuid */
+            organizationId: string;
+            /** Format: uuid */
+            custodyScopeId: string;
             /** @description Required for V2; V1 retains its original definition without this field. */
             usageLocation?: string | null;
             purpose: string;
-            toolIds: unknown[];
+            toolIds: string[];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -369,22 +372,26 @@ export interface components {
         CreateRequest: {
             /** @enum {string} */
             definitionVersion: "1" | "2";
-            organizationId: unknown;
-            custodyScopeId: unknown;
+            /** Format: uuid */
+            organizationId: string;
+            /** Format: uuid */
+            custodyScopeId: string;
             /** @description Required for V2; V1 retains its original definition without this field. */
             usageLocation?: string;
             purpose: string;
-            toolIds: unknown[];
+            toolIds: string[];
         } & unknown;
         ReviseRequest: {
             /** @enum {string} */
             definitionVersion: "1" | "2";
-            organizationId: unknown;
-            custodyScopeId: unknown;
+            /** Format: uuid */
+            organizationId: string;
+            /** Format: uuid */
+            custodyScopeId: string;
             /** @description Required for V2; V1 retains its original definition without this field. */
             usageLocation?: string;
             purpose: string;
-            toolIds: unknown[];
+            toolIds: string[];
             /** Format: int64 */
             expectedVersion: number;
         } & unknown;
@@ -395,13 +402,16 @@ export interface components {
             expectedVersion: number;
         };
         Option: {
-            id: unknown;
+            /** Format: uuid */
+            id: string;
             label: string;
         };
         CustodyScope: {
-            id: unknown;
+            /** Format: uuid */
+            id: string;
             label: string;
-            organizationId: unknown;
+            /** Format: uuid */
+            organizationId: string;
         };
         Candidates: {
             departments: components["schemas"]["Option"][];
