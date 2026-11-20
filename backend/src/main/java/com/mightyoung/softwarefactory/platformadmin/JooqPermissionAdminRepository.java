@@ -24,6 +24,13 @@ import java.util.UUID;
 
 @Repository
 public final class JooqPermissionAdminRepository implements PermissionAdminRepository {
+    // A permission code is global, but a published ledger and all role grants belong to a tenant.
+    private static final String VISIBLE_PERMISSION = """
+            (p.resource_type <> 'ledger_record' or exists (
+                select 1 from public.ledger_configuration c
+                 where c.tenant_id = ? and c.published_version is not null
+                   and c.configuration_key = split_part(p.code, '.', 3)))
+            """;
     private final DSLContext dsl;
     private final TransactionTemplate read;
 
@@ -38,8 +45,22 @@ public final class JooqPermissionAdminRepository implements PermissionAdminRepos
     public List<CatalogItem> catalog(UUID tenantId) {
         return read.execute(status -> {
             scope(tenantId);
-            return dsl.fetch("select code, application_key, label from public.permission "
-                            + "where application_key is not null order by sort_order, code")
+            return dsl.fetch("""
+                    select p.code, p.application_key,
+                           case when p.resource_type='ledger_record' then
+                                (s.definition->>'name') || ' · ' || case p.action
+                                  when 'read' then '查询记录' when 'create' then '新增草稿'
+                                  when 'update' then '编辑草稿' when 'delete' then '删除草稿' end
+                                else p.label end as label
+                      from public.permission p
+                      left join public.ledger_configuration c on p.resource_type='ledger_record'
+                        and c.configuration_key=split_part(p.code,'.',3) and c.tenant_id=?
+                      left join public.ledger_configuration_snapshot s on s.tenant_id=c.tenant_id
+                        and s.configuration_key=c.configuration_key and s.version=c.published_version
+                     where p.application_key is not null
+                       and (p.resource_type <> 'ledger_record' or s.version is not null)
+                     order by p.sort_order,p.code
+                    """, tenantId)
                     .map(r -> new CatalogItem(r.get(0, String.class), r.get(1, String.class), r.get(2, String.class)));
         });
     }
@@ -73,7 +94,7 @@ public final class JooqPermissionAdminRepository implements PermissionAdminRepos
         }
         Map<String, UUID> catalog = new LinkedHashMap<>();
         Map<String, UUID> allIds = new LinkedHashMap<>();
-        for (Record r : dsl.fetch("select code, id, application_key from public.permission")) {
+        for (Record r : dsl.fetch("select code, id, application_key from public.permission p where " + VISIBLE_PERMISSION, tenantId)) {
             allIds.put(r.get(0, String.class), r.get(1, UUID.class));
             if (r.get(2, String.class) != null) catalog.put(r.get(0, String.class), r.get(1, UUID.class));
         }

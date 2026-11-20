@@ -25,6 +25,7 @@ import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
 const PermissionConfigPage = lazy(() => import("./features/platform/PermissionConfigPage").then(module => ({ default: module.PermissionConfigPage })));
+const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
 const LedgerConfigPage = lazy(() => import("./features/ledgerConfig/LedgerConfigPage"));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
@@ -54,7 +55,7 @@ interface PlaceholderPage {
 }
 
 interface PermissionsPage {
-  kind: "permissions" | "ledger-configurations";
+  kind: "permissions" | "ledger-configurations" | "published-ledgers";
   title: string;
   description: string;
 }
@@ -69,6 +70,7 @@ interface RouteDef {
 }
 
 const ROUTES: readonly RouteDef[] = [
+  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账", description: "使用已发布台账。" } },
   {
     rest: "platform/ledger-configurations",
     application: "platform",
@@ -323,6 +325,9 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         onUnauthenticated={expire}
       />
     );
+  } else if (route.page.kind === "published-ledgers") {
+    title = route.page.title;
+    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后使用业务台账。" /> : <Suspense fallback={<p role="status">正在载入业务台账…</p>}><PublishedLedgersPage key={identityKey} onUnauthenticated={expire} /></Suspense>;
   } else if (route.page.kind === "ledger-configurations") {
     title = route.page.title;
     content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后配置台账。" /> : (
