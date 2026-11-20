@@ -32,14 +32,23 @@ AUTHZ_PLAN_FILE=/tmp/cerbos-decisions.json tools/dual-auth/data/run-ci.sh
 AUTHZ_PLAN_FILE=/tmp/cerbos-decisions.json tools/dual-auth/data/run-ci.sh ./mvnw -f tools/dual-auth/query/pom.xml test
 ```
 
-The runner makes real `CheckResources` and `PlanResources` calls for 14 cases.
+The runner makes real `CheckResources` and `PlanResources` calls for 14 baseline cases and two separate nullable-attribute cases.
 It checks the decisions against explicit expected record IDs, then evaluates
 the returned plans over the same records. Unknown plan operators fail the run.
-The output contains `records` and `cases`. Each case contains its action, the
+The output separates baseline `records`/`cases` from `nullableRecords`/`nullableCases`. Each case contains its action, the
 unmodified `filter`, and `expectedIds` obtained from individual engine decisions.
 The raw check and plan responses are included for inspection. The SQL harness
 can consume this file to verify database filtering, ordering, paging and counts.
 Map the policy attribute `record_id` to the record's `id` column.
+
+The nullable fixture keeps tenant and id required. It sends otherwise valid records
+with department/owner omitted and with each explicitly null, plus matching
+department/owner positive controls. A missing individual engine decision is not
+a denial. The JDBC fixture binds both missing and explicit null as SQL NULL and
+compares the exact IDs, count, and one-row pages with the individual engine
+decisions. Unsupported plan operands or literal null are not translated; this
+does not establish null-aware authorization for an application's schema or add
+a null operator to the permitted plan subset.
 
 The revoke cases supply refreshed principal data after removing the temporary
 record grant. They prove that Cerbos uses those current facts. Application
