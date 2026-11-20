@@ -83,6 +83,7 @@ export function LedgerConfigPage({
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
+  const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -159,6 +160,7 @@ export function LedgerConfigPage({
       setDraft(latest.definition);
       setHistory(versions);
       setCompared(null);
+      setCopySource(null);
       pending.current = null;
     } catch (cause) {
       if (mine === lifetime.current) failed(cause);
@@ -173,6 +175,22 @@ export function LedgerConfigPage({
     setDraft(empty());
     setHistory([]);
     setCompared(null);
+    setCopySource(null);
+    setError("");
+    setNotice("");
+    pending.current = null;
+  }
+  function copy(entry: ConfigurationSnapshot) {
+    if (!canManage || busy || !discardAllowed()) return;
+    setKey("");
+    setSnapshot(null);
+    setDraft({
+      ...structuredClone(entry.definition),
+      name: `${entry.definition.name}副本`,
+    });
+    setHistory([]);
+    setCompared(null);
+    setCopySource(entry);
     setError("");
     setNotice("");
     pending.current = null;
@@ -214,6 +232,16 @@ export function LedgerConfigPage({
       (action === "publish" && (dirty || !snapshot))
     )
       return;
+    if (action === "save" && copySource) {
+      if (key.trim() === copySource.key) {
+        setError("新台账必须使用与来源不同的标识。");
+        return;
+      }
+      if (items.some((item) => item.key === key.trim())) {
+        setError("新台账标识已存在，请使用其他标识。");
+        return;
+      }
+    }
     const mine = lifetime.current;
     const version = snapshot?.version ?? 0;
     const signature = JSON.stringify([
@@ -247,6 +275,7 @@ export function LedgerConfigPage({
       setSnapshot(next);
       setDraft(next.definition);
       setCompared(null);
+      setCopySource(null);
       pending.current = null;
       setHistory((current) =>
         action === "publish"
@@ -268,7 +297,13 @@ export function LedgerConfigPage({
             : `已保存草稿版本 ${next.version}。`,
       );
     } catch (cause) {
-      if (mine === lifetime.current) failed(cause);
+      if (mine === lifetime.current) {
+        if (copySource && cause instanceof ApiError && cause.status === 409)
+          setError(
+            "新台账标识已被使用。你的输入已保留，请使用其他标识后重新保存。",
+          );
+        else failed(cause);
+      }
     } finally {
       if (mine === lifetime.current) setBusy(false);
     }
@@ -296,6 +331,12 @@ export function LedgerConfigPage({
         />
       )}
       {notice && <p role="status">{notice}</p>}
+      {copySource && (
+        <p role="status">
+          已从台账 {copySource.definition.name}（{copySource.key}）的版本{" "}
+          {copySource.version} 复制配置，请填写新台账标识并保存草稿。
+        </p>
+      )}
       <div className="config-layout">
         <nav aria-label="已配置台账" className="config-list">
           {items.length === 0 && !loading && !loadFailed && (
@@ -492,6 +533,14 @@ export function LedgerConfigPage({
                       isDisabled={busy}
                       onClick={() => setCompared(entry)}
                     />
+                    {canManage && (
+                      <Button
+                        label={`复制版本 ${entry.version}为新台账`}
+                        variant="secondary"
+                        isDisabled={busy}
+                        onClick={() => copy(entry)}
+                      />
+                    )}
                     {canManage && (
                       <Button
                         label={`恢复版本 ${entry.version}为新草稿`}
