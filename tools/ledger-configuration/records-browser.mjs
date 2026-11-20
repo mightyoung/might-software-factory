@@ -12,6 +12,10 @@ const key = "sample_" + randomUUID().replaceAll("-", "");
 const name = "采购申请 " + key;
 const base = "/api/v1/admin/ledger-configurations/" + key;
 const runtime = "/api/v1/ledgers/" + key;
+const copyKey = "copy_" + randomUUID().replaceAll("-", "");
+const copyName = "批次验收 " + copyKey;
+const copyBase = "/api/v1/admin/ledger-configurations/" + copyKey;
+const copyRuntime = "/api/v1/ledgers/" + copyKey;
 const definition = {
   name, fields: [{ key: "quantity", label: "数量", type: "number", required: true }],
   listFields: ["quantity"], queryFields: ["quantity"]
@@ -67,6 +71,55 @@ try {
     const v2 = { ...definition, fields: [{ ...definition.fields[0], label: "采购数量" }] };
     await api(admin, "POST", base + "/versions", { requestId: randomUUID(), expectedVersion: 1, definition: v2 });
     await api(admin, "POST", base + "/publish", { version: 2, expectedVersion: 2, expectedPublishedVersion: 1 });
+    const adminPrefix = new URL(admin.url()).pathname.split("/").slice(0, 3).join("/");
+    await admin.goto(adminPrefix + "/platform/ledger-configurations");
+    await admin.getByRole("navigation", { name: "已配置台账" }).getByRole("button").filter({ hasText: name }).click();
+    await admin.getByRole("button", { name: "复制版本 1为新台账", exact: true }).click();
+    await expect(admin.getByLabel("台账标识")).toHaveValue("");
+    await expect(admin.getByLabel("字段名称")).toHaveValue("数量");
+    await admin.getByLabel("台账标识").fill(copyKey);
+    await admin.getByLabel("台账名称").fill(copyName);
+    const copyAction = async (label, endpoint) => {
+      const [response] = await Promise.all([
+        admin.waitForResponse(response => response.request().method() === "POST"
+          && new URL(response.url()).pathname === copyBase + "/" + endpoint),
+        admin.getByRole("button", { name: label, exact: true }).click()
+      ]);
+      assert.equal(response.status(), 200, await response.text());
+      return response.json();
+    };
+    const copied = await copyAction("保存草稿", "versions");
+    assert.equal(copied.version, 1);
+    assert.equal(copied.publishedVersion, null);
+    assert.deepEqual(copied.definition, { ...definition, name: copyName });
+    const copyCodes = ["read", "create", "update", "delete"].map(action => "ledger.record." + copyKey + "." + action);
+    assert.ok(!(await api(admin, "GET", "/api/v1/admin/permissions")).items.some(item => copyCodes.includes(item.code)));
+    assert.ok(!(await api(reader, "GET", "/api/v1/ledgers")).items.some(item => item.key === copyKey));
+    await admin.getByLabel("字段名称").fill("验收数量");
+    assert.equal((await copyAction("保存草稿", "versions")).version, 2);
+    assert.equal((await copyAction("发布当前版本", "publish")).publishedVersion, 2);
+    const originalVersions = (await api(admin, "GET", base + "/versions")).versions;
+    assert.equal(originalVersions.length, 2);
+    assert.equal(originalVersions[0].definition.fields[0].label, "采购数量");
+    assert.equal(originalVersions[0].publishedVersion, 2);
+    assert.ok(!(await api(reader, "GET", "/api/v1/ledgers")).items.some(item => item.key === copyKey));
+    await api(reader, "GET", copyRuntime, undefined, 403);
+    current = await permissions(admin, current, [...current.permissionCodes, ...copyCodes.slice(0, 2)]);
+    const copyEntry = await api(reader, "GET", copyRuntime);
+    const copyQuery = () => api(reader, "POST", copyRuntime + "/records/query", { page: 1, size: 10, filters: [] });
+    assert.equal((await copyQuery()).records.length, 0);
+    await api(reader, "GET", copyRuntime + "/records/" + record.id, undefined, 404);
+    const copiedRecord = await api(reader, "POST", copyRuntime + "/records", {
+      requestId: randomUUID(), definitionVersion: 2, organizationId: copyEntry.organizations[0].id,
+      values: { quantity: 7 }
+    });
+    assert.equal(copiedRecord.definitionVersion, 2);
+    assert.notEqual(copiedRecord.id, record.id);
+    await api(reader, "PUT", copyRuntime + "/records/" + copiedRecord.id,
+      { requestId: randomUUID(), expectedVersion: 1, values: { quantity: 8 } }, 403);
+    assert.equal((await query()).records[0].values.quantity, 42);
+    assert.equal((await copyQuery()).records[0].values.quantity, 7);
+
     await reader.getByRole("button", { name: "查看记录" }).click();
     await reader.getByRole("button", { name: "编辑草稿" }).click();
     const detail = reader.getByRole("region", { name: "记录详情", exact: true });
@@ -83,7 +136,11 @@ try {
     reader.once("dialog", dialog => dialog.accept());
     await reader.getByRole("button", { name: "删除草稿" }).click();
     await expect(reader.getByText("共 0 条记录")).toBeVisible();
-    console.log("Chrome/HTTPS: published definition, granted four actions, created and edited a V1 record after V2 publication, revoked edit, deleted draft.", key);
+    assert.equal((await copyQuery()).records[0].values.quantity, 7);
+    const copyVersions = (await api(admin, "GET", copyBase + "/versions")).versions;
+    assert.deepEqual(copyVersions.map(version => version.version), [2, 1]);
+    assert.equal(copyVersions[0].definition.fields[0].label, "验收数量");
+    console.log("Chrome/HTTPS: copied saved V1 into an independent ledger, published separately, verified independent history, records and action grants; edited source V1 after V2 publication, revoked edit and deleted source draft.", key, copyKey);
   } finally {
     await permissions(admin, current, role.permissionCodes);
   }

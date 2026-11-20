@@ -49,6 +49,171 @@ afterEach(() => {
 });
 
 describe("LedgerConfigPage", () => {
+  it("copies a saved historical version into an independent first draft", async () => {
+    const api = adapter();
+    const second = {
+      ...first,
+      version: 2,
+      publishedVersion: 2,
+      definition: { ...first.definition, name: "新版采购" },
+    };
+    vi.mocked(api.versions).mockResolvedValue([second, first]);
+    vi.mocked(api.save).mockImplementation(async (key, definition) => ({
+      ...first,
+      key,
+      definition,
+    }));
+    render(
+      <LedgerConfigPage
+        adapter={api}
+        canManage
+        canPublish
+        onUnauthenticated={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.change(await screen.findByLabelText("台账名称"), {
+      target: { value: "未保存的更改" },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    expect(
+      screen.getByText(/已从台账 采购申请（purchase）的版本 1/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("台账标识")).toHaveValue("");
+    expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请副本");
+    expect(
+      screen.queryByRole("region", { name: "版本历史" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发布当前版本" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    fireEvent.change(screen.getByLabelText("台账标识"), {
+      target: { value: "purchase_copy" },
+    });
+    fireEvent.change(screen.getByLabelText("字段名称"), {
+      target: { value: "复制数量" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await screen.findByText("已保存草稿版本 1。");
+    expect(api.save).toHaveBeenCalledWith(
+      "purchase_copy",
+      {
+        ...first.definition,
+        name: "采购申请副本",
+        fields: [{ ...first.definition.fields[0], label: "复制数量" }],
+      },
+      0,
+      expect.any(String),
+    );
+    expect(first.definition.fields[0]?.label).toBe("数量");
+    expect(api.publish).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已从台账/)).not.toBeInTheDocument();
+  });
+  it("retries a copy whose result is unknown without changing destination or request ID", async () => {
+    const a = adapter();
+    vi.mocked(a.save)
+      .mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true))
+      .mockResolvedValueOnce({
+        ...first, key: "purchase_copy", version: 1, publishedVersion: null,
+      });
+    render(<LedgerConfigPage adapter={a} canManage canPublish onUnauthenticated={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "复制版本 1为新台账" }));
+    const key = screen.getByLabelText("台账标识");
+    fireEvent.change(key, { target: { value: "purchase_copy" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await screen.findByText(/操作未确认成功/);
+    expect(key).toBeDisabled();
+    expect(key).toHaveValue("purchase_copy");
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+    await waitFor(() => expect(a.save).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(a.save).mock.calls[0]).toEqual(vi.mocked(a.save).mock.calls[1]);
+    expect(a.publish).not.toHaveBeenCalled();
+  });
+  it("keeps a dirty source when copying is cancelled and rejects its existing key", async () => {
+    const api = adapter();
+    vi.mocked(api.list).mockResolvedValue([
+      { ...first, latestVersion: 1 },
+      {
+        ...first,
+        key: "existing",
+        definition: { ...first.definition, name: "已有台账" },
+        latestVersion: 1,
+      },
+    ]);
+    render(
+      <LedgerConfigPage
+        adapter={api}
+        canManage
+        canPublish={false}
+        onUnauthenticated={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.change(await screen.findByLabelText("台账名称"), {
+      target: { value: "待保存" },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    expect(screen.getByLabelText("台账名称")).toHaveValue("待保存");
+    expect(screen.getByLabelText("台账标识")).toHaveValue("purchase");
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    fireEvent.change(screen.getByLabelText("台账标识"), {
+      target: { value: "purchase" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "新台账必须使用与来源不同的标识。",
+    );
+    fireEvent.change(screen.getByLabelText("台账标识"), {
+      target: { value: "existing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "新台账标识已存在，请使用其他标识。",
+    );
+    expect(api.save).not.toHaveBeenCalled();
+  });
+  it("preserves the copied input and request identifier after unknown results and key collisions", async () => {
+    const api = adapter();
+    vi.mocked(api.save)
+      .mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true))
+      .mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false))
+      .mockResolvedValueOnce({ ...first, key: "purchase_retry" });
+    render(
+      <LedgerConfigPage
+        adapter={api}
+        canManage
+        canPublish={false}
+        onUnauthenticated={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "复制版本 1为新台账" }));
+    fireEvent.change(screen.getByLabelText("台账标识"), {
+      target: { value: "purchase_copy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await screen.findByText(/操作未确认成功/);
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+    await screen.findByText(/新台账标识已被使用/);
+    expect(screen.getByLabelText("台账标识")).toHaveValue("purchase_copy");
+    expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请副本");
+    expect(vi.mocked(api.save).mock.calls[0]?.[3]).toBe(
+      vi.mocked(api.save).mock.calls[1]?.[3],
+    );
+    fireEvent.change(screen.getByLabelText("台账标识"), {
+      target: { value: "purchase_retry" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(api.save).mock.calls[2]?.[3]).not.toBe(
+      vi.mocked(api.save).mock.calls[1]?.[3],
+    );
+  });
   it("retries a failed list load without creating a draft version", async () => {
     const api = adapter();
     vi.mocked(api.list).mockRejectedValueOnce(
@@ -249,6 +414,9 @@ describe("LedgerConfigPage", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "恢复版本 1为新草稿" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "复制版本 1为新台账" }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "发布当前版本" }));
     await waitFor(() =>

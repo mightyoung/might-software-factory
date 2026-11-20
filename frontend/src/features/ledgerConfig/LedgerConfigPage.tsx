@@ -120,6 +120,7 @@ export function LedgerConfigPage({
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
+  const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -136,9 +137,7 @@ export function LedgerConfigPage({
   const locked = busy || recovery !== null;
   useUnsavedGuard(
     dirty || protectingOperation,
-    protectingOperation
-      ? "配置操作尚未确认。继续浏览后，可在当前标签页返回台账配置核对或重试。确定离开吗？"
-      : "当前配置有未保存的修改。可在当前标签页返回继续编辑。确定离开吗？",
+    (protectingOperation ? "配置操作尚未确认。" : "配置尚未保存。") + "可在此标签页返回。确定离开？",
     active,
   );
 
@@ -185,7 +184,19 @@ export function LedgerConfigPage({
 
   function discardAllowed() {
     if (locked || runningOperation.current) return false;
-    return !dirty || window.confirm("当前配置有未保存的修改，继续切换会丢弃输入。确定继续吗？");
+    return !dirty || window.confirm("切换会丢弃未保存的配置。确定切换？");
+  }
+  function showSnapshot(next: ConfigurationSnapshot) {
+    setSnapshot(next);
+    setDraft(next.definition);
+    setCompared(null);
+    setCopySource(null);
+  }
+  function updateDirectory(next: ConfigurationSnapshot) {
+    setItems((current) => [
+      { ...next, latestVersion: next.version },
+      ...current.filter((item) => item.key !== next.key),
+    ]);
   }
   async function select(item: ConfigurationSummary) {
     if (!discardAllowed()) return;
@@ -199,21 +210,20 @@ export function LedgerConfigPage({
       const latest = versions[0];
       if (!latest) throw new Error("Empty configuration history");
       setKey(item.key);
-      setSnapshot(latest);
-      setDraft(latest.definition);
+      showSnapshot(latest);
       setHistory(versions);
-      setCompared(null);
     } catch (cause) {
       if (mine === lifetime.current) failed(cause);
     } finally {
       if (mine === lifetime.current) setBusy(false);
     }
   }
-  function create() {
+  function create(source: ConfigurationSnapshot | null = null) {
     if (!discardAllowed()) return;
     setKey("");
     setSnapshot(null);
-    setDraft(empty());
+    setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
+    setCopySource(source);
     setHistory([]);
     setCompared(null);
     setError("");
@@ -246,12 +256,17 @@ export function LedgerConfigPage({
     }));
   }
   function mutate(action: Operation["action"], sourceVersion?: number) {
+    const target = key.trim();
     if (
       locked || runningOperation.current ||
       !(action === "publish" ? canPublish : canManage) ||
-      !key.trim() ||
+      !target ||
       (action === "publish" && (dirty || !snapshot))
     ) return;
+    if (copySource && (target === copySource.key || items.some((item) => item.key === target))) {
+      setError(target === copySource.key ? "新台账必须使用与来源不同的标识。" : "新台账标识已存在，请使用其他标识。");
+      return;
+    }
     const version = snapshot?.version ?? 0;
     const publishedVersion = snapshot?.publishedVersion ?? null;
     // Capture the immutable request at the first explicit action. A retry cannot
@@ -293,22 +308,15 @@ export function LedgerConfigPage({
           setError("无法确认原发布结果，请重新打开此台账核对当前发布版本。");
           return;
         }
-        setSnapshot(latest);
-        setDraft(latest.definition);
+        showSnapshot(latest);
         setHistory(versions);
-        setCompared(null);
-        setItems((current) => [
-          { ...latest, latestVersion: latest.version },
-          ...current.filter((item) => item.key !== latest.key),
-        ]);
+        updateDirectory(latest);
         setNotice(`版本 ${version} 已发布；已载入最新草稿版本 ${latest.version}。`);
         return;
       }
       if (mine !== lifetime.current) return;
       setRecovery(null);
-      setSnapshot(next);
-      setDraft(next.definition);
-      setCompared(null);
+      showSnapshot(next);
       setHistory((current) =>
         action === "publish"
           ? current.map((entry) => ({
@@ -317,10 +325,7 @@ export function LedgerConfigPage({
             }))
           : [next, ...current],
       );
-      setItems((current) => [
-        { ...next, latestVersion: next.version },
-        ...current.filter((item) => item.key !== next.key),
-      ]);
+      updateDirectory(next);
       setNotice(
         action === "publish"
           ? `已发布版本 ${next.version}。`
@@ -338,7 +343,9 @@ export function LedgerConfigPage({
         (recovery === operation && !definitiveConflict);
       setRecovery(unknownResult ? operation : null);
       if (unknownResult && !(cause instanceof ApiError && cause.status === 401)) {
-        setError("操作未确认成功。重试将使用相同的版本、内容和请求标识（如适用）。");
+        setError("操作未确认成功。重试沿用原版本、内容和请求标识。");
+      } else if (copySource && definitiveConflict) {
+        setError("新台账标识已被使用。你的输入已保留，请使用其他标识后重新保存。");
       } else {
         failed(cause);
       }
@@ -356,7 +363,7 @@ export function LedgerConfigPage({
             label="新建台账"
             variant="secondary"
             isDisabled={locked}
-            onClick={create}
+            onClick={() => create()}
           />
         )}
       </div>
@@ -372,6 +379,7 @@ export function LedgerConfigPage({
         />
       )}
       {notice && <p role="status">{notice}</p>}
+      {copySource && <p role="status">已从台账 {copySource.definition.name}（{copySource.key}）的版本 {copySource.version} 复制配置，请用新标识保存草稿。</p>}
       <div className="config-layout">
         <nav aria-label="已配置台账" className="config-list">
           {items.length === 0 && !loading && !loadFailed && (
@@ -575,6 +583,7 @@ export function LedgerConfigPage({
                       isDisabled={locked}
                       onClick={() => setCompared(entry)}
                     />
+                    {canManage && <Button label={`复制版本 ${entry.version}为新台账`} variant="secondary" isDisabled={locked} onClick={() => create(entry)} />}
                     {canManage && (
                       <Button
                         label={`恢复版本 ${entry.version}为新草稿`}
