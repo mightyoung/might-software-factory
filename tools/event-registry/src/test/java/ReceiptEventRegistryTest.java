@@ -1,5 +1,4 @@
 import java.sql.DriverManager;
-import java.util.Map;
 import java.util.UUID;
 
 import org.flowable.engine.ProcessEngine;
@@ -15,6 +14,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ReceiptEventRegistryTest {
     @Test
@@ -53,17 +53,29 @@ class ReceiptEventRegistryTest {
                             .channelAdapter("${receiptChannel}").jsonDeserializer().detectEventKeyUsingJsonField("type")
                             .jsonFieldsMapDirectlyToPayload().deploy();
                     engine.getRepositoryService().createDeployment().addClasspathResource("receipt.bpmn20.xml").deploy();
-                    channel.send(Map.of("type", "receiptRequested", "batch", "A"));
-                    channel.send(Map.of("type", "receiptRequested", "batch", "B"));
+                    var requested = StructuredReceiptEventTest.REQUESTED;
+                    assertEquals(new StructuredReceiptEvent.Identity("urn:fixture:purchase", "req-a"), channel.send(requested));
+                    channel.send(requested.replace("req-a", "req-b").replace("\"batch\":\"A\"", "\"batch\":\"B\""));
                     var processes = engine.getRuntimeService().createProcessInstanceQuery().processDefinitionKey("receipt");
                     assertEquals(2, processes.count());
                     var instance = processes.variableValueEquals("batch", "A").singleResult().getId();
+                    var otherInstance = engine.getRuntimeService().createProcessInstanceQuery()
+                            .processDefinitionKey("receipt").variableValueEquals("batch", "B").singleResult().getId();
                     var tasks = engine.getTaskService().createTaskQuery().taskDefinitionKey("received");
-                    channel.send(Map.of("type", "batchApproved", "instance", instance, "batch", "B"));
+                    var waiting = engine.getRuntimeService().createEventSubscriptionQuery().activityId("waitForBatch");
+                    var approved = StructuredReceiptEventTest.APPROVED.replace("instance-a", instance);
+                    String invalid = approved.replace("\"1.0\"", "\"0.3\"");
+                    assertThrows(IllegalArgumentException.class, () -> channel.send(invalid));
                     assertEquals(0, tasks.count());
-                    channel.send(Map.of("type", "batchApproved", "instance", instance, "batch", "A"));
+                    assertEquals(2, waiting.count());
+
+                    channel.send(approved.replace("approval-1", "wrong-batch").replace("\"batch\":\"A\"", "\"batch\":\"B\""));
+                    assertEquals(0, tasks.count());
+                    assertEquals(2, waiting.count());
+
+                    assertEquals(new StructuredReceiptEvent.Identity("urn:fixture:inspection", "approval-1"), channel.send(approved));
                     assertEquals(instance, tasks.singleResult().getProcessInstanceId());
-                    assertEquals(1, engine.getRuntimeService().createEventSubscriptionQuery().activityId("waitForBatch").count());
+                    assertEquals(otherInstance, waiting.singleResult().getProcessInstanceId());
                 } finally {
                     engine.close();
                 }
@@ -80,6 +92,10 @@ class ReceiptEventRegistryTest {
 
         @Override public void setEventRegistry(EventRegistry registry) { this.registry = registry; }
         @Override public void setInboundChannelModel(InboundChannelModel channel) { this.channel = channel; }
-        void send(Map<String, String> fields) { registry.eventReceived(channel, mapper.writeValueAsString(fields)); }
+        StructuredReceiptEvent.Identity send(String json) {
+            var parsed = StructuredReceiptEvent.parse(json);
+            registry.eventReceived(channel, mapper.writeValueAsString(parsed.flowableFields()));
+            return parsed.identity();
+        }
     }
 }
