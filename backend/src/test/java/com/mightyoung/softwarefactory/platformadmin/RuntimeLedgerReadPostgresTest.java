@@ -104,7 +104,7 @@ class RuntimeLedgerReadPostgresTest {
         var filter = List.of(new Filter("amount", "gte", 1));
         var sort = new Sort("amount", "asc");
         var page = endpoint.query(key, new Query(2, 1, filter, sort));
-        assertThat(json.<tools.jackson.databind.JsonNode>valueToTree(page)).isEqualTo(
+        assertThat(json.readTree(json.writeValueAsString(page))).isEqualTo(
                 json.readTree("""
                         {"records":[],"total":0,"page":2,"size":1,"hasMore":false}
                         """));
