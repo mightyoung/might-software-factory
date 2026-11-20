@@ -84,4 +84,35 @@ class LedgerConfigurationPostgresTest {
         assertThat(repository.versions(tenant, key)).extracting(Snapshot::version).containsExactly(2L, 1L);
     }
 
+    @Test void workflowSnapshotsReplayPublishAndRestoreWithoutChangingLegacyReceipts() {
+        UUID legacyRequest = UUID.randomUUID();
+        String legacyPayload = "{\"requestId\":\"" + legacyRequest + "\",\"expectedVersion\":0,\"definition\":"
+                + JsonMapper.builder().build().writeValueAsString(complete()) + "}";
+        tx.execute(status -> {
+            dsl.fetchValue("select set_config('app.tenant_id',?,true)", tenant.toString());
+            dsl.execute("insert into public.ledger_configuration(tenant_id,configuration_key,latest_version) values (?,?,1)", tenant, key);
+            dsl.execute("insert into public.ledger_configuration_snapshot(tenant_id,configuration_key,version,request_id,request_payload,definition,actor_member_id)"
+                    + " values (?,?,1,?,cast(? as jsonb),cast(? as jsonb),?)", tenant, key, legacyRequest, legacyPayload,
+                    JsonMapper.builder().build().writeValueAsString(complete()), actor);
+            return null;
+        });
+        assertThat(tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(legacyRequest, 0L, complete()))).version()).isEqualTo(1);
+        Definition graph = LedgerConfigurationWorkflowTest.withWorkflow(LedgerConfigurationWorkflowTest.linear());
+        SaveRequest graphSave = new SaveRequest(UUID.randomUUID(), 1L, graph);
+        Snapshot two = tx.execute(status -> repository.save(tenant, actor, key, graphSave));
+        assertThat(two.definition()).isEqualTo(graph);
+        assertThat(tx.execute(status -> repository.save(tenant, actor, key, graphSave)).version()).isEqualTo(2);
+        assertThat(tx.execute(status -> repository.publish(tenant, actor, key, new PublishRequest(2L, 2L, null))).publishedVersion()).isEqualTo(2);
+        Definition disconnected = LedgerConfigurationWorkflowTest.withWorkflow(new Workflow(graph.workflow().nodes(), List.of()));
+        tx.execute(status -> repository.save(tenant, actor, key, new SaveRequest(UUID.randomUUID(), 2L, disconnected)));
+        assertThatThrownBy(() -> tx.execute(status -> repository.publish(tenant, actor, key, new PublishRequest(3L, 3L, 2L))))
+                .isInstanceOf(IllegalArgumentException.class);
+        Snapshot restoredGraph = tx.execute(status -> repository.restore(tenant, actor, key, new RestoreRequest(UUID.randomUUID(), 3L, 2L)));
+        assertThat(restoredGraph.definition()).isEqualTo(graph);
+        assertThat(restoredGraph.publishedVersion()).isEqualTo(2);
+        Snapshot restoredLegacy = tx.execute(status -> repository.restore(tenant, actor, key, new RestoreRequest(UUID.randomUUID(), 4L, 1L)));
+        assertThat(restoredLegacy.definition().workflow()).isNull();
+        assertThat(repository.versions(tenant, key)).extracting(Snapshot::version).containsExactly(5L, 4L, 3L, 2L, 1L);
+    }
+
 }

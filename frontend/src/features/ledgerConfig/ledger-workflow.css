@@ -1,0 +1,57 @@
+.workflow-editor {
+  margin: 24px 0;
+  min-width: 0;
+}
+.workflow-canvas {
+  position: relative;
+  height: 300px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--tint);
+  overflow: hidden;
+}
+.workflow-canvas svg {
+  position: absolute;
+  left: 8%;
+  top: 10%;
+  width: 84%;
+  height: 80%;
+  pointer-events: none;
+}
+.workflow-canvas line {
+  stroke: var(--muted);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+.workflow-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  max-width: 120px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 2px solid var(--rule);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  overflow-wrap: anywhere;
+  cursor: grab;
+  touch-action: none;
+}
+.workflow-node[aria-pressed="true"] {
+  border-color: var(--petrol);
+}
+.workflow-node:focus-visible {
+  outline: 3px solid var(--petrol);
+  outline-offset: 3px;
+}
+.workflow-coordinates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 600px) {
+  .workflow-node {
+    max-width: 74px;
+    padding: 8px 6px;
+  }
+}

@@ -4,7 +4,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLeaveGuard } from "../../routing/router";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
-import { LedgerViewOrder } from "./LedgerViewOrder";
+import { LedgerWorkflowEditor, defaultWorkflow } from "./LedgerWorkflowEditor";
+import { LedgerViewOrder, ledgerViews } from "./LedgerViewOrder";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
   ConfigurationSnapshot,
@@ -20,6 +21,7 @@ const empty = (): LedgerConfiguration => ({
   fields: [],
   listFields: [],
   queryFields: [],
+  workflow: defaultWorkflow(),
 });
 const fieldTypes = {
   text: "文本",
@@ -36,19 +38,18 @@ type Operation = {
   send: () => Promise<ConfigurationSnapshot>;
 };
 
-const orderedViews = [
-  { property: "listFields", label: "列表字段顺序" },
-  { property: "queryFields", label: "查询字段顺序" },
-] as const;
+function sameConfigurationValue(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function ConfigurationOrder({ definition }: { definition: LedgerConfiguration }) {
   return (
     <>
-      {orderedViews.map(({ property, label }) => (
+      {ledgerViews.map(({ property, label }) => (
         <div className="config-order" key={property}>
-          <p>{label}</p>
+          <p>{label}顺序</p>
           {definition[property].length ? (
-            <ol aria-label={label}>
+            <ol aria-label={label + "顺序"}>
               {definition[property].map((key, index) => {
                 const field = definition.fields.find((candidate) => candidate.key === key);
                 return <li key={index}>{field?.label ? `${field.label}（${key}）` : key}</li>;
@@ -72,11 +73,7 @@ function ConfigurationPreview({
       <table>
         <thead>
           <tr>
-            <th>字段</th>
-            <th>类型</th>
-            <th>必填</th>
-            <th>列表</th>
-            <th>查询</th>
+            {["字段", "类型", "必填", "列表", "查询"].map(label => <th key={label}>{label}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -99,6 +96,10 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
+      <details>
+        <summary>查看流程图</summary>
+        <LedgerWorkflowEditor workflow={definition.workflow ?? defaultWorkflow()} disabled onChange={() => {}} />
+      </details>
     </div>
   );
 }
@@ -131,11 +132,11 @@ export function LedgerConfigPage({
   const lifetime = useRef(0);
   const runningOperation = useRef(false);
   const [recovery, setRecovery] = useState<Operation | null>(null);
-  const dirty = snapshot
-    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
-    : Boolean(key || draft.name || draft.fields.length);
+  const dirty = (!snapshot && Boolean(key)) ||
+    !sameConfigurationValue(draft, snapshot?.definition ?? empty());
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
+  const editDisabled = !canManage || locked || loading;
   useLeaveGuard(
     active && (dirty || protectingOperation),
     protectingOperation
@@ -403,7 +404,7 @@ export function LedgerConfigPage({
           ))}
         </nav>
         <div className="config-editor">
-          <fieldset disabled={!canManage || locked || loading}>
+          <fieldset disabled={editDisabled}>
             <legend>
               {snapshot ? `配置版本 ${snapshot.version}` : "新台账草稿"}
             </legend>
@@ -471,27 +472,24 @@ export function LedgerConfigPage({
                 <CheckboxInput
                   label="必填"
                   value={field.required}
-                  isDisabled={!canManage || locked}
+                  isDisabled={editDisabled}
                   onChange={() =>
                     updateField(index, { required: !field.required })
                   }
                 />
-                <CheckboxInput
-                  label="列表显示"
-                  value={draft.listFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("listFields", field.key)}
-                />
-                <CheckboxInput
-                  label="允许查询"
-                  value={draft.queryFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("queryFields", field.key)}
-                />
+                {ledgerViews.map(({ property, toggle }) => (
+                  <CheckboxInput
+                    key={property}
+                    label={toggle}
+                    value={draft[property].includes(field.key)}
+                    isDisabled={editDisabled || !field.key}
+                    onChange={() => toggleView(property, field.key)}
+                  />
+                ))}
                 <Button
                   label={`移除字段 ${index + 1}`}
                   variant="secondary"
-                  isDisabled={!canManage || locked}
+                  isDisabled={editDisabled}
                   onClick={() =>
                     setDraft((current) => ({
                       ...current,
@@ -528,10 +526,16 @@ export function LedgerConfigPage({
           </fieldset>
           <LedgerViewOrder
             definition={draft}
-            disabled={!canManage || locked || loading}
+            disabled={editDisabled}
             onChange={(property, keys) =>
               setDraft((current) => ({ ...current, [property]: keys }))
             }
+          />
+          <LedgerWorkflowEditor
+            key={snapshot?.key ?? "new"}
+            workflow={draft.workflow ?? defaultWorkflow()}
+            disabled={editDisabled}
+            onChange={(workflow) => setDraft(current => ({ ...current, workflow }))}
           />
           <LedgerViewPreview definition={draft} />
           {recovery && (
@@ -610,13 +614,13 @@ export function LedgerConfigPage({
             <section aria-label="版本比较">
               <h2>版本 {compared.version} 与当前草稿的差异</h2>
               <p>
-                {JSON.stringify(compared.definition) === JSON.stringify(draft)
+                {sameConfigurationValue(compared.definition, draft)
                   ? "配置内容相同。"
                   : "配置内容不同，可核对下方两份配置。"}
               </p>
-              {orderedViews.map(({ property, label }) =>
-                JSON.stringify(compared.definition[property]) !== JSON.stringify(draft[property])
-                  ? <p key={property}>{label}已变化。</p> : null,
+              {ledgerViews.map(({ property, label }) =>
+                !sameConfigurationValue(compared.definition[property], draft[property])
+                  ? <p key={property}>{label}顺序已变化。</p> : null,
               )}
               <div className="config-comparison">
                 <div>

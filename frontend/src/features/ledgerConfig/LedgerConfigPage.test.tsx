@@ -224,7 +224,7 @@ describe("LedgerConfigPage", () => {
     const comparison = screen.getByRole("region", { name: "版本比较" });
     expect(within(comparison).getByText("列表字段顺序已变化。")).toBeInTheDocument();
     expect(within(comparison).getByText("查询字段顺序已变化。")).toBeInTheDocument();
-    const orders = within(comparison).getAllByRole("list");
+    const orders = within(comparison).getAllByRole("list", { name: /字段顺序/ });
     expect(orders.map((order) => within(order).getAllByRole("listitem").map(item => item.textContent))).toEqual([
       ["数量（quantity）", "单位（unit）"],
       ["单位（unit）", "数量（quantity）"],

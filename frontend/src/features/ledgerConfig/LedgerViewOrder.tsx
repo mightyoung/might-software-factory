@@ -1,9 +1,9 @@
 import { Button } from "@astryxdesign/core/Button";
 import type { LedgerConfiguration } from "./model";
 
-const views = [
-  { property: "listFields", label: "列表字段" },
-  { property: "queryFields", label: "查询字段" },
+export const ledgerViews = [
+  { property: "listFields", label: "列表字段", toggle: "列表显示" },
+  { property: "queryFields", label: "查询字段", toggle: "允许查询" },
 ] as const;
 
 export function LedgerViewOrder({
@@ -25,7 +25,7 @@ export function LedgerViewOrder({
 
   return (
     <>
-      {views.map(({ property, label }) => (
+      {ledgerViews.map(({ property, label }) => (
         <fieldset key={property}>
           <legend>{label}排序</legend>
           {definition[property].length === 0 ? (
