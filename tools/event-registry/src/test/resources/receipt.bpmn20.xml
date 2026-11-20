@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn" targetNamespace="ledger">
+    <process id="receipt" isExecutable="true">
+        <startEvent id="requested">
+            <extensionElements>
+                <flowable:eventType>receiptRequested</flowable:eventType>
+                <flowable:eventOutParameter source="batch" target="batch"/>
+            </extensionElements>
+        </startEvent>
+        <sequenceFlow sourceRef="requested" targetRef="waitForBatch"/>
+        <intermediateCatchEvent id="waitForBatch">
+            <extensionElements>
+                <flowable:eventType>batchApproved</flowable:eventType>
+                <flowable:eventCorrelationParameter name="instance" value="${execution.processInstanceId}"/>
+                <flowable:eventCorrelationParameter name="batch" value="${batch}"/>
+            </extensionElements>
+        </intermediateCatchEvent>
+        <sequenceFlow sourceRef="waitForBatch" targetRef="received"/>
+        <userTask id="received" name="核对验收记录"/>
+        <sequenceFlow sourceRef="received" targetRef="done"/>
+        <endEvent id="done"/>
+    </process>
+</definitions>

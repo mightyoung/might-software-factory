@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedger } from "./features/findings/FindingsLedger";
 import { FindingReportForm } from "./components/FindingReportForm";
@@ -11,7 +11,6 @@ import { navigate, useLocation } from "./routing/router";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
-import { PermissionConfigPage } from "./features/platform/PermissionConfigPage";
 import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
 import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -24,6 +23,9 @@ import type { LoanFactory } from "./features/toolLoans/model";
 import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
+
+const PermissionConfigPage = lazy(() => import("./features/platform/PermissionConfigPage").then(module => ({ default: module.PermissionConfigPage })));
+const LedgerConfigPage = lazy(() => import("./features/ledgerConfig/LedgerConfigPage"));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -52,7 +54,7 @@ interface PlaceholderPage {
 }
 
 interface PermissionsPage {
-  kind: "permissions";
+  kind: "permissions" | "ledger-configurations";
   title: string;
   description: string;
 }
@@ -67,6 +69,12 @@ interface RouteDef {
 }
 
 const ROUTES: readonly RouteDef[] = [
+  {
+    rest: "platform/ledger-configurations",
+    application: "platform",
+    permission: "ledger.configuration.read",
+    page: { kind: "ledger-configurations", title: "台账配置", description: "配置台账结构与版本。" },
+  },
   {
     rest: "safety/findings",
     application: "safety",
@@ -165,6 +173,33 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: 
   </section>;
 }
 
+// Browser traversal cannot be cancelled reliably. Retain the editor in memory
+// after its first visit, only within this authorized AppShell identity.
+function LedgerConfigurationHost({ active, canManage, canPublish, onUnauthenticated }: {
+  active: boolean;
+  canManage: boolean;
+  canPublish: boolean;
+  onUnauthenticated: () => void;
+}) {
+  const [visited, setVisited] = useState(active);
+  useLayoutEffect(() => {
+    if (active) setVisited(true);
+  }, [active]);
+  if (!active && !visited) return null;
+  return (
+    <div hidden={!active}>
+      <Suspense fallback={<p role="status">正在载入配置页面…</p>}>
+        <LedgerConfigPage
+          active={active}
+          canManage={canManage}
+          canPublish={canPublish}
+          onUnauthenticated={onUnauthenticated}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
 interface AppAdapterFactories {
   createFindingStore: () => FindingStore;
   createPermissionAdmin: () => PermissionAdminAdapter;
@@ -202,7 +237,10 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     session && pathApplication && session.applications.some((app) => app.id === pathApplication) ? pathApplication : null;
   const shellApplication = redirect ? null : authorizedApplication;
   const menu = useAppMenu(shellApplication);
-  const canReadRoute = session !== null && route !== undefined && hasPermission(session, route.permission);
+  const canReadRoute = session !== null && route !== undefined && (
+    hasPermission(session, route.permission) || (route.page.kind === "ledger-configurations" &&
+      ["ledger.configuration.manage", "ledger.configuration.publish"].some(code => hasPermission(session, code)))
+  );
   const canReportHere = session !== null && route?.rest === "safety/findings" && hasPermission(session, "safety.finding.report");
   const reportOnly = canReportHere && !canReadRoute;
   // Do not consume the reset at /login or an intermediate canonical redirect. Never
@@ -239,12 +277,23 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     );
   }
   if (state.status === "signedOut") return <LoginPage notice={state.notice} />;
-  if (!session || redirect || selectionResetTarget) return null;
+  if (!session) return null;
+  // A same-identity canonical replace is not a session boundary.
+  const routingTransition = Boolean(redirect || selectionResetTarget);
+
+  const canManageLedgerConfig = hasPermission(session, "ledger.configuration.manage");
+  const canPublishLedgerConfig = hasPermission(session, "ledger.configuration.publish");
+  const canKeepLedgerConfig = mode === "http" &&
+    session.applications.some(app => app.id === "platform") &&
+    (hasPermission(session, "ledger.configuration.read") || canManageLedgerConfig || canPublishLedgerConfig);
 
   let title: string;
   let content: ReactNode;
 
-  if (!tenantMatches) {
+  if (routingTransition) {
+    title = "";
+    content = null;
+  } else if (!tenantMatches) {
     title = "无权访问";
     content = (
       <StatusPage
@@ -312,15 +361,20 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         onUnauthenticated={expire}
       />
     );
+  } else if (route.page.kind === "ledger-configurations") {
+    title = route.page.title;
+    content = mode !== "http" ? <StatusPage title="需连接后端" description="请连接后端后配置台账。" /> : null;
   } else if (route.page.kind === "permissions") {
     title = route.page.title;
     content = (
-      <PermissionConfigPage
-        adapter={permissionAdmin}
-        onPermissionsChanged={refresh}
-        canManage={hasPermission(session, "platform.permission.manage")}
-        onUnauthenticated={expire}
-      />
+      <Suspense fallback={<p role="status">正在载入权限配置…</p>}>
+        <PermissionConfigPage
+          adapter={permissionAdmin}
+          onPermissionsChanged={refresh}
+          canManage={hasPermission(session, "platform.permission.manage")}
+          onUnauthenticated={expire}
+        />
+      </Suspense>
     );
   } else {
     title = route.page.title;
@@ -347,6 +401,14 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       title={title}
     >
       {content}
+      {canKeepLedgerConfig && (
+        <LedgerConfigurationHost
+          active={!routingTransition && route?.page.kind === "ledger-configurations" && authorizedApplication === "platform" && canReadRoute}
+          canManage={canManageLedgerConfig}
+          canPublish={canPublishLedgerConfig}
+          onUnauthenticated={expire}
+        />
+      )}
     </AppShell>
   );
 }

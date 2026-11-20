@@ -41,7 +41,7 @@ class ModuleArchitectureTest {
             Map.entry("Dual-prevention business sample", Set.of(
                     "Application registry", "Audit and operations", "Authorization", "Directory",
                     "File evidence access", "Identity and authentication", "Support services", "Tenancy", "Workflow")),
-            Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication")),
+            Map.entry("Platform administration", Set.of("Application registry", "Authorization", "Identity and authentication", "Tenancy")),
             Map.entry("Entity ledger", Set.of("Application registry", "Authorization", "Identity and authentication", "Audit and operations")),
             Map.entry("Tooling catalog", Set.of("Workflow", "Entity ledger", "Authorization", "Identity and authentication", "Application registry", "Audit and operations"))
     );
