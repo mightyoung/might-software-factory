@@ -1,6 +1,6 @@
 import { ThemeSelector } from "../theme/ThemeProvider";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DEMO_ACCOUNTS } from "../../adapters/sessionAdapter";
+import { DEMO_ACCOUNTS } from "../../adapters/demoAccounts";
 import { SessionError } from "../../domain/session";
 import { useSession, type SessionState } from "./SessionProvider";
 

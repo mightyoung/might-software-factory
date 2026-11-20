@@ -1,7 +1,7 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useLeaveGuard } from "../../routing/router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
@@ -134,18 +134,13 @@ export function LedgerConfigPage({
     : Boolean(key || draft.name || draft.fields.length);
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
-  useLeaveGuard(
-    active && (dirty || protectingOperation),
+  useUnsavedGuard(
+    dirty || protectingOperation,
     protectingOperation
       ? "配置操作尚未确认。继续浏览后，可在当前标签页返回台账配置核对或重试。确定离开吗？"
       : "当前配置有未保存的修改。可在当前标签页返回继续编辑。确定离开吗？",
+    active,
   );
-  useLayoutEffect(() => {
-    if (!dirty && !protectingOperation) return;
-    const beforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", beforeUnload);
-    return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty, protectingOperation]);
 
   function failed(cause: unknown) {
     if (cause instanceof ApiError && cause.status === 401) {

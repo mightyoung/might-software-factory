@@ -76,12 +76,16 @@ public final class JooqLedgerConfigurationRepository implements LedgerConfigurat
         Snapshot selected = load(tenant, key, request.version());
         Long current = head.get("published_version", Long.class);
         // An identical publish retried after a lost response has no additional effect.
-        if (Objects.equals(current, request.version())) return selected;
+        if (Objects.equals(current, request.version())) {
+            dsl.execute("select public.register_ledger_record_permissions(?)", key);
+            return selected;
+        }
         if (!Objects.equals(current, request.expectedPublishedVersion())) throw new LedgerConfigurationException(VERSION_CONFLICT);
         LedgerConfigurationService.validDefinition(selected.definition(), true);
         dsl.execute("insert into public.ledger_configuration_publication(tenant_id,configuration_key,id,version,actor_member_id) values (?,?,?,?,?)",
                 tenant, key, UUID.randomUUID(), request.version(), actor);
         dsl.execute("update public.ledger_configuration set published_version=? where tenant_id=? and configuration_key=?", request.version(), tenant, key);
+        dsl.execute("select public.register_ledger_record_permissions(?)", key);
         return load(tenant, key, request.version());
     }
     private Snapshot append(UUID tenant, UUID actor, String key, long version, Long source, UUID requestId, String payload, Definition definition) {

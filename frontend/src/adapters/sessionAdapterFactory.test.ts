@@ -1,3 +1,5 @@
+import { createHttpAppAdapters } from "./httpAppAdapters";
+import { createSyntheticAppAdapters } from "./syntheticAppAdapters";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionError } from "../domain/session";
 import { syntheticSessionAdapter } from "./sessionAdapter";
@@ -33,5 +35,32 @@ describe("API mode boundary", () => {
       username: "demo.safety", password: "synthetic-password", tenantCode: "demo",
     })).rejects.toEqual(new SessionError("unavailable", true));
     expect(fetch).toHaveBeenCalled();
+  });
+});
+
+// The entry composes one mode; factories still rebuild scoped transports per identity.
+describe("production adapter composition", () => {
+  it("creates fresh HTTP stores without acquiring a synthetic session", async () => {
+    const adapters = createHttpAppAdapters();
+    expect(adapters.sessionAdapter.requiresTenantCode).toBe(true);
+    const first = adapters.createFindingStore();
+    const next = adapters.createFindingStore();
+    expect(next).not.toBe(first);
+    expect(next.ledger).not.toBe(first.ledger);
+    expect(next.commands).not.toBe(first.commands);
+    expect(adapters.createPermissionAdmin()).not.toBe(adapters.createPermissionAdmin());
+    const fetch = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", fetch);
+    await expect(adapters.sessionAdapter.login({
+      username: "demo.safety", password: "demo", tenantCode: "demo",
+    })).rejects.toEqual(new SessionError("unavailable", true));
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it("preserves the shared in-memory ledger and isolated permission editors for demo mode", () => {
+    const adapters = createSyntheticAppAdapters();
+    expect(adapters.sessionAdapter).toBe(syntheticSessionAdapter);
+    expect(adapters.createFindingStore()).toBe(adapters.createFindingStore());
+    expect(adapters.createPermissionAdmin()).not.toBe(adapters.createPermissionAdmin());
   });
 });

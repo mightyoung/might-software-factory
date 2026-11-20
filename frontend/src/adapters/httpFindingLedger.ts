@@ -14,7 +14,7 @@ import {
   type FindingReadOptions,
   type FindingListRequest,
   type FindingView,
-} from "./findingLedger";
+} from "./findingLedgerContract";
 
 type Item = components["schemas"]["FindingListItem"];
 type Detail = components["schemas"]["FindingDetail"];

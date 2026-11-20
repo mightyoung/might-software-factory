@@ -7,7 +7,7 @@ test("台账配置保存、比较、恢复与显式发布支持 Astryx 键盘操
 }) => {
   const editorRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("/ledgerConfig/"))
+    if (request.resourceType() === "script" && /\/ledgerConfig\/|\/assets\/LedgerConfigPage-[^/]+\.js$/.test(new URL(request.url()).pathname))
       editorRequests.push(request.url());
   });
   const permissions = [

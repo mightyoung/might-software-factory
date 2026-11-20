@@ -1,12 +1,13 @@
+import type { ComponentProps } from "react";
+import { mockFindingLedger } from "../../adapters/findingLedger";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
-  mockFindingLedger,
   type FindingLedgerAdapter,
   type FindingDetailSnapshot,
   type FindingLedgerReadFailureKind,
   type FindingView,
-} from "../../adapters/findingLedger";
+} from "../../adapters/findingLedgerContract";
 import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
@@ -31,7 +32,7 @@ interface FindingsLedgerProps {
   view: FindingView;
   title: string;
   description: string;
-  adapter?: FindingLedgerAdapter;
+  adapter: FindingLedgerAdapter;
   /** 提供上报端口且 canReport 为 true 时才显示“新建上报”（仅台账视图）。入口显隐只是呈现，服务端仍须鉴权。 */
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
@@ -51,7 +52,7 @@ const firstPage: PageResult<FindingRecord> = {
   pageCount: 1,
 };
 
-export function FindingsLedger(props: FindingsLedgerProps) {
+export function FindingsLedgerCore(props: FindingsLedgerProps) {
   const [scope, setScope] = useState({ adapter: props.adapter, submit: props.submitAdapter, generation: 0 });
   if (scope.adapter !== props.adapter || scope.submit !== props.submitAdapter) {
     setScope({ adapter: props.adapter, submit: props.submitAdapter, generation: scope.generation + 1 });
@@ -65,7 +66,7 @@ function FindingsLedgerBody({
   view,
   title,
   description,
-  adapter = mockFindingLedger,
+  adapter,
   synthetic,
   submitAdapter,
   commandAdapter,
@@ -383,4 +384,12 @@ function FindingsLedgerBody({
       )}
     </div>
   );
+}
+
+type Props = Omit<ComponentProps<typeof FindingsLedgerCore>, "adapter"> & {
+  adapter?: ComponentProps<typeof FindingsLedgerCore>["adapter"];
+};
+
+export function FindingsLedger({ adapter = mockFindingLedger, ...props }: Props) {
+  return <FindingsLedgerCore {...props} adapter={adapter} />;
 }
