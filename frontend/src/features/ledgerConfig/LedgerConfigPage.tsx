@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
-import { LedgerViewOrder } from "./LedgerViewOrder";
+import { ledgerViews, LedgerViewOrder } from "./LedgerViewOrder";
 import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
@@ -38,19 +38,14 @@ type Operation = {
   send: () => Promise<ConfigurationSnapshot>;
 };
 
-const orderedViews = [
-  { property: "listFields", label: "列表字段顺序" },
-  { property: "queryFields", label: "查询字段顺序" },
-] as const;
-
 function ConfigurationOrder({ definition }: { definition: LedgerConfiguration }) {
   return (
     <>
-      {orderedViews.map(({ property, label }) => (
+      {ledgerViews.map(({ property, label }) => (
         <div className="config-order" key={property}>
-          <p>{label}</p>
+          <p>{label}顺序</p>
           {definition[property].length ? (
-            <ol aria-label={label}>
+            <ol aria-label={label + "顺序"}>
               {definition[property].map((key, index) => {
                 const field = definition.fields.find((candidate) => candidate.key === key);
                 return <li key={index}>{field?.label ? `${field.label}（${key}）` : key}</li>;
@@ -484,18 +479,15 @@ export function LedgerConfigPage({
                     updateField(index, { required: !field.required })
                   }
                 />
-                <CheckboxInput
-                  label="列表显示"
-                  value={draft.listFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("listFields", field.key)}
-                />
-                <CheckboxInput
-                  label="允许查询"
-                  value={draft.queryFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("queryFields", field.key)}
-                />
+                {ledgerViews.map(({ property, toggleLabel }) => (
+                  <CheckboxInput
+                    key={property}
+                    label={toggleLabel}
+                    value={draft[property].includes(field.key)}
+                    isDisabled={!canManage || locked || !field.key}
+                    onChange={() => toggleView(property, field.key)}
+                  />
+                ))}
                 <Button
                   label={`移除字段 ${index + 1}`}
                   variant="secondary"
@@ -629,9 +621,9 @@ export function LedgerConfigPage({
                   ? "配置内容相同。"
                   : "配置内容不同，可核对下方两份配置。"}
               </p>
-              {orderedViews.map(({ property, label }) =>
+              {ledgerViews.map(({ property, label }) =>
                 JSON.stringify(compared.definition[property]) !== JSON.stringify(draft[property])
-                  ? <p key={property}>{label}已变化。</p> : null,
+                  ? <p key={property}>{label}顺序已变化。</p> : null,
               )}
               <div className="config-comparison">
                 <div>

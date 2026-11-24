@@ -52,12 +52,10 @@ export function LedgerWorkflowEditor({
     order.slice(1, -1).every((node) => node.kind === "step") &&
     workflow.edges.length === order.length - 1;
   const routeLocked = disabled || !connected;
-  for (const node of workflow.nodes) {
-    if (!order.includes(node)) order.push(node);
-  }
   const displayNodes =
     !disabled && preview ? patchNode(preview, preview.id) : workflow.nodes;
-  const index = order.findIndex((node) => node.id === selected?.id);
+  const index = order.indexOf(selected);
+  const canEditStep = !routeLocked && selected?.kind === "step";
 
   function patchNode(patch: Partial<Node>, id: string) {
     return workflow.nodes.map((node) =>
@@ -82,22 +80,20 @@ export function LedgerWorkflowEditor({
     const nodes = [...order];
     const before = nodes[position - 1];
     const after = nodes[position];
-    const x = Math.round(((before?.x ?? 0) + (after?.x ?? 1000)) / 2);
-    const y = Math.round(((before?.y ?? 500) + (after?.y ?? 500)) / 2);
-    nodes.splice(Math.max(0, position), 0, {
+    const node: Node = {
       id: "step_" + crypto.randomUUID().replaceAll("-", ""),
       kind: "step",
       label: "办理",
-      x,
-      y,
-    });
+      x: Math.round((before.x + after.x) / 2),
+      y: Math.round((before.y + after.y) / 2),
+    };
+    nodes.splice(position, 0, node);
     route(nodes);
-    setSelectedId(nodes[Math.max(0, position)].id);
+    setSelectedId(node.id);
   }
   function move(offset: number) {
     if (
-      routeLocked ||
-      selected?.kind !== "step" ||
+      !canEditStep ||
       index + offset <= 0 ||
       index + offset >= order.length - 1
     )
@@ -272,23 +268,21 @@ export function LedgerWorkflowEditor({
         <Button
           label="提前办理"
           variant="secondary"
-          isDisabled={routeLocked || selected?.kind !== "step" || index <= 1}
+          isDisabled={!canEditStep || index <= 1}
           onClick={() => move(-1)}
         />
         <Button
           label="延后办理"
           variant="secondary"
-          isDisabled={
-            routeLocked || selected?.kind !== "step" || index >= order.length - 2
-          }
+          isDisabled={!canEditStep || index >= order.length - 2}
           onClick={() => move(1)}
         />
         <Button
           label="删除办理节点"
           variant="secondary"
-          isDisabled={routeLocked || selected?.kind !== "step"}
+          isDisabled={!canEditStep}
           onClick={() => {
-            if (!routeLocked && selected?.kind === "step") {
+            if (canEditStep) {
               route(order.filter((node) => node.id !== selected.id));
               setSelectedId("start");
             }
