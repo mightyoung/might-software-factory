@@ -5,6 +5,7 @@ import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
 import { LedgerViewOrder } from "./LedgerViewOrder";
+import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
   ConfigurationSnapshot,
@@ -20,6 +21,7 @@ const empty = (): LedgerConfiguration => ({
   fields: [],
   listFields: [],
   queryFields: [],
+  workflow: defaultWorkflow(),
 });
 const fieldTypes = {
   text: "文本",
@@ -99,6 +101,10 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
+      <details>
+        <summary>查看流程图</summary>
+        <LedgerWorkflowEditor workflow={definition.workflow ?? defaultWorkflow()} disabled onChange={() => {}} />
+      </details>
     </div>
   );
 }
@@ -132,9 +138,8 @@ export function LedgerConfigPage({
   const lifetime = useRef(0);
   const runningOperation = useRef(false);
   const [recovery, setRecovery] = useState<Operation | null>(null);
-  const dirty = snapshot
-    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
-    : Boolean(key || draft.name || draft.fields.length);
+  const dirty = Boolean(!snapshot && key) ||
+    JSON.stringify(draft) !== JSON.stringify(snapshot?.definition ?? empty());
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
   useUnsavedGuard(
@@ -535,6 +540,12 @@ export function LedgerConfigPage({
             onChange={(property, keys) =>
               setDraft((current) => ({ ...current, [property]: keys }))
             }
+          />
+          <LedgerWorkflowEditor
+            key={snapshot?.key ?? "new"}
+            workflow={draft.workflow ?? defaultWorkflow()}
+            disabled={!canManage || locked || loading}
+            onChange={(workflow) => setDraft(current => ({ ...current, workflow }))}
           />
           <LedgerViewPreview definition={draft} />
           {recovery && (
