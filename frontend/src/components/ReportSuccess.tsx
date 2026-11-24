@@ -3,7 +3,7 @@ import type { FindingSubmitResult } from "../adapters/findingSubmit";
 
 export function ReportSuccess({
   result,
-  live,
+  live: contextLive,
   onClose,
   onOpen,
   onStartAnother,
@@ -16,6 +16,7 @@ export function ReportSuccess({
   onStartAnother: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }) {
+  const live = import.meta.env.MSF_BROWSER_MODE === undefined ? contextLive : import.meta.env.MSF_BROWSER_MODE === "http";
   return (
     <aside className="detail-panel report-panel" aria-label="新建上报面板" onKeyDown={onKeyDown}>
       <div className="detail-heading">
