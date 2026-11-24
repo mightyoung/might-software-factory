@@ -29,6 +29,7 @@ import {
 
 export interface FindingReportFormProps {
   adapter: FindingSubmitAdapter;
+  validateDraft?: typeof validateFindingDraft;
   /** 关闭面板：用户放弃（已确认）或提交成功后选择关闭。 */
   onClose: () => void;
   /** 提交成功：用于让台账刷新列表。 */
@@ -53,13 +54,14 @@ const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   unavailable: "服务暂时不可用，上报尚未确认成功。可以直接重试，重试不会重复创建记录。",
 };
 
-export function FindingReportForm(props:FindingReportFormProps) {
+export function FindingReportFormCore(props:FindingReportFormProps) {
   const [scope,setScope]=useState({adapter:props.adapter,draftKey:props.draftKey,generation:0});
   if(scope.adapter!==props.adapter||scope.draftKey!==props.draftKey){setScope({adapter:props.adapter,draftKey:props.draftKey,generation:scope.generation+1});return null;}
   return <FindingReportFormBody key={scope.generation} {...props}/>;
 }
 function FindingReportFormBody({
   adapter,
+  validateDraft,
   onClose,
   onSubmitted,
   onOpenSubmitted,
@@ -137,8 +139,8 @@ function FindingReportFormBody({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting || (published&&!definition)) return;
-    const found = definition?validatePublishedFindingDraft(draft,definition,now()):validateFindingDraft(draft, now());
+    if (submitting || (published&&!definition) || (!definition && !validateDraft)) return;
+    const found = definition?validatePublishedFindingDraft(draft,definition,now()):validateDraft!(draft, now());
     setErrors(found);
     const orgMissing = needsOrganization && (!organizationId||orgs.selected?.id!==organizationId);
     setOrgError(orgMissing ? "请选择所属组织" : null);
@@ -270,4 +272,8 @@ function FindingReportFormBody({
       </form>
     </aside>
   );
+}
+
+export function FindingReportForm({ validateDraft = validateFindingDraft, ...props }: FindingReportFormProps) {
+  return <FindingReportFormCore {...props} validateDraft={validateDraft} />;
 }

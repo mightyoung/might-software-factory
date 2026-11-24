@@ -12,14 +12,14 @@ import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
-import { FindingDetails } from "../../components/FindingDetails";
-import { FindingReportForm } from "../../components/FindingReportForm";
+import { FindingDetailsCore } from "../../components/FindingDetails";
+import { FindingReportFormCore } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
 import type { FindingRecord } from "../../domain/finding";
 import { toggleRow, toggleVisibleRows } from "../../domain/selection";
-import { findingLedgerSchema } from "./schema";
+import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
@@ -33,6 +33,7 @@ interface FindingsLedgerProps {
   title: string;
   description: string;
   adapter: FindingLedgerAdapter;
+  presentation?: typeof syntheticFindingPresentation;
   /** 提供上报端口且 canReport 为 true 时才显示“新建上报”（仅台账视图）。入口显隐只是呈现，服务端仍须鉴权。 */
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
@@ -67,6 +68,7 @@ function FindingsLedgerBody({
   title,
   description,
   adapter,
+  presentation,
   synthetic,
   submitAdapter,
   commandAdapter,
@@ -77,7 +79,6 @@ function FindingsLedgerBody({
 }: FindingsLedgerProps) {
   const appMode=useAppMode();
   const demo=synthetic??appMode==="synthetic";
-  const noun = demo ? "演示记录" : "记录";
   const location = useLocation();
   const [path, search = ""] = location.split("?");
   const selectionReady = useRef(!resetInitialSelection);
@@ -97,10 +98,10 @@ function FindingsLedgerBody({
     navigate(`${path}${suffix ? `?${suffix}` : ""}`, true);
   }, [path, search]);
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
-  const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : findingLedgerSchema, [definition]);
+  const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
   const published = adapter.publishedDefinition === true;
-  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
-  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
+  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
+  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
@@ -233,7 +234,7 @@ function FindingsLedgerBody({
   }
 
   function handleReset() {
-    const emptyQuery = createEmptyQuery(schema.queryFields);
+    const emptyQuery = createEmptyQuery(schema?.queryFields ?? []);
     setQuery(emptyQuery);
     runQuery(emptyQuery);
   }
@@ -265,24 +266,9 @@ function FindingsLedgerBody({
           )}
         </div>
 
-        {demo && (
-        <div className="demo-notice" role="note">
-          <span className="notice-mark" aria-hidden="true">i</span>
-          <p>
-            当前使用<strong>合成演示数据</strong>，只供浏览字段、列表和流程节点；不代表真实企业、人员、事件或审批结果。
-          </p>
-        </div>
-        )}
+        {demo && presentation && <presentation.Notice view={view} />}
 
-        {demo && view !== "all" && (
-          <p className="view-scope-note">
-            {view === "confirmation"
-              ? `展示处于两级确认节点的${noun}，不代表具体成员已获待办授权。`
-              : `展示处于验收节点的${noun}，不代表已提交真实整改证据。`}
-          </p>
-        )}
-
-        {(!published || definition) && <LedgerQueryForm
+        {schema && (!published || definition) && <LedgerQueryForm
           schema={schema}
           values={query}
           onChange={updateQuery}
@@ -305,7 +291,7 @@ function FindingsLedgerBody({
               </button>
             </div>
           )}
-          {!loading && !listError && (
+          {!loading && !listError && schema && (
             <LedgerTable
               columns={schema.columns}
               rows={page.items}
@@ -351,7 +337,8 @@ function FindingsLedgerBody({
       </section>}
 
       {reporting && submitAdapter && (
-        <FindingReportForm
+        <FindingReportFormCore
+          validateDraft={presentation?.validateDraft}
           adapter={submitAdapter}
           onClose={closeTab}
           onSubmitted={handleSubmitted}
@@ -363,7 +350,9 @@ function FindingsLedgerBody({
       )}
 
       {selectedFindingId && !reporting && (
-        <FindingDetails
+        <FindingDetailsCore
+          Fields={presentation?.Fields}
+          Actions={presentation?.Actions}
           definition={detailSnapshot.definition}
           finding={detail}
           loading={detailLoading}
@@ -390,6 +379,6 @@ type Props = Omit<ComponentProps<typeof FindingsLedgerCore>, "adapter"> & {
   adapter?: ComponentProps<typeof FindingsLedgerCore>["adapter"];
 };
 
-export function FindingsLedger({ adapter = mockFindingLedger, ...props }: Props) {
-  return <FindingsLedgerCore {...props} adapter={adapter} />;
+export function FindingsLedger({ adapter = mockFindingLedger, presentation = syntheticFindingPresentation, ...props }: Props) {
+  return <FindingsLedgerCore {...props} adapter={adapter} presentation={presentation} />;
 }
