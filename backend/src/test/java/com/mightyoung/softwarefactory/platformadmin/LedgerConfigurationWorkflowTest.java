@@ -6,6 +6,8 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Collections;
 
 import static com.mightyoung.softwarefactory.platformadmin.LedgerConfigurationModels.*;
 import static com.mightyoung.softwarefactory.platformadmin.LedgerConfigurationServiceTest.complete;
@@ -80,6 +82,106 @@ class LedgerConfigurationWorkflowTest {
             assertThatCode(() -> LedgerConfigurationService.validDefinition(withWorkflow(workflow), false)).doesNotThrowAnyException();
             assertThatThrownBy(() -> LedgerConfigurationService.validDefinition(withWorkflow(workflow), true)).isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    static Definition configured() {
+        Definition base = complete();
+        var nodes = new ArrayList<>(linear().nodes());
+        nodes.set(1, new Node("review", "step", "审核", 500, 500,
+                Map.of("enter", "待审核", "approve", "已通过", "return", "待补正"),
+                Map.of("quantity", "readonly", "owner", "required"),
+                new Approval("field", List.of("owner"), "sequential", "11111111-1111-4111-8111-111111111111")));
+        var fields = new ArrayList<>(base.fields());
+        fields.add(new Field("owner", "责任人", "text", false));
+        return new Definition(base.name(), fields, base.listFields(), base.queryFields(),
+                new Workflow(nodes, linear().edges(), List.of("待审核", "已通过", "待补正")));
+    }
+
+    static Definition rules(Map<String, String> transitions, Map<String, String> fieldRules, Approval approval) {
+        var nodes = new ArrayList<>(linear().nodes());
+        nodes.set(1, new Node("review", "step", "审核", 500, 500, transitions, fieldRules, approval));
+        return withWorkflow(new Workflow(nodes, linear().edges(), List.of("待审核")));
+    }
+
+    @Test void configuredNodeRulesRoundTripWithoutChangingLegacyGraphJson() {
+        assertThat(json.readValue(json.writeValueAsString(configured()), Definition.class)).isEqualTo(configured());
+        assertThatCode(() -> LedgerConfigurationService.validDefinition(configured(), true)).doesNotThrowAnyException();
+        String legacyGraph = json.writeValueAsString(withWorkflow(linear()));
+        assertThat(legacyGraph).doesNotContain("states", "transitions", "fieldRules", "approval");
+        assertThat(json.readValue(legacyGraph, Definition.class)).isEqualTo(withWorkflow(linear()));
+    }
+
+    @Test void incompleteReferencesCanBeSavedButMustResolveBeforePublication() {
+        for (Definition draft : List.of(
+                rules(Map.of("enter", "未知状态"), null, null),
+                rules(null, Map.of("missing", "required"), null),
+                rules(null, null, new Approval("members", List.of(), "any", null)),
+                rules(null, null, new Approval("members", List.of("unfinished"), "all", null)),
+                rules(null, null, new Approval("field", List.of("quantity"), "any", null)),
+                rules(null, null, new Approval("field", List.of("missing"), "any", null)),
+                rules(null, null, new Approval("departmentManager", List.of("extra"), "any", null)),
+                rules(null, null, new Approval("departmentManager", List.of(), "any", "unfinished")))) {
+            assertThatCode(() -> LedgerConfigurationService.validDefinition(draft, false)).doesNotThrowAnyException();
+            assertThatThrownBy(() -> LedgerConfigurationService.validDefinition(draft, true)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test void invalidRuleShapesAndBoundsAreRejectedBeforeSaving() {
+        for (Definition malformed : List.of(
+                rules(Map.of("unknownAction", "待审核"), null, null),
+                rules(Collections.singletonMap("enter", null), null, null),
+                rules(null, Map.of("bad-key", "required"), null),
+                rules(null, Map.of("quantity", "writeAnything"), null),
+                rules(null, null, new Approval("unknown", List.of(), "any", null)),
+                rules(null, null, new Approval("members", null, "any", null)),
+                rules(null, null, new Approval("members", List.of("duplicate", "duplicate"), "any", null)),
+                rules(null, null, new Approval("members", List.of(), "unknown", null)),
+                withWorkflow(new Workflow(linear().nodes(), linear().edges(), List.of("重复", "重复"))),
+                withWorkflow(new Workflow(linear().nodes(), linear().edges(), List.of(" "))),
+                withWorkflow(new Workflow(linear().nodes(), linear().edges(), List.of("长".repeat(121)))))) {
+            assertThatThrownBy(() -> LedgerConfigurationService.validDefinition(malformed, false)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test void directorySourcesAndAllFieldRulesCanBePublished() {
+        for (String source : List.of("members", "roles", "positions", "departmentManager")) {
+            for (String mode : List.of("any", "all", "sequential")) {
+                var targets = source.equals("departmentManager") ? List.<String>of()
+                        : List.of("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222");
+                Definition definition = rules(Map.of("enter", "待审核", "submit", "待审核"), Map.of("quantity", "hidden"),
+                        new Approval(source, targets, mode, null));
+                assertThatCode(() -> LedgerConfigurationService.validDefinition(definition, true)).doesNotThrowAnyException();
+            }
+        }
+        for (String rule : List.of("hidden", "readonly", "editable", "required")) {
+            assertThatCode(() -> LedgerConfigurationService.validDefinition(rules(null, Map.of("quantity", rule), null), true))
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Test void publicationRejectsDuplicateDirectoryIdentitiesRegardlessOfLetterCase() {
+        for (String source : List.of("members", "roles", "positions")) {
+            Definition draft = rules(null, null, new Approval(source,
+                    List.of("aaaaaaaa-1111-4111-8111-111111111111", "AAAAAAAA-1111-4111-8111-111111111111"), "sequential", null));
+            assertThatCode(() -> LedgerConfigurationService.validDefinition(draft, false)).doesNotThrowAnyException();
+            assertThatThrownBy(() -> LedgerConfigurationService.validDefinition(draft, true)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test void removingBusinessFieldsLeavesUnresolvedNodeOverridesAsDraftsUntilRepaired() {
+        Definition configured = configured();
+        for (Node review : List.of(
+                new Node("review", "step", "审核", 500, 500, null, Map.of("owner", "required"), null),
+                new Node("review", "step", "审核", 500, 500, null, null, configured.workflow().nodes().get(1).approval()))) {
+            var nodes = new ArrayList<>(linear().nodes());
+            nodes.set(1, review);
+            Definition draft = withWorkflow(new Workflow(nodes, linear().edges()));
+            assertThatCode(() -> LedgerConfigurationService.validDefinition(draft, false)).doesNotThrowAnyException();
+            assertThatThrownBy(() -> LedgerConfigurationService.validDefinition(draft, true)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(json.readValue(json.writeValueAsString(draft), Definition.class)).isEqualTo(draft);
+        }
+        assertThatCode(() -> LedgerConfigurationService.validDefinition(rules(null, Map.of(), null), true))
+                .doesNotThrowAnyException();
     }
 
     @Test void coordinatesRejectFractionalNumbersTextAndOverflowAtJsonBoundary() {

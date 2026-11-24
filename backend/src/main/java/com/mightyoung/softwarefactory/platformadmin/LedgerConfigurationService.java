@@ -108,16 +108,25 @@ public final class LedgerConfigurationService {
         }
         validColumns(definition.listFields(), keys, "definition.listFields");
         validColumns(definition.queryFields(), keys, "definition.queryFields");
-        validWorkflow(definition.workflow(), publishing);
+        validWorkflow(definition.workflow(), definition.fields(), publishing);
         if (publishing && (definition.name().isBlank() || keys.isEmpty() || definition.listFields().isEmpty() || definition.queryFields().isEmpty())) {
             invalid("definition", "incomplete_configuration");
         }
     }
-    private static void validWorkflow(Workflow workflow, boolean publishing) {
+    private static void validWorkflow(Workflow workflow, List<Field> fields, boolean publishing) {
         if (workflow == null) return;
         String path = "definition.workflow";
         if (workflow.nodes() == null || workflow.nodes().size() > 32
                 || workflow.edges() == null || workflow.edges().size() > 31) invalid(path, "invalid_graph");
+        Set<String> states = new HashSet<>();
+        if (workflow.states() != null) {
+            if (workflow.states().size() > 100) invalid(path + ".states", "too_many_states");
+            for (String state : workflow.states()) {
+                if (state == null || state.isBlank() || state.length() > 120 || !states.add(state)) {
+                    invalid(path + ".states", "invalid_or_duplicate_state");
+                }
+            }
+        }
         Map<String, Node> nodes = new HashMap<>();
         for (Node node : workflow.nodes()) {
             if (node == null || node.id() == null || !node.id().matches("[a-z][a-z0-9_]{0,63}")
@@ -127,6 +136,7 @@ public final class LedgerConfigurationService {
                     || node.y() == null || node.y() < 0 || node.y() > 1000) invalid(path, "invalid_node");
             if (nodes.putIfAbsent(node.id(), node) != null) invalid(path, "duplicate_node");
             if (publishing && node.label().isBlank()) invalid(path, "incomplete_node");
+            validNodeRules(node, states, fields, publishing);
         }
         Set<Edge> edges = new HashSet<>();
         Map<String, Integer> incoming = new HashMap<>();
@@ -154,6 +164,66 @@ public final class LedgerConfigurationService {
         String current = starts.getFirst().id();
         while (current != null && visited.add(current)) current = next.get(current);
         if (current != null || visited.size() != nodes.size()) invalid(path, "unreachable_node");
+    }
+    private static void validNodeRules(Node node, Set<String> states, List<Field> fields, boolean publishing) {
+        String path = "definition.workflow.nodes." + node.id();
+        if (node.transitions() != null) {
+            if (node.transitions().size() > 4) invalid(path + ".transitions", "invalid_transitions");
+            for (var entry : node.transitions().entrySet()) {
+                if (entry.getKey() == null || !Set.of("enter", "submit", "approve", "return").contains(entry.getKey())
+                        || entry.getValue() == null || entry.getValue().length() > 120) {
+                    invalid(path + ".transitions", "invalid_transition");
+                }
+                if (publishing && !states.contains(entry.getValue())) invalid(path + ".transitions", "unknown_state");
+            }
+        }
+        if (node.fieldRules() != null) {
+            if (node.fieldRules().size() > 100) invalid(path + ".fieldRules", "too_many_rules");
+            for (var entry : node.fieldRules().entrySet()) {
+                if (entry.getKey() == null || !entry.getKey().matches("[a-z][a-z0-9_]{0,63}")
+                        || entry.getValue() == null || !Set.of("hidden", "readonly", "editable", "required").contains(entry.getValue())) {
+                    invalid(path + ".fieldRules", "invalid_field_rule");
+                }
+                if (publishing && fields.stream().noneMatch(field -> field.key().equals(entry.getKey()))) invalid(path + ".fieldRules", "unknown_field");
+            }
+        }
+        Approval approval = node.approval();
+        if (approval == null) return;
+        path += ".approval";
+        if (approval.source() == null || !Set.of("members", "roles", "positions", "departmentManager", "field").contains(approval.source())
+                || approval.mode() == null || !Set.of("any", "all", "sequential").contains(approval.mode())
+                || approval.targets() == null || approval.targets().size() > 100) invalid(path, "invalid_approval");
+        Set<String> targets = new HashSet<>();
+        for (String target : approval.targets()) {
+            if (target == null || target.length() > 128 || !targets.add(target)) invalid(path, "invalid_targets");
+            if (publishing && target.isBlank()) invalid(path, "incomplete_targets");
+        }
+        if (approval.fallbackMember() != null && (approval.fallbackMember().length() > 128
+                || publishing && approval.fallbackMember().isBlank())) invalid(path, "invalid_fallback");
+        if (!publishing) return;
+        if (approval.fallbackMember() != null) validIdentityReference(approval.fallbackMember(), path);
+        switch (approval.source()) {
+            case "departmentManager" -> {
+                if (!targets.isEmpty()) invalid(path, "unexpected_targets");
+            }
+            case "field" -> {
+                if (targets.size() != 1 || fields.stream().noneMatch(field -> field.key().equals(approval.targets().getFirst())
+                        && field.type().equals("text"))) invalid(path, "unknown_approval_field");
+            }
+            default -> {
+                if (targets.isEmpty()) invalid(path, "incomplete_targets");
+                Set<java.util.UUID> identities = new HashSet<>();
+                for (String target : targets) {
+                    validIdentityReference(target, path);
+                    if (!identities.add(java.util.UUID.fromString(target))) invalid(path, "duplicate_identity_reference");
+                }
+            }
+        }
+    }
+    private static void validIdentityReference(String value, String path) {
+        if (!value.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+            invalid(path, "invalid_identity_reference");
+        }
     }
     private static void validColumns(List<String> columns, Set<String> keys, String path) {
         if (columns == null || columns.size() > 100) invalid(path, "invalid");

@@ -120,7 +120,7 @@ class LedgerConfigurationPostgresTest {
             dsl.execute("update public.ledger_configuration set latest_version=1 where tenant_id=? and configuration_key=?", tenant, key);
             assertThat(repository.publish(tenant, actor, key, new PublishRequest(1L, 1L, null)).publishedVersion()).isEqualTo(1L);
 
-            var graph = LedgerConfigurationWorkflowTest.withWorkflow(LedgerConfigurationWorkflowTest.linear());
+            var graph = LedgerConfigurationWorkflowTest.configured();
             var saveGraph = new SaveRequest(UUID.randomUUID(), 1L, graph);
             assertThat(repository.save(tenant, actor, key, saveGraph).definition()).isEqualTo(graph);
             assertThat(repository.save(tenant, actor, key, saveGraph).version()).isEqualTo(2L);

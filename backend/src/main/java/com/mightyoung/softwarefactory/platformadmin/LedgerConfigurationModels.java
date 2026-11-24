@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.annotation.JsonDeserialize;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public final class LedgerConfigurationModels {
@@ -15,10 +16,22 @@ public final class LedgerConfigurationModels {
             this(name, fields, listFields, queryFields, null);
         }
     }
-    public record Workflow(List<Node> nodes, List<Edge> edges) {}
+    public record Workflow(List<Node> nodes, List<Edge> edges,
+                           @JsonInclude(JsonInclude.Include.NON_NULL) List<String> states) {
+        public Workflow(List<Node> nodes, List<Edge> edges) { this(nodes, edges, null); }
+    }
     public record Node(String id, String kind, String label,
                        @JsonDeserialize(using = WorkflowCoordinateDeserializer.class) Integer x,
-                       @JsonDeserialize(using = WorkflowCoordinateDeserializer.class) Integer y) {}
+                       @JsonDeserialize(using = WorkflowCoordinateDeserializer.class) Integer y,
+                       @JsonInclude(JsonInclude.Include.NON_NULL) Map<String, String> transitions,
+                       @JsonInclude(JsonInclude.Include.NON_NULL) Map<String, String> fieldRules,
+                       @JsonInclude(JsonInclude.Include.NON_NULL) Approval approval) {
+        public Node(String id, String kind, String label, Integer x, Integer y) {
+            this(id, kind, label, x, y, null, null, null);
+        }
+    }
+    public record Approval(String source, List<String> targets, String mode,
+                           @JsonInclude(JsonInclude.Include.NON_NULL) String fallbackMember) {}
     public record Edge(String from, String to) {}
     public record SaveRequest(UUID requestId, Long expectedVersion, Definition definition) {}
     public record RestoreRequest(UUID requestId, Long expectedVersion, Long sourceVersion) {}

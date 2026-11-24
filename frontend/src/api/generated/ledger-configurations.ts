@@ -113,6 +113,7 @@ export interface components {
             workflow?: components["schemas"]["Workflow"];
         };
         Workflow: {
+            states?: string[];
             nodes: components["schemas"]["WorkflowNode"][];
             edges: {
                 from: string;
@@ -126,6 +127,25 @@ export interface components {
             label: string;
             x: number;
             y: number;
+            transitions?: {
+                enter?: string;
+                submit?: string;
+                approve?: string;
+                return?: string;
+            };
+            fieldRules?: {
+                [key: string]: "hidden" | "readonly" | "editable" | "required";
+            };
+            approval?: components["schemas"]["WorkflowApproval"];
+        };
+        WorkflowApproval: {
+            /** @enum {string} */
+            source: "members" | "roles" | "positions" | "departmentManager" | "field";
+            /** @description Ordered directory UUIDs for members, roles or positions, a single text field key for field source, or empty for department manager. Incomplete references may be saved as drafts. Publication rejects UUIDs that identify the same directory entry even when letter case differs. */
+            targets: string[];
+            /** @enum {string} */
+            mode: "any" | "all" | "sequential";
+            fallbackMember?: string;
         };
         Snapshot: {
             key: string;
