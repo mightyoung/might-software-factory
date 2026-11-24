@@ -50,6 +50,47 @@ afterEach(() => {
 });
 
 describe("LedgerConfigPage", () => {
+  it("keeps field policies through a temporary blank rename and clears deleted references", async () => {
+    const api = adapter();
+    const workflow = defaultWorkflow();
+    workflow.nodes[0] = { ...workflow.nodes[0], fieldRules: { quantity: "required" }, approval: { source: "field", mode: "any", targets: ["quantity"] } };
+    const configured = { ...first, definition: { ...first.definition, fields: [{ ...first.definition.fields[0], type: "text" as const }], workflow } };
+    vi.mocked(api.versions).mockResolvedValue([configured]);
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    await screen.findByDisplayValue("采购申请");
+    fireEvent.change(screen.getByLabelText("字段标识"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("字段标识"), { target: { value: "assignee" } });
+    expect(screen.getByLabelText("存储成员标识的文本字段")).toHaveValue("assignee");
+    expect(screen.getByLabelText("数量的规则")).toHaveValue("required");
+    fireEvent.click(screen.getByRole("button", { name: "移除字段 1" }));
+    expect(screen.getByLabelText("存储成员标识的文本字段")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.save).mock.calls[0]?.[1].workflow?.nodes[0]).toMatchObject({ fieldRules: {}, approval: { source: "field", targets: [] } });
+    expect(configured.definition.workflow.nodes[0].fieldRules).toEqual({ quantity: "required" });
+  });
+
+  it("does not steal another field's policies while typing through its key", async () => {
+    const api = adapter();
+    const workflow = defaultWorkflow();
+    workflow.nodes[0] = { ...workflow.nodes[0], fieldRules: { a: "required", b: "readonly" }, approval: { source: "field", mode: "any", targets: ["b"] } };
+    const configured = { ...first, definition: { ...first.definition, fields: [{ key: "a", label: "甲", type: "text" as const, required: false }, { key: "b", label: "乙", type: "text" as const, required: false }], listFields: ["a", "b"], queryFields: ["a", "b"], workflow } };
+    vi.mocked(api.versions).mockResolvedValue([configured]);
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    await screen.findByDisplayValue("采购申请");
+    const key = screen.getAllByLabelText("字段标识")[0];
+    fireEvent.change(key, { target: { value: "b" } });
+    fireEvent.change(key, { target: { value: "b2" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledOnce());
+    const saved = vi.mocked(api.save).mock.calls[0]![1];
+    expect(saved.listFields).toEqual(["b2", "b"]);
+    expect(saved.queryFields).toEqual(["b2", "b"]);
+    expect(saved.workflow?.nodes[0]).toMatchObject({ fieldRules: { b2: "required", b: "readonly" }, approval: { targets: ["b"] } });
+  });
+
   it("shows the default flow for legacy snapshots without changing their stored definition", async () => {
     const api = adapter();
     render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);

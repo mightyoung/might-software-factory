@@ -154,3 +154,61 @@ describe("LedgerWorkflowEditor", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("node business properties", () => {
+  function BusinessEditor() {
+    const [workflow, setWorkflow] = useState(defaultWorkflow);
+    return <>
+      <LedgerWorkflowEditor workflow={workflow} fields={[{ key: "owner", label: "经办人", type: "text", required: false }, { key: "quantity", label: "数量", type: "number", required: true }]} disabled={false} onChange={setWorkflow} />
+      <output aria-label="配置结果">{JSON.stringify(workflow)}</output>
+    </>;
+  }
+  it("keeps node policies and the state catalog when changing the route", () => {
+    render(<BusinessEditor />);
+    fireEvent.click(screen.getByRole("button", { name: "添加业务状态" }));
+    fireEvent.change(screen.getByLabelText("业务状态 1"), { target: { value: "待复核" } });
+    fireEvent.change(screen.getByLabelText("进入节点后的状态"), { target: { value: "待复核" } });
+    fireEvent.change(screen.getByLabelText("数量的规则"), { target: { value: "required" } });
+    fireEvent.change(screen.getByLabelText("审批人来源"), { target: { value: "members" } });
+    fireEvent.change(screen.getByLabelText("多人办理方式"), { target: { value: "sequential" } });
+    fireEvent.change(screen.getByLabelText("审批目标（每行一个，按顺序）"), { target: { value: "member_1\nmember_2" } });
+    fireEvent.change(screen.getByLabelText("待分派责任人成员标识"), { target: { value: "manager_1" } });
+    fireEvent.click(screen.getByRole("button", { name: "插入办理节点" }));
+    expect(result().states).toEqual(["待复核"]);
+    expect(result().nodes[0]).toMatchObject({ transitions: { enter: "待复核" }, fieldRules: { quantity: "required" }, approval: { source: "members", targets: ["member_1", "member_2"], mode: "sequential", fallbackMember: "manager_1" } });
+    fireEvent.change(screen.getByLabelText("业务状态 1"), { target: { value: "等待审批" } });
+    expect(result().nodes[0].transitions.enter).toBe("等待审批");
+    fireEvent.click(screen.getByRole("button", { name: "重置为登记到完成" }));
+    expect(result().states).toEqual(["等待审批"]);
+    expect(result().nodes).toEqual(defaultWorkflow().nodes);
+  });
+  it("does not steal another state's actions while typing through its name", () => {
+    function Editor() {
+      const initial = defaultWorkflow();
+      initial.states = ["A", "B"];
+      initial.nodes[0].transitions = { enter: "A", approve: "B" };
+      const [workflow, setWorkflow] = useState(initial);
+      return <><LedgerWorkflowEditor workflow={workflow} disabled={false} onChange={setWorkflow} /><output aria-label="配置结果">{JSON.stringify(workflow)}</output></>;
+    }
+    render(<Editor />);
+    const name = screen.getByLabelText("业务状态 1");
+    fireEvent.change(name, { target: { value: "B" } });
+    expect(result().nodes[0].transitions).toEqual({ enter: "A", approve: "B" });
+    fireEvent.change(name, { target: { value: "B2" } });
+    expect(result().states).toEqual(["B2", "B"]);
+    expect(result().nodes[0].transitions).toEqual({ enter: "B2", approve: "B" });
+  });
+
+  it("switches approver sources without retaining incompatible targets", () => {
+    render(<BusinessEditor />);
+    fireEvent.change(screen.getByLabelText("审批人来源"), { target: { value: "field" } });
+    const fields = screen.getByLabelText("存储成员标识的文本字段");
+    expect(fields).not.toHaveTextContent("数量");
+    fireEvent.change(fields, { target: { value: "owner" } });
+    expect(result().nodes[0].approval.targets).toEqual(["owner"]);
+    fireEvent.change(screen.getByLabelText("审批人来源"), { target: { value: "departmentManager" } });
+    expect(result().nodes[0].approval.targets).toEqual([]);
+    fireEvent.change(screen.getByLabelText("审批人来源"), { target: { value: "" } });
+    expect(result().nodes[0]).not.toHaveProperty("approval");
+  });
+});

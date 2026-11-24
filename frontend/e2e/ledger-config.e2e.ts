@@ -1,3 +1,4 @@
+import { configureReviewNode, reviewProperties, reviewStates } from "../../tools/ledger-configuration/review-node.mjs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
@@ -202,6 +203,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await page.getByLabel("台账名称").fill("采购申请新版");
   await page.getByRole("button", { name: "插入办理节点" }).click();
   await page.getByLabel("节点名称").fill("主管确认");
+  await configureReviewNode(page);
   const node = page.getByRole("button", { name: "流程节点 主管确认", exact: true });
   const originalX = await page.getByLabel("节点横坐标").inputValue();
   const originalY = await page.getByLabel("节点纵坐标").inputValue();
@@ -226,12 +228,17 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   ).toBeVisible();
   const editedFlow = versions[0].definition.workflow!;
   expect(editedFlow.nodes.find(node => node.kind === "step")).toMatchObject({ label: "主管确认", x: savedX + 25, y: savedY });
+  expect(editedFlow).toMatchObject({ states: reviewStates });
+  expect(editedFlow.nodes.find(node => node.kind === "step")).toMatchObject(reviewProperties);
   expect(editedFlow.edges).toHaveLength(2);
   await page.reload();
   await page.getByRole("navigation", { name: "已配置台账" })
     .getByRole("button").filter({ hasText: "采购申请新版" }).click();
   await page.getByRole("button", { name: "流程节点 主管确认", exact: true }).click();
   await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
+  await expect(page.getByLabel("审批目标（每行一个，按顺序）")).toHaveValue(reviewProperties.approval.targets.join("\n"));
+  await expect(page.getByLabel("退回后的状态")).toHaveValue(reviewStates[1]);
+  await expect(page.getByLabel("数量的规则")).toHaveValue("required");
   await expect(page.getByLabel("节点纵坐标")).toHaveValue(String(savedY));
   await page.getByRole("button", { name: "比较版本 1", exact: true }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText(

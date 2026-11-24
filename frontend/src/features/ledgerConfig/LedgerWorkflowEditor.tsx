@@ -2,6 +2,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { useRef, useState, type PointerEvent } from "react";
 import type { LedgerConfiguration } from "./model";
 import "./ledger-workflow.css";
+import { LedgerNodeProperties } from "./LedgerNodeProperties";
 
 type Workflow = NonNullable<LedgerConfiguration["workflow"]>;
 type Node = Workflow["nodes"][number];
@@ -18,13 +19,16 @@ export function defaultWorkflow(): Workflow {
 
 export function LedgerWorkflowEditor({
   workflow,
+  fields = [],
   disabled,
   onChange,
 }: {
   workflow: Workflow;
+  fields?: LedgerConfiguration["fields"];
   disabled: boolean;
   onChange: (workflow: Workflow) => void;
 }) {
+  const stateRenameOrigins = useRef(new Map<number, { from: string; value: string }>());
   const [selectedId, setSelectedId] = useState("start");
   const [preview, setPreview] = useState<{
     id: string;
@@ -68,6 +72,7 @@ export function LedgerWorkflowEditor({
   }
   function route(nodes: Node[]) {
     onChange({
+      ...workflow,
       nodes,
       edges: nodes
         .slice(1)
@@ -130,9 +135,61 @@ export function LedgerWorkflowEditor({
     }
   }
 
+  function renameState(index: number, value: string) {
+    if (disabled) return;
+    const previous = workflow.states![index];
+    const pending = stateRenameOrigins.current.get(index);
+    const origin = pending?.value === previous ? pending.from : previous;
+    const unique = value !== "" && !workflow.states!.some((state, position) => position !== index && state === value);
+    if (unique) stateRenameOrigins.current.delete(index);
+    else stateRenameOrigins.current.set(index, { from: origin, value });
+    const states = workflow.states!.map((state, position) => position === index ? value : state);
+    const nodes = workflow.nodes.map((node) => {
+      if (!unique || !node.transitions) return node;
+      const transitions = Object.fromEntries(
+        Object.entries(node.transitions).map(([action, state]) => [
+          action,
+          state === origin ? value : state,
+        ]),
+      );
+      return { ...node, transitions };
+    });
+    onChange({ ...workflow, states, nodes });
+  }
+
   return (
     <section aria-label="流程设计" className="workflow-editor">
       <h2>流程设计</h2>
+      <fieldset disabled={disabled}>
+        <legend>台账业务状态</legend>
+        {(workflow.states ?? []).map((state, index) => (
+          <div className="config-actions" key={index}>
+            <label>
+              业务状态 {index + 1}
+              <input maxLength={120} value={state} onChange={(event) => renameState(index, event.target.value)} />
+            </label>
+            <Button
+              label={`移除业务状态 ${index + 1}`}
+              variant="secondary"
+              isDisabled={disabled}
+              onClick={() => {
+                stateRenameOrigins.current = new Map([...stateRenameOrigins.current]
+                  .filter(([position]) => position !== index)
+                  .map(([position, origin]) => [position > index ? position - 1 : position, origin]));
+                onChange({ ...workflow, states: workflow.states!.filter((_, position) => position !== index) });
+              }}
+            />
+          </div>
+        ))}
+        <Button
+          label="添加业务状态"
+          variant="secondary"
+          isDisabled={disabled || (workflow.states?.length ?? 0) >= 100}
+          onClick={() => {
+            if (!disabled) onChange({ ...workflow, states: [...(workflow.states ?? []), ""] });
+          }}
+        />
+      </fieldset>
       <div className="workflow-canvas" ref={canvas} aria-label="流程画布">
         <svg
           viewBox="0 0 1000 1000"
@@ -229,6 +286,7 @@ export function LedgerWorkflowEditor({
               onChange={(event) => update({ label: event.target.value })}
             />
           </label>
+          <LedgerNodeProperties node={selected} fields={fields} states={workflow.states ?? []} onChange={update} />
           <div className="workflow-coordinates">
             {(["x", "y"] as const).map((axis) => (
               <label key={axis}>
@@ -254,7 +312,7 @@ export function LedgerWorkflowEditor({
           isDisabled={disabled}
           onClick={() => {
             if (!disabled) {
-              onChange(defaultWorkflow());
+              onChange({ ...workflow, ...defaultWorkflow() });
               setSelectedId("start");
             }
           }}
