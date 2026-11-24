@@ -1,3 +1,4 @@
+import { configureReviewNode, reviewProperties, reviewStates } from "./review-node.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -50,26 +51,65 @@ try {
   await expect(columns).toHaveText(["数量", "批次"]);
   const first = await action("保存草稿", "versions");
   assert.equal(first.version, 1);
+  assert.deepEqual(first.definition.workflow.nodes.map(node => node.kind), ["start", "end"]);
+  assert.deepEqual(first.definition.workflow.edges, [{ from: "start", to: "end" }]);
   assert.deepEqual(first.definition.listFields, ["quantity", "batch"]);
   assert.deepEqual(first.definition.queryFields, ["batch", "quantity"]);
   assert.equal((await action("发布当前版本", "publish")).publishedVersion, 1);
   await page.getByLabel("字段名称").first().fill("到货批次");
-  assert.equal((await action("保存草稿", "versions")).version, 2);
+  await page.getByRole("button", { name: "插入办理节点" }).click();
+  await page.getByLabel("节点名称").fill("主管确认");
+  await configureReviewNode(page);
+  const node = page.getByRole("button", { name: "流程节点 主管确认", exact: true });
+  const originalX = await page.getByLabel("节点横坐标").inputValue();
+  const originalY = await page.getByLabel("节点纵坐标").inputValue();
+  await node.scrollIntoViewIfNeeded();
+  const box = await node.boundingBox();
+  assert.ok(box);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 35, box.y + box.height / 2 + 35, { steps: 5 });
+  await page.mouse.up();
+  const x = Number(await page.getByLabel("节点横坐标").inputValue());
+  const y = Number(await page.getByLabel("节点纵坐标").inputValue());
+  assert.notEqual(x, Number(originalX));
+  assert.notEqual(y, Number(originalY));
+  const second = await action("保存草稿", "versions");
+  assert.equal(second.version, 2);
+  assert.deepEqual(second.definition.workflow.states, reviewStates);
+  assert.equal(second.definition.workflow.nodes.length, 3);
+  assert.deepEqual(second.definition.workflow.nodes.find(node => node.kind === "step"), {
+    id: second.definition.workflow.nodes.find(node => node.kind === "step").id,
+    kind: "step", label: "主管确认", x, y, ...reviewProperties,
+  });
+  assert.equal((await action("发布当前版本", "publish")).publishedVersion, 2);
+  await page.reload();
+  await page.getByRole("navigation", { name: "已配置台账" }).getByRole("button").filter({ hasText: name }).click();
+  await page.getByRole("button", { name: "流程节点 主管确认", exact: true }).click();
+  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(x));
+  await expect(page.getByLabel("审批目标（每行一个，按顺序）")).toHaveValue(reviewProperties.approval.targets.join("\n"));
+  await expect(page.getByLabel("退回后的状态")).toHaveValue(reviewStates[1]);
+  await expect(page.getByLabel("数量的规则")).toHaveValue("required");
+  await expect(page.getByLabel("节点纵坐标")).toHaveValue(String(y));
   await page.getByRole("button", { name: "比较版本 1" }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText("到货批次");
   const restored = await action("恢复版本 1为新草稿", "restore");
   assert.equal(restored.version, 3);
   assert.equal(restored.sourceVersion, 1);
-  assert.equal(restored.publishedVersion, 1);
+  assert.equal(restored.publishedVersion, 2);
   assert.equal(restored.definition.fields[0].label, "批次");
+  assert.deepEqual(restored.definition.workflow, first.definition.workflow);
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
+  await expect(page.getByRole("button", { name: "流程节点 主管确认", exact: true })).toHaveCount(0);
   assert.equal((await action("发布当前版本", "publish")).publishedVersion, 3);
   await page.reload();
   await page.getByRole("navigation", { name: "已配置台账" }).getByRole("button").filter({ hasText: name }).click();
   await expect(page.getByText("版本 3 · 已发布", {exact:false}).first()).toBeVisible();
   await expect(columns).toHaveText(["数量", "批次"]);
   await expect(page.getByRole("group", { name: "查询条件预览" }).getByRole("spinbutton")).toBeDisabled();
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
   assert.deepEqual(errors, []);
-  console.log("Real HTTPS and Chrome: saved drafts 1/2, compared 1, restored draft 3, explicitly published and reopened history.", key);
+  console.log("Real HTTPS and Chrome: saved default workflow, inserted/renamed/dragged a node in draft 2, published and reopened the configured state, field and ordered approval rules, restored workflow 1 into draft 3 and explicitly published.", key);
 } finally {
   await browser.close();
 }

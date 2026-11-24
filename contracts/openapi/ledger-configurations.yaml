@@ -201,6 +201,11 @@ components:
       type: object
       required: [nodes, edges]
       properties:
+        states:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 120, pattern: '\S' }
         nodes:
           type: array
           maxItems: 32
@@ -224,6 +229,40 @@ components:
         label: { type: string, maxLength: 120 }
         x: { type: integer, minimum: 0, maximum: 1000 }
         y: { type: integer, minimum: 0, maximum: 1000 }
+        transitions:
+          type: object
+          maxProperties: 4
+          additionalProperties: false
+          properties:
+            enter: { type: string, maxLength: 120 }
+            submit: { type: string, maxLength: 120 }
+            approve: { type: string, maxLength: 120 }
+            return: { type: string, maxLength: 120 }
+        fieldRules:
+          type: object
+          maxProperties: 100
+          propertyNames:
+            pattern: '^[a-z][a-z0-9_]{0,63}$'
+          additionalProperties:
+            type: string
+            enum: [hidden, readonly, editable, required]
+        approval:
+          $ref: '#/components/schemas/WorkflowApproval'
+    WorkflowApproval:
+      type: object
+      required: [source, targets, mode]
+      properties:
+        source:
+          type: string
+          enum: [members, roles, positions, departmentManager, field]
+        targets:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          description: Ordered directory UUIDs for members, roles or positions, a single text field key for field source, or empty for department manager. Incomplete references may be saved as drafts. Publication rejects UUIDs that identify the same directory entry even when letter case differs.
+          items: { type: string, maxLength: 128 }
+        mode: { type: string, enum: [any, all, sequential] }
+        fallbackMember: { type: string, maxLength: 128 }
     Snapshot:
       type: object
       required:

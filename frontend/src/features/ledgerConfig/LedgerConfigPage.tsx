@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
-import { LedgerViewOrder } from "./LedgerViewOrder";
+import { ledgerViews, LedgerViewOrder } from "./LedgerViewOrder";
+import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
   ConfigurationSnapshot,
@@ -20,6 +21,7 @@ const empty = (): LedgerConfiguration => ({
   fields: [],
   listFields: [],
   queryFields: [],
+  workflow: defaultWorkflow(),
 });
 const fieldTypes = {
   text: "文本",
@@ -36,19 +38,14 @@ type Operation = {
   send: () => Promise<ConfigurationSnapshot>;
 };
 
-const orderedViews = [
-  { property: "listFields", label: "列表字段顺序" },
-  { property: "queryFields", label: "查询字段顺序" },
-] as const;
-
 function ConfigurationOrder({ definition }: { definition: LedgerConfiguration }) {
   return (
     <>
-      {orderedViews.map(({ property, label }) => (
+      {ledgerViews.map(({ property, label }) => (
         <div className="config-order" key={property}>
-          <p>{label}</p>
+          <p>{label}顺序</p>
           {definition[property].length ? (
-            <ol aria-label={label}>
+            <ol aria-label={label + "顺序"}>
               {definition[property].map((key, index) => {
                 const field = definition.fields.find((candidate) => candidate.key === key);
                 return <li key={index}>{field?.label ? `${field.label}（${key}）` : key}</li>;
@@ -99,8 +96,43 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
+      <details>
+        <summary>查看流程图</summary>
+        <LedgerWorkflowEditor fields={definition.fields} workflow={definition.workflow ?? defaultWorkflow()} disabled onChange={() => {}} />
+      </details>
     </div>
   );
+}
+
+function remapWorkflowField(
+  workflow: LedgerConfiguration["workflow"],
+  previous: string,
+  next?: string,
+) {
+  if (!workflow || previous === next) return workflow;
+  const nodes = workflow.nodes.map((node) => {
+    const fieldRules = node.fieldRules ? { ...node.fieldRules } : undefined;
+    if (fieldRules && Object.hasOwn(fieldRules, previous)) {
+      const rule = fieldRules[previous];
+      delete fieldRules[previous];
+      if (next !== undefined) fieldRules[next] = rule;
+    }
+    const approval = node.approval;
+    return {
+      ...node,
+      ...(fieldRules ? { fieldRules } : {}),
+      ...(approval?.source === "field" ? {
+        approval: {
+          ...approval,
+          targets: approval.targets.flatMap((key) => {
+            if (key !== previous) return [key];
+            return next !== undefined ? [next] : [];
+          }),
+        },
+      } : {}),
+    };
+  });
+  return { ...workflow, nodes };
 }
 
 export function LedgerConfigPage({
@@ -120,6 +152,7 @@ export function LedgerConfigPage({
   const [key, setKey] = useState("");
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
+  const [draftEpoch, setDraftEpoch] = useState(0);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
   const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
@@ -131,10 +164,10 @@ export function LedgerConfigPage({
   const [error, setError] = useState("");
   const lifetime = useRef(0);
   const runningOperation = useRef(false);
+  const fieldRenameOrigins = useRef(new Map<number, string>());
   const [recovery, setRecovery] = useState<Operation | null>(null);
-  const dirty = snapshot
-    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
-    : Boolean(key || draft.name || draft.fields.length);
+  const dirty = Boolean(!snapshot && key) ||
+    JSON.stringify(draft) !== JSON.stringify(snapshot?.definition ?? empty());
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
   useUnsavedGuard(
@@ -154,8 +187,17 @@ export function LedgerConfigPage({
       setError(
         "配置已被其他人更新。你的输入已保留，请重新打开此台账核对最新版本。",
       );
-    else if (cause instanceof ApiError && cause.status === 400)
-      setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
+    else if (cause instanceof ApiError && cause.status === 400) {
+      const path = cause.fieldErrors[0]?.field?.split(".");
+      const node = draft.workflow?.nodes.find(item => item.id === path?.[3]);
+      if (node) {
+        setError(`节点“${node.label || node.id}”配置无效，请核对状态、字段规则及审批人的标识和顺序。`);
+      } else if (path?.[1] === "workflow") {
+        setError("流程配置无效，请核对节点连线和业务状态名称。");
+      } else {
+        setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
+      }
+    }
     else setError("操作未确认成功，请稍后重试。");
   }
   useEffect(() => {
@@ -189,6 +231,8 @@ export function LedgerConfigPage({
     return !dirty || window.confirm("切换会丢弃未保存的配置。确定切换？");
   }
   function showSnapshot(next: ConfigurationSnapshot) {
+    fieldRenameOrigins.current.clear();
+    setDraftEpoch((epoch) => epoch + 1);
     setSnapshot(next);
     setDraft(next.definition);
     setCompared(null);
@@ -222,6 +266,8 @@ export function LedgerConfigPage({
   }
   function create(source: ConfigurationSnapshot | null = null) {
     if (!discardAllowed()) return;
+    fieldRenameOrigins.current.clear();
+    setDraftEpoch((epoch) => epoch + 1);
     setKey("");
     setSnapshot(null);
     setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
@@ -232,22 +278,43 @@ export function LedgerConfigPage({
     setNotice("");
   }
   function updateField(index: number, patch: Partial<LedgerField>) {
+    const origin = fieldRenameOrigins.current.get(index) ?? draft.fields[index]!.key;
+    const renameKey = patch.key !== undefined && patch.key !== "" && !draft.fields.some((field, position) => position !== index && field.key === patch.key);
+    if (patch.key !== undefined) {
+      if (renameKey) fieldRenameOrigins.current.delete(index);
+      else fieldRenameOrigins.current.set(index, origin);
+    }
     setDraft((current) => {
-      const previous = current.fields[index]!;
       const fields = current.fields.map((field, position) =>
         position === index ? { ...field, ...patch } : field,
       );
       const rename = (keys: string[]) =>
         keys.map((value) =>
-          value === previous.key && patch.key !== undefined ? patch.key : value,
+          value === origin && renameKey ? patch.key! : value,
         );
       return {
         ...current,
         fields,
         listFields: rename(current.listFields),
         queryFields: rename(current.queryFields),
+        ...(current.workflow && renameKey ? {
+          workflow: remapWorkflowField(current.workflow, origin, patch.key),
+        } : {}),
       };
     });
+  }
+  function removeField(index: number) {
+    const origin = fieldRenameOrigins.current.get(index) ?? draft.fields[index]!.key;
+    fieldRenameOrigins.current = new Map([...fieldRenameOrigins.current]
+      .filter(([position]) => position !== index)
+      .map(([position, key]) => [position > index ? position - 1 : position, key]));
+    setDraft((current) => ({
+      ...current,
+      fields: current.fields.filter((_, position) => position !== index),
+      listFields: current.listFields.filter((value) => value !== origin),
+      queryFields: current.queryFields.filter((value) => value !== origin),
+      ...(current.workflow ? { workflow: remapWorkflowField(current.workflow, origin) } : {}),
+    }));
   }
   function toggleView(property: "listFields" | "queryFields", field: string) {
     setDraft((current) => ({
@@ -479,36 +546,20 @@ export function LedgerConfigPage({
                     updateField(index, { required: !field.required })
                   }
                 />
-                <CheckboxInput
-                  label="列表显示"
-                  value={draft.listFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("listFields", field.key)}
-                />
-                <CheckboxInput
-                  label="允许查询"
-                  value={draft.queryFields.includes(field.key)}
-                  isDisabled={!canManage || locked || !field.key}
-                  onChange={() => toggleView("queryFields", field.key)}
-                />
+                {ledgerViews.map(({ property, toggleLabel }) => (
+                  <CheckboxInput
+                    key={property}
+                    label={toggleLabel}
+                    value={draft[property].includes(field.key)}
+                    isDisabled={!canManage || locked || !field.key}
+                    onChange={() => toggleView(property, field.key)}
+                  />
+                ))}
                 <Button
                   label={`移除字段 ${index + 1}`}
                   variant="secondary"
                   isDisabled={!canManage || locked}
-                  onClick={() =>
-                    setDraft((current) => ({
-                      ...current,
-                      fields: current.fields.filter(
-                        (_, position) => position !== index,
-                      ),
-                      listFields: current.listFields.filter(
-                        (value) => value !== field.key,
-                      ),
-                      queryFields: current.queryFields.filter(
-                        (value) => value !== field.key,
-                      ),
-                    }))
-                  }
+                  onClick={() => removeField(index)}
                 />
               </fieldset>
             ))}
@@ -535,6 +586,13 @@ export function LedgerConfigPage({
             onChange={(property, keys) =>
               setDraft((current) => ({ ...current, [property]: keys }))
             }
+          />
+          <LedgerWorkflowEditor
+            key={draftEpoch}
+            fields={draft.fields}
+            workflow={draft.workflow ?? defaultWorkflow()}
+            disabled={!canManage || locked || loading}
+            onChange={(workflow) => setDraft(current => ({ ...current, workflow }))}
           />
           <LedgerViewPreview definition={draft} />
           {recovery && (
@@ -618,9 +676,9 @@ export function LedgerConfigPage({
                   ? "配置内容相同。"
                   : "配置内容不同，可核对下方两份配置。"}
               </p>
-              {orderedViews.map(({ property, label }) =>
+              {ledgerViews.map(({ property, label }) =>
                 JSON.stringify(compared.definition[property]) !== JSON.stringify(draft[property])
-                  ? <p key={property}>{label}已变化。</p> : null,
+                  ? <p key={property}>{label}顺序已变化。</p> : null,
               )}
               <div className="config-comparison">
                 <div>
