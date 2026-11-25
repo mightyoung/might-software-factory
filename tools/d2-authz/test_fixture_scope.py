@@ -71,3 +71,17 @@ class FixtureScopeTest(unittest.TestCase):
             with self.assertRaises(ValueError), fixture_transaction(tx, OWNED):
                 self.fail("May not join a previous transaction")
             cursor.execute.assert_not_called()
+
+    def test_transaction_rechecks_version_ddl_and_database_owner_before_scope_binding(self):
+        tx, cursor = self.connection()
+        cursor.fetchone.side_effect = [None]  # No qualifying role/version row.
+        with self.assertRaises(ValueError), fixture_transaction(tx, OWNED):
+            self.fail("A connection that no longer qualifies must not be entered")
+        cursor.execute.assert_called_once()
+        identity_sql = cursor.execute.call_args.args[0]
+        self.assertIn("current_setting('server_version_num')::int >= 180000", identity_sql)
+        self.assertIn("current_setting('server_version_num')::int < 190000", identity_sql)
+        self.assertIn("not pg_catalog.has_database_privilege(current_database(), 'CREATE,TEMP')", identity_sql)
+        self.assertIn("not pg_catalog.has_schema_privilege('public', 'CREATE')", identity_sql)
+        self.assertIn("d.datdba = r.oid", identity_sql)
+        self.assertIs(tx.__exit__.call_args.args[0], ValueError)

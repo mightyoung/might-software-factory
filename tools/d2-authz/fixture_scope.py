@@ -48,9 +48,15 @@ def fixture_transaction(connection, owned):
                 or r.rolcreatedb or r.rolcreaterole
                 or exists(select 1 from pg_catalog.pg_auth_members m where m.member = r.oid)
             )
+            and current_setting('server_version_num')::int >= 180000
+            and current_setting('server_version_num')::int < 190000
+            and not pg_catalog.has_database_privilege(current_database(), 'CREATE,TEMP')
+            and not pg_catalog.has_schema_privilege('public', 'CREATE')
+            and not exists(select 1 from pg_catalog.pg_database d
+                           where d.datname = current_database() and d.datdba = r.oid)
             """)
         if cursor.fetchone() != (DATABASE, FIXTURE_ROLE, FIXTURE_ROLE, owned.instance, None):
-            raise ValueError("AU-08 fixture connection has the wrong instance, role or inherited context")
+            raise ValueError("AU-08 fixture connection has the wrong instance, PostgreSQL version, role or inherited context")
         cursor.execute("select pg_catalog.set_config('app.tenant_id', %s, true)", (tenant_id,))
         if cursor.fetchone() != (tenant_id,):
             raise ValueError("Cannot bind AU-08 transaction to the owned tenant")
