@@ -11,9 +11,13 @@ OP = RESOURCES + "db/operator/"
 VERSIONS = (*map(str, range(2, 9)), *map(str, range(11, 19)), "18.1", "18.2", "18.3",
             *map(str, range(19, 38)))
 SOURCES = {
-    "framework": ("backend/pom.xml", "tools/d0/migrate.java", "tools/d0/bootstrap.java",
+    "framework": ("backend/pom.xml", RESOURCES + "application.yml", "tools/d0/migrate.java", "tools/d0/bootstrap.java",
                   OP + "V23-superuser-apply.sql"),
     "d0_grants": (OP + "d0-legacy-runtime-grants.sql", OP + "d0-runtime-grants.sql"),
+    # These operator files name an existing dev role; do not execute or rewrite them for AU-08.
+    # Record the fixed-role deltas so a later least-privilege review can account for them.
+    "fixed_role_grant_deltas": tuple(OP + f"V{version}-runtime-grants.sql"
+                                     for version in ("25", "36", "37")),
     "d1_grants": (OP + "d1-runtime-grants.sql",),
     "d2_grants": tuple(OP + f"d2{suffix}-runtime-grants.sql"
                        for suffix in ("", "-return", "-loss", "-transfer", "-version")),

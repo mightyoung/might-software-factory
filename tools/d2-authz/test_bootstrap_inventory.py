@@ -1,3 +1,4 @@
+from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,3 +33,16 @@ class BootstrapInventoryTest(unittest.TestCase):
                      "d1_fixture", "deploy_bpmn", "bpmn", "acceptance"):
             self.assertIn(name, result["sources"])
             self.assertTrue(all(len(digest) == 64 for digest in result["sources"][name].values()))
+
+    def test_captures_fixed_role_grant_deltas_as_review_inputs_not_runnable_bootstrap(self):
+        result = review_inputs(ROOT)
+        self.assertFalse(result["ready"])
+        fixed = result["sources"]["fixed_role_grant_deltas"]
+        self.assertEqual(list(fixed), [
+            "backend/src/main/resources/db/operator/V25-runtime-grants.sql",
+            "backend/src/main/resources/db/operator/V36-runtime-grants.sql",
+            "backend/src/main/resources/db/operator/V37-runtime-grants.sql",
+        ])
+        for name, digest in fixed.items():
+            self.assertEqual(digest, sha256((ROOT / name).read_bytes()).hexdigest())
+        self.assertIn("backend/src/main/resources/application.yml", result["sources"]["framework"])
