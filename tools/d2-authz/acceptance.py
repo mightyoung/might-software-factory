@@ -9,6 +9,10 @@ import re
 import time
 from uuid import uuid4
 
+# The acceptance scenarios use assert for their pass/fail predicates.
+if not __debug__:
+    raise SystemExit("AU-08 requires Python assertions; do not use optimized mode.")
+
 import psycopg2
 import requests
 
