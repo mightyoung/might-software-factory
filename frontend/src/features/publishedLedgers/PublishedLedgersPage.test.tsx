@@ -137,6 +137,7 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   fireEvent.click(within(editor).getByRole("button", { name: "保存记录" }));
   await screen.findByRole("alert");
   expect(quantity).toBeDisabled();
+  expect(within(editor).getByLabelText("所属组织")).toBeDisabled();
   expect(screen.getByRole("button", { name: "新增记录" })).toHaveAttribute("aria-disabled", "true");
   const retry = screen.getByRole("button", { name: "重试原操作" });
   fireEvent.click(retry);

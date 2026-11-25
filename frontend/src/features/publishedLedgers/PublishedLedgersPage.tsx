@@ -141,7 +141,7 @@ export function PublishedLedgersPage({
     return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
   }
   function select(next: PublishedLedger) {
-    if (busy || !mayDiscard()) return;
+    if (!mayDiscard()) return;
     setLedger(next);
     setFilters({});
     setEditor(null);
@@ -155,7 +155,7 @@ export function PublishedLedgersPage({
     });
   }
   function create() {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger || !mayDiscard()) return;
     const initial = {
       values: Object.fromEntries(
         ledger.definition.fields
@@ -170,7 +170,7 @@ export function PublishedLedgersPage({
     setError("");
   }
   async function open(id: string) {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger || !mayDiscard()) return;
     const mine = generation.current;
     setBusy(true);
     setError("");
@@ -497,7 +497,7 @@ export function PublishedLedgersPage({
                         所属组织
                         <select
                           required
-                          disabled={!!editor.detail || !editing || locked}
+                          disabled={!!editor.detail}
                           value={editor.organizationId}
                           onChange={(event) =>
                             setEditor(
