@@ -1,7 +1,9 @@
+import java.sql.Connection;
 import java.sql.DriverManager;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.BiConsumer;
 
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.ProcessEngineConfiguration;
@@ -21,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ReceiptEventRegistryTest {
     @Test
     void startsInstancesAndOnlyWakesTheMatchingInstanceAndBatch() throws Exception {
-        withEngine((engine, channel) -> {
+        withEngine((engine, channel, storage, schema) -> {
             engine.getRepositoryService().createDeployment().addClasspathResource("receipt.bpmn20.xml").deploy();
             var requested = StructuredReceiptEventTest.REQUESTED;
             assertEquals(new StructuredReceiptEvent.Identity("urn:fixture:purchase", "req-a"), channel.send(requested));
@@ -51,7 +53,7 @@ class ReceiptEventRegistryTest {
 
     @Test
     void earlyStructuredApprovalDoesNotAdvanceUntilExactResendAfterSubscription() throws Exception {
-        withEngine((engine, channel) -> {
+        withEngine((engine, channel, storage, schema) -> {
             engine.getRepositoryService().createDeployment().addClasspathResource("receipt-early.bpmn20.xml").deploy();
             var runtime = engine.getRuntimeService();
             var tasks = engine.getTaskService();
@@ -82,7 +84,76 @@ class ReceiptEventRegistryTest {
         });
     }
 
-    private static void withEngine(BiConsumer<ProcessEngine, TestChannel> test) throws Exception {
+    @Test
+    void relaysStoredApprovalOnlyForAnUnexpiredReadyInstance() throws Exception {
+        withEngine((engine, channel, storage, schema) -> {
+            engine.getRepositoryService().createDeployment().addClasspathResource("receipt-early.bpmn20.xml").deploy();
+            var runtime = engine.getRuntimeService();
+            var tasks = engine.getTaskService();
+            String first = runtime.startProcessInstanceByKey("receiptWithIntake", Map.of("batch", "A")).getId();
+            String second = runtime.startProcessInstanceByKey("receiptWithIntake", Map.of("batch", "B")).getId();
+            var inbox = new EarlyReceiptStorageFixture(schema);
+            inbox.create(storage);
+            Instant now = Instant.parse("2026-11-25T00:00:00Z");
+            Duration ttl = Duration.ofSeconds(30);
+            String body = StructuredReceiptEventTest.APPROVED;
+            var accepted = EarlyReceiptContract.accept("tenant-a", "sub-v1",
+                    body.replace("instance-a", first), now, ttl);
+            var expiring = EarlyReceiptContract.accept("tenant-a", "sub-v1",
+                    body.replace("instance-a", second).replace("approval-1", "approval-2")
+                            .replace("\"batch\":\"A\"", "\"batch\":\"B\""),
+                    now.minus(ttl), ttl);
+            storage.setAutoCommit(false);
+            try {
+                inbox.accept(storage, accepted);
+                inbox.accept(storage, expiring);
+                storage.commit();
+            } finally {
+                storage.rollback(); // Also discard any writes if the fixture did not reach commit.
+                storage.setAutoCommit(true);
+            }
+
+            assertEquals(EarlyReceiptContract.Decision.WAIT,
+                    relay(engine, channel, inbox.find(storage, accepted.key()), now));
+            var received = tasks.createTaskQuery().taskDefinitionKey("received");
+            assertEquals(0L, received.count());
+
+            tasks.complete(tasks.createTaskQuery().processInstanceId(first).taskDefinitionKey("intake").singleResult().getId());
+            tasks.complete(tasks.createTaskQuery().processInstanceId(second).taskDefinitionKey("intake").singleResult().getId());
+            assertEquals(2L, runtime.createEventSubscriptionQuery().activityId("waitForBatch").count());
+            assertEquals(EarlyReceiptContract.Decision.EXPIRE,
+                    relay(engine, channel, inbox.find(storage, expiring.key()), now));
+            assertEquals(0L, received.count());
+            assertEquals(EarlyReceiptContract.Decision.DELIVER,
+                    relay(engine, channel, inbox.find(storage, accepted.key()), now));
+            assertEquals(first, received.singleResult().getProcessInstanceId());
+            assertEquals(second, runtime.createEventSubscriptionQuery()
+                    .activityId("waitForBatch").singleResult().getProcessInstanceId());
+            assertEquals(EarlyReceiptContract.Decision.WAIT,
+                    relay(engine, channel, inbox.find(storage, accepted.key()), now));
+            assertEquals(1L, received.count());
+        });
+    }
+
+    // An explicit test relay, not a production scheduler, transaction, or durable receipt.
+    private static EarlyReceiptContract.Decision relay(ProcessEngine engine, TestChannel channel,
+            EarlyReceiptContract stored, Instant decisionTime) {
+        assertNotNull(stored, "expected saved delivery");
+        var runtime = engine.getRuntimeService();
+        boolean ready = runtime.createEventSubscriptionQuery()
+                .processInstanceId(stored.target().instance()).activityId("waitForBatch").count() == 1
+                && stored.target().batch().equals(runtime.getVariable(stored.target().instance(), "batch"));
+        var decision = stored.evaluate(decisionTime, ready);
+        if (decision == EarlyReceiptContract.Decision.DELIVER) channel.send(stored.originalBody());
+        return decision;
+    }
+
+    @FunctionalInterface
+    private interface EngineScenario {
+        void run(ProcessEngine engine, TestChannel channel, Connection storage, String schema) throws Exception;
+    }
+
+    private static void withEngine(EngineScenario test) throws Exception {
         String url = System.getenv("EVENT_PG_URL");
         assertNotNull(url, "Set EVENT_PG_URL to a dedicated PostgreSQL verification database");
         String user = System.getenv("EVENT_PG_USER");
@@ -116,7 +187,7 @@ class ReceiptEventRegistryTest {
                     repository.createInboundChannelModelBuilder().key("receipt-channel").resourceName("receipt.channel")
                             .channelAdapter("${receiptChannel}").jsonDeserializer().detectEventKeyUsingJsonField("type")
                             .jsonFieldsMapDirectlyToPayload().deploy();
-                    test.accept(engine, channel);
+                    test.run(engine, channel, connection, schema);
                 } finally {
                     engine.close();
                 }

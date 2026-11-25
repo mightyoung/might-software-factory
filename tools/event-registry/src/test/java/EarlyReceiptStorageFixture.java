@@ -9,7 +9,7 @@ final class EarlyReceiptStorageFixture {
     private final String table;
 
     EarlyReceiptStorageFixture(String schema) {
-        if (!schema.matches("early_storage_probe_[a-f0-9]{32}")) {
+        if (!schema.matches("(early_storage_probe_|event_probe_)[a-f0-9]{32}")) {
             throw new IllegalArgumentException("Expected a dedicated test schema");
         }
         table = schema + ".delivery";
