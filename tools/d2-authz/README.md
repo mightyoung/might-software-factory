@@ -93,6 +93,32 @@ fixture SQL 事务时，先核对实时数据库名、实例标记、PostgreSQL 
 边界，每次进入新事务重新核对范围；不得在租户作用域内主动 commit，也不改 HTTP 业务
 请求、并发先后或九项断言。离线模拟覆盖边界控制，不代表数据库已实测。
 
+#### fixture 观察和变更权限审查（不含初始化或应用运行权限）
+
+以下从 `acceptance.py` 的直接 SQL 和 `workflow_pin.py` 的只读查询倒推。
+这是后续核对清单，不是授予权限的 SQL。三种身份分开：引导身份建库、迁移和种入
+合成数据；应用身份仅执行正常 HTTPS 业务；fixture 身份仅做下表操作。
+
+| 用途 | fixture 权限候选 | 不应借此授予 |
+| --- | --- | --- |
+| 隔离和成员核对 | `tenant(id,code,name,status)`、`account(id,login_key)`、`tenant_member(tenant_id,id,account_id)` 的 SELECT | 读取凭据、写账户、修改租户 |
+| 撤权和精确恢复 | 读取 `permission(id,code)`、`role_grant(tenant_id,role_id,member_id)`、`role_permission(tenant_id,role_id,permission_id,scope_rule_id)`；后者仅 DELETE 和四列 INSERT | 修改权限目录、角色定义或角色授予；把 V25 dev 角色整表权限照搬过来 |
+| 停用并恢复合成成员 | 仅 `tenant_member(status)` UPDATE | 修改 `auth_epoch`、身份归属或任意列 |
+| 断言无部分提交 | 只读 `tool_loan`、`tool_loan_revision`、`tool_loan_command_receipt`、`tool_loan_item`、`tool_return_request_item`、`workflow_binding(business_id,process_instance_id)`、`act_ru_task` 及 `audit_event(resource_id,result)`；快照的 `to_jsonb` 包含整行 | 写业务表、改工作流任务、读取完整审计载荷 |
+| 固定流程和阻塞证据 | 按 `read_workflow_pin` 实际引用的定义与资源列读取；只观测本库等待者 PID、当前持锁者及其阻塞关系 | 部署流程、读取 SQL 文本、授予 `pg_read_all_stats` 或 `pg_monitor` |
+
+与现有授权对照：D0 的运行角色已区分成员 `auth_epoch` 更新与权限关联四列恢复，
+不能据此把 D0 运行角色授给 fixture；V25 的权限变更记录与 V36/V37 的普通台账
+不是此观察角色所需。成员和权限关联使用 V3 强制行级隔离；Flowable 表不能假定有
+同样的应用租户策略。接入时由已核验的合成库隔离这些表，查询还须通过同租户
+V1 单据的真实绑定关联，不能按孤立的任务 ID 读取。
+
+预检需用专用 fixture 登录逐项验证有效权限和对象所有者，包含 PUBLIC 或其他来源
+产生的间接权限；用测试确认只有预期合成成员和角色关联受影响。旧脚本按成员授予
+匹配角色，尚未证明角色只给目标合成成员使用；接入前应在锁内证明成员初始状态、
+候选关联及其原值，再变更并精确恢复，恢复后另起事务读回。不扩大权限来弥补
+查询失败，不把这份审查清单当成真实 PostgreSQL 验收结果。
+
 `workflow_pin.py` 验证后续部署读回：只接受本轮合成租户中唯一启用的第一版
 `toolLoanV1`，要求实际部署的 BPMN 字节与源码 SHA-256 一致，并使用真实定义 ID
 生成 pin。调用方必须从已核对归属的 Flowable 实例查同租户同键的全部版本，不可先过滤
