@@ -38,7 +38,8 @@ interface FindingDetailsProps {
 }
 
 export function FindingDetailsCore({ Fields, Actions, definition, finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
-  const demo = useAppMode() === "synthetic";
+  const contextMode = useAppMode();
+  const demo = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
   const noun = demo ? "演示记录" : "记录";
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">

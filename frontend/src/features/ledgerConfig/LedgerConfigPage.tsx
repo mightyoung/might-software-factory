@@ -96,10 +96,12 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
-      <details>
-        <summary>查看流程图</summary>
-        <LedgerWorkflowEditor workflow={definition.workflow ?? defaultWorkflow()} disabled onChange={() => {}} />
-      </details>
+      {definition.workflow ? (
+        <details>
+          <summary>查看流程图</summary>
+          <LedgerWorkflowEditor workflow={definition.workflow} disabled onChange={() => {}} />
+        </details>
+      ) : <p>此版本未保存流程。</p>}
     </div>
   );
 }

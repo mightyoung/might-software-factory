@@ -497,3 +497,19 @@ it("sends a stable save identifier and current published pointer through the sha
     { body: { version: 2, expectedVersion: 2, expectedPublishedVersion: 1 } },
   );
 });
+
+it("distinguishes a missing historical flow from an explicitly saved default graph in read-only comparison", async () => {
+  const api = adapter();
+  const current = { ...first, version: 2, definition: { ...first.definition, workflow: defaultWorkflow() } };
+  vi.mocked(api.versions).mockResolvedValue([current, first]);
+  render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "比较版本 1" }));
+  const comparison = screen.getByRole("region", { name: "版本比较" });
+  const old = within(comparison).getByRole("heading", { name: "历史版本 1" }).parentElement!;
+  const present = within(comparison).getByRole("heading", { name: "当前草稿" }).parentElement!;
+  expect(within(comparison).getByText(/配置内容不同/)).toBeInTheDocument();
+  expect(within(present).getByText("查看流程图")).toBeInTheDocument();
+  expect(api.save).not.toHaveBeenCalled();
+  expect(within(old).queryByText("查看流程图")).not.toBeInTheDocument();
+});

@@ -202,7 +202,8 @@ interface AppAdapterFactories {
 
 function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans, demoPresentation }: AppAdapterFactories) {
   const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
-  const mode = useAppMode();
+  const contextMode = useAppMode();
+  const mode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;

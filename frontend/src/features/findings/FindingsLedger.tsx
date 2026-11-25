@@ -77,8 +77,9 @@ function FindingsLedgerBody({
   draftKey,
   onUnauthenticated,
 }: FindingsLedgerProps) {
-  const appMode=useAppMode();
-  const demo=synthetic??appMode==="synthetic";
+  const contextMode = useAppMode();
+  const appMode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
+  const demo = import.meta.env.MSF_BROWSER_MODE === undefined ? synthetic ?? appMode === "synthetic" : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   const location = useLocation();
   const [path, search = ""] = location.split("?");
   const selectionReady = useRef(!resetInitialSelection);

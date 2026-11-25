@@ -77,7 +77,8 @@ function FindingReportFormBody({
   const [draft, setDraft] = useState<FindingDraft>(restored?.draft ?? initial);
   const [errors, setErrors] = useState<FindingDraftErrors>({});
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const live = useAppMode() === "http";
+  const contextMode = useAppMode();
+  const live = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "http";
 
   // 组织选择：仅当适配器提供 listOrganizations 时启用。
   const needsOrganization = adapter.queryOrganizations !== undefined || adapter.listOrganizations !== undefined;
