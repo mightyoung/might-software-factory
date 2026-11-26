@@ -26,3 +26,12 @@
 - `D2_ISSUE_TOOL_IDS`，JSON 数组，包含该范围内三件不同的合成测试工装 UUID。第一件须处于正常、未占用状态，脚本会使用该件创建申请并完成发放。
 
 脚本将去敏结果 JSON 写到标准输出，可重定向到私有证据目录。成功结果包含 `failedStatus=503`、`retryStatus=200`、`rollbackProof=PASS` 和 `sameKeyRetry=PASS`。运行会保留带独立标记的合成业务数据供复核。
+
+## TL-10 发放后拒绝旧撤销（候选验收）
+
+仅在已有授权的本机隔离工装验收环境执行，不能用正式、业务或 NAS 数据库；不能使用 AU-08 的托管批准。前端须包含 #106 的确认冲突处理。沿用上方双账号和同源专用数据库；设置 `D2_ISSUE_DATABASE=msf_d2_issue_test`、同一 ACK，`D2_ISSUE_SCOPE_ID` 为测试保管范围、`D2_WITHDRAW_TOOL_ID` 为该范围中一件独占且尚未被占用的合成工装。凭据沿用私有环境变量，不保存进证据。
+
+1. 在仓库根目录用 `node --test tools/d2-issue/withdraw-after-issue.test.mjs` 验证目标保护。此步骤不连接应用或数据库。
+2. 在隔离夹具与 Chrome 可用时执行 `node tools/d2-issue/withdraw-after-issue.mjs`。借用人打开第 1 版撤销表单，另一 Chrome 会话实际发放同一张申请，借用人随后确认旧版请求应得到 409 并重新读取到第 2 版「已发放」，无旧重试控件。这是实际用户交错，不是两事务同时等待锁。
+3. 对同一个回环数据库，以有读取合成夹具权限的观察账号运行 `psql -X -h 127.0.0.1 -d msf_d2_issue_test -v loan=... -v marker=... -v tool=... -f tools/d2-issue/verify-withdraw-after-issue.sql`。将浏览器 JSON 的 loanId、marker、toolId 与数据库 PASS 一起保存才算有持久证据。只确认一个成功发放、一个有效占用、一条流程绑定，无撤销修订、回执或成功审计。
+4. 本切片不验证反向交错、同时持锁或已引用工具的删除拒绝，不能代替完整 TL-10。夹具会保留一张发放成功的合成申请，清理由隔离环境所有者处理。
