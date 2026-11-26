@@ -31,6 +31,10 @@ def observed_port(log):
     return int(ports[0])
 
 
+def csrf_ready(status, token):
+    return status == 204 and isinstance(token, str) and bool(token)
+
+
 def app_configuration(keystore, password, version, tenant, pin):
     return {
         "server": {"address": "127.0.0.1", "port": 0, "ssl": {"enabled": True, "key-store": str(keystore),
@@ -96,7 +100,7 @@ def app(owned, directory, cert, jar_sha, runtime_password, phase, tenant, pin):
                         origin = f"https://127.0.0.1:{port}"
                         try:
                             response = session.get(origin + "/api/v1/auth/csrf", timeout=3, allow_redirects=False)
-                            if response.status_code == 200 and session.cookies.get("XSRF-TOKEN"):
+                            if csrf_ready(response.status_code, session.cookies.get("XSRF-TOKEN")):
                                 break
                         except requests.exceptions.SSLError:
                             raise ValueError("AU-08 HTTPS endpoint did not present the owned certificate") from None

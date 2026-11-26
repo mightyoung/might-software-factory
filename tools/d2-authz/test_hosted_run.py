@@ -20,3 +20,10 @@ class HostedRunTest(unittest.TestCase):
         self.assertFalse(cfg["spring"]["flyway"]["enabled"])
         self.assertFalse(cfg["flowable"]["database-schema-update"])
         self.assertEqual(cfg["software-factory"]["workflow"]["tool-loan"]["tenant-pins"]["tenant"]["definition-id"], "observed-id")
+
+    def test_readiness_uses_the_actual_no_content_csrf_route(self):
+        from hosted_run import csrf_ready
+        self.assertTrue(csrf_ready(204, "from-owned-https"))
+        self.assertFalse(csrf_ready(200, "not-the-expected-response"))
+        self.assertFalse(csrf_ready(204, None))
+        self.assertFalse(csrf_ready(302, "unexpected-redirect"))
