@@ -31,8 +31,8 @@ class Target:
     database_name: str = DATABASE
 
 
-def checked_target(environment, head, dirty, mapped_port):
-    """Validate runner and checkout; the port must come from the owned mapping, not inputs."""
+def check_checkout(environment, head, dirty):
+    """Refuse any non-project runner, inexact checkout, or inherited target override."""
     if (environment.get("GITHUB_ACTIONS") != "true"
             or environment.get("RUNNER_ENVIRONMENT") != "github-hosted"
             or environment.get("RUNNER_OS") != "Linux"
@@ -44,6 +44,11 @@ def checked_target(environment, head, dirty, mapped_port):
     if any(name.startswith(OVERRIDE_PREFIXES) or name in DOCKER_OVERRIDES
            for name in environment):
         raise ValueError("Inherited database, acceptance or Docker endpoint overrides are forbidden")
+
+
+def checked_target(environment, head, dirty, mapped_port):
+    """Validate runner and checkout; the port must come from the owned mapping, not inputs."""
+    check_checkout(environment, head, dirty)
     if type(mapped_port) is not int or not 1024 <= mapped_port <= 65535 or mapped_port == 5432:
         raise ValueError("AU-08 requires an owned non-default host port")
     return Target(head, mapped_port)
