@@ -28,3 +28,12 @@ class HostedGrantTest(unittest.TestCase):
             self.assertTrue(effective_column(RUNTIME, "tool_loan_loss", column, "SELECT"))
         self.assertFalse(effective_table(RUNTIME, "tool_loan_loss", "INSERT"))
         self.assertFalse(effective_column(RUNTIME, "tool_loan_loss", "actor_member_id", "SELECT"))
+
+    def test_settlement_guard_and_damaged_helper_have_only_the_required_column_access(self):
+        self.assertTrue(effective_column(RUNTIME, "tool_loan_loss", "occurred_at", "SELECT"))
+        self.assertFalse(effective_table(RUNTIME, "tool_loan_loss", "SELECT"))
+        self.assertFalse(effective_table(RUNTIME, "tool_loan_loss", "INSERT"))
+        for column in ("item_state", "version", "updated_at", "updated_by_actor_id"):
+            self.assertTrue(effective_column(RUNTIME, "tool", column, "UPDATE"))
+        for column in ("code", "organization_id", "custody_scope_id", "name"):
+            self.assertFalse(effective_column(RUNTIME, "tool", column, "UPDATE"))
