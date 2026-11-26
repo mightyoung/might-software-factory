@@ -1,5 +1,6 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { unknownOutcome } from "../toolLoans/model";
@@ -11,7 +12,6 @@ import type {
   PublishedLedgerAdapter,
   Query,
   RecordDetail,
-  RecordPage,
   Values,
 } from "./model";
 import "./published-ledgers.css";
@@ -33,18 +33,23 @@ const display = (value: unknown) =>
         : "否"
       : String(value);
 
-export function PublishedLedgersPage({
-  adapter,
-  onUnauthenticated,
-  active = true,
-}: {
+type PageProps = {
   adapter: PublishedLedgerAdapter;
   active?: boolean;
   onUnauthenticated(): void;
-}) {
-  const [ledgers, setLedgers] = useState<PublishedLedger[]>([]);
-  const [ledger, setLedger] = useState<PublishedLedger | null>(null);
-  const [result, setResult] = useState<RecordPage | null>(null);
+};
+
+export function PublishedLedgersPage(props: PageProps) {
+  const [scope, setScope] = useState(() => ({ adapter: props.adapter, generation: 0 }));
+  if (scope.adapter !== props.adapter) {
+    setScope({ adapter: props.adapter, generation: scope.generation + 1 });
+    return null;
+  }
+  return <PublishedLedgersSession key={scope.generation} {...props} />;
+}
+
+function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: PageProps) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Query>({
@@ -53,8 +58,7 @@ export function PublishedLedgersPage({
     filters: [],
   });
   const [attempt, setAttempt] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [querying, setQuerying] = useState(false);
+  const [recordAttempt, setRecordAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -88,64 +92,41 @@ export function PublishedLedgersPage({
       setError("请检查必填字段、数值、日期和所属组织。");
     else setError("操作未确认成功。请重试，写入重试会沿用原请求标识。");
   }
+  // AppShell remounts its children on identity changes. Scope this client to
+  // this mounted HTTP page and adapter rather than sharing readable data globally.
+  const reads = useMemo(() => new QueryClient({ defaultOptions: { queries: {
+    gcTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  } } }), [adapter]);
+  const directory = useQuery({
+    queryKey: ["published-ledgers", attempt],
+    queryFn: ({ signal }) => adapter.list(signal),
+  }, reads);
+  const ledgers = directory.isSuccess ? directory.data : [];
+  const ledger = ledgers.find(item => item.key === selectedKey) ?? null;
+  const records = useQuery({
+    queryKey: ["published-records", ledger?.key, ledger?.definitionVersion, attempt, recordAttempt, query],
+    enabled: !!ledger?.capabilities.read,
+    queryFn: ({ signal }) => adapter.query(ledger!.key, query, signal),
+  }, reads);
+  const result = records.isSuccess ? records.data : null;
+  const loading = directory.isPending;
+  const querying = records.isFetching;
   useEffect(() => {
-    const controller = new AbortController();
-    const mine = ++generation.current;
-    setLoading(true);
-    setError("");
-    adapter
-      .list(controller.signal)
-      .then((items) => {
-        if (mine !== generation.current) return;
-        setLedgers(items);
-        setLedger(
-          (current) => items.find((item) => item.key === current?.key) ?? null,
-        );
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) failed(cause);
-      })
-      .finally(() => {
-        if (mine === generation.current) setLoading(false);
-      });
-    return () => {
-      controller.abort();
-      generation.current += 1;
-    };
+    generation.current += 1;
+    return () => { generation.current += 1; };
   }, [adapter, attempt]);
   useEffect(() => {
-    if (!ledger?.capabilities.read) {
-      setResult(null);
-      return;
-    }
-    const controller = new AbortController();
-    setQuerying(true);
-    setError("");
-    adapter
-      .query(ledger.key, query, controller.signal)
-      .then((next) => {
-        if (!controller.signal.aborted) setResult(next);
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) {
-          setResult(null);
-          failed(cause);
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setQuerying(false);
-      });
-    return () => controller.abort();
-  }, [adapter, ledger, query, attempt]);
+    const failure = directory.error ?? records.error;
+    if (failure) failed(failure);
+  }, [directory.error, records.error]);
   function mayDiscard() {
     return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
   }
   function select(next: PublishedLedger) {
     if (!mayDiscard()) return;
-    setLedger(next);
+    setSelectedKey(next.key);
     setFilters({});
     setEditor(null);
-    setResult(null);
     setNotice("");
     setError("");
     setQuery({
@@ -219,7 +200,7 @@ export function PublishedLedgersPage({
     setQuery((current) => ({ ...current, filters: next, page: 1 }));
   }
   function refreshRecords() {
-    setQuery((current) => ({ ...current }));
+    setRecordAttempt(value => value + 1);
   }
   function endTracking() {
     if (sending.current || !uncertain || !window.confirm(
@@ -262,6 +243,7 @@ export function PublishedLedgersPage({
       setUncertain(false);
       setNotice(success);
       setQuery((current) => ({ ...current, page: 1 }));
+      refreshRecords();
     } catch (cause) {
       if (mine !== generation.current) return;
       // The ledger command service checks the exact receipt before the version.
@@ -287,6 +269,7 @@ export function PublishedLedgersPage({
           onClick={() => {
             if (mayDiscard()) {
               setEditor(null);
+              setError("");
               setAttempt((value) => value + 1);
             }
           }}
