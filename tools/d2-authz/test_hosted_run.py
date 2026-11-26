@@ -70,3 +70,16 @@ class HostedRunTest(unittest.TestCase):
             diagnosis = failure_diagnostic(failure)
         self.assertEqual(diagnosis, "AU08_RUN_FAILED AssertionError SITE=acceptance.py:2 HTTP=403")
         self.assertNotIn("private", diagnosis)
+
+    def test_app_diagnostics_only_extract_known_code_coordinates_and_db_object(self):
+        from hosted_run import app_diagnostics
+        log = ("debug password synthetic-private\n"
+               "Ledger unavailable trace=12345678-1234-4234-8234-123456789abc "
+               "type=org.example.Database causeType=org.example.Cause sqlState=42501 "
+               "source=[com.mightyoung.softwarefactory.tooling.ToolLoanService.issue(ToolLoanService.java:121)]\n"
+               "Caused by: org.postgresql.util.PSQLException: ERROR: permission denied for table act_ge_bytearray\n"
+               "Request fake raw row\n")
+        self.assertEqual(app_diagnostics(log),
+                         ["AU08_APP_DEPENDENCY type=org.example.Database cause=org.example.Cause "
+                          "sqlstate=42501 source=ToolLoanService.java:121",
+                          "AU08_APP_DB_PERMISSION table=act_ge_bytearray"])

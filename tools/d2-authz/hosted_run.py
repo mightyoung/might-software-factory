@@ -68,6 +68,24 @@ def make_certificate(directory):
     return ca, keystore, password
 
 
+def app_diagnostics(log):
+    """Return only bounded diagnostics from the known ledger warning and PostgreSQL errors."""
+    findings = []
+    warnings = re.findall(
+        r"Ledger unavailable trace=[0-9a-f-]{36} type=([A-Za-z0-9_.$]{1,120}) "
+        r"causeType=([A-Za-z0-9_.$]{1,120}) sqlState=([A-Z0-9]{5}|none|00000) source=\[([^\]\n]{0,1200})\]",
+        log)
+    for kind, cause, sqlstate, frames in warnings[-2:]:
+        locations = re.findall(r"\(([A-Za-z0-9_]+\.java:[0-9]{1,5})\)", frames)[:4]
+        findings.append(f"AU08_APP_DEPENDENCY type={kind} cause={cause} sqlstate={sqlstate} source="
+                        + ",".join(locations))
+    for kind, name in re.findall(
+            r"org\.postgresql\.util\.PSQLException: ERROR: permission denied for (table|function|sequence|schema) "
+            r"([a-z][a-z0-9_]{0,62})(?=\s|\(|$)", log)[-4:]:
+        findings.append(f"AU08_APP_DB_PERMISSION {kind}={name}")
+    return list(dict.fromkeys(findings))
+
+
 @contextmanager
 def app(owned, directory, cert, jar_sha, runtime_password, phase, tenant, pin):
     import requests
@@ -111,6 +129,10 @@ def app(owned, directory, cert, jar_sha, runtime_password, phase, tenant, pin):
                 else:
                     raise ValueError("AU-08 owned HTTPS endpoint did not become ready for phase " + phase)
             yield origin, app_name
+        except Exception:
+            for diagnostic in app_diagnostics(log.read_text(errors="replace")):
+                print(diagnostic, file=sys.stderr)
+            raise
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -190,12 +212,18 @@ def run():
 def failure_diagnostic(failure):
     """Allow only a local source coordinate, HTTP status and SQLSTATE, never the payload."""
     stage = "AU08_RUN_FAILED " + type(failure).__name__
+    coordinates = []
     for frame in reversed(traceback.extract_tb(failure.__traceback__)):
         basename = Path(frame.filename).name
         if basename in {"acceptance.py", "fixture_scope.py", "hosted_run.py",
                         "hosted_bootstrap.py", "hosted_grants.py", "hosted_observation.py"}:
-            stage += f" SITE={basename}:{frame.lineno}"
-            break
+            coordinates.append(f"{basename}:{frame.lineno}")
+            if len(coordinates) == 2 or basename != "acceptance.py":
+                break
+    if coordinates:
+        stage += " SITE=" + coordinates[0]
+    if len(coordinates) == 2:
+        stage += " CALLER=" + coordinates[1]
     sqlstate = getattr(failure, "pgcode", None)
     if isinstance(sqlstate, str) and re.fullmatch(r"[A-Z0-9]{5}", sqlstate):
         stage += " SQLSTATE=" + sqlstate
