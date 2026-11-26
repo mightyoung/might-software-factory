@@ -57,6 +57,61 @@ describe("已登录时的应用路由与导航", () => {
     expect(await screen.findByRole("link", { name: "设备概览" })).toBeInTheDocument();
   });
 
+  it("只保存侧栏折叠偏好，重新打开工作台时仍生效", async () => {
+    const key = "might.sidebar.collapsed";
+    localStorage.removeItem(key);
+    try {
+      const first = renderSignedIn("demo.manager");
+      const nav = await screen.findByRole("navigation", { name: "安全管理导航" });
+      expect(nav).toBeVisible();
+      const collapse = screen.getByRole("button", { name: "收起导航" });
+      expect(collapse).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(collapse);
+      expect(screen.queryByRole("navigation", { name: "安全管理导航" })).toBeNull();
+      expect(localStorage.getItem(key)).toBe("1");
+      first.unmount();
+
+      renderSignedIn("demo.manager");
+      const expand = await screen.findByRole("button", { name: "展开导航" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(expand);
+      expect(await screen.findByRole("navigation", { name: "安全管理导航" })).toBeVisible();
+      expect(localStorage.getItem(key)).toBe("0");
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
+  it("快捷导航只能搜索当前会话实际可见的页面", async () => {
+    // jsdom has no native modal API. Playwright separately verifies real focus containment.
+    const dialog = HTMLDialogElement.prototype;
+    const showModal = dialog.showModal;
+    const close = dialog.close;
+    dialog.showModal = function () { this.setAttribute("open", ""); };
+    dialog.close = function () { this.removeAttribute("open"); };
+    try {
+      renderSignedIn("demo.safety");
+      const home = await screen.findByRole("link", { name: "隐患台账" });
+      home.focus();
+      fireEvent.keyDown(home, { key: "k", ctrlKey: true });
+      const modal = screen.getByRole("dialog", { name: "快捷导航" });
+      const search = within(modal).getByRole("searchbox", { name: "搜索页面" });
+      expect(search).toHaveFocus();
+      fireEvent.change(search, { target: { value: "风险管控" } });
+      expect(within(modal).queryByRole("link", { name: "风险管控" })).toBeNull();
+      expect(within(modal).getByText("没有匹配的页面")).toBeVisible();
+      fireEvent.change(search, { target: { value: "隐患" } });
+      expect(within(modal).getByRole("link", { name: "隐患台账" })).toHaveAttribute("href", `${T}/safety/findings`);
+      fireEvent.click(within(modal).getByRole("button", { name: "关闭" }));
+      expect(screen.queryByRole("dialog", { name: "快捷导航" })).toBeNull();
+      expect(home).toHaveFocus();
+    } finally {
+      cleanup();
+      dialog.showModal = showModal;
+      dialog.close = close;
+    }
+  });
+
   it("支持浏览器历史后退与前进恢复导航", async () => {
     renderSignedIn("demo.manager");
     fireEvent.click(await screen.findByRole("link", { name: "排查任务" }));

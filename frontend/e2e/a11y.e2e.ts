@@ -299,3 +299,48 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   }
   expect(writes).toEqual([]);
 });
+
+test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦点", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(page);
+  const heading = page.getByRole("heading", { name: "隐患台账" });
+  const nav = page.getByRole("navigation", { name: "安全管理导航" });
+  await expect(heading).toBeVisible();
+  await expect(nav).toBeVisible();
+  await page.getByRole("button", { name: "收起导航" }).click();
+  await expect(nav).toHaveCount(0);
+  await page.reload();
+  await expect(heading).toBeVisible();
+  const expand = page.getByRole("button", { name: "展开导航" });
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(nav).toHaveCount(0);
+  await expand.click();
+  await expect(nav).toBeVisible();
+
+  for (const [theme, shortcut] of [["light", "Control+k"], ["dark", "Meta+k"]] as const) {
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
+      `${theme} 主题不应出现页面级横向滚动`).toBe(false);
+    const trigger = page.getByRole("button", { name: "快捷导航" });
+    await trigger.focus();
+    await page.keyboard.press(shortcut);
+    const modal = page.getByRole("dialog", { name: "快捷导航" });
+    const search = modal.getByRole("searchbox", { name: "搜索页面" });
+    await expect(search).toBeFocused();
+    await scan(page, `快捷导航（${theme}）`);
+    await search.fill("隐患");
+    const result = modal.getByRole("link", { name: "隐患台账" });
+    await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
+    const close = modal.getByRole("button", { name: "关闭" });
+    await page.keyboard.press("Shift+Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(result).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  }
+});
