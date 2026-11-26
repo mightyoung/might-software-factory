@@ -70,6 +70,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     fields: { key: string; label: string; type: string; required: boolean }[];
     listFields: string[];
     queryFields: string[];
+    workflow?: { nodes: { id: string; kind: string; label: string; x: number; y: number }[]; edges: { from: string; to: string }[] };
   };
   type Snapshot = {
     key: string;
@@ -80,10 +81,16 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     savedAt: string;
     savedBy: string;
   };
+  const legacy: Snapshot = {
+    key: "legacy_ledger", version: 1,
+    definition: { name: "历史台账", fields: [], listFields: [], queryFields: [] },
+    publishedVersion: null, sourceVersion: null,
+    savedAt: "2026-11-19T00:00:00Z", savedBy: "配置员",
+  };
   const versions: Snapshot[] = [];
   let loseNextSaveResponse = false;
   const receipts = new Map<string, { body: unknown; snapshot: Snapshot }>();
-  const histories = new Map<string, Snapshot[]>([["purchase", versions]]);
+  const histories = new Map<string, Snapshot[]>([["purchase", versions], ["legacy_ledger", [legacy]]]);
   const saveAttempts: { key: string; expectedVersion: number }[] = [];
   await page.route("**/api/v1/admin/ledger-configurations**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -161,13 +168,22 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await page.goto(settingsPath + "/permissions");
   await expect(page.getByText("暂无角色。")).toBeVisible();
   expect(editorRequests.length).toBeGreaterThan(0);
-  expect(permissionReads).toHaveLength(2);
+  expect(new Set(permissionReads)).toEqual(new Set(["/api/v1/admin/roles", "/api/v1/admin/permissions"]));
+  if (process.env.E2E_PREVIEW) expect(permissionReads).toHaveLength(2);
+  const permissionReadsOnExit = permissionReads.length;
   expect(configurationReads).toEqual([]);
 
   await page.goto(settingsPath + "/ledger-configurations");
+  await expect(page.getByLabel("台账标识")).toBeVisible();
+  expect(new Set(configurationReads)).toEqual(new Set(["/api/v1/admin/ledger-configurations"]));
+  if (process.env.E2E_PREVIEW) expect(configurationReads).toHaveLength(1);
+  expect(permissionReads).toHaveLength(permissionReadsOnExit);
+  await page.getByRole("navigation", { name: "已配置台账" })
+    .getByRole("button").filter({ hasText: "历史台账" }).click();
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
+  expect(legacy.definition.workflow).toBeUndefined();
+  await page.getByRole("button", { name: "新建台账", exact: true }).click();
   await page.getByLabel("台账标识").fill("purchase");
-  expect(configurationReads).toEqual(["/api/v1/admin/ledger-configurations"]);
-  expect(permissionReads).toHaveLength(2);
   await page.getByLabel("台账名称").fill("采购申请");
   await page.getByRole("button", { name: "添加字段" }).click();
   await page.getByLabel("字段标识").fill("quantity");
@@ -181,11 +197,42 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 1" }),
   ).toBeVisible();
+  expect(versions[0].definition.workflow?.nodes.map(node => node.kind)).toEqual(["start", "end"]);
+  expect(versions[0].definition.workflow?.edges).toEqual([{ from: "start", to: "end" }]);
   await page.getByLabel("台账名称").fill("采购申请新版");
+  await page.getByRole("button", { name: "插入办理节点" }).click();
+  await page.getByLabel("节点名称").fill("主管确认");
+  const node = page.getByRole("button", { name: "流程节点 主管确认", exact: true });
+  const originalX = await page.getByLabel("节点横坐标").inputValue();
+  const originalY = await page.getByLabel("节点纵坐标").inputValue();
+  await node.scrollIntoViewIfNeeded();
+  const beforeDrag = await node.boundingBox();
+  expect(beforeDrag).not.toBeNull();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 35, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByLabel("节点横坐标")).not.toHaveValue(originalX);
+  await expect(page.getByLabel("节点纵坐标")).not.toHaveValue(originalY);
+  const savedX = Number(await page.getByLabel("节点横坐标").inputValue());
+  const savedY = Number(await page.getByLabel("节点纵坐标").inputValue());
+  await node.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 主管确认 → 完成");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 2" }),
   ).toBeVisible();
+  const editedFlow = versions[0].definition.workflow!;
+  expect(editedFlow.nodes.find(node => node.kind === "step")).toMatchObject({ label: "主管确认", x: savedX + 25, y: savedY });
+  expect(editedFlow.edges).toHaveLength(2);
+  await page.reload();
+  await page.getByRole("navigation", { name: "已配置台账" })
+    .getByRole("button").filter({ hasText: "采购申请新版" }).click();
+  await page.getByRole("button", { name: "流程节点 主管确认", exact: true }).click();
+  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
+  await expect(page.getByLabel("节点纵坐标")).toHaveValue(String(savedY));
   await page.getByRole("button", { name: "比较版本 1", exact: true }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText(
     "配置内容不同",
@@ -195,6 +242,9 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     page.getByRole("status").filter({ hasText: "新草稿 3" }),
   ).toBeVisible();
   expect(versions[0].publishedVersion).toBeNull();
+  expect(versions[0].definition.workflow).toEqual(versions.find(version => version.version === 1)!.definition.workflow);
+  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
+  await expect(page.getByRole("button", { name: "流程节点 主管确认", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("台账名称")).toHaveValue("采购申请");
   await page.getByRole("button", { name: "发布当前版本" }).focus();
   await page.keyboard.press("Enter");
@@ -262,6 +312,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       queryFields: ["quantity"],
     },
   });
+  expect(histories.get("purchase_copy")![0].definition.workflow).toEqual(sourceBeforeCopy.find(version => version.version === 1)!.definition.workflow);
   expect(versions).toEqual(sourceBeforeCopy);
   await page.getByRole("navigation", { name: "已配置台账" })
     .getByRole("button", { name: "回退后继续编辑 最新 4 · 已发布 3" }).click();

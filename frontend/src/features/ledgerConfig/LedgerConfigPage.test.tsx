@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouteLink } from "../../routing/router";
 import { ApiError } from "../../api/httpClient";
 import { LedgerConfigPage } from "./LedgerConfigPage";
+import { defaultWorkflow } from "./LedgerWorkflowEditor";
 import {
   createHttpLedgerConfig,
   type ConfigurationSnapshot,
@@ -49,6 +50,40 @@ afterEach(() => {
 });
 
 describe("LedgerConfigPage", () => {
+  it("shows the default flow for legacy snapshots without changing their stored definition", async () => {
+    const api = adapter();
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    expect(await screen.findByLabelText("办理路径")).toHaveTextContent("登记 → 完成");
+    expect(screen.getByRole("button", { name: "保存草稿" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.change(screen.getByLabelText("台账名称"), { target: { value: "采购申请新版" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.save).mock.calls[0]?.[1]).toEqual({ ...first.definition, name: "采购申请新版" });
+  });
+
+  it("persists a new default flow and protects graph-only draft changes", async () => {
+    const api = adapter();
+    vi.mocked(api.save).mockImplementation(async (key, definition) => ({ ...first, key, definition }));
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "插入办理节点" })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "插入办理节点" }));
+    fireEvent.change(screen.getByLabelText("节点名称"), { target: { value: "复核" } });
+    const departure = new Event("beforeunload", { cancelable: true });
+    expect(window.dispatchEvent(departure)).toBe(false);
+    fireEvent.change(screen.getByLabelText("台账标识"), { target: { value: "review" } });
+    fireEvent.change(screen.getByLabelText("台账名称"), { target: { value: "复核台账" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledOnce());
+    const saved = vi.mocked(api.save).mock.calls[0]?.[1].workflow;
+    expect(saved?.nodes.map(node => node.label)).toEqual(["登记", "复核", "完成"]);
+    expect(saved?.edges).toEqual([
+      { from: "start", to: saved?.nodes[1]?.id },
+      { from: saved?.nodes[1]?.id, to: "end" },
+    ]);
+    expect(defaultWorkflow().nodes).toHaveLength(2);
+  });
+
   it("copies a saved historical version into an independent first draft", async () => {
     const api = adapter();
     const historical = {
@@ -461,4 +496,20 @@ it("sends a stable save identifier and current published pointer through the sha
     "/api/v1/admin/ledger-configurations/purchase/publish",
     { body: { version: 2, expectedVersion: 2, expectedPublishedVersion: 1 } },
   );
+});
+
+it("distinguishes a missing historical flow from an explicitly saved default graph in read-only comparison", async () => {
+  const api = adapter();
+  const current = { ...first, version: 2, definition: { ...first.definition, workflow: defaultWorkflow() } };
+  vi.mocked(api.versions).mockResolvedValue([current, first]);
+  render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "比较版本 1" }));
+  const comparison = screen.getByRole("region", { name: "版本比较" });
+  const old = within(comparison).getByRole("heading", { name: "历史版本 1" }).parentElement!;
+  const present = within(comparison).getByRole("heading", { name: "当前草稿" }).parentElement!;
+  expect(within(comparison).getByText(/配置内容不同/)).toBeInTheDocument();
+  expect(within(present).getByText("查看流程图")).toBeInTheDocument();
+  expect(api.save).not.toHaveBeenCalled();
+  expect(within(old).queryByText("查看流程图")).not.toBeInTheDocument();
 });
