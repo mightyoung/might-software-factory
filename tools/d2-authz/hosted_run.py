@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import time
+import traceback
 
 from fixture_scope import fixture_transaction
 from hosted_allocation import IMAGE, allocate
@@ -186,6 +187,29 @@ def run():
     print("AU08_VERIFIED_AFTER_CLEANUP checks=" + str(report["passed"]))
 
 
+def failure_diagnostic(failure):
+    """Allow only a local source coordinate, HTTP status and SQLSTATE, never the payload."""
+    stage = "AU08_RUN_FAILED " + type(failure).__name__
+    for frame in reversed(traceback.extract_tb(failure.__traceback__)):
+        basename = Path(frame.filename).name
+        if basename in {"acceptance.py", "fixture_scope.py", "hosted_run.py",
+                        "hosted_bootstrap.py", "hosted_grants.py", "hosted_observation.py"}:
+            stage += f" SITE={basename}:{frame.lineno}"
+            break
+    sqlstate = getattr(failure, "pgcode", None)
+    if isinstance(sqlstate, str) and re.fullmatch(r"[A-Z0-9]{5}", sqlstate):
+        stage += " SQLSTATE=" + sqlstate
+    response = getattr(failure, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(failure, AssertionError) and len(failure.args) == 1:
+        detail = failure.args[0]
+        if isinstance(detail, tuple) and len(detail) == 2 and type(detail[0]) is int:
+            status = detail[0]
+    if type(status) is int and 100 <= status <= 599:
+        stage += " HTTP=" + str(status)
+    return stage
+
+
 if __name__ == "__main__":
     try:
         run()
@@ -195,8 +219,5 @@ if __name__ == "__main__":
         if type(failure) is ValueError and re.fullmatch(r"[A-Za-z0-9_:. /=-]{1,180}", message) and message.startswith(("AU-08", "Unexpected AU-08", "The AU-08", "No actual application")):
             print(message, file=sys.stderr)
         else:
-            sqlstate = getattr(failure, "pgcode", None)
-            print("AU08_RUN_FAILED " + type(failure).__name__
-                  + ((" SQLSTATE=" + sqlstate) if isinstance(sqlstate, str) and re.fullmatch(r"[A-Z0-9]{5}", sqlstate) else ""),
-                  file=sys.stderr)
+            print(failure_diagnostic(failure), file=sys.stderr)
         raise SystemExit(1) from None

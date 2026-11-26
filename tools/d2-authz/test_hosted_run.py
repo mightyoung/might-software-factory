@@ -58,3 +58,15 @@ class HostedRunTest(unittest.TestCase):
             result = witness(None, SimpleNamespace(instance="owned-instance"), SimpleNamespace(commit="commit"),
                              "owned-app-name", "sha", "1", "actual-loan-id", "PENDING_ISSUE")
             self.assertEqual(result["definition_version"], 1)
+
+    def test_failure_diagnostic_exposes_only_local_site_and_http_status(self):
+        from hosted_run import failure_diagnostic
+        namespace = {}
+        exec(compile("def reject():\n    assert False, (403, 'private payload')", "acceptance.py", "exec"),
+             namespace)
+        try:
+            namespace["reject"]()
+        except AssertionError as failure:
+            diagnosis = failure_diagnostic(failure)
+        self.assertEqual(diagnosis, "AU08_RUN_FAILED AssertionError SITE=acceptance.py:2 HTTP=403")
+        self.assertNotIn("private", diagnosis)
