@@ -1,19 +1,19 @@
+import { createBrowserHistory } from "@tanstack/react-router";
 import { useEffect, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react";
 
-type Listener = () => void;
-const listeners = new Set<Listener>();
+// One history per browser document; raw search remains untouched for legacy deep links.
+let browserHistory: ReturnType<typeof createBrowserHistory> | undefined;
+export function getWorkspaceHistory() {
+  return (browserHistory ??= createBrowserHistory());
+}
 
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  window.addEventListener("popstate", listener);
-  return () => {
-    listeners.delete(listener);
-    window.removeEventListener("popstate", listener);
-  };
+function subscribe(listener: () => void): () => void {
+  return getWorkspaceHistory().subscribe(listener);
 }
 
 function getLocation(): string {
-  return `${window.location.pathname}${window.location.search}`;
+  const { pathname, search } = getWorkspaceHistory().location;
+  return `${pathname}${search}`;
 }
 
 export function useLocation(): string {
@@ -21,9 +21,15 @@ export function useLocation(): string {
 }
 
 export function navigate(to: string, replace = false): void {
-  if (replace) window.history.replaceState(null, "", to);
-  else window.history.pushState(null, "", to);
-  window.dispatchEvent(new PopStateEvent("popstate"));
+  const target = new URL(to, window.location.href);
+  if (target.origin !== window.location.origin) throw new Error("Expected an in-app route");
+  const href = `${target.pathname}${target.search}${target.hash}`;
+  const history = getWorkspaceHistory();
+  if (replace) history.replace(href);
+  else history.push(href);
+  // Callers read window.location immediately after user navigation. Do not batch
+  // a push and the following canonical replace into a different history shape.
+  history.flush();
 }
 
 let tabOpener: (url: string) => void = (url) => { window.open(url, "_blank", "noopener"); };

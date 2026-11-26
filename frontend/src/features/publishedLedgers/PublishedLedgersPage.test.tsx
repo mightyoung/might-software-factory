@@ -84,7 +84,7 @@ it("sends typed filters and edits using the record's pinned version", async () =
       expect.any(AbortSignal),
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "查看记录" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
   await screen.findByText("定义版本 1 · 记录版本 1");
   fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
   const editor = screen.getByRole("region", { name: "记录详情" });
@@ -232,4 +232,48 @@ it("does not offer writes to a reader", async () => {
   expect(
     screen.queryByRole("button", { name: "删除草稿" }),
   ).not.toBeInTheDocument();
+});
+
+it("does not keep old ledger names or list results after a fresh directory denial", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValueOnce([ledger]).mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: /^刷新台账$/ }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
+  expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
+  expect(a.create).not.toHaveBeenCalled();
+});
+
+it("cancels the previous adapter read and never shows its records under a new adapter", async () => {
+  const old = adapter(), next = adapter();
+  let signal: AbortSignal | undefined;
+  let complete!: (items: PublishedLedger[]) => void;
+  vi.mocked(old.list).mockImplementation(current => {
+    signal = current;
+    return new Promise(resolve => { complete = resolve; });
+  });
+  vi.mocked(next.list).mockResolvedValue([{ ...ledger, key: "shift", definition: { ...definition, name: "交接记录" } }]);
+  const dom = render(<PublishedLedgersPage adapter={old} onUnauthenticated={vi.fn()} />);
+  await waitFor(() => expect(old.list).toHaveBeenCalledOnce());
+  dom.rerender(<PublishedLedgersPage adapter={next} onUnauthenticated={vi.fn()} />);
+  await screen.findByRole("button", { name: "交接记录" });
+  expect(signal?.aborted).toBe(true);
+  complete([ledger]);
+  expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
+});
+
+it("aborts an in-flight detail read when leaving the bound adapter", async () => {
+  const a = adapter();
+  vi.mocked(a.detail).mockImplementation(() => new Promise(() => {}));
+  const unauthenticated = vi.fn();
+  const view = render(<PublishedLedgersPage adapter={a} onUnauthenticated={unauthenticated} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
+  const signal = vi.mocked(a.detail).mock.calls[0]?.[2];
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(signal?.aborted).toBe(false);
+  view.rerender(<PublishedLedgersPage adapter={adapter()} onUnauthenticated={unauthenticated} />);
+  expect(signal?.aborted).toBe(true);
+  expect(screen.queryByRole("region", { name: "记录详情" })).not.toBeInTheDocument();
 });
