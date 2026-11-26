@@ -304,7 +304,7 @@ test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦�
   await page.setViewportSize({ width: 1440, height: 900 });
   await signIn(page);
   const heading = page.getByRole("heading", { name: "隐患台账" });
-  const nav = page.getByRole("navigation", { name: "安全管理导航" });
+  const nav = page.getByRole("navigation", { name: "生产安全导航" });
   await expect(heading).toBeVisible();
   await expect(nav).toBeVisible();
   await page.getByRole("button", { name: "收起导航" }).click();
@@ -317,7 +317,11 @@ test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦�
   await expand.click();
   await expect(nav).toBeVisible();
 
-  for (const [theme, shortcut] of [["light", "Control+k"], ["dark", "Meta+k"]] as const) {
+  for (const [theme, shortcut, width] of [
+    ["light", "Control+k", 1440], ["dark", "Meta+k", 1440],
+    ["light", "Control+k", 390], ["dark", "Meta+k", 390],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
     await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
@@ -330,7 +334,7 @@ test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦�
     await expect(search).toBeFocused();
     await scan(page, `快捷导航（${theme}）`);
     await search.fill("隐患");
-    const result = modal.getByRole("link", { name: "隐患台账" });
+    const result = modal.getByRole("link", { name: "隐患管理" });
     await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
     const close = modal.getByRole("button", { name: "关闭" });
     await page.keyboard.press("Shift+Tab");
