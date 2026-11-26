@@ -162,14 +162,18 @@ class HostedBootstrap {
             sql(c, "insert into public.tool_custodian(tenant_id,custody_scope_id,member_id,valid_from) values (?,?,?,timestamptz '2026-01-01 00:00:00+00')",tenant,custody,member);
     }
 
-    static void deploy(String password, UUID tenant) throws Exception {
-        try (var c = DriverManager.getConnection(url, MIGRATOR, password)) { verify(c, MIGRATOR, false); }
+    static StandaloneProcessEngineConfiguration workflowConfiguration(String password) {
         var cfg = new StandaloneProcessEngineConfiguration();
-        cfg.setJdbcUrl(url).setJdbcUsername(MIGRATOR).setJdbcPassword(password)
+        cfg.setJdbcUrl(url).setJdbcUsername(MIGRATOR).setJdbcPassword(password).setJdbcDriver("org.postgresql.Driver")
                 .setDatabaseSchemaUpdate("false").setAsyncExecutorActivate(false);
         cfg.setDisableIdmEngine(true);
         cfg.setDisableEventRegistry(true);
-        var engine = cfg.buildProcessEngine();
+        return cfg;
+    }
+
+    static void deploy(String password, UUID tenant) throws Exception {
+        try (var c = DriverManager.getConnection(url, MIGRATOR, password)) { verify(c, MIGRATOR, false); }
+        var engine = workflowConfiguration(password).buildProcessEngine();
         try {
             var repo = engine.getRepositoryService();
             var query = repo.createProcessDefinitionQuery().processDefinitionTenantId(tenant.toString()).processDefinitionKey("toolLoanV1");

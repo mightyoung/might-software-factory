@@ -106,7 +106,8 @@ def migrate_and_seed(root, artifact, artifact_sha256, owned, directory, bootstra
     process_environment = {key: os.environ[key] for key in ("PATH", "JAVA_HOME") if key in os.environ}
     try:
         subprocess.run(["javac", "-cp", classpath, "-d", str(classes), "tools/d0/bootstrap.java",
-                        "tools/d0/migrate.java", "tools/d2-authz/HostedBootstrap.java"],
+                        "tools/d0/migrate.java", "tools/d2-authz/HostedBootstrap.java",
+                        "tools/d2-authz/HostedBootstrapConfigTest.java"],
                        cwd=root, env=process_environment, capture_output=True, timeout=60, check=True)
     except (OSError, subprocess.SubprocessError):
         raise ValueError("AU-08 bootstrap Java compilation failed") from None
@@ -114,6 +115,11 @@ def migrate_and_seed(root, artifact, artifact_sha256, owned, directory, bootstra
              "AU08_BOOT_TENANT": synthetic_tenant_id(owned.instance),
              "AU08_BOOT_MIGRATOR_PASSWORD": passwords[MIGRATOR_ROLE]}
     classpath = str(classes) + os.pathsep + classpath
+    try:
+        subprocess.run(["java", "--class-path", classpath, "HostedBootstrapConfigTest"], cwd=root,
+                       env=process_environment, capture_output=True, timeout=20, check=True)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("AU-08 Flowable offline configuration test failed") from None
     run_java(root, classpath, "migrate", {**child, "AU08_BOOT_ADMIN_PASSWORD": bootstrap_password})
     print("AU08_MIGRATIONS_VALIDATED", flush=True)
     run_java(root, classpath, "seed", {**child, "AU08_BOOT_READER": actors["reader"],
