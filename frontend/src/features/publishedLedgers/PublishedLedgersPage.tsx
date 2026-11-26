@@ -1,13 +1,16 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { QueryClient, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { tableFeatures, useTable } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { unknownOutcome } from "../toolLoans/model";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type { LedgerConfiguration } from "../ledgerConfig/model";
 import { createPublishedLedgerAdapter } from "./model";
 import type {
+  LedgerRecord,
   PublishedLedger,
   PublishedLedgerAdapter,
   Query,
@@ -32,6 +35,53 @@ const display = (value: unknown) =>
         ? "是"
         : "否"
       : String(value);
+
+const publishedTableFeatures = tableFeatures({});
+const getRecordId = (record: LedgerRecord) => record.id;
+
+function PublishedRecordsTable({ definition, rows, locked, onOpen }: {
+  definition: LedgerConfiguration;
+  rows: readonly LedgerRecord[];
+  locked: boolean;
+  onOpen(id: string): Promise<void>;
+}) {
+  const columns = useMemo(() => definition.listFields.map((key) => ({
+    id: key,
+    header: definition.fields.find((field) => field.key === key)?.label ?? key,
+    accessorFn: (record: LedgerRecord) => display(record.values[key]),
+  })), [definition]);
+  const data = useMemo(() => [...rows], [rows, columns]);
+  const table = useTable({ features: publishedTableFeatures, columns, data, getRowId: getRecordId });
+  const visibleColumns = table.getAllLeafColumns();
+
+  return (
+    <div className="published-table">
+      <table>
+        <caption>{definition.name}记录</caption>
+        <thead>
+          <tr>
+            {visibleColumns.map((column) => (
+              <th key={column.id} scope="col">{String(column.columnDef.header)}</th>
+            ))}
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((record) => (
+            <tr key={record.id}>
+              {visibleColumns.map((column) => (
+                <td key={column.id}>{record.getValue<string>(column.id)}</td>
+              ))}
+              <td>
+                <Button label="查看记录" variant="secondary" isDisabled={locked} onClick={() => void onOpen(record.id)} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 type PageProps = {
   adapter: PublishedLedgerAdapter;
@@ -94,9 +144,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   }
   // AppShell remounts its children on identity changes. Scope this client to
   // this mounted HTTP page and adapter rather than sharing readable data globally.
-  const reads = useMemo(() => new QueryClient({ defaultOptions: { queries: {
-    gcTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
-  } } }), [adapter]);
+  const [reads] = useState(createWorkspaceQueryClient);
   const directory = useQuery({
     queryKey: ["published-ledgers", attempt],
     queryFn: ({ signal }) => adapter.list(signal),
@@ -113,9 +161,13 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const querying = records.isFetching;
   useEffect(() => {
     generation.current += 1;
-    return () => { generation.current += 1; };
-  }, [adapter, attempt]);
+    return () => {
+      generation.current += 1;
+      void reads.cancelQueries({ queryKey: ["published-record-detail"] });
+    };
+  }, [reads, attempt]);
   useEffect(() => {
+    if (directory.error) setSelectedKey(null);
     const failure = directory.error ?? records.error;
     if (failure) failed(failure);
   }, [directory.error, records.error]);
@@ -157,7 +209,10 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     setError("");
     setNotice("");
     try {
-      const detail = await adapter.detail(ledger.key, id);
+      const detail = await reads.fetchQuery({
+        queryKey: ["published-record-detail", ledger.key, id],
+        queryFn: ({ signal }) => adapter.detail(ledger.key, id, signal),
+      });
       if (mine === generation.current) {
         setEditor({
           detail,
@@ -373,42 +428,12 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                   {result && (
                     <>
                       <p>共 {result.total} 条记录</p>
-                      <div className="published-table">
-                        <table>
-                          <caption>{ledger.definition.name}记录</caption>
-                          <thead>
-                            <tr>
-                              {ledger.definition.listFields.map((key) => (
-                                <th key={key} scope="col">
-                                  {ledger.definition.fields.find(
-                                    (field) => field.key === key,
-                                  )?.label ?? key}
-                                </th>
-                              ))}
-                              <th scope="col">操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {result.records.map((record) => (
-                              <tr key={record.id}>
-                                {ledger.definition.listFields.map((key) => (
-                                  <td key={key}>
-                                    {display(record.values[key])}
-                                  </td>
-                                ))}
-                                <td>
-                                  <Button
-                                    label="查看记录"
-                                    variant="secondary"
-                                    isDisabled={locked}
-                                    onClick={() => void open(record.id)}
-                                  />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <PublishedRecordsTable
+                        definition={ledger.definition}
+                        rows={result.records}
+                        locked={locked}
+                        onOpen={open}
+                      />
                       {result.total === 0 && <p>没有符合条件的记录。</p>}
                       <div className="published-actions">
                         <Button

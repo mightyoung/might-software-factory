@@ -308,3 +308,18 @@ it("cancels the previous adapter read and never shows its records under a new ad
   complete([ledger]);
   expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
 });
+
+it("aborts an in-flight detail read when leaving the bound adapter", async () => {
+  const a = adapter();
+  vi.mocked(a.detail).mockImplementation(() => new Promise(() => {}));
+  const unauthenticated = vi.fn();
+  const view = render(<PublishedLedgersPage adapter={a} onUnauthenticated={unauthenticated} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
+  const signal = vi.mocked(a.detail).mock.calls[0]?.[2];
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(signal?.aborted).toBe(false);
+  view.rerender(<PublishedLedgersPage adapter={adapter()} onUnauthenticated={unauthenticated} />);
+  expect(signal?.aborted).toBe(true);
+  expect(screen.queryByRole("region", { name: "记录详情" })).not.toBeInTheDocument();
+});

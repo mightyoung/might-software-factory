@@ -13,6 +13,7 @@ import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
+import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
@@ -121,6 +122,8 @@ const ROUTES: readonly RouteDef[] = [
   },
 ];
 
+const workspaceRoutes = createWorkspaceRouteMatcher(ROUTES);
+
 function applicationOfPath(rest: string): ApplicationId | null {
   const entity = parseEntityRoute(rest);
   if (entity) return entity.appKey;
@@ -220,12 +223,13 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const parsed = parsePath(pathname);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
-  const entityRoute = parseEntityRoute(parsed.rest);
+  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
+  const { route, entityRoute } = tenantMatches
+    ? workspaceRoutes.match(session.tenant.id, parsed.rest)
+    : { route: undefined, entityRoute: null };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
   const redirect = session ? canonicalTarget(session, location) : null;
-  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
-  const route = tenantMatches ? ROUTES.find((candidate) => candidate.rest === parsed.rest) : undefined;
   const pathApplication = tenantMatches ? applicationOfPath(parsed.rest) : null;
   const authorizedApplication =
     session && pathApplication && session.applications.some((app) => app.id === pathApplication) ? pathApplication : null;
