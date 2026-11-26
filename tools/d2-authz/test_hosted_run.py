@@ -27,3 +27,34 @@ class HostedRunTest(unittest.TestCase):
         self.assertFalse(csrf_ready(200, "not-the-expected-response"))
         self.assertFalse(csrf_ready(204, None))
         self.assertFalse(csrf_ready(302, "unexpected-redirect"))
+
+    def test_connection_witness_requires_runtime_and_run_name_without_elevated_stats(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from hosted_run import witness
+        from hosted_observation import RUNTIME_ROLE
+
+        class ScopedCursor:
+            def execute(self, sql, arguments):
+                self.sql, self.arguments = sql, arguments
+
+            def fetchone(self):
+                if "pg_stat_activity" in self.sql:
+                    self_test.assertEqual(self.arguments, (RUNTIME_ROLE, "owned-app-name"))
+                    self_test.assertIn("datname=current_database()", self.sql)
+                    self_test.assertIn("application_name=", self.sql)
+                    # PostgreSQL hides backend_type for an unrelated unprivileged role.
+                    return ("backend_type" not in self.sql,)
+                self_test.assertEqual(self.arguments, ("actual-loan-id",))
+                return ("1", "PENDING_ISSUE")
+
+        self_test = self
+        @contextmanager
+        def scope(connection, owned):
+            yield ScopedCursor()
+
+        with patch("hosted_run.fixture_transaction", scope):
+            result = witness(None, SimpleNamespace(instance="owned-instance"), SimpleNamespace(commit="commit"),
+                             "owned-app-name", "sha", "1", "actual-loan-id", "PENDING_ISSUE")
+            self.assertEqual(result["definition_version"], 1)

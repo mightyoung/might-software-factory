@@ -122,8 +122,9 @@ def app(owned, directory, cert, jar_sha, runtime_password, phase, tenant, pin):
 
 def witness(connection, owned, target, app_name, jar_hash, version, loan_id, expected_loan_state):
     with fixture_transaction(connection, owned) as q:
+        # Unrelated PostgreSQL roles see database/user/application name, not backend_type or SQL text.
         q.execute("""select exists(select 1 from pg_stat_activity where datname=current_database()
-            and usename=%s and application_name=%s and backend_type='client backend')""", (RUNTIME_ROLE, app_name))
+            and usename=%s and application_name=%s)""", (RUNTIME_ROLE, app_name))
         if q.fetchone() != (True,):
             raise ValueError("No actual application connection observed in the owned AU-08 database")
         q.execute("select definition_version,state from public.tool_loan where id=%s", (loan_id,))
