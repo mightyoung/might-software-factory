@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 const packages = ["@astryxdesign/core", "@astryxdesign/theme-neutral", "@astryxdesign/cli"];
-const theme = "src/themes/might/mightPetrolTheme.ts";
+const theme = "src/themes/might/mightTheme.ts";
 const targetPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const read = path => JSON.parse(readFileSync(path, "utf8"));
 
@@ -40,6 +40,7 @@ function main(argv) {
     ["npm", ["install", "--package-lock-only", "--ignore-scripts", "--save-dev", "--save-exact", atTarget(packages[2])]],
     ["npm", ["ci", "--no-audit", "--no-fund"]],
     ["npm", ["exec", "--offline", "--", "astryx", "theme", "build", theme]],
+    [process.execPath, ["tools/generate-astryx-root-tokens.mjs"]],
     ["npm", ["run", "typecheck"]],
     ["npm", ["test"]],
     ...["http", "synthetic"].flatMap(mode => [

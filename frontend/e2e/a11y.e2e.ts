@@ -299,3 +299,30 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   }
   expect(writes).toEqual([]);
 });
+
+test("编译后的 Astryx 品牌变量在明暗主题保持同源", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-astryx-theme", "might");
+  const accent: string[] = [];
+  for (const theme of ["light", "dark"] as const) {
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(html).toHaveAttribute("data-theme", theme);
+    const result = await html.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        accent: style.getPropertyValue("--color-accent").trim(),
+        petrol: style.getPropertyValue("--petrol").trim(),
+        ink: style.getPropertyValue("--color-text-primary").trim(),
+        legacyInk: style.getPropertyValue("--ink").trim(),
+      };
+    });
+    expect(result.petrol).not.toBe("");
+    expect(result.accent).toBe(result.petrol);
+    expect(result.ink).toBe(result.legacyInk);
+    accent.push(result.accent);
+    await scan(page, `Astryx 登录页（${theme}）`);
+  }
+  expect(accent[0]).not.toBe(accent[1]);
+});
