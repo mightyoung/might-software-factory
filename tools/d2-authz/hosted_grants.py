@@ -29,6 +29,8 @@ for name, columns in {
 RUNTIME["tool"] = {"SELECT": None,
     "INSERT": "tenant_id id version created_at updated_at created_by_actor_id updated_by_actor_id code name model description custody_scope_id organization_id item_state".split(),
     "UPDATE": ["item_state"]}
+# All loan responses select the lost-item projection, even when there are no lost items.
+RUNTIME["tool_loan_loss"] = {"SELECT": "tenant_id loan_id tool_id command_id reason".split()}
 RUNTIME["session_authority_activation"] = {"SELECT": """
     singleton state version activated_at activated_by_database_role activation_event_id activation_evidence_sha256
 """.split()}

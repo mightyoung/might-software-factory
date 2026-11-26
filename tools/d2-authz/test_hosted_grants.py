@@ -22,3 +22,9 @@ class HostedGrantTest(unittest.TestCase):
         self.assertFalse(effective_table(FIXTURE, "act_ru_task", "DELETE"))
         self.assertTrue(effective_column(FIXTURE, "permission", "label", "UPDATE"))
         self.assertFalse(effective_column(FIXTURE, "permission", "code", "UPDATE"))
+
+    def test_all_loan_responses_can_render_loss_projection_without_loss_writes(self):
+        for column in ("tenant_id", "loan_id", "tool_id", "command_id", "reason"):
+            self.assertTrue(effective_column(RUNTIME, "tool_loan_loss", column, "SELECT"))
+        self.assertFalse(effective_table(RUNTIME, "tool_loan_loss", "INSERT"))
+        self.assertFalse(effective_column(RUNTIME, "tool_loan_loss", "actor_member_id", "SELECT"))

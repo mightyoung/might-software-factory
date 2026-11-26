@@ -17,7 +17,7 @@ class HostedBootstrap {
 
     public static void main(String[] args) {
         try {
-            if (args.length != 1 || !Set.of("migrate", "seed").contains(args[0]))
+            if (args.length != 1 || !Set.of("migrate", "seed", "deploy").contains(args[0]))
                 throw new IllegalArgumentException("Explicit AU-08 phase required");
             marker = UUID.fromString(bootstrap.required("AU08_BOOT_MARKER"));
             int port = Integer.parseInt(bootstrap.required("AU08_BOOT_PORT"));
@@ -30,20 +30,22 @@ class HostedBootstrap {
             } else {
                 UUID tenant = UUID.fromString(bootstrap.required("AU08_BOOT_TENANT"));
                 if (!tenant.equals(derivedTenant())) throw new IllegalStateException("Wrong synthetic tenant");
-                seed(secret, tenant);
-                deploy(secret, tenant);
+                if (args[0].equals("seed")) seed(secret, tenant);
+                else deploy(secret, tenant);
             }
             System.out.println("AU08_BOOTSTRAP_OK " + args[0]);
         } catch (Exception failure) {
             String state = "NA";
-            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            List<String> classes = new ArrayList<>();
+            for (Throwable cause = failure; cause != null && classes.size() < 5; cause = cause.getCause()) {
+                classes.add(cause.getClass().getSimpleName());
                 if (cause instanceof SQLException sql && sql.getSQLState() != null
                         && sql.getSQLState().matches("[A-Z0-9]{5}")) {
                     state = sql.getSQLState();
                     break;
                 }
             }
-            System.err.println("AU08_BOOTSTRAP_FAILED " + failure.getClass().getSimpleName() + " " + state);
+            System.err.println("AU08_BOOTSTRAP_FAILED " + String.join(".", classes) + " " + state);
             System.exit(1);
         }
     }
@@ -161,6 +163,7 @@ class HostedBootstrap {
     }
 
     static void deploy(String password, UUID tenant) throws Exception {
+        try (var c = DriverManager.getConnection(url, MIGRATOR, password)) { verify(c, MIGRATOR, false); }
         var cfg = new StandaloneProcessEngineConfiguration();
         cfg.setJdbcUrl(url).setJdbcUsername(MIGRATOR).setJdbcPassword(password)
                 .setDatabaseSchemaUpdate("false").setAsyncExecutorActivate(false);

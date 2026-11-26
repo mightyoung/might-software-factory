@@ -91,7 +91,7 @@ def run_java(root, classpath, stage, environment):
     except subprocess.CalledProcessError as error:
         # The Java entry emits only a fixed stage or sanitized SQLSTATE.
         status = [line for line in error.stderr.splitlines()
-                  if re.fullmatch(r"AU08_BOOTSTRAP_FAILED [A-Za-z]+ (?:[A-Z0-9]{5}|NA)", line)]
+                  if re.fullmatch(r"AU08_BOOTSTRAP_FAILED [A-Za-z.]+ (?:[A-Z0-9]{5}|NA)", line)]
         raise ValueError("AU-08 " + stage + " failed" + (": " + status[0] if len(status) == 1 else "")) from None
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError("AU-08 " + stage + " unavailable") from None
@@ -115,5 +115,8 @@ def migrate_and_seed(root, artifact, artifact_sha256, owned, directory, bootstra
              "AU08_BOOT_MIGRATOR_PASSWORD": passwords[MIGRATOR_ROLE]}
     classpath = str(classes) + os.pathsep + classpath
     run_java(root, classpath, "migrate", {**child, "AU08_BOOT_ADMIN_PASSWORD": bootstrap_password})
+    print("AU08_MIGRATIONS_VALIDATED", flush=True)
     run_java(root, classpath, "seed", {**child, "AU08_BOOT_READER": actors["reader"],
                                                   "AU08_BOOT_KEEPER": actors["keeper"]})
+    print("AU08_SYNTHETIC_IDENTITIES_SEEDED", flush=True)
+    run_java(root, classpath, "deploy", child)
