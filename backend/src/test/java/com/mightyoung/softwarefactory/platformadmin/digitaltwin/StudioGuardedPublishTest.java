@@ -144,6 +144,124 @@ class StudioGuardedPublishTest {
         verify(insert, times(1)).executeUpdate();
     }
 
+    @Test void exactAppendAuditPointerOrderAndNoDecisionBeforeCommit() throws Exception {
+        var scope = prepare();
+        allowPublication();
+        var stream = UUID.randomUUID();
+        update(StudioPublicationWrites.CREATE_SQL, 1);
+        setupLock(stream, null);
+        var append = update(StudioPublicationWrites.APPEND_SQL, 1);
+        var audit = update(StudioPublicationAudit.INSERT_SQL, 1);
+        var pointer = update(StudioPublicationWrites.POINTER_SQL, 1);
+        inParent(() -> {
+            var staged = command().stage(scope, target(), 0, sourceBytes());
+            assertThrows(IllegalStateException.class, staged::committedDecision);
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(org.springframework.transaction.support.TransactionSynchronization.STATUS_COMMITTED));
+            assertEquals(StudioPublicationPolicy.Outcome.APPEND, staged.committedDecision().outcome());
+        });
+        var order = inOrder(append, audit, pointer);
+        order.verify(append).executeUpdate();
+        order.verify(audit).executeUpdate();
+        order.verify(pointer).executeUpdate();
+        var reserved = org.mockito.ArgumentCaptor.forClass(UUID.class);
+        verify(append).setObject(eq(7), reserved.capture());
+        verify(audit).setObject(2, reserved.getValue());
+        verify(audit).setObject(4, stream);
+        verify(audit).setObject(3, context.actorId());
+        verify(connection, never()).commit();
+    }
+
+    @Test void badInputAndForeignTargetDoNotReachWriteStorage() throws Exception {
+        var scope = prepare();
+        allowPublication();
+        inParent(() -> assertThrows(IllegalArgumentException.class,
+                () -> command().stage(scope, target(), 0, new byte[]{1})));
+        verify(connection, never()).prepareStatement(StudioPublicationWrites.CREATE_SQL);
+        inParent(() -> assertThrows(StudioPublicationPolicy.Forbidden.class,
+                () -> command().stage(scope, new StudioPublicationPolicy.Target(UUID.randomUUID(), "floor"), 0, sourceBytes())));
+        verify(connection, never()).prepareStatement(StudioPublicationWrites.LOCK_SQL);
+    }
+
+    @Test void staleAndUnchangedNeverAuditOrAppend() throws Exception {
+        var scope = prepare();
+        allowPublication();
+        update(StudioPublicationWrites.CREATE_SQL, 0);
+        setupLock(UUID.randomUUID(), 2L);
+        var digest = StudioDraftDecoder.decode(sourceBytes()).facts().canonicalSha256();
+        var lookup = mock(PreparedStatement.class);
+        var rows = mock(ResultSet.class);
+        when(connection.prepareStatement(StudioPublicationWrites.HEAD_SQL)).thenReturn(lookup);
+        when(lookup.executeQuery()).thenReturn(rows);
+        when(rows.next()).thenReturn(true, false, true, false);
+        when(rows.getString(1)).thenReturn(digest);
+        inParent(() -> assertThrows(StudioPublicationPolicy.VersionConflict.class,
+                () -> command().stage(scope, target(), 1, sourceBytes())));
+        inParent(() -> {
+            var staged = command().stage(scope, target(), 2, sourceBytes());
+            TransactionSynchronizationManager.getSynchronizations().forEach(s -> s.afterCompletion(1));
+            assertThrows(IllegalStateException.class, staged::committedDecision);
+        });
+        verify(connection, never()).prepareStatement(StudioPublicationAudit.INSERT_SQL);
+        verify(connection, never()).prepareStatement(StudioPublicationWrites.APPEND_SQL);
+    }
+
+    @Test void failedAuditPoisonsOwnerAndNeverMovesPointer() throws Exception {
+        var scope = prepare();
+        allowPublication();
+        update(StudioPublicationWrites.CREATE_SQL, 1);
+        setupLock(UUID.randomUUID(), null);
+        update(StudioPublicationWrites.APPEND_SQL, 1);
+        update(StudioPublicationAudit.INSERT_SQL, 0);
+        inParent(() -> {
+            assertThrows(SessionSensitiveException.class, () -> command().stage(scope, target(), 0, sourceBytes()));
+            assertTrue(((ConnectionHolder) TransactionSynchronizationManager.getResource(source)).isRollbackOnly());
+        });
+        verify(connection, never()).prepareStatement(StudioPublicationWrites.POINTER_SQL);
+    }
+
+    private StudioPublicationCommand command() {
+        return new StudioPublicationCommand(new StudioGuardedPublish(source, callers, human));
+    }
+
+    private byte[] sourceBytes() {
+        return """
+                {"snapshotVersion":1,"scene":{"schemaVersion":1,"screenId":"floor","devices":[]},
+                 "floorplan":{"walls":[],"zones":[]}}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private void allowPublication() throws Exception {
+        when(checked.enforcement()).thenReturn(ENFORCING);
+        var statement = mock(PreparedStatement.class);
+        when(connection.prepareStatement(StudioAuthorityQueries.PUBLISH_SQL)).thenReturn(statement);
+        when(statement.executeQuery()).thenAnswer(call -> {
+            var rows = mock(ResultSet.class);
+            when(rows.next()).thenReturn(true, false);
+            when(rows.getBoolean(1)).thenReturn(true);
+            return rows;
+        });
+    }
+
+    private PreparedStatement update(String sql, int count) throws Exception {
+        var statement = mock(PreparedStatement.class);
+        when(connection.prepareStatement(sql)).thenReturn(statement);
+        when(statement.executeUpdate()).thenReturn(count);
+        return statement;
+    }
+
+    private void setupLock(UUID stream, Long head) throws Exception {
+        var statement = mock(PreparedStatement.class);
+        when(connection.prepareStatement(StudioPublicationWrites.LOCK_SQL)).thenReturn(statement);
+        when(statement.executeQuery()).thenAnswer(call -> {
+            var rows = mock(ResultSet.class);
+            when(rows.next()).thenReturn(true, false);
+            when(rows.getObject(1, UUID.class)).thenReturn(stream);
+            when(rows.getObject(2, Long.class)).thenReturn(head);
+            return rows;
+        });
+    }
+
     private StudioPublicationPolicy.Target target() { return new StudioPublicationPolicy.Target(context.tenantId(), "floor"); }
 
     private HumanSessionAuthorityTransaction.WriteScope prepare() {

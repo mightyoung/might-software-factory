@@ -62,3 +62,11 @@ snapshot can attempt the conditional pointer update once. This class is **not** 
 physical connection before advancing, and commit before returning success. Audit action/policy
 registration and the scoped same-connection audit adapter remain activation prerequisites; the
 deferred FK does not prove actor/action/receipt semantics.
+
+`StudioPublicationCommand` composes these dormant steps: the existing managed write owner lends
+its verified connection, the locked stream supplies the audit resource, and one server-reserved ID
+is shared by the accepted version and audit receipt. The matching receipt precedes the exact
+pointer update. The owning transaction is unchanged; a staged result exposes its decision only
+after Spring reports `STATUS_COMMITTED`. Java recorders exercise this ordering and simulated
+completion, not an actual commit. There is still no runtime caller, HTTP route, schema registration
+or production grant.
