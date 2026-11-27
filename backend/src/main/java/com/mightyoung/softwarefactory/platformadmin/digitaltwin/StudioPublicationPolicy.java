@@ -92,7 +92,7 @@ public final class StudioPublicationPolicy {
                 !caller.verifiedPermissions().contains(required)) throw new Forbidden();
     }
 
-    private static Metrics metrics(DraftFacts draft) {
+    static Metrics metrics(DraftFacts draft) {
         if (draft.devices() < 0 || draft.devices() > 500 || draft.walls().size() > 100 || draft.zones().size() > 20)
             throw new IllegalArgumentException("Studio geometry exceeds v1 limits");
         var ids = new HashSet<Integer>();
