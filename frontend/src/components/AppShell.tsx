@@ -38,7 +38,8 @@ function QuickNavigation({ session, menu, onClose }: Pick<AppShellProps, "sessio
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
-  const pages = new Map(session.applications.map(app => [app.entryPath, app.name]));
+  const applicationNames = new Map(session.applications.map(app => [app.entryPath, app.name]));
+  const pages = new Map(applicationNames);
   if (menu.status === "ready") {
     const visible = visibleMenuNodes(menu.menu.nodes, session);
     for (const item of visible.flatMap(node => node.children ?? [node])) {
@@ -46,7 +47,9 @@ function QuickNavigation({ session, menu, onClose }: Pick<AppShellProps, "sessio
     }
   }
   const term = query.trim().toLocaleLowerCase();
-  const results = [...pages].filter(([, label]) => label.toLocaleLowerCase().includes(term));
+  const results = [...pages].filter(([path, label]) =>
+    label.toLocaleLowerCase().includes(term) || applicationNames.get(path)?.toLocaleLowerCase().includes(term),
+  );
   return <dialog ref={dialog} className="quick-navigation" aria-labelledby="quick-navigation-title"
     onCancel={event => { event.preventDefault(); onClose(); }}
     onKeyDown={event => {
