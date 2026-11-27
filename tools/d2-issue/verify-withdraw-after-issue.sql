@@ -11,7 +11,10 @@ declare target_id uuid := current_setting('test.tl10_loan')::uuid;
         target_tenant uuid;
 begin
     if current_database() <> 'msf_d2_issue_test'
-       or inet_server_addr() is distinct from '127.0.0.1'::inet
+       or (inet_server_addr() is distinct from '127.0.0.1'::inet and (
+           nullif(current_setting('test.tl10_owned_instance', true), '') is null or
+           current_setting('msf.ci_instance', true) is distinct from current_setting('test.tl10_owned_instance', true)
+       ))
        or marker !~ '^TL10-ISSUE-FIRST-[0-9a-f-]{36}$' then
         raise exception 'Dedicated loopback TL-10 fixture required';
     end if;

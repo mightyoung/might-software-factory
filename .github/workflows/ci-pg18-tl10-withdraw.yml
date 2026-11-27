@@ -1,0 +1,50 @@
+name: TL-10 isolated issue before stale withdrawal
+
+on:
+  push:
+    branches: [codex/tl10-withdraw-hosted-20261127]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tl10-withdraw-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tl10:
+    if: github.repository == 'mightyoung/might-software-factory' && github.ref == 'refs/heads/codex/tl10-withdraw-hosted-20261127'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+      - name: Check target guard, Chrome and package backend
+        run: |
+          node --test tools/d2-issue/withdraw-after-issue.test.mjs
+          google-chrome --version
+          ./mvnw -B -ntp -pl backend -am -DskipTests package
+      - name: Build real HTTP frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          VITE_API_MODE=http npm run build
+      - name: Run only issue before stale withdrawal
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tl10-venv"
+          "$RUNNER_TEMP/tl10-venv/bin/python" -m pip --disable-pip-version-check install 'requests==2.32.5' 'psycopg2-binary==2.9.11'
+          "$RUNNER_TEMP/tl10-venv/bin/python" -B tools/d2-authz/hosted_run.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tl10-withdraw-verified-summary
+          path: artifacts/tl10/result.json
+          if-no-files-found: error
+          retention-days: 7

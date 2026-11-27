@@ -40,7 +40,11 @@ async function run(env) {
     await page.getByLabel("账号", { exact: true }).fill(`d1seed-${actor}`);
     await page.getByLabel("密码", { exact: true }).fill(env[`D2_PASSWORD_${actor.toUpperCase()}`]);
     await page.getByRole("button", { name: "登录", exact: true }).click();
+    await expect(page.getByText("工装管理", { exact: true }).first()).toBeVisible();
     const entry = page.getByText("我的工装借用单", { exact: true }).first();
+    if (!await entry.isVisible()) {
+      await page.getByRole("link", { name: "工装管理", exact: true }).first().click();
+    }
     await expect(entry).toBeVisible();
     return { page, entry };
   }
