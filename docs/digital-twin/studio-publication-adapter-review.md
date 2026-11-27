@@ -51,3 +51,14 @@
 在真实 Studio 权限/策略与事务拥有者未确定前，不新增会假装完成这项绑定的接口或
 mock 实现。recorder 只能证明适配器顺序、参数和错误传播；锁冲突、新旧快照、权限撤回
 串行化、真实提交回滚、数据库权限/RLS 与延迟外键仍需隔离 PostgreSQL 单独验收。
+
+## Dormant dedicated audit path
+
+`StudioPublicationAudit` uses a fixed `studio_scene.publish` event and
+`studio-publication-v1` tag on the connection proven by `StudioGuardedPublish.Authorized`.
+The authorized proof is private to the operation callback and invalid after it returns.
+The receipt checks the issuing adapter, same scope and complete expected record, including the
+reserved audit ID; a mismatch poisons the owner's transaction. Neither the receipt nor its
+validation is a commit acknowledgment. The transaction owner still must build the audit record from
+the locked stream and accepted version's reserved ID, then require that receipt before moving the
+pointer. No audit action was added to a live registry and no application privilege was granted.

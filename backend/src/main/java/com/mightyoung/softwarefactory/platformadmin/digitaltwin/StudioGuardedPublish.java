@@ -9,7 +9,8 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.BiFunction;
+import java.time.Instant;
+import java.util.function.Function;
 
 import static com.mightyoung.softwarefactory.identity.SessionSensitiveContracts.Enforcement.ENFORCING;
 import static com.mightyoung.softwarefactory.platformadmin.digitaltwin.StudioPublicationPolicy.*;
@@ -27,7 +28,7 @@ final class StudioGuardedPublish {
     }
 
     /** The trusted callback must use this connection and complete synchronously; the outer owner commits. */
-    <T> T run(HumanSessionAuthorityTransaction.WriteScope scope, Target target, BiFunction<Caller, Connection, T> publish) {
+    <T> T run(HumanSessionAuthorityTransaction.WriteScope scope, Target target, Function<Authorized, T> publish) {
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || !TransactionSynchronizationManager.isSynchronizationActive()
                 || !(TransactionSynchronizationManager.getResource(source) instanceof ConnectionHolder holder)
@@ -45,21 +46,82 @@ final class StudioGuardedPublish {
             return callers.withGuarded(scope, boundary -> {
                 callers.requireGuarded(scope, boundary, source, connection);
                 var checked = human.requireGuardedCheckedCurrent(scope, boundary);
-                if (checked == null || checked.enforcement() != ENFORCING
-                        || checked.observedAt(scope, boundary) == null) throw SessionSensitiveException.unavailable();
+                if (checked == null || checked.enforcement() != ENFORCING) throw SessionSensitiveException.unavailable();
+                var observedAt = checked.observedAt(scope, boundary);
+                if (observedAt == null) throw SessionSensitiveException.unavailable();
                 try {
                     if (!StudioAuthorityQueries.mayPublish(connection, context)) throw new Forbidden();
                 } catch (SQLException failure) {
                     throw SessionSensitiveException.unavailable();
                 }
-                callers.requireGuarded(scope, boundary, source, connection);
-                var result = publish.apply(new Caller(context.tenantId(), context.actorId(), context.memberId(), true, Set.of()), connection);
-                callers.requireGuarded(scope, boundary, source, connection);
-                return result;
+                var actor = new Caller(context.tenantId(), context.actorId(), context.memberId(), true, Set.of());
+                var authorized = new Authorized(actor, target, connection, observedAt, holder, () -> {
+                    if (TransactionSynchronizationManager.getResource(source) != holder || holder.getConnection() != connection)
+                        throw SessionSensitiveException.unavailable();
+                    callers.requireGuarded(scope, boundary, source, connection);
+                });
+                try {
+                    authorized.requireCurrent();
+                    var result = publish.apply(authorized);
+                    authorized.requireCurrent();
+                    return result;
+                } finally {
+                    authorized.open = false;
+                }
             });
         } catch (RuntimeException | Error failure) {
             holder.setRollbackOnly();
             throw failure;
         }
     }
+
+    static final class Authorized {
+        private final Caller caller;
+        private final Target target;
+        private final Connection connection;
+        private final Instant observedAt;
+        private final ConnectionHolder holder;
+        private final Runnable proof;
+        private final Thread thread = Thread.currentThread();
+        private boolean open = true;
+        private boolean auditStarted;
+
+        private Authorized(Caller caller, Target target, Connection connection, Instant observedAt,
+                           ConnectionHolder holder, Runnable proof) {
+            this.caller = caller;
+            this.target = target;
+            this.connection = connection;
+            this.observedAt = observedAt;
+            this.holder = holder;
+            this.proof = proof;
+        }
+
+        Caller caller() { requireCurrent(); return caller; }
+        Connection connection() { requireCurrent(); return connection; }
+        Instant observedAt() { requireCurrent(); return observedAt; }
+
+        void requireTarget(Target expected) {
+            requireCurrent();
+            if (!target.equals(expected)) throw unavailable();
+        }
+
+        void startAudit() {
+            requireCurrent();
+            if (auditStarted) throw unavailable();
+            auditStarted = true;
+        }
+
+        void requireCurrent() {
+            if (Thread.currentThread() != thread || !open) throw SessionSensitiveException.unavailable();
+            if (holder.isRollbackOnly()) throw SessionSensitiveException.unavailable();
+            try { proof.run(); }
+            catch (RuntimeException failure) { throw unavailable(); }
+        }
+
+        SessionSensitiveException unavailable() {
+            if (Thread.currentThread() == thread && open) holder.setRollbackOnly();
+            return SessionSensitiveException.unavailable();
+        }
+    }
+
 }
