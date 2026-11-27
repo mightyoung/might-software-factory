@@ -104,3 +104,60 @@ test("moving a session prefab updates the exported floor position without breaki
   await expect(form).toBeHidden();
   await expect(page.locator("#tour-edit-list")).toContainText("组件巡检");
 });
+
+test("removal requires confirmation and refuses a prefab still targeted by a tour", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.prefabBuffersDeleted = 0;
+    const remove = WebGL2RenderingContext.prototype.deleteBuffer;
+    WebGL2RenderingContext.prototype.deleteBuffer = function (...args) {
+      window.prefabBuffersDeleted++;
+      return remove.apply(this, args);
+    };
+  });
+  await page.goto("/");
+  await expect(page.locator("#status")).toContainText("已就绪");
+  const open = page.getByRole("button", { name: "移除所选组件实例" });
+  const confirm = page.getByRole("button", { name: "确认移除实例" });
+  const instance = page.locator("#devices").getByRole("button", { name: /conveyor-standard · v1$/ });
+  await expect(open).toBeHidden();
+  await page.getByRole("button", { name: "保存组件版本" }).click();
+  await page.getByRole("button", { name: "放入合成场景" }).click();
+  await open.click();
+  await expect(page.locator("#prefab-remove-target")).toContainText("conveyor-standard · v1（prefab-instance-1）");
+  const cancel = page.getByRole("button", { name: "取消移除" });
+  await expect(cancel).toBeFocused();
+  await cancel.click();
+  await expect(confirm).toBeHidden();
+  await expect(instance).toBeVisible();
+
+  await page.getByLabel("机位设备").selectOption("prefab-instance-1");
+  await page.getByLabel("机位名称").fill("占用该实例");
+  await page.getByRole("button", { name: "添加机位" }).click();
+  await open.click();
+  await confirm.click();
+  const message = page.locator("#prefab-remove-message");
+  await expect(message).toContainText("仍被巡检机位使用");
+  await expect(instance).toBeVisible();
+  const tour = page.locator("#tour-edit-list");
+  await expect(tour).toContainText("占用该实例");
+  await tour.getByRole("button", { name: "移除 占用该实例" }).click();
+
+  const releases = () => page.evaluate(() => window.prefabBuffersDeleted);
+  const before = await releases();
+  await open.click();
+  await confirm.click();
+  await expect(message).toContainText("已从当前草稿移除");
+  await expect.poll(releases).toBeGreaterThan(before);
+  await expect(page.locator("#selection")).toHaveText("未选中设备。");
+  await expect(instance).toHaveCount(0);
+  await expect(page.getByLabel("机位设备").locator('option[value="prefab-instance-1"]')).toHaveCount(0);
+  await expect(page.locator("#prefab-versions").getByRole("button", { name: /· v1$/ })).toBeVisible();
+
+  const result = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出场景草稿" }).click();
+  const chunks = [];
+  for await (const chunk of await (await result).createReadStream()) chunks.push(chunk);
+  const snapshot = JSON.parse(Buffer.concat(chunks).toString());
+  expect(snapshot.scene.devices.some(({ id }) => id === "prefab-instance-1")).toBe(false);
+  expect(snapshot.scene.devices.some(({ id }) => id === "conveyor-04")).toBe(true);
+});

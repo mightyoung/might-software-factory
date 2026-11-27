@@ -23,6 +23,15 @@
             <p id="prefab-relocate-message" role="status"></p>
           </fieldset>
         </form>
+        <div id="prefab-remove-controls" hidden>
+          <button id="prefab-remove" type="button">移除所选组件实例</button>
+          <div id="prefab-remove-confirmation" hidden>
+            <p id="prefab-remove-target"></p>
+            <button id="prefab-remove-confirm" type="button">确认移除实例</button>
+            <button id="prefab-remove-cancel" type="button">取消移除</button>
+          </div>
+        </div>
+        <p id="prefab-remove-message" role="status"></p>
         <fieldset id="conveyor-tool">
           <legend>传送带参数</legend>
           <label for="conveyor-length">长度（米）</label>
