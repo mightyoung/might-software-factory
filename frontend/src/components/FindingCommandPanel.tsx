@@ -75,14 +75,14 @@ function CommandForm({ action, reason, grade, errors, busy, retry, canSubmit, fi
           />
           <div className="report-field">
             <label htmlFor={`${uid}-dueAt`}>整改期限<span className="required-mark" aria-hidden="true"> *</span></label>
-            <input id={`${uid}-dueAt`} type="datetime-local" value={dispatch.values.dueAt} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.dueAt)} onChange={(event) => dispatch.onChange({ ...dispatch.values, dueAt: event.target.value })} />
-            <p className="field-hint">按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。</p>
-            {dispatch.errors.dueAt && <p className="field-error">{dispatch.errors.dueAt}</p>}
+            <input id={`${uid}-dueAt`} type="datetime-local" value={dispatch.values.dueAt} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.dueAt)} aria-describedby={`${uid}-dueAt-hint${dispatch.errors.dueAt ? ` ${uid}-dueAt-error` : ""}`} onChange={(event) => dispatch.onChange({ ...dispatch.values, dueAt: event.target.value })} />
+            <p id={`${uid}-dueAt-hint`} className="field-hint">按北京时间（Asia/Shanghai）填写，与你的电脑时区无关。</p>
+            {dispatch.errors.dueAt && <p id={`${uid}-dueAt-error`} className="field-error">{dispatch.errors.dueAt}</p>}
           </div>
           <div className="report-field">
             <label htmlFor={`${uid}-requirements`}>整改要求<span className="required-mark" aria-hidden="true"> *</span></label>
-            <textarea id={`${uid}-requirements`} rows={3} value={dispatch.values.requirements} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.requirements)} onChange={(event) => dispatch.onChange({ ...dispatch.values, requirements: event.target.value })} />
-            {dispatch.errors.requirements && <p className="field-error">{dispatch.errors.requirements}</p>}
+            <textarea id={`${uid}-requirements`} rows={3} value={dispatch.values.requirements} disabled={busy || fieldsBlocked} aria-invalid={Boolean(dispatch.errors.requirements)} aria-describedby={dispatch.errors.requirements ? `${uid}-requirements-error` : undefined} onChange={(event) => dispatch.onChange({ ...dispatch.values, requirements: event.target.value })} />
+            {dispatch.errors.requirements && <p id={`${uid}-requirements-error`} className="field-error">{dispatch.errors.requirements}</p>}
           </div>
         </>
       )}
