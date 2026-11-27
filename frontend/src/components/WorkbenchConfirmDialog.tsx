@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef } from "react";
 
-export function WorkbenchConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }: {
+export function WorkbenchConfirmDialog({ title, description, confirmLabel, cancelLabel = "继续编辑", onCancel, onConfirm }: {
   title: string;
   description: string;
   confirmLabel: string;
+  cancelLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -36,7 +37,7 @@ export function WorkbenchConfirmDialog({ title, description, confirmLabel, onCan
       <h2 id={id}>{title}</h2>
       <p id={id + "-description"}>{description}</p>
       <div className="report-actions">
-        <button ref={cancel} type="button" className="button button-subtle" onClick={onCancel}>继续编辑</button>
+        <button ref={cancel} type="button" className="button button-subtle" onClick={onCancel}>{cancelLabel}</button>
         <button ref={confirm} type="button" className="button button-primary" onClick={onConfirm}>
           {confirmLabel}
         </button>

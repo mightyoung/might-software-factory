@@ -101,6 +101,61 @@ it("sends typed filters and edits using the record's pinned version", async () =
   );
 });
 
+it("requires accessible confirmation for the current draft and retries only its original deletion", async () => {
+  const prototype = HTMLDialogElement.prototype;
+  const previousShow = Object.getOwnPropertyDescriptor(prototype, "showModal");
+  const previousClose = Object.getOwnPropertyDescriptor(prototype, "close");
+  Object.defineProperties(prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
+  const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    const a = adapter();
+    vi.mocked(a.remove).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true));
+    const props = { adapter: a, onUnauthenticated: vi.fn() };
+    const view = render(<PublishedLedgersPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
+    const remove = await screen.findByRole("button", { name: "删除草稿" });
+    const confirmation = () => screen.findByRole("alertdialog", { name: "删除这条草稿记录？" });
+    remove.focus();
+    fireEvent.click(remove);
+    const dialog = await confirmation();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveFocus();
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(remove).toHaveFocus();
+    expect(screen.getByRole("region", { name: "记录详情" })).toBeInTheDocument();
+    expect(a.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    await confirmation();
+    view.rerender(<PublishedLedgersPage {...props} active={false} />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    view.rerender(<PublishedLedgersPage {...props} active />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(a.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    fireEvent.click(within(await confirmation()).getByRole("button", { name: "确认删除" }));
+    await screen.findByRole("alert");
+    expect(a.remove).toHaveBeenCalledExactlyOnceWith("purchase", "record", {
+      requestId: expect.any(String), expectedVersion: 1,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+    await waitFor(() => expect(a.remove).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(a.remove).mock.calls[1]).toEqual(vi.mocked(a.remove).mock.calls[0]);
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    nativeConfirm.mockRestore();
+    for (const [name, descriptor] of [["showModal", previousShow], ["close", previousClose]] as const) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
+  }
+});
+
 it("reuses the create request after an unknown result and preserves conflict input", async () => {
   const a = adapter();
   vi.mocked(a.create)

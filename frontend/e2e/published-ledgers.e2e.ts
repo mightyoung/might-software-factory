@@ -67,6 +67,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     updatedAt: string;
   } = null;
   let creates = 0;
+  let deletes = 0;
   let refuseDirectory = false;
   let firstCreate: unknown;
   const queries: unknown[] = [];
@@ -92,7 +93,9 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
       return route.fulfill({ json: { record, definition, capabilities } });
     const body = route.request().postDataJSON();
     if (path.endsWith("/delete")) {
-      expect(body.expectedVersion).toBe(2);
+      expect(path).toBe("/api/v1/ledgers/purchase/records/row-1/delete");
+      expect(body).toEqual({ requestId: expect.any(String), expectedVersion: 2 });
+      deletes += 1;
       record = null;
       return route.fulfill({ json: {} });
     }
@@ -172,6 +175,15 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     page.getByRole("cell", { name: "6", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "查看记录" }).click();
+  const remove = page.getByRole("button", { name: "删除草稿" });
+  const confirmation = page.getByRole("alertdialog", { name: "删除这条草稿记录？" });
+  const cancelDelete = confirmation.getByRole("button", { name: "取消" });
+  const confirmDelete = confirmation.getByRole("button", { name: "确认删除" });
+  const nativeDialogs: string[] = [];
+  page.on("dialog", async dialog => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
   for (const [theme, width] of [
     ["light", 1440],
     ["dark", 390],
@@ -190,10 +202,26 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
+    await remove.focus();
+    await page.keyboard.press("Enter");
+    await expect(cancelDelete).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirmDelete).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancelDelete).toBeFocused();
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    expect(violations.map(({ id }) => id)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toHaveCount(0);
+    await expect(remove).toBeFocused();
+    expect(deletes).toBe(0);
   }
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "删除草稿" }).click();
+  await page.keyboard.press("Enter");
+  await confirmDelete.click();
   await expect(page.getByText("共 0 条记录")).toBeVisible();
+  expect(deletes).toBe(1);
+  expect(nativeDialogs).toEqual([]);
 
   refuseDirectory = true;
   await page.getByRole("button", { name: "刷新台账", exact: true }).click();
