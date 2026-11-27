@@ -1,7 +1,10 @@
+import { useForm } from "react-hook-form";
+import * as z from "zod/mini";
 import { useId, useRef, useState } from "react";
 import { FindingCommandError, type FindingCommandAdapter } from "../adapters/findingCommands";
 import { newIdempotencyKey } from "../adapters/findingSubmit";
 import { ACCEPTED_MEDIA_TYPES, TERMINAL_UPLOAD_STATES, type FindingEvidenceAdapter, type UploadState } from "../adapters/findingEvidence";
+import { codePointLength } from "../domain/findingDraft";
 import type { FindingRecord } from "../domain/finding";
 import { useEvidenceUpload } from "../features/findings/useEvidenceUpload";
 
@@ -29,12 +32,15 @@ export interface EvidenceUploadPanelProps {
 }
 
 const STATEMENT_MAX = 4000;
+const statementSchema = z.custom<string>((value) =>
+  typeof value === "string" && value !== "" && codePointLength(value) <= STATEMENT_MAX,
+);
 
 /** 上传 → 隔离扫描 → 服务端终结发布（FINALIZED）后才允许提交整改；服务端会再次校验证据与身份。 */
 export function EvidenceUploadPanel({ finding, adapter, commands, onSubmitted, onUnauthenticated }: EvidenceUploadPanelProps) {
   const uid = useId();
   const input = useRef<HTMLInputElement>(null);
-  const [statement, setStatement] = useState("");
+  const { register, getValues, setError, clearErrors, formState: { errors } } = useForm({ defaultValues: { statement: "" } });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // 同一份内容的重试复用同一个幂等键；内容变了才换新键。
@@ -49,12 +55,16 @@ export function EvidenceUploadPanel({ finding, adapter, commands, onSubmitted, o
   const active = status && !["VERIFIED_PENDING_FINALIZATION", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "FINALIZED"].includes(status.state);
 
   const ready = status?.state === "FINALIZED" && evidenceSetId !== null && finding.version !== undefined;
-  const text = statement.trim();
 
   async function submit() {
     if (!commands || !ready || submitting) return;
-    if (text === "" || [...text].length > STATEMENT_MAX) return setSubmitError(`请填写整改说明，最多 ${STATEMENT_MAX} 个字。`);
-    const command = { kind: "submitRemediation" as const, evidenceSetId: evidenceSetId!, statement: text };
+    const statement = statementSchema.safeParse(getValues("statement").trim());
+    if (!statement.success) {
+      setSubmitError(null);
+      return setError("statement", { type: "validate", message: `请填写整改说明，最多 ${STATEMENT_MAX} 个字。` });
+    }
+    clearErrors("statement");
+    const command = { kind: "submitRemediation" as const, evidenceSetId: evidenceSetId!, statement: statement.data };
     const payload = JSON.stringify([finding.id, finding.version, command]);
     if (attempt.current?.payload !== payload) attempt.current = { payload, key: newIdempotencyKey() };
     setSubmitting(true);
@@ -124,11 +134,11 @@ export function EvidenceUploadPanel({ finding, adapter, commands, onSubmitted, o
         <>
           <div className="report-field">
             <label htmlFor={`${uid}-statement`}>整改说明</label>
-            <textarea id={`${uid}-statement`} value={statement} disabled={submitting} onChange={(event) => setStatement(event.target.value)} />
+            <textarea id={`${uid}-statement`} {...register("statement")} disabled={submitting} aria-invalid={Boolean(errors.statement)} aria-describedby={errors.statement ? `${uid}-statement-error` : undefined} />
           </div>
-          {submitError && (
-            <p className="field-error" role="alert">
-              {submitError}
+          {(errors.statement?.message || submitError) && (
+            <p id={`${uid}-statement-error`} className="field-error" role="alert">
+              {errors.statement?.message || submitError}
             </p>
           )}
           <div className="detail-actions">
