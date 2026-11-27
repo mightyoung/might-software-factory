@@ -114,3 +114,26 @@ test("validates local GLB and frees buffers across 50 real browser replacements"
   await expect.poll(async () => (await metrics()).releases - before.releases).toBeGreaterThanOrEqual(50);
   expect(extraRequests).toEqual([]);
 });
+
+test("keyboard face resizing and explicit GLB units work in the isolated editor", async ({ page }) => {
+  await page.goto("/");
+  const robot = page.getByRole("button", { name: "机械臂 06 · 预警" });
+  await robot.focus();
+  await page.keyboard.press("Enter");
+  const tool = page.getByRole("group", { name: "保持对侧不动地调整尺寸" });
+  await expect(tool.getByRole("status")).toHaveText("长 2 · 宽 1.8 · 高 2.2 米。");
+  await tool.getByLabel("设备局部面").selectOption("+Y");
+  await tool.getByRole("button", { name: "伸出 0.5 米" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(tool.getByRole("status")).toHaveText("长 2 · 宽 1.8 · 高 2.7 米。");
+  await expect(robot).toHaveAttribute("aria-pressed", "true");
+
+  const source = page.getByLabel("模型源单位");
+  const picker = page.getByLabel("选择 GLB 文件");
+  await picker.setInputFiles({ name: "two-unit.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(syntheticGlb()) });
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+  await source.selectOption("mm");
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，0.002 × 0.002 × 0.002 米。")).toBeVisible();
+  await source.selectOption("m");
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+});
