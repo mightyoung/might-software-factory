@@ -1,3 +1,4 @@
+import { mountMeshoptExperiment } from "./meshoptExperiment.ts";
 import { mountAssetVerification } from "./assetVerification.ts";
 import { mountSyntheticVideo } from "./video.ts";
 import { mountPublication } from "./publication.ts";
@@ -74,7 +75,7 @@ const unitWarning = document.querySelector<HTMLParagraphElement>("#unit-warning"
 const resizeTool = document.querySelector<HTMLFieldSetElement>("#resize-tool")!;
 const resizeResult = document.querySelector<HTMLParagraphElement>("#resize-result")!;
 const resizeFace = document.querySelector<HTMLSelectElement>("#resize-face")!;
-let inspection: { name: string; metrics: StaticGlb["metrics"]; rendered: boolean; source: ArrayBuffer } | null = null;
+let inspection: { name: string; metrics: StaticGlb["metrics"]; rendered: boolean; source: ArrayBuffer | null } | null = null;
 const bank = new LocalAssetBank();
 const bankList = document.querySelector<HTMLUListElement>("#model-bank")!;
 const bankInfo = document.querySelector<HTMLParagraphElement>("#model-bank-info")!;
@@ -97,6 +98,7 @@ function renderBank() {
       const bytes = bank.read(asset.id);
       if (bytes) {
         readVersion++;
+        meshopt.cancel();
         error();
         modelUnit.value = asset.sourceUnit;
         showLocalModel(asset.name, bytes);
@@ -118,7 +120,7 @@ function renderBank() {
 }
 saveModel.addEventListener("click", async () => {
   const current = inspection;
-  if (!current || saveModel.disabled) return;
+  if (!current?.source || saveModel.disabled) return;
   saveModel.disabled = true;
   try {
     const existing = new Set(bank.list().map((asset) => asset.id));
@@ -188,17 +190,22 @@ thumbnailButton.addEventListener("click", () => {
   };
   if (!engine?.requestPreviewThumbnail(thumbnailCanvas, finish)) finish(false);
 });
-function showLocalModel(name: string, source: ArrayBuffer) {
+const meshopt = mountMeshoptExperiment((name, bytes) => showLocalModel(name, bytes, true),
+  () => { readVersion++; }, () => closeModel());
+function showLocalModel(name: string, source: ArrayBuffer, experimental = false) {
   const model = openStaticGlb(source);
   const rendered = engine?.showModel(model);
   if (!rendered) model.dispose();
-  inspection = { name, metrics: model.metrics, rendered: Boolean(rendered), source };
+  if (experimental) modelUnit.value = "m";
+  else meshopt.reset();
+  modelUnit.disabled = experimental;
+  inspection = { name, metrics: model.metrics, rendered: Boolean(rendered), source: experimental ? null : source };
   showHierarchy(model.hierarchy);
   resetThumbnail();
   displayInspection();
   displayWallStatus();
   modelClose.hidden = false;
-  saveModel.hidden = false;
+  saveModel.hidden = experimental;
 }
 function displayInspection() {
   const unit: SourceUnit = modelUnit.value === "mm" ? "mm" : "m";
@@ -247,6 +254,8 @@ function error(message = "") {
 }
 function closeModel() {
   readVersion++;
+  meshopt.reset();
+  modelUnit.disabled = false;
   engine?.hideModel(selected);
   inspection = null;
   showHierarchy();
@@ -263,6 +272,7 @@ modelInput.addEventListener("change", async () => {
   modelInput.value = "";
   if (!file) return;
   const mine = ++readVersion;
+  meshopt.cancel();
   error();
   if (!file.name.toLowerCase().endsWith(".glb") || file.size > MAX_GLB_BYTES) {
     error("请选择不超过 8 MiB 的 .glb 文件。");
@@ -362,7 +372,9 @@ updateGizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, () => {
   return item && "equipment" in item ? engine?.projectedHandles(item.id, item.equipment.dimensions) ?? [] : [];
 }, (delta, face, id) => { if (selected === id) adjustSelected(delta, face); });
 window.addEventListener("pagehide", (event) => {
-  if (!event.persisted) { readVersion++; engine?.dispose(); }
+  readVersion++;
+  meshopt.cancel();
+  if (!event.persisted) engine?.dispose();
 });
 
 const planEditor = mountFloorplanEditor((snapshot) => {
