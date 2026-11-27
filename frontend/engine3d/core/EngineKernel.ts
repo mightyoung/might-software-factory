@@ -2,7 +2,7 @@ import { Color, DirectionalLight, GridHelper, HemisphereLight, Mesh, MeshStandar
 import { buildFloorplanGeometry, type FloorplanGeometrySnapshot } from "./floorplanGeometry.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 import type { StaticGlb } from "./glbIntake.ts";
-import { buildSceneObjects } from "./sceneObjects.ts";
+import { buildSceneObjects, type SceneBuildMode } from "./sceneObjects.ts";
 import { resizeFaces, type ResizeFace } from "./equipmentResize.ts";
 import type { DeviceState, ParametricEquipment, SceneDocument } from "../schema/scene.ts";
 
@@ -12,6 +12,7 @@ export function mountEngine(
   canvas: HTMLCanvasElement, sceneDocument: SceneDocument,
   onStatus: (status: RenderStatus) => void,
   onFrame?: () => void,
+  options: { sceneMode?: SceneBuildMode } = {},
 ) {
   let renderer: WebGLRenderer;
   try {
@@ -24,7 +25,7 @@ export function mountEngine(
   scene.background = new Color(0xe6eeec);
   const camera = new PerspectiveCamera(48, 1, 0.1, 3000);
   const target = new Vector3();
-  let objects = buildSceneObjects(sceneDocument);
+  let objects = buildSceneObjects(sceneDocument, options.sceneMode);
   const grid = new GridHelper(32, 32, 0x668d86, 0xbaccc8);
   const key = new DirectionalLight(0xffffff, 2);
   key.position.set(6, 15, 8);
@@ -154,7 +155,7 @@ export function mountEngine(
     replaceScene(next: SceneDocument) {
       if (disposed) return false;
       const previous = objects;
-      objects = buildSceneObjects(next);
+      objects = buildSceneObjects(next, options.sceneMode);
       scene.remove(previous.group);
       previous.dispose();
       objects.group.visible = !preview.current;
