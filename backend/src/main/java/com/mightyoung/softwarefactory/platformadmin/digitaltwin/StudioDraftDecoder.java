@@ -24,7 +24,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 import static com.mightyoung.softwarefactory.platformadmin.digitaltwin.StudioPublicationPolicy.*;
 
-/** Dormant decoder for walls, zones and primitive devices only. No tenant, transport or storage. */
+/** Dormant allowlisted Studio v1 decoder. No tenant, transport or storage. */
 public final class StudioDraftDecoder {
     private static final int MAX_BYTES = 256 * 1024;
     private static final Pattern ID = Pattern.compile("[a-z][a-z0-9_-]{0,63}");
@@ -60,7 +60,7 @@ public final class StudioDraftDecoder {
     }
 
     private static Decoded validate(JsonNode input) {
-        fields(input, "snapshotVersion", "scene", "floorplan");
+        fields(input, Set.of("cameraTour", "hudWidgets"), "snapshotVersion", "scene", "floorplan");
         integer(input.get("snapshotVersion"), 1, 1);
         JsonNode scene = input.get("scene"), floor = input.get("floorplan");
         fields(scene, "schemaVersion", "screenId", "devices");
@@ -70,17 +70,23 @@ public final class StudioDraftDecoder {
         ObjectNode canonical = JSON.createObjectNode().put("snapshotVersion", 1);
         var canonicalDevices = canonical.putObject("scene").put("schemaVersion", 1).put("screenId", screen).putArray("devices");
         var deviceIds = new HashSet<String>();
+        int parametric = 0;
         for (var device : devices) {
-            fields(device, "id", "label", "position", "state", "primitive", "size");
+            boolean equipment = device.has("equipment");
+            if (equipment) {
+                fields(device, "id", "label", "position", "state", "equipment");
+                if (++parametric > 24) throw invalid();
+            } else fields(device, "id", "label", "position", "state", "primitive", "size");
             String id = identifier(device.get("id"));
             if (!deviceIds.add(id)) throw invalid();
-            String label = LABEL_TRIM.matcher(text(device.get("label"))).replaceAll("");
-            if (label.isEmpty() || label.length() > 80 || !StandardCharsets.UTF_8.newEncoder().canEncode(label)) throw invalid();
-            var target = canonicalDevices.addObject().put("id", id).put("label", label);
+            var target = canonicalDevices.addObject().put("id", id).put("label", label(device.get("label"), 80));
             vector(device.get("position"), target.putArray("position"), "-1000", "1000");
-            target.put("state", choice(device.get("state"), Set.of("normal", "warning", "alarm")))
-                    .put("primitive", choice(device.get("primitive"), Set.of("box", "cylinder")));
-            vector(device.get("size"), target.putArray("size"), "0.05", "100");
+            target.put("state", choice(device.get("state"), Set.of("normal", "warning", "alarm")));
+            if (equipment) equipment(device.get("equipment"), target.putObject("equipment"));
+            else {
+                target.put("primitive", choice(device.get("primitive"), Set.of("box", "cylinder")));
+                vector(device.get("size"), target.putArray("size"), "0.05", "100");
+            }
         }
         fields(floor, "walls", "zones");
         var walls = new ArrayList<Wall>();
@@ -103,6 +109,27 @@ public final class StudioDraftDecoder {
             zones.add(new Zone(id, points));
         }
 
+        if (input.has("cameraTour")) {
+            var tour = canonical.putArray("cameraTour");
+            var visited = new HashSet<String>();
+            for (var point : array(input.get("cameraTour"), 0, 20)) {
+                fields(point, "deviceId", "label", "dwellSeconds");
+                String deviceId = identifier(point.get("deviceId"));
+                if (!deviceIds.contains(deviceId) || !visited.add(deviceId)) throw invalid();
+                tour.addObject().put("deviceId", deviceId).put("label", label(point.get("label"), 60))
+                        .put("dwellSeconds", integer(point.get("dwellSeconds"), 1, 30));
+            }
+        }
+        if (input.has("hudWidgets")) {
+            var hud = canonical.putArray("hudWidgets");
+            var shown = new HashSet<String>();
+            for (var item : array(input.get("hudWidgets"), 0, 4)) {
+                String key = choice(item, Set.of("devices", "alarms", "walls", "zones"));
+                if (!shown.add(key)) throw invalid();
+                hud.add(key);
+            }
+        }
+
         var bytes = JSON.writeValueAsBytes(canonical);
         if (bytes.length > MAX_BYTES) throw invalid();
         var facts = new DraftFacts(screen, sha256(bytes), devices.size(), walls, zones);
@@ -117,20 +144,47 @@ public final class StudioDraftDecoder {
         return new Point(x, z);
     }
 
+    private static void equipment(JsonNode value, ObjectNode target) {
+        fields(value, Set.of("rotationYRad"), "kind", "dimensions");
+        target.put("kind", choice(value.get("kind"), Set.of("CONVEYOR", "CORRIDOR", "ROBOT_ARM", "SPIRAL_CONVEYOR")));
+        var dimensions = value.get("dimensions");
+        fields(dimensions, "length", "width", "height");
+        target.putObject("dimensions")
+                .put("length", decimal(dimensions.get("length"), "0.2", "36"))
+                .put("width", decimal(dimensions.get("width"), "0.2", "12"))
+                .put("height", decimal(dimensions.get("height"), "0.2", "12"));
+        target.put("rotationYRad", value.has("rotationYRad")
+                ? decimal(value.get("rotationYRad"), "-6.283185307179586", "6.283185307179586") : BigDecimal.ZERO);
+    }
+
     private static void vector(JsonNode node, ArrayNode target, String minimum, String maximum) {
-        var min = new BigDecimal(minimum);
-        var max = new BigDecimal(maximum);
-        for (var element : array(node, 3, 3)) {
-            if (!element.isNumber()) throw invalid();
-            var number = element.decimalValue().stripTrailingZeros();
-            if (number.scale() > 24 || number.compareTo(min) < 0 || number.compareTo(max) > 0) throw invalid();
-            target.add(number.scale() < 0 ? number.setScale(0) : number);
-        }
+        for (var element : array(node, 3, 3)) target.add(decimal(element, minimum, maximum));
+    }
+
+    private static BigDecimal decimal(JsonNode element, String minimum, String maximum) {
+        if (!element.isNumber()) throw invalid();
+        var number = element.decimalValue().stripTrailingZeros();
+        if (number.scale() > 24 || number.compareTo(new BigDecimal(minimum)) < 0 ||
+                number.compareTo(new BigDecimal(maximum)) > 0) throw invalid();
+        return number.scale() < 0 ? number.setScale(0) : number;
+    }
+
+    private static String label(JsonNode node, int limit) {
+        String label = LABEL_TRIM.matcher(text(node)).replaceAll("");
+        if (label.isEmpty() || label.length() > limit || !StandardCharsets.UTF_8.newEncoder().canEncode(label)) throw invalid();
+        return label;
     }
 
     private static void fields(JsonNode node, String... names) {
-        if (node == null || !node.isObject() || node.size() != names.length) throw invalid();
+        fields(node, Set.of(), names);
+    }
+
+    private static void fields(JsonNode node, Set<String> optionals, String... names) {
+        if (node == null || !node.isObject()) throw invalid();
+        int count = names.length;
         for (var name : names) if (!node.has(name)) throw invalid();
+        for (var optional : optionals) if (node.has(optional)) count++;
+        if (node.size() != count) throw invalid();
     }
 
     private static JsonNode array(JsonNode node, int min, int max) {

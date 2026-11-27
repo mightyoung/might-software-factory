@@ -39,7 +39,6 @@ class StudioDraftDecoderTest {
                 SOURCE + " {}", SOURCE.replace("\"snapshotVersion\":1", "\"snapshotVersion\":1,\"snapshotVersion\":1"),
                 SOURCE.replace("\"screenId\":\"factory\"", "\"screenId\":\"factory\",\"\\u0073creenId\":\"other\""),
                 SOURCE.replace("\"label\":\" 泵 \"", "\"label\":\"泵\",\"url\":\"https://invalid.example/\""),
-                SOURCE.replace("\"scene\":", "\"hudWidgets\":[],\"scene\":"),
                 SOURCE.replace("\"scene\":", "\"cameraTour\":null,\"scene\":"),
                 SOURCE.replace("[10,0]", "[11.5,0]"), SOURCE.replace("\"id\":2", "\"id\":1"),
                 SOURCE.replace("[0,10]", "[0,0]"), SOURCE.replace("[0.5,1,1]", "[0.01,1,1]"),
@@ -57,6 +56,60 @@ class StudioDraftDecoderTest {
         assertEquals(draft.facts().canonicalSha256(), decision.canonicalSha256());
         assertEquals(1.0, decision.metrics().wallLengthM());
         assertEquals(0.5, decision.metrics().zoneAreaM2());
+    }
+
+    @Test void acceptsCurrentSyntheticSceneAndCanonicalizesOptionalFields() throws Exception {
+        var fixture = syntheticFixture();
+        var draft = decode(fixture);
+        assertEquals("sample-workshop", draft.facts().screenKey());
+        assertEquals(7, draft.facts().devices());
+        var canonical = new String(draft.canonicalBytes(), StandardCharsets.UTF_8);
+        assertTrue(canonical.contains("\"rotationYRad\":0"));
+        assertTrue(canonical.contains("\"label\":\"机械臂巡视\""));
+        assertEquals(draft.facts().canonicalSha256(), decode(canonical).facts().canonicalSha256());
+        assertNotEquals(draft.facts().canonicalSha256(), decode(fixture.replace("机械臂巡视", "机械臂复查")).facts().canonicalSha256());
+    }
+
+    @Test void refusesInvalidOptionalFieldsAndUnknownEquipmentPayloads() throws Exception {
+        var fixture = syntheticFixture();
+        for (var bad : new String[] {
+            fixture.replace("\"deviceId\": \"robot-06\"", "\"deviceId\": \"unregistered\""),
+            fixture.replace("\"dwellSeconds\": 3", "\"dwellSeconds\": 0"),
+            fixture.replace("\"dwellSeconds\": 3", "\"dwellSeconds\": \"3\""),
+            fixture.replace("\"walls\"\n  ]", "\"devices\"\n  ]"),
+            fixture.replace("\"CONVEYOR\"", "\"UNKNOWN\""),
+            fixture.replace("\"length\": 4", "\"length\": 40"),
+            fixture.replace("\"kind\": \"CONVEYOR\"", "\"kind\": \"CONVEYOR\", \"rotationYRad\": 7"),
+            fixture.replace("\"kind\": \"CONVEYOR\"", "\"kind\": \"CONVEYOR\", \"texture\": \"about:blank\""),
+        }) {
+            assertNotEquals(fixture, bad);
+            assertThrows(IllegalArgumentException.class, () -> decode(bad));
+        }
+    }
+
+    @Test void enforcesParametricLimitAndUniqueTourDeviceReferences() {
+        String device = """
+                {"id":"d%d","label":"Synthetic machine","position":[0,0,0],"state":"normal",
+                 "equipment":{"kind":"ROBOT_ARM","dimensions":{"length":2,"width":1,"height":3}}}
+                """;
+        String payload = """
+                {"snapshotVersion":1,"scene":{"schemaVersion":1,"screenId":"factory","devices":[%s]},
+                "floorplan":{"walls":[],"zones":[]},"cameraTour":%s}
+                """;
+        var devices = java.util.stream.IntStream.range(0, 24).mapToObj(i -> device.formatted(i))
+                .collect(java.util.stream.Collectors.joining(","));
+        String stop = """
+                {"deviceId":"d0","label":"巡视","dwellSeconds":30}
+                """;
+        assertEquals(24, decode(payload.formatted(devices, "[" + stop + "]")).facts().devices());
+        assertThrows(IllegalArgumentException.class, () -> decode(payload.formatted(devices + "," + device.formatted(24), "[]")));
+        assertThrows(IllegalArgumentException.class, () -> decode(payload.formatted(devices, "[" + stop + "," + stop + "]")));
+    }
+
+    private static String syntheticFixture() throws Exception {
+        try (var fixture = StudioDraftDecoderTest.class.getResourceAsStream("/digital-twin/combined-studio-v1-synthetic.json")) {
+            return new String(java.util.Objects.requireNonNull(fixture).readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     private static StudioDraftDecoder.Decoded decode(String value) {

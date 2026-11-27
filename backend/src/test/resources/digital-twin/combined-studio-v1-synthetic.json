@@ -1,0 +1,144 @@
+{
+  "snapshotVersion": 1,
+  "scene": {
+    "schemaVersion": 1,
+    "screenId": "sample-workshop",
+    "devices": [
+      {
+        "id": "pump-01",
+        "label": "循环泵 01",
+        "primitive": "cylinder",
+        "position": [
+          -4,
+          0,
+          1
+        ],
+        "size": [
+          2.4,
+          2.1,
+          2.4
+        ],
+        "state": "normal"
+      },
+      {
+        "id": "press-02",
+        "label": "成型机 02",
+        "primitive": "box",
+        "position": [
+          1,
+          0,
+          -2
+        ],
+        "size": [
+          3,
+          3,
+          2
+        ],
+        "state": "warning"
+      },
+      {
+        "id": "fan-03",
+        "label": "排风装置 03",
+        "primitive": "box",
+        "position": [
+          5,
+          0,
+          1
+        ],
+        "size": [
+          2,
+          2,
+          2.6
+        ],
+        "state": "alarm"
+      },
+      {
+        "id": "conveyor-04",
+        "label": "传送带 04",
+        "position": [
+          -3,
+          0,
+          6
+        ],
+        "state": "normal",
+        "equipment": {
+          "kind": "CONVEYOR",
+          "dimensions": {
+            "length": 4,
+            "width": 1,
+            "height": 0.9
+          }
+        }
+      },
+      {
+        "id": "corridor-05",
+        "label": "廊道 05",
+        "position": [
+          0,
+          0,
+          -7
+        ],
+        "state": "normal",
+        "equipment": {
+          "kind": "CORRIDOR",
+          "dimensions": {
+            "length": 8,
+            "width": 1.8,
+            "height": 1.2
+          }
+        }
+      },
+      {
+        "id": "robot-06",
+        "label": "机械臂 06",
+        "position": [
+          5,
+          0,
+          -4
+        ],
+        "state": "warning",
+        "equipment": {
+          "kind": "ROBOT_ARM",
+          "dimensions": {
+            "length": 2,
+            "width": 1.8,
+            "height": 2.2
+          }
+        }
+      },
+      {
+        "id": "spiral-07",
+        "label": "螺旋传送机 07",
+        "position": [
+          7,
+          0,
+          5
+        ],
+        "state": "normal",
+        "equipment": {
+          "kind": "SPIRAL_CONVEYOR",
+          "dimensions": {
+            "length": 3,
+            "width": 3,
+            "height": 3.3
+          }
+        }
+      }
+    ]
+  },
+  "floorplan": {
+    "walls": [],
+    "zones": []
+  },
+  "cameraTour": [
+    {
+      "deviceId": "robot-06",
+      "label": "  机械臂巡视  ",
+      "dwellSeconds": 3
+    }
+  ],
+  "hudWidgets": [
+    "devices",
+    "walls"
+  ]
+}
