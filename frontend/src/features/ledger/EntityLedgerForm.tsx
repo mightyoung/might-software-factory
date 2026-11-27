@@ -1,3 +1,4 @@
+import { useForm } from "react-hook-form";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError } from "../../api/httpClient";
 import { useLeaveGuard } from "../../routing/router";
@@ -12,7 +13,10 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
   onSuccess(result: LedgerCommand): void; onUnauthenticated(): void; onRefresh(): void;
 }) {
   const restored = useRef(peekEntityDraft(owner, draftKey));
-  const [draft, setDraft] = useState<LedgerDraft>(() => ({ ...initialDraft(definition, use, record?.values), ...restored.current?.values }));
+  const defaults = useRef<LedgerDraft | null>(null);
+  defaults.current ??= { ...initialDraft(definition, use, record?.values), ...restored.current?.values };
+  const { getValues, setValue, watch } = useForm<LedgerDraft>({ defaultValues: defaults.current });
+  const draft = watch();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,11 +41,12 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
       stashEntityDraft(owner, draftKey, { request: current.pending ?? undefined, values: current.draft, definitionVersion: definition.definitionVersion, key: current.pending?.key ?? null, fingerprint: current.pending?.fingerprint ?? null, locked: current.locked, expectedVersion: expectedVersion.current });
     }
   }, [owner, draftKey, definition.definitionVersion]);
-  function change(key: string, value: string) { setDraft(current => ({ ...current, [key]: value })); setDirty(true); setErrors(current => ({ ...current, [key]: "" })); }
+  function change(key: string, value: string) { setValue(key, value); setDirty(true); setErrors(current => ({ ...current, [key]: "" })); }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || (!reviewed && !locked)) return;
     const generation = lifetime.current;
+    const draft = getValues();
     let request = pending;
     if (!locked) {
       const validation = formValues(definition, use, draft);
