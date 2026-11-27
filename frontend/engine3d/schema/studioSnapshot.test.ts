@@ -36,3 +36,10 @@ test("keeps an authored named camera sequence and refuses unknown or duplicated 
   assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...valid, cameraTour: [{ ...valid.cameraTour[0], deviceId: "missing" }] })));
   assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...valid, cameraTour: [{ ...valid.cameraTour[0], dwellSeconds: 31 }] })));
 });
+
+test("accepts a bounded allowlisted HUD selection and never accepts arbitrary HTML or endpoints", () => {
+  const hud = { ...snapshot, hudWidgets: ["devices", "alarms", "zones"] };
+  assert.deepEqual(parseStudioSnapshot(JSON.stringify(hud)).hudWidgets, hud.hudWidgets);
+  assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...hud, hudWidgets: ["devices", "devices"] })));
+  assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...hud, hudWidgets: [{ url: "https://example.com" }] })));
+});

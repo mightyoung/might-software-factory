@@ -1,6 +1,6 @@
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
-import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
+import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot, hudKeys, type HudKey } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
@@ -243,6 +243,14 @@ const planEditor = mountFloorplanEditor((snapshot) => {
   displayWallStatus();
 });
 
+const hudChecks = Array.from(document.querySelectorAll<HTMLInputElement>("#hud-editor input"));
+const selectedHud = () => {
+  const keys = hudChecks.filter((input) => input.checked).map((input) => input.value as HudKey);
+  return keys.length === hudKeys.length ? undefined : keys;
+};
+function restoreHud(keys: readonly HudKey[]) {
+  for (const input of hudChecks) input.checked = keys.includes(input.value as HudKey);
+}
 const tourEditor = mountTourEditor();
 tourEditor.setScene(sample);
 const importDraft = document.querySelector<HTMLInputElement>("#snapshot-import")!;
@@ -262,14 +270,14 @@ function downloadSnapshot(raw: string, filename: string) {
 }
 document.querySelector("#player-export")!.addEventListener("click", async () => {
   try {
-    downloadSnapshot(await createPlayerSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot())), "might-player-v1.json");
+    downloadSnapshot(await createPlayerSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot(), selectedHud())), "might-player-v1.json");
     snapshotError();
     draftStatus.textContent = "离线放映文件已交给浏览器下载。";
   } catch (cause) { snapshotError(cause instanceof Error ? cause.message : "放映文件生成失败。"); }
 });
 document.querySelector("#snapshot-export")!.addEventListener("click", () => {
   try {
-    downloadSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot()), "might-scene-draft.json");
+    downloadSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot(), selectedHud()), "might-scene-draft.json");
     snapshotError();
     draftStatus.textContent = "场景草稿已交给浏览器下载。";
   } catch (cause) {
@@ -295,6 +303,7 @@ importDraft.addEventListener("change", async () => {
     engine?.replaceScene(sample);
     planEditor.restore(next.floorplan);
     tourEditor.setScene(sample, next.cameraTour ?? []);
+    restoreHud(next.hudWidgets ?? hudKeys);
     const conveyor = sample.devices.find((device) => device.id === "conveyor-04" && "equipment" in device);
     document.querySelector<HTMLElement>("#conveyor-tool")!.hidden = !conveyor;
     if (conveyor && "equipment" in conveyor) {
