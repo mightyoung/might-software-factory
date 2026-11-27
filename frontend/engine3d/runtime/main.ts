@@ -2,6 +2,7 @@ import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
+import { LocalAssetBank } from "../core/LocalAssetBank.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
 import { SceneDocumentSchema } from "../schema/scene.ts";
@@ -61,7 +62,58 @@ const unitWarning = document.querySelector<HTMLParagraphElement>("#unit-warning"
 const resizeTool = document.querySelector<HTMLFieldSetElement>("#resize-tool")!;
 const resizeResult = document.querySelector<HTMLParagraphElement>("#resize-result")!;
 const resizeFace = document.querySelector<HTMLSelectElement>("#resize-face")!;
-let inspection: { name: string; metrics: StaticGlb["metrics"]; rendered: boolean } | null = null;
+let inspection: { name: string; metrics: StaticGlb["metrics"]; rendered: boolean; source: ArrayBuffer } | null = null;
+const bank = new LocalAssetBank();
+const bankList = document.querySelector<HTMLUListElement>("#model-bank")!;
+const bankInfo = document.querySelector<HTMLParagraphElement>("#model-bank-info")!;
+const saveModel = document.querySelector<HTMLButtonElement>("#save-model")!;
+function renderBank() {
+  bankList.replaceChildren(...bank.list().map((asset) => {
+    const row = document.createElement("li");
+    const load = document.createElement("button"), remove = document.createElement("button");
+    load.type = remove.type = "button";
+    load.textContent = `预览 ${asset.name}`;
+    remove.textContent = `移除 ${asset.name}`;
+    load.addEventListener("click", () => {
+      const bytes = bank.read(asset.id);
+      if (bytes) { readVersion++; error(); showLocalModel(asset.name, bytes); }
+    });
+    remove.addEventListener("click", () => {
+      bank.remove(asset.id);
+      renderBank();
+      bankInfo.textContent = `已从会话模型库移除 ${asset.name}。`;
+      bankInfo.focus();
+    });
+    row.append(load, " ", remove);
+    return row;
+  }));
+}
+saveModel.addEventListener("click", async () => {
+  const current = inspection;
+  if (!current || saveModel.disabled) return;
+  saveModel.disabled = true;
+  try {
+    const existing = new Set(bank.list().map((asset) => asset.id));
+    const stored = await bank.register(current.name, current.source);
+    renderBank();
+    bankInfo.textContent = existing.has(stored.id) ? `文件内容相同，沿用 ${stored.name}。`
+      : `已留存 ${stored.name}。模型库共 ${bank.list().length} 个。`;
+  } catch (cause) {
+    bankInfo.textContent = cause instanceof Error ? cause.message : "无法加入会话模型库。";
+  } finally {
+    saveModel.disabled = false;
+  }
+});
+function showLocalModel(name: string, source: ArrayBuffer) {
+  const model = openStaticGlb(source);
+  const rendered = engine?.showModel(model);
+  if (!rendered) model.dispose();
+  inspection = { name, metrics: model.metrics, rendered: Boolean(rendered), source };
+  displayInspection();
+  displayWallStatus();
+  modelClose.hidden = false;
+  saveModel.hidden = false;
+}
 function displayInspection() {
   const unit: SourceUnit = modelUnit.value === "mm" ? "mm" : "m";
   if (!inspection) { modelResult.textContent = ""; unitWarning.hidden = true; return; }
@@ -113,6 +165,7 @@ function closeModel() {
   displayInspection();
   displayWallStatus();
   modelClose.hidden = true;
+  saveModel.hidden = true;
   error();
 }
 modelClose.addEventListener("click", () => { closeModel(); modelInput.focus(); });
@@ -129,13 +182,7 @@ modelInput.addEventListener("change", async () => {
   try {
     const bytes = await file.arrayBuffer();
     if (mine !== readVersion) return;
-    const model = openStaticGlb(bytes);
-    const rendered = engine?.showModel(model);
-    if (!rendered) model.dispose();
-    inspection = { name: file.name, metrics: model.metrics, rendered: Boolean(rendered) };
-    displayInspection();
-    displayWallStatus();
-    modelClose.hidden = false;
+    showLocalModel(file.name, bytes);
   } catch (cause) {
     if (mine === readVersion) error(cause instanceof Error && cause.message.startsWith("GLB：")
       ? cause.message : "无法读取该本地文件。");
