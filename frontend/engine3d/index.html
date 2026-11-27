@@ -211,8 +211,19 @@
         </svg>
       </figure>
     </section>
+    <section class="floorplan" aria-labelledby="asset-verification-title">
+      <h2 id="asset-verification-title">本地模型清单核验</h2>
+      <p>从本机选择已导出的清单和对应 GLB，只核对文件内容与登记指标是否一致，不证明发布者或授权，也不加入模型库。</p>
+      <form id="asset-verification-form" class="floorplan-controls">
+        <label>核验清单 <input id="asset-verification-list" type="file" accept=".json,application/json" required></label>
+        <label>核验模型 <input id="asset-verification-model" type="file" accept=".glb,model/gltf-binary" required></label>
+        <button type="submit">核验本地文件</button>
+      </form>
+      <p id="asset-verification-result" role="status" aria-live="polite">等待选择文件。</p>
+    </section>
   </main>
   <script type="module" src="/runtime/main.ts"></script>
   <script type="module" src="/runtime/simulation.ts"></script>
+  <script type="module" src="/runtime/assetVerification.ts"></script>
 </body>
 </html>
