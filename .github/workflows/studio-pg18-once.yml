@@ -1,0 +1,30 @@
+name: Studio synthetic PostgreSQL 18 (one-off)
+on:
+  pull_request:
+    types: [opened]
+    branches: [codex/twin-studio-scoped-authority-20261127]
+permissions:
+  contents: read
+jobs:
+  studio-synthetic:
+    if: github.repository == 'mightyoung/might-software-factory' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/twin-studio-pg18-acceptance-20261127' && github.base_ref == 'codex/twin-studio-scoped-authority-20261127' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_DB: msf_ci_studio_authority
+          POSTGRES_PASSWORD: synthetic_studio_ci_bootstrap_only
+        options: >-
+          --health-cmd "pg_isready -U postgres -d msf_ci_studio_authority"
+          --health-interval 2s --health-timeout 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify screen isolation, committed revocation and failed publication rollback
+        env:
+          STUDIO_PG_ACK: studio-synthetic-ci-once
+          STUDIO_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash tools/studio-pg18/check.sh
