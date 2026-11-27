@@ -140,7 +140,18 @@ test("keyboard face resizing and explicit GLB units work in the isolated editor"
 
 test("top-view pointer snaps an orthogonal wall and keyboard builds only simple zones", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 });
+  await page.addInitScript(() => {
+    window.lastFrameDraws = 0;
+    const gl = WebGL2RenderingContext.prototype;
+    const clear = gl.clear;
+    const draw = gl.drawElements;
+    gl.clear = function (...args) { window.lastFrameDraws = 0; return clear.apply(this, args); };
+    gl.drawElements = function (...args) { window.lastFrameDraws++; return draw.apply(this, args); };
+  });
   await page.goto("/");
+  const frameDraws = () => page.evaluate(() => window.lastFrameDraws);
+  await expect.poll(frameDraws).toBeGreaterThan(0);
+  const baselineDraws = await frameDraws();
   const editor = page.getByRole("region", { name: "顶视平面绘图" });
   const map = editor.getByRole("img", { name: "顶视图，横轴 X，纵轴 Z" });
   await expect(map).toBeVisible();
@@ -148,6 +159,8 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await map.click({ position: { x: box.width * 0.5, y: box.height * 0.5 } });
   await map.click({ position: { x: box.width * 0.7, y: box.height * 0.55 }, modifiers: ["Shift"] });
   await expect(editor.locator(".plan-wall")).toHaveAttribute("points", "0,0 40,0");
+  await expect(page.getByRole("status").filter({ hasText: "三维墙体 1 条，高 3 米，厚 0.2 米。" })).toBeVisible();
+  await expect.poll(frameDraws).toBeGreaterThan(baselineDraws);
   await expect(editor.getByRole("status")).toContainText("墙段 1 条");
   await editor.getByLabel("绘制模式").selectOption("zone");
   await editor.getByLabel("吸附网格").selectOption("0.1");
