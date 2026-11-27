@@ -1,3 +1,4 @@
+import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
@@ -308,3 +309,6 @@ importDraft.addEventListener("change", async () => {
     if (mine === snapshotRevision) snapshotError(cause instanceof Error ? cause.message : "场景草稿读取失败。");
   }
 });
+
+mountPublication(() => ({ screenId: sample.screenId,
+  raw: () => serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot()) }), downloadSnapshot);
