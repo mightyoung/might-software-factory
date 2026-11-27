@@ -59,6 +59,11 @@
           <input id="local-model" type="file" accept=".glb,model/gltf-binary" aria-describedby="model-hint">
           <p id="model-hint">上限 8 MiB，当前最多支持 4 个无纹理静态网格。文件不会上传。</p>
           <p id="model-result" role="status"></p>
+          <details id="model-hierarchy" hidden>
+            <summary>查看 GLB 节点树</summary>
+            <p>本地源节点关系；视口仍以合并网格渲染。</p>
+            <ul id="model-nodes" aria-label="源节点"></ul>
+          </details>
           <p id="unit-warning" role="status" hidden></p>
           <p id="model-error" role="alert" hidden></p>
           <button id="close-model" type="button" hidden>返回合成场景</button>

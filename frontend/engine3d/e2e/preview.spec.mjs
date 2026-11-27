@@ -309,12 +309,32 @@ test("local multi-mesh preview computes combined dimensions and preserves previo
   const network = [];
   page.on("request", (request) => network.push(request.url()));
   const input = page.getByLabel("选择 GLB 文件");
-  await input.setInputFiles({ name: "two-meshes.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(multiMeshGlb()) });
+  await input.setInputFiles({ name: "two-meshes.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(multiMeshGlb((doc) => {
+    doc.nodes[0].name = "<img>";
+    doc.meshes[1].name = "设备部件";
+  })) });
   const valid = page.getByText("two-meshes.glb：2 个三角面，6 个顶点，5 × 2 × 3 米。");
   await expect(valid).toBeVisible();
+  const details = page.locator("#model-hierarchy");
+  await details.locator("summary").click();
+  const root = details.locator("#model-nodes > li");
+  await expect(root).toContainText("<img>");
+  await expect(root.locator("img")).toHaveCount(0);
+  await expect(root.locator("li")).toHaveText([
+    "节点 #1 / 网格 #0（3 顶点，1 面）", "节点 #2 / 网格 #1 · 设备部件（3 顶点，1 面）",
+  ]);
   const bad = multiMeshGlb((doc) => { doc.nodes[2].children = [0]; });
   await input.setInputFiles({ name: "cycle.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(bad) });
   await expect(page.getByRole("alert")).toBeVisible();
   await expect(valid).toBeVisible();
+  await expect(root.locator("li")).toHaveCount(2);
+  await page.getByRole("button", { name: "加入会话模型库" }).click();
+  await expect(page.locator("#model-bank-info")).toContainText("模型库共 1 个。");
+  await page.getByRole("button", { name: "返回合成场景" }).click();
+  await expect(details).toBeHidden();
+  await expect(details.locator("li")).toHaveCount(0);
+  await page.getByRole("button", { name: "预览 two-meshes.glb", exact: true }).click();
+  await details.locator("summary").click();
+  await expect(root.locator("li")).toHaveCount(2);
   expect(network).toEqual([]);
 });

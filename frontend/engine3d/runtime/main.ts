@@ -11,7 +11,7 @@ import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { LocalAssetBank } from "../core/LocalAssetBank.ts";
-import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
+import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb, type StaticGlbNode } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
 import { SceneDocumentSchema } from "../schema/scene.ts";
 
@@ -131,11 +131,31 @@ saveModel.addEventListener("click", async () => {
     saveModel.disabled = false;
   }
 });
+const hierarchy = document.querySelector<HTMLDetailsElement>("#model-hierarchy")!;
+const nodes = document.getElementById("model-nodes")!;
+function showHierarchy(roots: readonly StaticGlbNode[] = []) {
+  function row(node: StaticGlbNode): HTMLLIElement {
+    const entry = document.createElement("li");
+    const mesh = node.mesh;
+    entry.textContent = `节点 #${node.index}${node.name ? ` · ${node.name}` : ""}`
+      + (mesh ? ` / 网格 #${mesh.index}${mesh.name ? ` · ${mesh.name}` : ""}（${mesh.vertices} 顶点，${mesh.triangles} 面）` : "");
+    if (node.children.length) {
+      const children = document.createElement("ul");
+      children.append(...node.children.map(row));
+      entry.append(children);
+    }
+    return entry;
+  }
+  nodes.replaceChildren(...roots.map(row));
+  hierarchy.hidden = !roots.length;
+  hierarchy.open = false;
+}
 function showLocalModel(name: string, source: ArrayBuffer) {
   const model = openStaticGlb(source);
   const rendered = engine?.showModel(model);
   if (!rendered) model.dispose();
   inspection = { name, metrics: model.metrics, rendered: Boolean(rendered), source };
+  showHierarchy(model.hierarchy);
   displayInspection();
   displayWallStatus();
   modelClose.hidden = false;
@@ -190,6 +210,7 @@ function closeModel() {
   readVersion++;
   engine?.hideModel(selected);
   inspection = null;
+  showHierarchy();
   displayInspection();
   displayWallStatus();
   modelClose.hidden = true;

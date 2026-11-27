@@ -48,7 +48,15 @@ const docSchema = z.strictObject({
   })).min(1).max(MAX_MESHES * 3),
 });
 
+export type StaticGlbNode = Readonly<{
+  index: number;
+  name?: string;
+  mesh?: Readonly<{ index: number; name?: string; vertices: number; triangles: number }>;
+  children: readonly StaticGlbNode[];
+}>;
+
 export interface StaticGlb {
+  hierarchy: readonly StaticGlbNode[];
   geometry: BufferGeometry;
   metrics: { vertices: number; triangles: number; dimensions: [number, number, number] };
   dispose(): void;
@@ -261,7 +269,23 @@ export function openStaticGlb(data: ArrayBuffer): StaticGlb {
     }
   }
   geometry.computeBoundingBox();
+  // This source tree is an inspection projection, not a graph used for rendering.
+  const safeName = (name?: string) => name?.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+  function inspectNode(index: number): StaticGlbNode {
+    const { name, mesh, children } = doc.nodes[index];
+    const title = safeName(name);
+    const meshName = mesh === undefined ? "" : safeName(doc.meshes[mesh].name);
+    return Object.freeze({
+      index, ...(title ? { name: title } : {}),
+      ...(mesh === undefined ? {} : { mesh: Object.freeze({
+        index: mesh, ...(meshName ? { name: meshName } : {}),
+        vertices: declaredCounts[mesh].vertices, triangles: declaredCounts[mesh].indices / 3,
+      }) }),
+      children: Object.freeze((children ?? []).map(inspectNode)),
+    });
+  }
+  const hierarchy = Object.freeze(doc.scenes[0].nodes.map(inspectNode));
   let disposed = false;
-  return { geometry, metrics: { vertices, triangles: totalIndices / 3, dimensions },
+  return { geometry, hierarchy, metrics: { vertices, triangles: totalIndices / 3, dimensions },
     dispose() { if (!disposed) { disposed = true; geometry.dispose(); } } };
 }

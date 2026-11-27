@@ -104,3 +104,22 @@ test("rejects invalid branching and applies vertex/index limits to the whole mod
   assert.throws(() => openStaticGlb(multiMeshGlb(undefined, [60_000, 60_000])), /总顶点/);
   assert.throws(() => openStaticGlb(multiMeshGlb(undefined, [3, 3], [300_000, 300_000])), /总三角/);
 });
+
+test("exposes a detached immutable source tree and validated per-mesh counts", () => {
+  const model = openStaticGlb(multiMeshGlb((doc) => {
+    doc.nodes[0].name = "父节点\u202e<script>";
+    doc.meshes[1].name = "部件";
+  }));
+  assert.deepEqual(model.hierarchy, [{
+    index: 0, name: "父节点<script>", children: [{
+      index: 1, mesh: { index: 0, vertices: 3, triangles: 1 }, children: [],
+    }, {
+      index: 2, mesh: { index: 1, name: "部件", vertices: 3, triangles: 1 }, children: [],
+    }],
+  }]);
+  const [root] = model.hierarchy;
+  assert.ok(Object.isFrozen(model.hierarchy) && Object.isFrozen(root) && Object.isFrozen(root.children));
+  assert.ok(Object.isFrozen(root.children[1].mesh));
+  model.dispose();
+  assert.equal(root.children.length, 2);
+});
