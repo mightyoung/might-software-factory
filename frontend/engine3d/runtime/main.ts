@@ -44,12 +44,14 @@ const messages: Record<RenderStatus, string> = {
   unavailable: "此设备无法使用 WebGL 2。请使用二维设备列表。",
 };
 let updateGizmo = () => {};
+let thumbnailRenderStatus = (_state: RenderStatus) => {};
 const engine = mountEngine(canvas, sample, (state) => {
   status.textContent = messages[state];
   overview.disabled = state !== "ready";
   // Do not remove a temporarily lost canvas while the browser is restoring it.
   canvas.hidden = state === "unavailable";
   if (state !== "ready") updateGizmo();
+  thumbnailRenderStatus(state);
 }, () => updateGizmo(), { allowVisualReference: true });
 
 const buttons = new Map<string, HTMLButtonElement>();
@@ -150,12 +152,49 @@ function showHierarchy(roots: readonly StaticGlbNode[] = []) {
   hierarchy.hidden = !roots.length;
   hierarchy.open = false;
 }
+const thumbnailCanvas = document.querySelector<HTMLCanvasElement>("#model-thumbnail")!;
+const thumbnailButton = document.querySelector<HTMLButtonElement>("#model-thumbnail-button")!;
+const thumbnailMessage = document.getElementById("model-thumbnail-status")!;
+function resetThumbnail() {
+  thumbnailCanvas.hidden = true;
+  thumbnailCanvas.getContext("2d")?.clearRect(0, 0, thumbnailCanvas.width, thumbnailCanvas.height);
+  thumbnailButton.hidden = !inspection?.rendered;
+  thumbnailButton.disabled = false;
+  thumbnailMessage.textContent = "";
+}
+thumbnailRenderStatus = (state) => {
+  if (state === "lost") {
+    if (inspection?.rendered) {
+      resetThumbnail();
+      thumbnailButton.disabled = true;
+      thumbnailMessage.textContent = "三维视口中断，恢复后可重新生成缩略图。";
+    }
+  } else if (state === "ready" && inspection?.rendered) {
+    thumbnailButton.disabled = false;
+    thumbnailMessage.textContent = "";
+  }
+};
+thumbnailButton.addEventListener("click", () => {
+  const selected = inspection;
+  if (!selected?.rendered || thumbnailButton.disabled) return;
+  resetThumbnail();
+  thumbnailButton.disabled = true;
+  thumbnailMessage.textContent = "正在生成缩略图…";
+  const finish = (ready: boolean) => {
+    if (inspection !== selected) return;
+    thumbnailButton.disabled = false;
+    thumbnailCanvas.hidden = !ready;
+    thumbnailMessage.textContent = ready ? "已生成 128 × 96 像素的临时缩略图。" : "当前无法生成缩略图。";
+  };
+  if (!engine?.requestPreviewThumbnail(thumbnailCanvas, finish)) finish(false);
+});
 function showLocalModel(name: string, source: ArrayBuffer) {
   const model = openStaticGlb(source);
   const rendered = engine?.showModel(model);
   if (!rendered) model.dispose();
   inspection = { name, metrics: model.metrics, rendered: Boolean(rendered), source };
   showHierarchy(model.hierarchy);
+  resetThumbnail();
   displayInspection();
   displayWallStatus();
   modelClose.hidden = false;
@@ -211,6 +250,7 @@ function closeModel() {
   engine?.hideModel(selected);
   inspection = null;
   showHierarchy();
+  resetThumbnail();
   displayInspection();
   displayWallStatus();
   modelClose.hidden = true;

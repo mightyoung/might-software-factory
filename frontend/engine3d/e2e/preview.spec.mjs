@@ -33,7 +33,7 @@ test("draws devices, preserves selection during WebGL loss and draws again after
   await expect.poll(getDraws).toBeGreaterThan(beforeRebuild);
 
   await page.evaluate(() => {
-    const gl = document.querySelector("canvas").getContext("webgl2");
+    const gl = document.querySelector("#viewport").getContext("webgl2");
     window.loss = gl.getExtension("WEBGL_lose_context");
     if (!window.loss) throw new Error("Chrome has no WEBGL_lose_context test extension");
     window.loss.loseContext();
@@ -64,7 +64,7 @@ test("without WebGL, the keyboard-operable device list still works on narrow vie
   });
   await page.goto("/");
   await expect(page.getByRole("status").filter({ hasText: "此设备无法使用 WebGL 2" })).toBeVisible();
-  await expect(page.locator("canvas")).toBeHidden();
+  await expect(page.locator("#viewport")).toBeHidden();
   const fan = page.getByRole("button", { name: "排风装置 03 · 告警" });
   await fan.focus();
   await page.keyboard.press("Enter");
@@ -336,5 +336,38 @@ test("local multi-mesh preview computes combined dimensions and preserves previo
   await page.getByRole("button", { name: "预览 two-meshes.glb", exact: true }).click();
   await details.locator("summary").click();
   await expect(root.locator("li")).toHaveCount(2);
+  expect(network).toEqual([]);
+});
+
+test("captures the validated preview as one bounded local thumbnail and clears it on replacement", async ({ page }) => {
+  await page.goto("/");
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  const generate = page.getByRole("button", { name: "生成本地缩略图" });
+  const thumb = page.locator("#model-thumbnail");
+  await expect(generate).toBeHidden();
+  const input = page.getByLabel("选择 GLB 文件");
+  const choose = (name, bytes) => input.setInputFiles({ name, mimeType: "model/gltf-binary", buffer: Buffer.from(bytes) });
+  await choose("thumbnail-first.glb", multiMeshGlb());
+  await generate.click();
+  await expect(thumb).toBeVisible();
+  await expect(thumb).toHaveAccessibleName("当前模型的本地缩略图");
+  await expect(thumb).toHaveAttribute("width", "128");
+  await expect(thumb).toHaveAttribute("height", "96");
+  const colors = await thumb.evaluate((image) => {
+    const { data } = image.getContext("2d").getImageData(0, 0, image.width, image.height);
+    const unique = new Set();
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3]) unique.add(data[i] * 65536 + data[i + 1] * 256 + data[i + 2]);
+    }
+    return unique.size;
+  });
+  expect(colors).toBeGreaterThan(4);
+  await choose("thumbnail-second.glb", syntheticGlb());
+  await expect(page.locator("#model-result")).toContainText("thumbnail-second.glb");
+  await expect(thumb).toBeHidden();
+  const cleared = await thumb.evaluate((image) =>
+    image.getContext("2d").getImageData(0, 0, image.width, image.height).data.every((value) => value === 0));
+  expect(cleared).toBe(true);
   expect(network).toEqual([]);
 });

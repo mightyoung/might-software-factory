@@ -40,3 +40,5 @@ fieldset p { overflow-wrap: anywhere; }
 #video-slots article { border: 1px solid #aac3bd; border-radius: .5rem; padding: .5rem; }
 #video-slots h3 { margin: 0; font-size: 1rem; }
 #video-slots video { width: 100%; aspect-ratio: 16/9; background: #123b35; display: block; margin: .4rem 0; }
+
+#model-thumbnail { width: 128px; height: 96px; }
