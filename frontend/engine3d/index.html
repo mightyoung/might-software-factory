@@ -72,6 +72,14 @@
           <button id="close-model" type="button" hidden>返回合成场景</button>
           <button id="save-model" type="button" hidden>加入会话模型库</button>
         </fieldset>
+        <details>
+          <summary>实验：本地 Meshopt 预览</summary>
+          <p>仅支持单个无索引静态网格的坐标，按米解释。不保存、不上传、不加入模型库。</p>
+          <label for="meshopt-file">选择实验 Meshopt GLB</label>
+          <input id="meshopt-file" type="file" accept=".glb,model/gltf-binary">
+          <button id="meshopt-close" type="button" hidden>关闭实验预览</button>
+          <p id="meshopt-status" role="status"></p>
+        </details>
         <section aria-labelledby="model-bank-label">
           <h2 id="model-bank-label">会话模型库</h2>
           <p>最多 8 个，共 32 MiB。仅保存在此页面内存，刷新即清除。</p>
