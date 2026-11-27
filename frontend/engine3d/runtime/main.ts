@@ -1,3 +1,4 @@
+import { mountAssetVerification } from "./assetVerification.ts";
 import { mountSyntheticVideo } from "./video.ts";
 import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
@@ -49,7 +50,7 @@ const engine = mountEngine(canvas, sample, (state) => {
   // Do not remove a temporarily lost canvas while the browser is restoring it.
   canvas.hidden = state === "unavailable";
   if (state !== "ready") updateGizmo();
-}, () => updateGizmo());
+}, () => updateGizmo(), { allowVisualReference: true });
 
 const buttons = new Map<string, HTMLButtonElement>();
 const placedPrefabs = new Map<string, PrefabPlacement>();
@@ -337,6 +338,7 @@ importDraft.addEventListener("change", async () => {
     if (mine !== snapshotRevision) return;
     const next = parseStudioSnapshot(raw);
     // Validate all shapes before mutating either visible editor.
+    visualReference.clear();
     sample = next.scene;
     // The file stores copied devices, not page-only prefab pins. Never reuse stale provenance.
     placedPrefabs.clear();
@@ -363,3 +365,14 @@ importDraft.addEventListener("change", async () => {
 mountSyntheticVideo();
 mountPublication(() => ({ screenId: sample.screenId,
   raw: () => serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot(), selectedHud()) }), downloadSnapshot);
+
+
+const visualReference = mountAssetVerification((asset, bytes, point) => {
+  const candidate = openStaticGlb(bytes);
+  let owned = false;
+  try {
+    owned = engine?.placeVisualReference(candidate, asset.sourceUnit, point) ?? false;
+    if (!owned) throw new Error("三维视口不可用，无法放置参考。");
+    closeModel();
+  } finally { if (!owned) candidate.dispose(); }
+}, () => engine?.removeVisualReference());
