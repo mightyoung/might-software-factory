@@ -24,4 +24,3 @@ export async function meshoptFixture(change?: (doc: any, packed: Uint8Array) => 
   new Uint8Array(bin).set(packed);
   return encodeGlb(doc, bin);
 }
-
