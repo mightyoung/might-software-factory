@@ -39,8 +39,28 @@ async function run(env) {
     await page.getByLabel("租户编码").fill("d1seed");
     await page.getByLabel("账号", { exact: true }).fill(`d1seed-${actor}`);
     await page.getByLabel("密码", { exact: true }).fill(env[`D2_PASSWORD_${actor.toUpperCase()}`]);
+    const login = page.waitForResponse((res) =>
+      new URL(res.url()).pathname === "/api/v1/auth/login" && res.request().method() === "POST");
+    const bootstrap = page.waitForResponse((res) =>
+      new URL(res.url()).pathname === "/api/v1/session/bootstrap" && res.request().method() === "GET");
+    // Login is a documented 204; the separate authenticated bootstrap returns the app list.
     await page.getByRole("button", { name: "登录", exact: true }).click();
+    const response = await login;
+    if (response.status() !== 204) {
+      void bootstrap.catch(() => {});
+      throw new Error("TL10_LOGIN_HTTP_" + response.status());
+    }
+    const unlocked = await bootstrap;
+    if (!unlocked.ok()) throw new Error("TL10_LOGIN_BOOTSTRAP_" + unlocked.status());
+    const applications = (await unlocked.json()).data?.applications;
+    if (Array.isArray(applications) && !applications.some(app => app.id === "tooling")) {
+      throw new Error("TL10_LOGIN_TOOLING_MISSING");
+    }
+    await expect(page.getByRole("link", { name: "工装管理", exact: true }).first()).toBeVisible();
     const entry = page.getByText("我的工装借用单", { exact: true }).first();
+    if (!await entry.isVisible()) {
+      await page.getByRole("link", { name: "工装管理", exact: true }).first().click();
+    }
     await expect(entry).toBeVisible();
     return { page, entry };
   }
