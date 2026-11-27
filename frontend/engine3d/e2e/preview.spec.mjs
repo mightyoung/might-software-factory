@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { syntheticGlb } from "../core/glbFixture.ts";
+import { exporterGlb, syntheticGlb } from "../core/glbFixture.ts";
 
 test("draws devices, preserves selection during WebGL loss and draws again after restore", async ({ page }) => {
   const errors = [];
@@ -136,4 +136,16 @@ test("keyboard face resizing and explicit GLB units work in the isolated editor"
   await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，0.002 × 0.002 × 0.002 米。")).toBeVisible();
   await source.selectOption("m");
   await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+});
+
+test("local exporter-shaped GLB honors parent transform without network or texture loads", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  await page.getByLabel("选择 GLB 文件").setInputFiles({
+    name: "exporter.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(exporterGlb()),
+  });
+  await expect(page.getByText("exporter.glb：2 个三角面，4 个顶点，3 × 2 × 1 米。")).toBeVisible();
+  expect(network).toEqual([]);
 });
