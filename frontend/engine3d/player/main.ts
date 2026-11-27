@@ -76,7 +76,7 @@ fileInput.addEventListener("change", async () => {
       canvas.hidden = state !== "ready";
       graphics.textContent = state === "ready" ? "三维放映已就绪。"
         : state === "lost" ? "三维暂时不可用，恢复前可用二维列表。" : "没有 WebGL 2，可使用二维列表。";
-    });
+    }, undefined, { sceneMode: "player-readonly" });
     engine?.hideModel();
     engine?.replaceFloorplan(floorplan);
     labelsById = new Map(scene.devices.map(({ id, label }) => [id, label]));
