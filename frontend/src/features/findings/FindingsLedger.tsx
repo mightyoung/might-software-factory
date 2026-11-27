@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import type { ComponentProps } from "react";
 import { mockFindingLedger } from "../../adapters/findingLedger";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
   type FindingLedgerAdapter,
@@ -15,7 +15,6 @@ import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetailsCore } from "../../components/FindingDetails";
-import { FindingReportFormCore } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
@@ -24,6 +23,7 @@ import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
+import { findingSearchInput, validateFindingSearch, validateFindingState, withFindingState, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -31,6 +31,7 @@ interface FindingsLedgerProps {
   synthetic?: boolean;
   /** Clear a previous security context's URL selection, while preserving cold deep links. */
   resetInitialSelection?: boolean;
+  routeSearch?: FindingSearch;
   view: FindingView;
   title: string;
   description: string;
@@ -55,6 +56,8 @@ const firstPage: PageResult<FindingRecord> = {
   pageCount: 1,
 };
 
+const FindingReportFormCore = lazy(() => import("../../components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
+
 export function FindingsLedgerCore(props: FindingsLedgerProps) {
   const [scope, setScope] = useState({ adapter: props.adapter, submit: props.submitAdapter, generation: 0 });
   if (scope.adapter !== props.adapter || scope.submit !== props.submitAdapter) {
@@ -66,6 +69,7 @@ export function FindingsLedgerCore(props: FindingsLedgerProps) {
 
 function FindingsLedgerBody({
   resetInitialSelection = false,
+  routeSearch,
   view,
   title,
   description,
@@ -83,33 +87,40 @@ function FindingsLedgerBody({
   const appMode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
   const demo = import.meta.env.MSF_BROWSER_MODE === undefined ? synthetic ?? appMode === "synthetic" : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   const location = useLocation();
-  const [path, search = ""] = location.split("?");
+  const delimiter = location.indexOf("?");
+  const path = delimiter < 0 ? location : location.slice(0, delimiter);
+  const search = delimiter < 0 ? "" : location.slice(delimiter);
   const selectionReady = useRef(!resetInitialSelection);
-  const params = new URLSearchParams(search);
-  // tab=1：详情 / 新建上报在独立标签页里整页展示，不再占用台账右侧面板。
-  const standalone = params.get("tab") === "1";
-  const reporting = standalone && params.get("report") === "1";
-  const relatedId = params.get("related");
-  const relatedTo = reporting && relatedId ? { id: relatedId, code: params.get("relatedCode") ?? relatedId } : null;
-  const selectedFindingId = selectionReady.current ? params.get("caseId") : null;
+  // App supplies TanStack's validated match; standalone uses the identical projection.
+  const { standalone, reporting, relatedId, relatedCode, caseId, findingState } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
+  const relatedTo = reporting && relatedId ? { id: relatedId, code: relatedCode ?? relatedId } : null;
+  const selectedFindingId = selectionReady.current ? caseId : null;
   useEffect(() => {
     if (selectionReady.current) return;
     selectionReady.current = true;
-    const parameters = new URLSearchParams(search);
-    parameters.delete("caseId");
-    const suffix = parameters.toString();
-    navigate(`${path}${suffix ? `?${suffix}` : ""}`, true);
+    navigate(path + withoutFindingSelection(search), true);
   }, [path, search]);
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
   const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
   const published = adapter.publishedDefinition === true;
-  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
-  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
+  function fromRoute() {
+    const values: QueryValues = { ...createEmptyQuery(schema?.queryFields ?? []), ...(findingState && { state: findingState }) };
+    return { status: findingState, draft: values, applied: values };
+  }
+  const [queryState, setQueryState] = useState(fromRoute);
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  // Apply a history change before Query observes the old filters or page.
+  if (queryState.status !== findingState) {
+    setQueryState(fromRoute());
+    setPageIndex(1);
+    setSelectedIds(new Set());
+    setRefreshKey(value => value + 1);
+  }
+  const { draft: query, applied: appliedQuery } = queryState;
   const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
   const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
@@ -225,21 +236,21 @@ function FindingsLedgerBody({
   }
 
   function updateQuery(key: string, value: QueryValue) {
-    setQuery((current) => ({ ...current, [key]: value }));
+    setQueryState(current => ({ ...current, draft: { ...current.draft, [key]: value } }));
   }
 
   function runQuery(nextQuery: QueryValues) {
-    setAppliedQuery({ ...nextQuery });
+    const status = validateFindingState(nextQuery.state);
+    const nextSearch = withFindingState(selectedFindingId ? withoutFindingSelection(search) : search, status);
+    setQueryState({ status, draft: nextQuery, applied: nextQuery });
     setPageIndex(1);
     setSelectedIds(new Set());
-    if (selectedFindingId) navigate(path);
+    if (nextSearch !== search) navigate(path + nextSearch + window.location.hash);
     setRefreshKey((value) => value + 1);
   }
 
   function handleReset() {
-    const emptyQuery = createEmptyQuery(schema?.queryFields ?? []);
-    setQuery(emptyQuery);
-    runQuery(emptyQuery);
+    runQuery(createEmptyQuery(schema?.queryFields ?? []));
   }
 
   function openDetail(record: FindingRecord) {
@@ -340,6 +351,7 @@ function FindingsLedgerBody({
       </section>}
 
       {reporting && submitAdapter && (
+        <Suspense fallback={<p role="status">正在载入上报表单…</p>}>
         <FindingReportFormCore
           validateDraft={presentation?.validateDraft}
           adapter={submitAdapter}
@@ -350,6 +362,7 @@ function FindingsLedgerBody({
           draftKey={draftKey}
           {...(relatedTo ? { relatedTo } : {})}
         />
+        </Suspense>
       )}
 
       {selectedFindingId && !reporting && (

@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import { expect, it, vi } from "vitest";
 import { createWorkspaceRouteMatcher } from "./workspaceRoutes";
 
 const finding = { rest: "safety/findings", permission: "safety.finding.read" };
@@ -22,4 +23,30 @@ it("matches all four generic ledger routes but preserves validation of business 
   for (const tail of ["/records/short", "/create/edit", "/records/%ZZ", "/other"]) {
     expect(routes.match("tenant", base + tail).entityRoute).toBeNull();
   }
+});
+
+it("validates only the known finding deep-link fields without coercing first values", () => {
+  const router = match();
+  const raw = "?tab=1&tab=0&report=1&caseId=0012&caseId=ignored&related=old&relatedCode=%E4%B8%AD+%E6%96%87&x=%2f&x=%2F&findingState=CLOSED&findingState=RECTIFYING";
+  expect(router.findingSearch("东区", "safety/findings", raw)).toEqual({
+    standalone: true, reporting: true, findingState: "CLOSED", caseId: "0012", relatedId: "old", relatedCode: "中 文",
+  });
+  expect(router.findingSearch("东区", "safety/findings", "?tab=01&report=1&caseId=&relatedCode=&findingState=closed")).toEqual({
+    standalone: false, reporting: false, findingState: null, caseId: "", relatedId: null, relatedCode: "",
+  });
+  expect(router.findingSearch("东区", "safety/Findings", raw)).toBeUndefined();
+});
+
+it("registers a lazy page as the actual matched route component without loading it for unauthorized routes", () => {
+  const load = vi.fn(async () => ({ default: () => null }));
+  const page = lazyRouteComponent(load);
+  const routes = createWorkspaceRouteMatcher([
+    finding,
+    { rest: "platform/ledgers", permission: "ledger.directory.open", component: page },
+  ]);
+  expect(routes.componentFor("platform/ledgers")).toBe(page);
+  expect(routes.match("tenant", "platform/ledgers").component).toBe(page);
+  expect(routes.match("tenant", "platform/Ledgers").component).toBeUndefined();
+  expect(routes.match("tenant", "safety/findings").component).toBeUndefined();
+  expect(load).not.toHaveBeenCalled();
 });

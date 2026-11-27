@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -109,29 +111,32 @@ function ConfigurationPreview({
   );
 }
 
-export function LedgerConfigPage({
-  adapter,
-  canManage,
-  canPublish,
-  onUnauthenticated,
-  active = true,
-}: {
+type LedgerConfigProps = {
   adapter: LedgerConfigAdapter;
   active?: boolean;
   canManage: boolean;
   canPublish: boolean;
   onUnauthenticated: () => void;
-}) {
-  const [items, setItems] = useState<ConfigurationSummary[]>([]);
+};
+
+export function LedgerConfigPage(props: LedgerConfigProps) {
+  const [scope, setScope] = useState(() => ({ adapter: props.adapter, generation: 0 }));
+  if (scope.adapter !== props.adapter) {
+    setScope({ adapter: props.adapter, generation: scope.generation + 1 });
+    return null;
+  }
+  return <LedgerConfigSession key={scope.generation} {...props} />;
+}
+
+function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated, active = true }: LedgerConfigProps) {
   const [key, setKey] = useState("");
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
   const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [failedAuthorization, setFailedAuthorization] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -166,34 +171,43 @@ export function LedgerConfigPage({
       setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
     else setError("操作未确认成功，请稍后重试。");
   }
+  const [reads] = useState(createWorkspaceQueryClient);
+  const listKey = ["ledger-config-directory", loadAttempt] as const;
+  const directory = useQuery({
+    queryKey: listKey,
+    enabled: active,
+    queryFn: ({ signal }) => adapter.list(signal),
+  }, reads);
+  const loading = active && (directory.isPending || directory.isFetching);
+  const items = directory.isSuccess && !loading ? directory.data : [];
+  const loadStatus = directory.error instanceof ApiError ? directory.error.status : 0;
+  const denied = loadStatus === 401 || loadStatus === 403;
+  const blocked = denied || (failedAuthorization && (!directory.isSuccess || loading));
+  // A reactivation rechecks authority before revealing a retained loaded draft.
+  const hideDraft = blocked || (loading && (snapshot !== null || copySource !== null));
+  const listError = directory.isError
+    ? loadStatus === 401 ? "登录已失效，请重新登录。"
+      : loadStatus === 403 ? "你没有执行此配置操作的权限。"
+        : "暂时无法读取台账配置，请稍后重试。"
+    : "";
   useEffect(() => {
-    const controller = new AbortController();
-    const mine = ++lifetime.current;
-    setLoading(true);
-    setLoadFailed(false);
-    setError("");
-    adapter
-      .list(controller.signal)
-      .then((next) => {
-        if (mine === lifetime.current) setItems(next);
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted && mine === lifetime.current) {
-          setLoadFailed(true);
-          failed(cause);
-        }
-      })
-      .finally(() => {
-        if (mine === lifetime.current) setLoading(false);
-      });
-    return () => {
-      controller.abort();
-      lifetime.current += 1;
-    };
-  }, [adapter, loadAttempt]); // The adapter is recreated at the identity boundary.
+    if (denied) setFailedAuthorization(true);
+    else if (directory.isSuccess && !loading) setFailedAuthorization(false);
+  }, [denied, directory.isSuccess, loading]);
+  useEffect(() => {
+    if (loadStatus === 401) onUnauthenticated();
+  }, [directory.error, loadStatus, onUnauthenticated]);
+  useEffect(() => {
+    if (!active) void reads.cancelQueries({ queryKey: ["ledger-config-directory"] });
+  }, [active, reads]);
+  useEffect(() => {
+    lifetime.current += 1;
+    return () => { lifetime.current += 1; };
+  }, []);
 
   function switchDraft(target: SwitchDraft, confirmed = false) {
-    if (!active || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
+    if (!active || blocked || loading || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
+    if (target.kind === "select" && !items.some(item => item.key === target.item.key)) return;
     if (dirty && !confirmed) {
       setPendingSwitch((current) => current ?? target);
     } else if (target.kind === "select") {
@@ -211,7 +225,8 @@ export function LedgerConfigPage({
     setCopySource(null);
   }
   function updateDirectory(next: ConfigurationSnapshot) {
-    setItems((current) => [
+    if (reads.getQueryState(listKey)?.status !== "success") return;
+    reads.setQueryData<ConfigurationSummary[]>(listKey, current => current && [
       { ...next, latestVersion: next.version },
       ...current.filter((item) => item.key !== next.key),
     ]);
@@ -274,7 +289,7 @@ export function LedgerConfigPage({
   function mutate(action: Operation["action"], sourceVersion?: number) {
     const target = key.trim();
     if (
-      locked || runningOperation.current ||
+      blocked || loading || locked || runningOperation.current ||
       !(action === "publish" ? canPublish : canManage) ||
       !target ||
       (action === "publish" && (dirty || !snapshot))
@@ -300,7 +315,7 @@ export function LedgerConfigPage({
 
   async function runOperation(operation: Operation) {
     const { action, key: operationKey, version, sourceVersion } = operation;
-    if (busy || runningOperation.current || !(action === "publish" ? canPublish : canManage)) return;
+    if (blocked || loading || busy || runningOperation.current || !(action === "publish" ? canPublish : canManage)) return;
     const mine = lifetime.current;
     runningOperation.current = true;
     setBusy(true);
@@ -372,7 +387,7 @@ export function LedgerConfigPage({
   }
   return (
     <section className="config-page">
-      {active && pendingSwitch && <WorkbenchConfirmDialog
+      {active && !hideDraft && !loading && pendingSwitch && <WorkbenchConfirmDialog
         title="放弃未保存的修改？"
         description={pendingSwitch.kind === "restore"
           ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
@@ -386,31 +401,30 @@ export function LedgerConfigPage({
       />}
       <div className="page-heading">
         <h1>台账配置</h1>
-        {canManage && (
+        {canManage && !blocked && (
           <Button
             label="新建台账"
             variant="secondary"
-            isDisabled={locked}
+            isDisabled={locked || loading}
             onClick={() => switchDraft({ kind: "create", source: null })}
           />
         )}
       </div>
       {loading && <p role="status">正在载入配置…</p>}
-      {error && <p role="alert">{error}</p>}
-      {loadFailed && (
+      {(listError || (!hideDraft && error)) && <p role="alert">{listError || error}</p>}
+      {directory.isError && loadStatus !== 401 && (
         <Button
           label="重新载入台账列表"
-          isDisabled={locked}
-
+          isDisabled={busy}
           variant="secondary"
           onClick={() => setLoadAttempt((value) => value + 1)}
         />
       )}
-      {notice && <p role="status">{notice}</p>}
-      {copySource && <p role="status">已从台账 {copySource.definition.name}（{copySource.key}）的版本 {copySource.version} 复制配置，请用新标识保存草稿。</p>}
-      <div className="config-layout">
+      {!hideDraft && notice && <p role="status">{notice}</p>}
+      {!hideDraft && copySource && <p role="status">已从台账 {copySource.definition.name}（{copySource.key}）的版本 {copySource.version} 复制配置，请用新标识保存草稿。</p>}
+      {!hideDraft && <div className="config-layout">
         <nav aria-label="已配置台账" className="config-list">
-          {items.length === 0 && !loading && !loadFailed && (
+          {items.length === 0 && !loading && !directory.isError && (
             <p>暂无台账配置。</p>
           )}
           {items.map((item) => (
@@ -658,7 +672,7 @@ export function LedgerConfigPage({
             </section>
           )}
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

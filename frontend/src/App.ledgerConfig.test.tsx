@@ -10,7 +10,7 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-it("preserves the configuration in the same authenticated tab through real history traversal", async () => {
+it("preserves the local configuration draft and revalidates the directory only on active visits", async () => {
   const path = "/t/demo-tenant/platform/ledger-configurations";
   window.history.replaceState(null, "", "/t/demo-tenant/safety/findings");
   window.history.pushState(null, "", path);
@@ -19,6 +19,7 @@ it("preserves the configuration in the same authenticated tab through real histo
   const grants = ["ledger.configuration.read", "ledger.configuration.manage"];
   const fetchConfig = vi.fn().mockResolvedValue(Response.json({ items: [] }));
   vi.stubGlobal("fetch", fetchConfig);
+  const countDirectoryReads = () => fetchConfig.mock.calls.filter(([url]) => url === "/api/v1/admin/ledger-configurations").length;
   render(<App mode="http" sessionAdapter={{
     ...adapter,
     restore: async () => ({
@@ -28,20 +29,26 @@ it("preserves the configuration in the same authenticated tab through real histo
     }),
   }} />);
   await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
+  expect(countDirectoryReads()).toBe(1);
   fireEvent.change(screen.getByLabelText("台账名称"), { target: { value: "尚未保存的配置" } });
   window.history.back();
   expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeVisible();
   expect(screen.queryByRole("heading", { name: "台账配置" })).not.toBeInTheDocument();
+  expect(countDirectoryReads()).toBe(1);
   window.history.forward();
   expect(await screen.findByRole("heading", { name: "台账配置" })).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
   expect(screen.getByLabelText("台账名称")).toHaveValue("尚未保存的配置");
+  expect(countDirectoryReads()).toBe(2);
   navigate("/safety/findings");
   await waitFor(() => expect(window.location.pathname).toBe("/t/demo-tenant/safety/findings"));
   expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeVisible();
+  expect(countDirectoryReads()).toBe(2);
   navigate(path);
   expect(await screen.findByRole("heading", { name: "台账配置" })).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
   expect(screen.getByLabelText("台账名称")).toHaveValue("尚未保存的配置");
-  expect(fetchConfig.mock.calls.filter(([url]) => url === "/api/v1/admin/ledger-configurations")).toHaveLength(1);
+  expect(countDirectoryReads()).toBe(3);
 });
 
 it("discards the hidden editor and a pending retry when the same actor's permissions change", async () => {
@@ -93,6 +100,45 @@ it("discards the hidden editor and a pending retry when the same actor's permiss
   expect(screen.queryByRole("button", { name: "重试原操作" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "发布当前版本" })).not.toBeInTheDocument();
   expect(fetchConfig.mock.calls.filter(([, request]) => request?.method === "POST")).toHaveLength(1);
+});
+
+it("loads the authorized published-ledger route lazily and keeps its draft in the same identity", async () => {
+  const path = "/t/demo-tenant/platform/ledgers";
+  const findings = "/t/demo-tenant/safety/findings";
+  window.history.replaceState(null, "", findings);
+  const adapter = createSyntheticSessionAdapter({ signedInAs: "demo.admin" });
+  const session = (await adapter.restore())!;
+  const grant = "ledger.directory.open";
+  const recordApi = vi.fn(async (url: string) => url.endsWith("/ledgers")
+    ? Response.json({ items: [{
+      key: "purchase", definitionVersion: 1,
+      definition: { name: "采购申请", fields: [{ key: "name", label: "名称", type: "text", required: true }], listFields: [], queryFields: [] },
+      organizations: [{ id: "org", name: "生产部" }],
+      capabilities: { create: true, read: false, update: false, delete: false },
+    }] })
+    : Response.json({}));
+  vi.stubGlobal("fetch", recordApi);
+  render(<App mode="http" sessionAdapter={{ ...adapter, restore: async () => ({
+    ...session,
+    permissions: [...session.permissions, grant],
+    canonicalPermissions: [...(session.canonicalPermissions ?? session.permissions), grant],
+  }) }} />);
+  const directoryReads = () => recordApi.mock.calls.filter(([url]) => url === "/api/v1/ledgers").length;
+  await screen.findByRole("heading", { name: "隐患台账" });
+  expect(directoryReads()).toBe(0);
+  navigate(path);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  fireEvent.change(screen.getByLabelText("名称（必填）"), { target: { value: "保留原草稿" } });
+  expect(directoryReads()).toBe(1);
+  window.history.back();
+  await screen.findByRole("heading", { name: "隐患台账" });
+  expect(screen.queryByRole("heading", { name: "业务台账" })).not.toBeInTheDocument();
+  expect(directoryReads()).toBe(1);
+  window.history.forward();
+  await screen.findByRole("heading", { name: "业务台账" });
+  expect(screen.getByLabelText("名称（必填）")).toHaveValue("保留原草稿");
+  expect(directoryReads()).toBe(1);
 });
 
 it("does not carry a published-ledger write across the same actor's permission change", async () => {

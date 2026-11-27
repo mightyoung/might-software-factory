@@ -77,6 +77,16 @@ test("HTTP 已登录默认页和业务台账深链接分别满足冷启动预算
     expect(landingTotals.css).toBeLessThanOrEqual(56 * 1024);
     expect(landingAssets.some((file) => /OfficeDialog|PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage/.test(file))).toBe(false);
 
+    const deniedReads: string[] = [];
+    landing.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === "/api/v1/ledgers" || pathname.includes("PublishedLedgersPage-")) deniedReads.push(pathname);
+    });
+    await landing.goto(`${tenantPath}/platform/ledgers`);
+    await expect(landing.getByRole("heading", { name: "无权访问" })).toBeVisible();
+    await landing.waitForLoadState("networkidle");
+    expect(deniedReads).toEqual([]);
+
     const ledger = await ledgerContext.newPage();
     const permissions = ["ledger.directory.open"];
     const authorization = { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: 1 };

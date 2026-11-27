@@ -241,6 +241,58 @@ describe("LedgerConfigPage", () => {
       vi.mocked(api.save).mock.calls[1]?.[3],
     );
   });
+  it("rechecks the directory on return and hides revoked names while keeping the local draft for an authorized retry", async () => {
+    const api = adapter();
+    const load = vi.mocked(api.list);
+    load.mockReset()
+      .mockResolvedValueOnce([{ ...first, latestVersion: 1 }])
+      .mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false))
+      .mockResolvedValueOnce([{ ...first, latestVersion: 1 }]);
+    const props = { adapter: api, canManage: true, canPublish: true, onUnauthenticated: vi.fn() };
+    const view = render(<LedgerConfigPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    fireEvent.change(await screen.findByDisplayValue("采购申请"), { target: { value: "仍待保存的输入" } });
+    view.rerender(<LedgerConfigPage {...props} active={false} />);
+    expect(load).toHaveBeenCalledTimes(1);
+    view.rerender(<LedgerConfigPage {...props} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("没有执行此配置操作的权限");
+    expect(screen.queryByRole("button", { name: /采购申请/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("台账名称")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存草稿" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新载入台账列表" }));
+    await screen.findByRole("button", { name: /采购申请/ });
+    expect(screen.getByLabelText("台账名称")).toHaveValue("仍待保存的输入");
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
+  it("starts no inactive request and aborts a pending list on identity change; 401 uses the current session callback", async () => {
+    const api = adapter();
+    const load = vi.mocked(api.list).mockImplementation(() => new Promise(() => {}));
+    const oldLogin = vi.fn();
+    const view = render(<LedgerConfigPage adapter={api} active={false} canManage canPublish onUnauthenticated={oldLogin} />);
+    expect(load).not.toHaveBeenCalled();
+    view.rerender(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={oldLogin} />);
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    const firstSignal = load.mock.calls[0]?.[0];
+    expect(firstSignal?.aborted).toBe(false);
+    view.rerender(<LedgerConfigPage adapter={api} active={false} canManage canPublish onUnauthenticated={oldLogin} />);
+    await waitFor(() => expect(firstSignal?.aborted).toBe(true));
+    view.rerender(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={oldLogin} />);
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    const signal = load.mock.calls[1]?.[0];
+    expect(signal?.aborted).toBe(false);
+    const next = adapter();
+    vi.mocked(next.list).mockRejectedValueOnce(new ApiError(401, "UNAUTHENTICATED", null, false));
+    const nextLogin = vi.fn();
+    view.rerender(<LedgerConfigPage adapter={next} canManage canPublish onUnauthenticated={nextLogin} />);
+    await waitFor(() => expect(nextLogin).toHaveBeenCalledTimes(1));
+    expect(signal?.aborted).toBe(true);
+    expect(oldLogin).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /采购申请/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("台账名称")).not.toBeInTheDocument();
+  });
+
   it("retries a failed list load without creating a draft version", async () => {
     const api = adapter();
     vi.mocked(api.list).mockRejectedValueOnce(

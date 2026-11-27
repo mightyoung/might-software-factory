@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsLedger } from "./FindingsLedger";
 import {
   FindingLedgerAccessError,
@@ -88,6 +88,41 @@ describe("隐患台账分页与详情", () => {
     expect(screen.getByText("DEMO-HZ-001")).toBeInTheDocument();
     expect(screen.getByText("DEMO-HZ-006")).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "隐患编号" })).toHaveValue("");
+  });
+
+  it("restores the submitted status on Back/Forward without leaking other inputs into the raw URL", async () => {
+    const base = createPagedFixtureAdapter();
+    const list = vi.fn(base.list);
+    const raw = "?tag=%2f&tag=%2F&flag=&q=a+b";
+    act(() => navigate("/safety/findings" + raw + "&findingState=RECTIFYING", true));
+    render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={{ ...base, list }} />);
+    const status = screen.getByRole("combobox", { name: "状态" });
+    const text = screen.getByRole("searchbox", { name: "隐患编号" });
+    expect(status).toHaveValue("RECTIFYING");
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+    expect(list.mock.calls[0]?.[0].query.state).toBe("RECTIFYING");
+    fireEvent.change(status, { target: { value: "CLOSED" } });
+    fireEvent.change(text, { target: { value: "临时编号" } });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(location.search).toBe(raw + "&findingState=RECTIFYING");
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list.mock.calls[1]?.[0].query).toMatchObject({ state: "CLOSED", keyword: "临时编号" });
+    expect(location.search).toBe(raw + "&findingState=CLOSED");
+    act(() => history.back());
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+    expect(status).toHaveValue("RECTIFYING");
+    expect(text).toHaveValue("");
+    expect(list.mock.calls[2]?.[0].query.state).toBe("RECTIFYING");
+    act(() => history.forward());
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(4));
+    expect(status).toHaveValue("CLOSED");
+    expect(list.mock.calls[3]?.[0].query.state).toBe("CLOSED");
+    expect(location.search).toBe(raw + "&findingState=CLOSED");
+    fireEvent.click(screen.getByRole("button", { name: "重置" }));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(5));
+    expect(status).toHaveValue("");
+    expect(location.search).toBe(raw);
   });
 
   it("选择范围只包括当前页，翻页后清空选择", async () => {

@@ -58,6 +58,17 @@ describe("LoginPage rate limit feedback", () => {
     expect(screen.getByRole("button", { name: "登录" })).toBeEnabled();
   });
 
+  it("keeps transport values exact and admits only one in-flight submit in the same render", async () => {
+    login.mockReturnValue(new Promise(() => {}));
+    render(<LoginPage notice="none" />);
+    fireEvent.change(screen.getByLabelText("租户编码"), { target: { value: " tenant " } });
+    fireEvent.change(screen.getByLabelText("账号"), { target: { value: " account " } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: " password " } });
+    const form = screen.getByRole("button").closest("form")!;
+    await act(async () => { fireEvent.submit(form); fireEvent.submit(form); });
+    expect(login).toHaveBeenCalledExactlyOnceWith(" account ", " password ", " tenant ");
+  });
+
   it("cleans up its countdown when unmounted", async () => {
     login.mockRejectedValue(new SessionError("rate_limited", false, 300));
     const interval = vi.spyOn(window, "setInterval");

@@ -1,3 +1,5 @@
+import { LoginPageCore } from "./features/session/LoginPage";
+import { lazyRouteComponent, type RouteComponent } from "@tanstack/react-router";
 import { syntheticPresentation } from "./adapters/syntheticPresentation";
 import type { ComponentProps } from "react";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -6,13 +8,13 @@ import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
-import { FindingReportFormCore } from "./components/FindingReportForm";
-import { LoginPageCore } from "./features/session/LoginPage";
 import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
+import { withoutFindingSelection } from "./routing/findingSearch";
+import { PublishedLedgerRouteScope } from "./routing/publishedLedgerRouteScope";
 import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
@@ -28,8 +30,9 @@ import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
+const FindingReportFormCore = lazy(() => import("./components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
 const PermissionConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.PermissionConfigPage })));
-const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
+
 const LedgerConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.LedgerConfigPage })));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
@@ -68,10 +71,15 @@ interface RouteDef {
   /** 仅用于界面呈现的权限摘要判断；服务端对每个请求仍须最终鉴权。 */
   permission: string;
   page: LedgerPage | PlaceholderPage | SettingsPage;
+  component?: RouteComponent;
 }
 
 const ROUTES: readonly RouteDef[] = [
-  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账" } },
+  {
+    rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open",
+    page: { kind: "published-ledgers", title: "业务台账" },
+    component: lazyRouteComponent(() => import("./features/publishedLedgers/PublishedLedgersPage")),
+  },
   {
     rest: "platform/ledger-configurations",
     application: "platform",
@@ -123,6 +131,7 @@ const ROUTES: readonly RouteDef[] = [
 ];
 
 const workspaceRoutes = createWorkspaceRouteMatcher(ROUTES);
+const PublishedLedgerRoute = workspaceRoutes.componentFor("platform/ledgers");
 
 function applicationOfPath(rest: string): ApplicationId | null {
   const entity = parseEntityRoute(rest);
@@ -174,7 +183,7 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated, presentation 
   return <section className="ledger-main">
     <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
     <p>可上报你有权提交的隐患。</p>
-    {open && <FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
+    {open && <Suspense fallback={<p role="status">正在载入上报表单…</p>}><FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} /></Suspense>}
   </section>;
 }
 
@@ -224,7 +233,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
   const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
-  const { route, entityRoute } = tenantMatches
+  const { route, entityRoute, component: matchedComponent } = tenantMatches
     ? workspaceRoutes.match(session.tenant.id, parsed.rest)
     : { route: undefined, entityRoute: null };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -243,13 +252,10 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const reportOnly = canReportHere && !canReadRoute;
   // Do not consume the reset at /login or an intermediate canonical redirect. Never
   // mount a new identity's reader while a previous identity's URL selection remains.
-  const parameters = new URLSearchParams(splitLocation(location).search);
-  let selectionResetTarget: string | null = null;
-  if (session && !redirect && (pendingSelectionReset.current || reportOnly) && parameters.has("caseId")) {
-    parameters.delete("caseId");
-    const suffix = parameters.toString();
-    selectionResetTarget = `${pathname}${suffix ? `?${suffix}` : ""}`;
-  }
+  const { search } = splitLocation(location);
+  const retainedSearch = session && !redirect && (pendingSelectionReset.current || reportOnly)
+    ? withoutFindingSelection(search) : search;
+  const selectionResetTarget = retainedSearch !== search ? pathname + retainedSearch : null;
   const resetInitialSelection = pendingSelectionReset.current;
   useLayoutEffect(() => {
     if (identityKey) previousIdentity.current = identityKey;
@@ -284,7 +290,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const platformHttp = mode === "http" && session.applications.some(app => app.id === "platform");
   const activeLedgerPage = !routingTransition && authorizedApplication === "platform" && canReadRoute ? route?.page.kind : undefined;
   const isConfigOpen = activeLedgerPage === "ledger-configurations";
-  const isRecordsOpen = activeLedgerPage === "published-ledgers";
+  const isRecordsOpen = activeLedgerPage === "published-ledgers" && matchedComponent === PublishedLedgerRoute;
   const canKeepLedgerConfig = platformHttp &&
     (hasPermission(session, "ledger.configuration.read") || canManageLedgerConfig || canPublishLedgerConfig);
 
@@ -355,6 +361,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         adapter={findingStore.ledger}
         synthetic={mode === "synthetic"}
         resetInitialSelection={resetInitialSelection}
+        routeSearch={workspaceRoutes.findingSearch(session.tenant.id, parsed.rest, search)}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
         evidenceAdapter={findingStore.evidence}
@@ -408,9 +415,11 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
           <LedgerConfigPage active={isConfigOpen} canManage={canManageLedgerConfig} canPublish={canPublishLedgerConfig} onUnauthenticated={expire} />
         </RetainedRoute>
       )}
-      {platformHttp && hasPermission(session, "ledger.directory.open") && (
+      {platformHttp && PublishedLedgerRoute && hasPermission(session, "ledger.directory.open") && (
         <RetainedRoute active={isRecordsOpen} loading="正在载入业务台账…">
-          <PublishedLedgersPage active={isRecordsOpen} onUnauthenticated={expire} />
+          <PublishedLedgerRouteScope.Provider value={{ active: isRecordsOpen, onUnauthenticated: expire }}>
+            <PublishedLedgerRoute />
+          </PublishedLedgerRouteScope.Provider>
         </RetainedRoute>
       )}
     </AppShell>

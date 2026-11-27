@@ -82,6 +82,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   };
   const versions: Snapshot[] = [];
   let loseNextSaveResponse = false;
+  let directoryForbidden = false;
   const receipts = new Map<string, { body: unknown; snapshot: Snapshot }>();
   const histories = new Map<string, Snapshot[]>([["purchase", versions]]);
   const saveAttempts: { key: string; expectedVersion: number }[] = [];
@@ -90,6 +91,10 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     const key = path.split("/")[5];
     const current = key ? histories.get(key) ?? [] : [];
     if (route.request().method() === "GET") {
+      if (!key && directoryForbidden) {
+        await route.fulfill({ status: 403, json: { code: "FORBIDDEN", message: "fixture" } });
+        return;
+      }
       await route.fulfill({
         json: path.endsWith("/versions")
           ? { versions: current }
@@ -244,9 +249,18 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   expect(nativeLeaveDialogs).toEqual([]);
   page.off("dialog", nativeLeave);
   await expect(page.locator(".ledger-row").first()).toBeVisible();
+  directoryForbidden = true;
+  const writesBeforeDenial = saveAttempts.length;
   await page.goBack();
   await expect(page.getByRole("heading", { name: "台账配置" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("没有执行此配置操作的权限");
+  await expect(page.getByRole("button", { name: /采购申请/ })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "台账名称" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存草稿" })).toHaveCount(0);
+  directoryForbidden = false;
+  await page.getByRole("button", { name: "重新载入台账列表" }).click();
   await expect(page.getByRole("textbox", { name: "台账名称" })).toHaveValue("回退后继续编辑");
+  expect(saveAttempts).toHaveLength(writesBeforeDenial);
 
   loseNextSaveResponse = true;
   await page.getByRole("button", { name: "保存草稿" }).click();
