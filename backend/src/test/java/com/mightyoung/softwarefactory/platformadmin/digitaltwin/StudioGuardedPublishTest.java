@@ -2,6 +2,8 @@ package com.mightyoung.softwarefactory.platformadmin.digitaltwin;
 
 import com.mightyoung.softwarefactory.identity.*;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -261,6 +263,59 @@ class StudioGuardedPublishTest {
         assertFalse(TransactionSynchronizationManager.hasResource(source));
     }
 
+    @Test void lostHttpResponseAfterCommitCannotAppendOrAuditAgainAtOriginalVersion() throws Exception {
+        prepare();
+        var owner = owner(mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class));
+        prepareOwnerConnection();
+        allowPublication();
+        when(update(StudioPublicationWrites.CREATE_SQL, 1).executeUpdate()).thenReturn(1, 0);
+        // The mock head advances only when the real Spring transaction manager calls commit.
+        var head = new java.util.concurrent.atomic.AtomicReference<Long>();
+        var stream = UUID.randomUUID();
+        setupLockFrom(stream, head::get);
+        doAnswer(call -> { head.set(1L); return null; }).when(connection).commit();
+        var append = update(StudioPublicationWrites.APPEND_SQL, 1);
+        var audit = update(StudioPublicationAudit.INSERT_SQL, 1);
+        var pointer = update(StudioPublicationWrites.POINTER_SQL, 1);
+        var lookup = mock(PreparedStatement.class);
+        var rows = mock(ResultSet.class);
+        when(connection.prepareStatement(StudioPublicationWrites.HEAD_SQL)).thenReturn(lookup);
+        when(lookup.executeQuery()).thenReturn(rows);
+        when(rows.next()).thenReturn(true, false);
+        when(rows.getString(1)).thenReturn(StudioDraftDecoder.decode(sourceBytes()).facts().canonicalSha256());
+        var requests = mock(SessionSensitiveRequests.class);
+        when(requests.capture(any())).thenReturn(request);
+        var adapter = new StudioPublishHttp(requests, owner);
+        var lost = spy(new MockHttpServletResponse());
+        doThrow(new java.io.IOException("simulated lost response")).when(lost).getOutputStream();
+
+        assertThrows(java.io.IOException.class, () -> adapter.postAfterSecurity("floor", originalPublish(), lost));
+        assertEquals(1L, head.get());
+        assertEquals(0, lost.getContentAsByteArray().length);
+
+        var retry = new MockHttpServletResponse();
+        adapter.postAfterSecurity("floor", originalPublish(), retry);
+        assertEquals(409, retry.getStatus());
+        assertEquals(0, retry.getContentAsByteArray().length);
+        assertEquals(1L, head.get());
+        verify(append, times(1)).executeUpdate();
+        verify(audit, times(1)).executeUpdate();
+        verify(pointer, times(1)).executeUpdate();
+        var order = inOrder(connection, lost);
+        order.verify(connection).commit();
+        order.verify(lost).getOutputStream();
+        order.verify(connection).rollback();
+        verify(connection, times(1)).commit();
+    }
+
+    private MockHttpServletRequest originalPublish() {
+        var post = new MockHttpServletRequest("POST", "/api/v1/admin/studio/screens/floor/publish");
+        post.setContentType("application/json");
+        post.addHeader(StudioPublishInput.EXPECTED_VERSION, "0");
+        post.setContent(sourceBytes());
+        return post;
+    }
+
     @Test void publishOwnerPreflightRefusesForeignTenantAndExistingTransactionWithoutSql() {
         when(request.context()).thenReturn(context);
         var guard = mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class);
@@ -328,13 +383,17 @@ class StudioGuardedPublishTest {
     }
 
     private void setupLock(UUID stream, Long head) throws Exception {
+        setupLockFrom(stream, () -> head);
+    }
+
+    private void setupLockFrom(UUID stream, java.util.function.Supplier<Long> head) throws Exception {
         var statement = mock(PreparedStatement.class);
         when(connection.prepareStatement(StudioPublicationWrites.LOCK_SQL)).thenReturn(statement);
         when(statement.executeQuery()).thenAnswer(call -> {
             var rows = mock(ResultSet.class);
             when(rows.next()).thenReturn(true, false);
             when(rows.getObject(1, UUID.class)).thenReturn(stream);
-            when(rows.getObject(2, Long.class)).thenReturn(head);
+            when(rows.getObject(2, Long.class)).thenReturn(head.get());
             return rows;
         });
     }

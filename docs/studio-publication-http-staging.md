@@ -9,6 +9,8 @@ This document describes a dormant transport. Neither adapter registers a route, 
 
 The tenant comes only from the captured human session. Both methods run through their corresponding owner on the guarded connection and return no representation until commit. All responses produced by the adapters are private/no-store. The adapters have offline coverage. A test-only MockMvc bridge also runs the proposed write path through the actual management security configuration, login provider/filter, CSRF cookie/header handling, credential-version check and absolute session lifetime. The bridge uses in-memory identity fixtures, a servlet test session, and a stubbed publish owner. Anonymous, expired and outdated sessions and missing or mismatched CSRF headers are rejected before dispatch. A valid session with matching CSRF reaches the owner with the session tenant, regardless of a caller-provided tenant header. This does not exercise persisted sessions, database-backed authorization or transaction correctness, or any registered application route.
 
+A separate offline case injects a response-write failure after the transaction manager's commit using JDBC test doubles. A retry at the original version returns a conflict, with exactly one append, audit and head update across both requests. This is not a browser recovery or database integration test.
+
 ## Before enabling the routes
 
 1. Bind the exact routes to the existing verified session and CSRF filter chain. Do not infer tenant or actor from headers, accept a token attribute as proof of CSRF, or publish from the offline Player.
