@@ -256,11 +256,40 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   fireEvent.click(screen.getByRole("button", { name: "只读刷新记录" }));
   await waitFor(() => expect(a.query).toHaveBeenCalledTimes(2));
   expect(a.create).toHaveBeenCalledTimes(2);
-  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
-  fireEvent.click(screen.getByRole("button", { name: "结束追踪" }));
-  expect(confirmation).toHaveBeenCalledOnce();
-  confirmation.mockRestore();
-  expect(a.create).toHaveBeenCalledTimes(2);
+  const prototype = HTMLDialogElement.prototype;
+  const originals = ["showModal", "close"].map(name => [name, Object.getOwnPropertyDescriptor(prototype, name)] as const);
+  Object.defineProperties(prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
+  const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    const end = screen.getByRole("button", { name: "结束追踪" });
+    end.focus();
+    fireEvent.click(end);
+    const confirmation = await screen.findByRole("alertdialog", { name: "结束本地追踪？" });
+    expect(confirmation).toHaveTextContent("不会撤销");
+    expect(within(confirmation).getByRole("button", { name: "继续追踪" })).toHaveFocus();
+    fireEvent(confirmation, new Event("cancel", { cancelable: true }));
+    expect(end).toHaveFocus();
+    expect(quantity).toHaveValue(7);
+    expect(quantity).toBeDisabled();
+    expect(a.create).toHaveBeenCalledTimes(2);
+    vi.mocked(a.create).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true));
+    fireEvent.click(retry);
+    await waitFor(() => expect(end).not.toHaveAttribute("aria-disabled", "true"));
+    expect(vi.mocked(a.create).mock.calls[2]).toEqual(vi.mocked(a.create).mock.calls[0]);
+    fireEvent.click(end);
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认结束追踪" }));
+    expect(a.create).toHaveBeenCalledTimes(3);
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  } finally {
+    nativeConfirm.mockRestore();
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
+  }
   expect(screen.queryByRole("region", { name: "新增记录" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "新增记录" })).not.toHaveAttribute("aria-disabled", "true");
 });

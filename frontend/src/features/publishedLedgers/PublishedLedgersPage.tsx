@@ -121,6 +121,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const command = useRef<(() => Promise<unknown>) | null>(null);
   const sending = useRef(false);
   const [uncertain, setUncertain] = useState(false);
+  const [pendingEnd, setPendingEnd] = useState<(() => Promise<unknown>) | null>(null);
+  const endConfirmation = active && uncertain && !busy && pendingEnd && command.current === pendingEnd;
+  useEffect(() => { setPendingEnd(null); }, [active, busy, uncertain]);
   const locked = busy || uncertain;
   const original = editor?.detail?.record.values;
   const dirty =
@@ -275,10 +278,13 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   function refreshRecords() {
     setRecordAttempt(value => value + 1);
   }
+  function requestEndTracking() {
+    const operation = command.current;
+    if (active && uncertain && !busy && !sending.current && operation) setPendingEnd(() => operation);
+  }
   function endTracking() {
-    if (sending.current || !uncertain || !window.confirm(
-      "请先核对已有记录。原操作可能已成功，结束追踪不会撤销它。确认已经核对并结束？",
-    )) return;
+    setPendingEnd(null);
+    if (!endConfirmation || sending.current || command.current !== pendingEnd) return;
     command.current = null;
     setUncertain(false);
     setEditor(null);
@@ -358,6 +364,14 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
         onCancel={() => setPendingDiscard(null)}
         onConfirm={confirmDiscard}
       />}
+      {endConfirmation && <WorkbenchConfirmDialog
+        title="结束本地追踪？"
+        description="请先核对已有记录。原操作可能已在服务器成功，结束本地追踪不会撤销它，也不代表操作失败。"
+        cancelLabel="继续追踪"
+        confirmLabel="确认结束追踪"
+        onCancel={() => setPendingEnd(null)}
+        onConfirm={endTracking}
+      />}
       <div className="page-heading">
         <h1>业务台账</h1>
         <Button
@@ -377,7 +391,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
         <div className="published-actions">
           <Button label="重试原操作" isDisabled={busy} onClick={() => void send("原操作已确认。")} />
           {ledger?.capabilities.read && <Button label="只读刷新记录" variant="secondary" isDisabled={busy || querying} onClick={refreshRecords} />}
-          <Button label="结束追踪" variant="secondary" isDisabled={busy} onClick={endTracking} />
+          <Button label="结束追踪" variant="secondary" isDisabled={busy} onClick={requestEndTracking} />
         </div>
       )}
       {notice && <p role="status">{notice}</p>}

@@ -68,6 +68,8 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   } = null;
   let creates = 0;
   let updates = 0;
+  let lostTrackingCreates = 0;
+  let loseTrackingResponse = false;
   let deletes = 0;
   let refuseDirectory = false;
   let firstCreate: unknown;
@@ -105,6 +107,20 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
       expect(body.expectedVersion).toBe(1);
       record = { ...record!, values: body.values, version: 2 };
     } else {
+      if (loseTrackingResponse) {
+        lostTrackingCreates += 1;
+        expect(body.values.quantity).toBe(9);
+        record = {
+          id: "row-2",
+          definitionVersion: 2,
+          organizationId: "org",
+          values: body.values,
+          version: 1,
+          createdAt: "2026-11-20T00:00:00Z",
+          updatedAt: "2026-11-20T00:00:00Z",
+        };
+        return route.abort();
+      }
       if (firstCreate) {
         expect(body).toEqual(firstCreate);
         return route.fulfill({ json: record });
@@ -245,13 +261,41 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await confirmDelete.click();
   await expect(page.getByText("共 0 条记录")).toBeVisible();
   expect(deletes).toBe(1);
+
+  loseTrackingResponse = true;
+  await page.getByRole("button", { name: "新增记录" }).click();
+  const newDraft = page.getByRole("region", { name: "新增记录", exact: true });
+  await newDraft.getByLabel("采购数量（必填）").fill("9");
+  await newDraft.getByRole("button", { name: "保存记录" }).click();
+  await expect(page.getByRole("alert")).toContainText("操作未确认成功");
+  expect(lostTrackingCreates).toBe(1);
+  const endTracking = page.getByRole("button", { name: "结束追踪", exact: true });
+  const stop = page.getByRole("alertdialog", { name: "结束本地追踪？" });
+  await endTracking.focus();
+  await page.keyboard.press("Enter");
+  await expect(stop.getByRole("button", { name: "继续追踪" })).toBeFocused();
+  await expect(stop).toContainText("不会撤销");
+  await page.keyboard.press("Escape");
+  await expect(stop).toHaveCount(0);
+  await expect(endTracking).toBeFocused();
+  await expect(page.getByRole("button", { name: "重试原操作" })).toBeVisible();
+  await page.getByRole("button", { name: "只读刷新记录" }).click();
+  await expect(page.getByText("共 1 条记录")).toBeVisible();
+  await endTracking.click();
+  await stop.getByRole("button", { name: "确认结束追踪" }).click();
+  await expect(newDraft).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重试原操作" })).toHaveCount(0);
+  await expect(page.getByText("共 1 条记录")).toBeVisible();
+  expect(record?.id).toBe("row-2");
+  expect(lostTrackingCreates).toBe(1);
+  expect(deletes).toBe(1);
   expect(nativeDialogs).toEqual([]);
 
   refuseDirectory = true;
   await page.getByRole("button", { name: "刷新台账", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("当前授权不允许此操作");
   await expect(page.getByRole("button", { name: "采购申请", exact: true })).toHaveCount(0);
-  await expect(page.getByText("共 0 条记录")).toHaveCount(0);
+  await expect(page.getByText("共 1 条记录")).toHaveCount(0);
   expect(creates).toBe(1);
   expect(updates).toBe(1);
 });
