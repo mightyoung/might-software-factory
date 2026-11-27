@@ -51,7 +51,7 @@ class StudioDraftDecoderTest {
     @Test void assignmentAndDigestUseTheSameServerValidatedGeometry() {
         var draft = decode(SOURCE);
         var tenant = java.util.UUID.randomUUID();
-        var caller = new StudioPublicationPolicy.Caller(tenant, java.util.Set.of(StudioPublicationPolicy.Permission.STUDIO_PUBLISH));
+        var caller = new StudioPublicationPolicy.Caller(tenant, java.util.UUID.randomUUID(), java.util.UUID.randomUUID(), true, java.util.Set.of());
         var decision = StudioPublicationPolicy.decide(caller, new StudioPublicationPolicy.Target(tenant, "factory"), 0, null, draft.facts());
         assertEquals(draft.facts().canonicalSha256(), decision.canonicalSha256());
         assertEquals(1.0, decision.metrics().wallLengthM());

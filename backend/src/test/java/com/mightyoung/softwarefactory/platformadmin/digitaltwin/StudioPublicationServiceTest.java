@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class StudioPublicationServiceTest {
     private static final UUID TENANT = UUID.randomUUID();
     private static final Target TARGET = new Target(TENANT, "floor");
-    private static final Caller PUBLISHER = new Caller(TENANT, Set.of(Permission.STUDIO_PUBLISH));
+    private static final Caller PUBLISHER = new Caller(TENANT, UUID.randomUUID(), UUID.randomUUID(), true, Set.of());
     private static final byte[] VALID = """
             {"snapshotVersion":1,"scene":{"schemaVersion":1,"screenId":"floor","devices":[]},
              "floorplan":{"walls":[],"zones":[]}}
@@ -23,8 +23,8 @@ class StudioPublicationServiceTest {
         var fixture = new Fixture();
         var service = new StudioPublicationService(fixture);
         assertThrows(Forbidden.class, () -> service.publish(null, TARGET, -1, null));
-        assertThrows(Forbidden.class, () -> service.publish(new Caller(UUID.randomUUID(), Set.of(Permission.STUDIO_PUBLISH)), TARGET, 0, null));
-        assertThrows(Forbidden.class, () -> service.publish(new Caller(TENANT, Set.of(Permission.PLAYER_READ)), TARGET, 0, null));
+        assertThrows(Forbidden.class, () -> service.publish(new Caller(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), true, Set.of()), TARGET, 0, null));
+        assertThrows(Forbidden.class, () -> service.publish(new Caller(TENANT, UUID.randomUUID(), UUID.randomUUID(), false, Set.of(TARGET.screenKey())), TARGET, 0, null));
         assertEquals(0, fixture.calls);
         assertThrows(IllegalArgumentException.class, () -> service.publish(PUBLISHER, TARGET, 0, null));
         assertEquals(0, fixture.calls);

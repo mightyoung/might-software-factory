@@ -13,20 +13,35 @@ public final class StudioPublicationPolicy {
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private StudioPublicationPolicy() {}
 
-    public enum Permission { STUDIO_PUBLISH, PLAYER_READ }
     public enum Outcome { APPEND, UNCHANGED }
 
-    public record Caller(UUID verifiedTenantId, Set<Permission> verifiedPermissions) {
-        public Caller {
-            Objects.requireNonNull(verifiedTenantId);
-            verifiedPermissions = Set.copyOf(verifiedPermissions);
+    /** Current human authority supplied by the trusted Studio adapter, never a request DTO.
+     * The adapter owns freshness and must not reuse this value outside its guard/transaction.
+     */
+    public static final class Caller {
+        private final UUID verifiedTenantId;
+        private final UUID actorId;
+        private final UUID memberId;
+        private final boolean mayPublish;
+        private final Set<String> playerScreens;
+
+        Caller(UUID verifiedTenantId, UUID actorId, UUID memberId, boolean mayPublish, Set<String> playerScreens) {
+            this.verifiedTenantId = Objects.requireNonNull(verifiedTenantId);
+            this.actorId = Objects.requireNonNull(actorId);
+            this.memberId = Objects.requireNonNull(memberId);
+            this.mayPublish = mayPublish;
+            this.playerScreens = Set.copyOf(playerScreens);
+            for (String key : this.playerScreens) requireScreenKey(key);
         }
+
+        public UUID verifiedTenantId() { return verifiedTenantId; }
+        public UUID actorId() { return actorId; }
+        public UUID memberId() { return memberId; }
     }
     public record Target(UUID tenantId, String screenKey) {
         public Target {
             Objects.requireNonNull(tenantId);
-            if (screenKey == null || !SCREEN.matcher(screenKey).matches())
-                throw new IllegalArgumentException("Invalid screen key");
+            requireScreenKey(screenKey);
         }
     }
     public record Head(Target target, long version, String canonicalSha256) {
@@ -68,9 +83,15 @@ public final class StudioPublicationPolicy {
     public static final class Forbidden extends RuntimeException {}
     public static final class VersionConflict extends RuntimeException {}
 
-    public static void authorizeRead(Caller caller, Target target) { authorize(caller, target, Permission.PLAYER_READ); }
+    public static void authorizeRead(Caller caller, Target target) {
+        requireSameTenant(caller, target);
+        if (!caller.playerScreens.contains(target.screenKey())) throw new Forbidden();
+    }
 
-    static void authorizePublish(Caller caller, Target target) { authorize(caller, target, Permission.STUDIO_PUBLISH); }
+    static void authorizePublish(Caller caller, Target target) {
+        requireSameTenant(caller, target);
+        if (!caller.mayPublish) throw new Forbidden();
+    }
 
     public static Decision decide(Caller caller, Target target, long expectedVersion, Head head, DraftFacts draft) {
         authorizePublish(caller, target);
@@ -89,9 +110,13 @@ public final class StudioPublicationPolicy {
 
     private static boolean validHash(String value) { return value != null && SHA256.matcher(value).matches(); }
 
-    private static void authorize(Caller caller, Target target, Permission required) {
-        if (caller == null || target == null || !caller.verifiedTenantId().equals(target.tenantId()) ||
-                !caller.verifiedPermissions().contains(required)) throw new Forbidden();
+    private static void requireSameTenant(Caller caller, Target target) {
+        if (caller == null || target == null || !caller.verifiedTenantId().equals(target.tenantId()))
+            throw new Forbidden();
+    }
+
+    private static void requireScreenKey(String key) {
+        if (key == null || !SCREEN.matcher(key).matches()) throw new IllegalArgumentException("Invalid screen key");
     }
 
     static Metrics metrics(DraftFacts draft) {
