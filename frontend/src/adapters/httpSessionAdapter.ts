@@ -106,7 +106,15 @@ export function createHttpSessionAdapter(client: HttpClient): SessionAdapter {
       } catch (error) {
         if (error instanceof ApiError) {
           const kind = classifyHttpError(error);
-          if (kind === "invalid") throw new SessionError("invalid_request", false);
+          if (kind === "invalid") {
+            // Only request-owned password paths pass this boundary; messages/values never do.
+            const fields = new Set<"current" | "next">();
+            for (const item of error.fieldErrors) {
+              if (item?.field === "currentPassword") fields.add("current");
+              if (item?.field === "newPassword") fields.add("next");
+            }
+            throw new SessionError("invalid_request", false, null, [...fields]);
+          }
           if (kind === "conflict") throw new SessionError("stale_attempt", true);
           if (kind === "unauthenticated") {
             // 契约里 401 既可能是“会话已失效”也可能是“当前密码不对”：再读一次会话来区分。
