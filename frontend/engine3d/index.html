@@ -104,6 +104,24 @@
       <p id="snapshot-status" role="status"></p>
       <p id="snapshot-error" role="alert" hidden></p>
     </section>
+    <section class="floorplan" aria-labelledby="publication-label">
+      <h2 id="publication-label">合成发布验收</h2>
+      <p>仅验证会话内的租户、权限和版本规则。角色选项不是真实身份；不会发布到服务端。</p>
+      <div class="floorplan-controls">
+        <label>模拟身份 <select id="publication-principal">
+          <option value="a-writer">租户 A · 发布人员</option><option value="a-reader">租户 A · 放映人员</option>
+          <option value="b-writer">租户 B · 发布人员</option><option value="b-reader">租户 B · 放映人员</option>
+        </select></label>
+        <label>目标租户 <select id="publication-target"><option value="tenant-a">租户 A</option><option value="tenant-b">租户 B</option></select></label>
+        <label>预期版本 <input id="publication-expected" type="number" value="0" min="0" max="8" step="1"></label>
+        <label>读取版本（留空最新） <input id="publication-version" type="number" min="1" max="8" step="1"></label>
+        <button id="publication-commit" type="button">模拟发布当前草稿</button>
+        <button id="publication-read" type="button">读取已发布版本</button>
+        <button id="publication-export" type="button" disabled>导出已读放映文件</button>
+      </div>
+      <p id="publication-status" role="status">无已读版本。</p>
+      <p id="publication-error" role="alert" hidden></p>
+    </section>
     <section class="floorplan" aria-labelledby="floorplan-label">
       <h2 id="floorplan-label">顶视平面绘图</h2>
       <p>本页草稿不会保存到业务场景。图上点选，或输入坐标加点；按住 Shift 可锁定横向或纵向。</p>

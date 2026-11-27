@@ -1,4 +1,5 @@
 import { mountSyntheticVideo } from "./video.ts";
+import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot, hudKeys, type HudKey } from "../schema/studioSnapshot.ts";
@@ -320,3 +321,5 @@ importDraft.addEventListener("change", async () => {
 });
 
 mountSyntheticVideo();
+mountPublication(() => ({ screenId: sample.screenId,
+  raw: () => serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot(), selectedHud()) }), downloadSnapshot);
