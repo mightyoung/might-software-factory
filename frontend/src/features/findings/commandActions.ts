@@ -112,18 +112,6 @@ export interface CommandInputErrors {
   grade?: string;
 }
 
-/** 本地校验；服务端仍会重新校验。意见只按码点计长、按可见字符判空。 */
-export function validateCommandInput(action: ActionDef, reason: string, grade: "" | Grade): CommandInputErrors {
-  const errors: CommandInputErrors = {};
-  if (action.reason) {
-    if ((action.cycleText ? reason.length : codePointLength(reason)) > REASON_MAX) errors.reason = `不能超过 ${REASON_MAX} 个字`;
-    else if (action.cycleText && /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(reason)) errors.reason = "请检查文字内容";
-    else if (action.reason === "required" && !hasVisibleCharacter(reason)) errors.reason = "请填写意见";
-  }
-  if (action.grade && !grade) errors.grade = "请选择隐患等级";
-  return errors;
-}
-
 /** 派单本地校验；服务端仍会重新校验。到期时间只检查格式，是否合理由服务端判断。 */
 export function validateDispatchInput(values: DispatchValues): DispatchErrors {
   const errors: DispatchErrors = {};

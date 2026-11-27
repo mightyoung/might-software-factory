@@ -1,3 +1,4 @@
+import { useForm } from "react-hook-form";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   FindingCommandError,
@@ -8,16 +9,16 @@ import {
 } from "../../adapters/findingCommands";
 import { newIdempotencyKey } from "../../adapters/findingSubmit";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
-import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft";
+import { parseCommandInput, type CommandInput } from "./commandInput";
 
 import {
   ACTIONS,
   EMPTY_DISPATCH,
   REFRESH_ON,
-  REASON_MAX,
   reviewActions,
   validateDispatchInput,
   type ActionDef,
+  type CommandInputErrors,
   type DispatchErrors,
   type DispatchValues,
 } from "./commandActions";
@@ -35,9 +36,9 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   const canSearchCandidates = Boolean(adapter.searchDispatchCandidates);
   const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? (canSearchCandidates ? [] : [{ label: "分派整改", reason: "当前连接没有派单候选查询能力。" }]) : [];
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
-  const [grade, setGrade] = useState<"" | "GENERAL" | "MAJOR">("");
-  const [errors, setErrors] = useState<{ reason?: string; grade?: string }>({});
+  const { watch, setValue, getValues, reset } = useForm<CommandInput>({ defaultValues: { reason: "", grade: "" } });
+  const { reason, grade } = watch();
+  const [errors, setErrors] = useState<CommandInputErrors>({});
   const [dispatch, setDispatch] = useState<DispatchValues>(EMPTY_DISPATCH);
   const [dispatchErrors, setDispatchErrors] = useState<DispatchErrors>({});
   const [pending, setPending] = useState(false);
@@ -81,8 +82,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     attempt.current = null;
     setActiveId(null);
     setDraftAction(null);
-    setReason("");
-    setGrade("");
+    reset();
     setDispatch(EMPTY_DISPATCH);
     setHistory(null);
     if (kind === "unauthenticated") onUnauthenticated?.();
@@ -108,8 +108,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     if (uncertain) return;
     setActiveId(id);
     setDraftAction(actions.find(action => action.id === id) ?? null);
-    setReason("");
-    setGrade("");
+    reset();
     setDispatch(EMPTY_DISPATCH);
     setDispatchErrors({});
     setErrors({});
@@ -121,20 +120,14 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!active || pending || refreshing || version === undefined || !canSubmit) return;
-    const found: typeof errors = {};
-    if (active.reason && !uncertain) {
-      if ((active.cycleText ? reason.length : codePointLength(reason)) > REASON_MAX) found.reason = `不能超过 ${REASON_MAX} 个字`;
-      else if (active.cycleText && /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(reason)) found.reason = "请检查文字内容";
-      else if (active.reason === "required" && !hasVisibleCharacter(reason)) found.reason = "请填写意见";
-    }
-    if (!uncertain && active.grade && !grade) found.grade = "请选择隐患等级";
+    const parsed = uncertain ? null : parseCommandInput(active, getValues());
     const dispatchFound = active.dispatch && !uncertain ? validateDispatchInput(dispatch) : {};
-    setErrors(found);
+    setErrors(parsed && !parsed.success ? parsed.errors : {});
     setDispatchErrors(dispatchFound);
     setFailure(null);
-    if (Object.keys(found).length > 0 || Object.keys(dispatchFound).length > 0) return;
+    if (Object.keys(dispatchFound).length > 0 || (parsed && !parsed.success)) return;
 
-    const command = uncertain ? attempt.current!.command : active.build({ reason: active.cycleText ? reason : reason.trim(), grade: grade || "GENERAL", dispatch });
+    const command = parsed ? active.build({ ...parsed.input, dispatch }) : attempt.current!.command;
     const commandVersion = uncertain ? attempt.current!.version : version;
     const payload = JSON.stringify([finding.id, commandVersion, command]);
     if (attempt.current?.payload !== payload) attempt.current = { payload, key: newIdempotencyKey(), command, version: commandVersion };
@@ -147,7 +140,7 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
       setDone(`已完成“${active.label}”，当前状态：${findingStateLabels[result.state]}。`);
       setActiveId(null);
       setDraftAction(null);
-      setReason("");
+      reset();
       setDispatch(EMPTY_DISPATCH);
       attempt.current = null;
       setRefresh(value => value + 1);
@@ -169,5 +162,5 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   }
 
 
-  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason,grade,setGrade,errors,dispatch,setDispatch,dispatchErrors,pending,failure,done,submit };
+  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason:(value:string)=>setValue("reason",value),grade,setGrade:(value:string)=>setValue("grade",value),errors,dispatch,setDispatch,dispatchErrors,pending,failure,done,submit };
 }
