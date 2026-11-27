@@ -1,5 +1,6 @@
 import { CameraTour } from "../core/CameraTour.ts";
 import { mountEngine } from "../core/EngineKernel.ts";
+import type { TourPoint } from "../schema/studioSnapshot.ts";
 import { MAX_PLAYER_BYTES, parsePlayerSnapshot } from "../schema/playerSnapshot.ts";
 
 const fileInput = document.querySelector<HTMLInputElement>("#play-file")!;
@@ -16,6 +17,7 @@ const tour = new CameraTour();
 const play = document.querySelector<HTMLButtonElement>("#tour-play")!;
 const pause = document.querySelector<HTMLButtonElement>("#tour-pause")!;
 const tourStatus = document.querySelector<HTMLParagraphElement>("#tour-status")!;
+let authored = new Map<string, TourPoint>();
 let labelsById = new Map<string, string>();
 let timer = 0;
 function highlight(id: string) {
@@ -26,7 +28,7 @@ function highlight(id: string) {
     button.setAttribute("aria-pressed", String(button.dataset.id === id));
 }
 function stopTour(reason = "") {
-  if (timer) window.clearInterval(timer);
+  if (timer) window.clearTimeout(timer);
   timer = 0;
   tour.pause();
   pause.disabled = true;
@@ -40,12 +42,17 @@ play.addEventListener("click", () => {
   play.disabled = true;
   pause.disabled = false;
   tourStatus.textContent = "正在按顺序巡检设备。";
-  highlight(first);
-  timer = window.setInterval(() => {
-    const next = tour.advance();
-    if (next) highlight(next);
-    else stopTour("设备巡检已完成。");
-  }, 3000);
+  function step(id: string) {
+    const point = authored.get(id);
+    highlight(id);
+    if (point) tourStatus.textContent = `正在放映机位：${point.label}。`;
+    timer = window.setTimeout(() => {
+      const next = tour.advance();
+      if (next) step(next);
+      else stopTour("设备巡检已完成。");
+    }, (point?.dwellSeconds ?? 3) * 1000);
+  }
+  step(first);
 });
 pause.addEventListener("click", () => { stopTour("设备巡检已暂停。"); play.focus(); });
 document.addEventListener("visibilitychange", () => {
@@ -60,7 +67,7 @@ fileInput.addEventListener("change", async () => {
   try {
     if (!file.name.toLowerCase().endsWith(".json") || file.size > MAX_PLAYER_BYTES)
       throw new Error("请选择大小符合要求的 JSON 放映文件。");
-    const { scene, floorplan } = await parsePlayerSnapshot(await file.text());
+    const { scene, floorplan, cameraTour } = await parsePlayerSnapshot(await file.text());
     if (mine !== revision) return;
     if (engine) engine.replaceScene(scene);
     else engine = mountEngine(canvas, scene, (state) => {
@@ -71,7 +78,8 @@ fileInput.addEventListener("change", async () => {
     engine?.hideModel();
     engine?.replaceFloorplan(floorplan);
     labelsById = new Map(scene.devices.map(({ id, label }) => [id, label]));
-    tour.replace(scene.devices.map(({ id }) => id));
+    authored = new Map((cameraTour ?? []).map((point) => [point.deviceId, point]));
+    tour.replace(cameraTour?.length ? cameraTour.map(({ deviceId }) => deviceId) : scene.devices.map(({ id }) => id));
     stopTour("已准备好设备巡检。");
     status.textContent = `正在放映 ${scene.screenId}：${scene.devices.length} 个设备，${floorplan.walls.length} 条墙，${floorplan.zones.length} 个二维区域。`;
     list.replaceChildren(...scene.devices.map(({ id, label, state }) => {
