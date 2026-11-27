@@ -29,11 +29,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,11 +47,12 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(controllers = {AuthenticationSessionController.class, StudioPublishSecurityHttpTest.TestBridge.class})
+@WebMvcTest(controllers = {AuthenticationSessionController.class, StudioManagementSecurityHttpTest.TestBridge.class})
 @Import({SecurityConfiguration.class, SessionContextResolver.class,
-        StudioPublishSecurityHttpTest.TestBridge.class, StudioPublishSecurityHttpTest.Dependencies.class})
-class StudioPublishSecurityHttpTest {
-    private static final String PATH = "/api/v1/admin/studio/screens/floor/publish";
+        StudioManagementSecurityHttpTest.TestBridge.class, StudioManagementSecurityHttpTest.Dependencies.class})
+class StudioManagementSecurityHttpTest {
+    private static final String PUBLISH_PATH = "/api/v1/admin/studio/screens/floor/publish";
+    private static final String PLAYER_PATH = "/api/v1/studio/screens/floor/published";
     private static final UUID ACTOR = UUID.randomUUID();
     private static final UUID ACCOUNT = UUID.randomUUID();
     private static final UUID TENANT = UUID.randomUUID();
@@ -60,10 +63,12 @@ class StudioPublishSecurityHttpTest {
     @Autowired MockMvc mvc;
     @Autowired StudioPublish owner;
     @Autowired AccountStatusReadRepository accounts;
+    @Autowired StudioPlayerStorageFixture player;
 
-    @BeforeEach void resetDoubles() {
+    @BeforeEach void resetDoubles() throws SQLException {
         reset(owner, accounts);
         when(accounts.findState(ACCOUNT)).thenReturn(Optional.of(new AccountSecurityState("ACTIVE", 1)));
+        player.resetStorage();
     }
 
     @Test void loginAndMatchingCsrfReachOwnerWithVerifiedIdentityAndReturnReceipt() throws Exception {
@@ -119,6 +124,70 @@ class StudioPublishSecurityHttpTest {
         verifyNoInteractions(owner);
     }
 
+    @Test void playerRequiresLoginAndRejectsOldCredentialBeforeStorage() throws Exception {
+        mvc.perform(get(PLAYER_PATH))
+                .andExpect(status().isUnauthorized()).andExpect(result -> assertNull(result.getHandler()));
+        var session = login();
+        when(accounts.findState(ACCOUNT)).thenReturn(Optional.of(new AccountSecurityState("ACTIVE", 2)));
+        mvc.perform(get(PLAYER_PATH).session(session))
+                .andExpect(status().isUnauthorized()).andExpect(result -> assertNull(result.getHandler()));
+        verifyNoInteractions(player.source, player.connection);
+    }
+
+    @Test void playerChecksSeparateGrantEvenWithMatchingEtagAfterRevocation() throws Exception {
+        var session = login();
+        player.granted = true;
+        var etag = "\"" + player.snapshot.facts().canonicalSha256() + "\"";
+        mvc.perform(get(PLAYER_PATH).session(session).param("version", "7")
+                        .header("If-None-Match", etag).header("X-Tenant-Id", UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("ETag", etag))
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(content().bytes(player.snapshot.canonicalBytes()));
+        verify(player.connection).commit();
+        player.granted = false;
+        mvc.perform(get(PLAYER_PATH).session(session).param("version", "7").header("If-None-Match", etag))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("ETag"))
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(content().string(""));
+        verify(player.grant, times(2)).setObject(1, TENANT);
+        verify(player.grant, times(2)).setObject(2, MEMBER);
+        verify(player.grant, times(2)).setString(3, "floor");
+        verify(player.connection, times(1)).prepareStatement(StudioPublishedLookup.PIN_SQL);
+        verify(player.connection, never()).prepareStatement(StudioAuthorityQueries.PUBLISH_SQL);
+        verifyNoInteractions(owner);
+    }
+
+    @Test void playerPinnedMissDoesNotReadCurrentOrReturnItsValidator() throws Exception {
+        var session = login();
+        player.granted = true;
+        mvc.perform(get(PLAYER_PATH).session(session))
+                .andExpect(status().isOk()).andExpect(content().bytes(player.snapshot.canonicalBytes()));
+        clearInvocations(player.connection);
+        mvc.perform(get(PLAYER_PATH).session(session).param("version", "4"))
+                .andExpect(status().isNotFound())
+                .andExpect(header().doesNotExist("ETag"))
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(content().string(""));
+        verify(player.pin).setLong(3, 4L);
+        verify(player.connection, never()).prepareStatement(StudioPublishedLookup.CURRENT_SQL);
+        verify(player.connection).commit();
+    }
+
+    @Test void failedPlayerReadCommitCannotReturnBodyOrValidator() throws Exception {
+        var session = login();
+        player.granted = true;
+        doThrow(new SQLException("synthetic commit failure")).when(player.connection).commit();
+        mvc.perform(get(PLAYER_PATH).session(session).param("version", "7"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().doesNotExist("ETag"))
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(content().string(""));
+        verify(player.pin).executeQuery();
+        verify(player.connection).commit();
+    }
+
     private MockHttpSession login() throws Exception {
         var session = (MockHttpSession) mvc.perform(withCsrf(post("/api/v1/auth/login"), csrf())
                 .contentType("application/json")
@@ -141,28 +210,36 @@ class StudioPublishSecurityHttpTest {
     }
 
     private static MockHttpServletRequestBuilder publish() {
-        return post(PATH).contentType("application/json").content(BODY)
+        return post(PUBLISH_PATH).contentType("application/json").content(BODY)
                 .header(StudioPublishInput.EXPECTED_VERSION, "0");
     }
 
-    /** Only this test context maps a URL. The adapter and publication owner remain dormant. */
+    /** Only this test context maps URLs. Neither adapter is activated. */
     @RestController
     static class TestBridge {
         private final StudioPublishHttp adapter;
+        private final StudioPlayerHttp player;
 
-        TestBridge(SessionSensitiveRequests requests, StudioPublish owner) {
+        TestBridge(SessionSensitiveRequests requests, StudioPublish owner, StudioPlayerStorageFixture storage) {
             adapter = new StudioPublishHttp(requests, owner);
+            player = new StudioPlayerHttp(requests, storage.reader);
         }
 
-        @PostMapping(PATH)
+        @PostMapping(PUBLISH_PATH)
         void post(HttpServletRequest request, HttpServletResponse response) throws IOException {
             adapter.postAfterSecurity("floor", request, response);
+        }
+
+        @GetMapping(PLAYER_PATH)
+        void getPlayer(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            player.get("floor", request, response);
         }
     }
 
     @TestConfiguration(proxyBeanMethods = false)
     static class Dependencies {
         @Bean StudioPublish owner() { return mock(StudioPublish.class); }
+        @Bean StudioPlayerStorageFixture player() { return new StudioPlayerStorageFixture(TENANT); }
         @Bean AccountStatusReadRepository accounts() { return mock(AccountStatusReadRepository.class); }
         @Bean AuthenticationEvents authenticationEvents() { return event -> {}; }
 

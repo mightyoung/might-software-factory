@@ -11,6 +11,8 @@ The tenant comes only from the captured human session. Both methods run through 
 
 A separate offline case injects a response-write failure after the transaction manager's commit using JDBC test doubles. A retry at the original version returns a conflict, with exactly one append, audit and head update across both requests. This is not a browser recovery or database integration test.
 
+The test-only bridge also runs the Player GET through the management session chain and the actual read owner, separate screen-grant query and immutable projection. With synthetic guard/authority and JDBC doubles, it verifies no storage on anonymous or outdated sessions; a fresh grant check despite a matching ETag; no bytes or ETag after grant removal or failed commit; and no current-version lookup when a requested version is missing, even when current is available. It does not verify real grant mutations, PostgreSQL locking or route activation.
+
 ## Before enabling the routes
 
 1. Bind the exact routes to the existing verified session and CSRF filter chain. Do not infer tenant or actor from headers, accept a token attribute as proof of CSRF, or publish from the offline Player.
