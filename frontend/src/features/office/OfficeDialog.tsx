@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { ThemeSelector } from "../theme/ThemeProvider";
 import { officeEditors, type OfficeEditorKind } from "./editors";
 import "./OfficeDialog.css";
@@ -11,6 +12,8 @@ export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind;
   const frame = useRef<HTMLIFrameElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const dirty = useRef(false);
+  const exitPhase = useRef<"idle" | "checking" | "confirming">("idle");
+  const [confirmClose, setConfirmClose] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const initialTheme = useRef(theme);
   const currentTheme = useRef(theme);
@@ -19,11 +22,23 @@ export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind;
   close.current = onClose;
 
   function finishClose() {
-    if (!dirty.current || window.confirm(editor.discardPrompt)) close.current();
+    if (!dirty.current) {
+      exitPhase.current = "idle";
+      close.current();
+      return;
+    }
+    exitPhase.current = "confirming";
+    setConfirmClose(true);
+  }
+  function checkClose() {
+    const content = frame.current?.contentWindow;
+    if (!content || exitPhase.current !== "idle") return;
+    exitPhase.current = "checking";
+    content.postMessage({ channel, type: "close-check" }, location.origin);
   }
   function requestClose() {
-    if (loaded) frame.current?.contentWindow?.postMessage({ channel, type: "close-check" }, location.origin);
-    else finishClose();
+    if (loaded) checkClose();
+    else if (exitPhase.current === "idle") finishClose();
   }
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -33,8 +48,8 @@ export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind;
     function message(event: MessageEvent) {
       if (event.origin !== location.origin || event.source !== frame.current?.contentWindow || event.data?.channel !== channel) return;
       if (event.data.type === "state" && typeof event.data.dirty === "boolean") dirty.current = event.data.dirty;
-      if (event.data.type === "close-request") frame.current?.contentWindow?.postMessage({ channel, type: "close-check" }, location.origin);
-      if (event.data.type === "close-state" && typeof event.data.dirty === "boolean") {
+      if (event.data.type === "close-request") checkClose();
+      if (event.data.type === "close-state" && exitPhase.current === "checking" && typeof event.data.dirty === "boolean") {
         dirty.current = event.data.dirty;finishClose();
       }
       if (event.data.type === "ready") {
@@ -53,7 +68,7 @@ export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind;
     frame.current?.contentWindow?.postMessage({ channel, type: "theme", theme }, location.origin);
   }, [theme]);
 
-  return <dialog ref={dialog} className="office-dialog" aria-labelledby="office-dialog-heading" onCancel={event => {
+  return <><dialog ref={dialog} className="office-dialog" aria-labelledby="office-dialog-heading" onCancel={event => {
     event.preventDefault();requestClose();
   }}>
     <header className="office-dialog-heading"><h2 id="office-dialog-heading">{editor.title}</h2>
@@ -62,5 +77,20 @@ export function OfficeDialog({ kind, onClose, theme }: { kind: OfficeEditorKind;
     {!loaded && <p className="office-dialog-loading" role="status">正在加载{editor.frameTitle}…</p>}
     <iframe ref={frame} src={`${editor.page}?theme=${initialTheme.current}`} title={editor.frameTitle}
       sandbox="allow-scripts allow-same-origin allow-downloads allow-modals" />
-  </dialog>;
+  </dialog>
+    {confirmClose && <WorkbenchConfirmDialog
+      title="丢弃未导出的修改？"
+      description={editor.discardPrompt}
+      confirmLabel="丢弃并关闭"
+      onCancel={() => {
+        exitPhase.current = "idle";
+        setConfirmClose(false);
+      }}
+      onConfirm={() => {
+        exitPhase.current = "idle";
+        setConfirmClose(false);
+        close.current();
+      }}
+    />}
+  </>;
 }

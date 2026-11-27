@@ -19,6 +19,29 @@ async function downloadSnapshot(page: Page, save: Locator) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+async function cancelOfficeClose(page: Page, close: Locator) {
+  const nativeDialogs: string[] = [];
+  const native = async (dialog: import("@playwright/test").Dialog) => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  };
+  page.on("dialog", native);
+  await close.focus();
+  await page.keyboard.press("Enter");
+  const prompt = page.getByRole("alertdialog", { name: "丢弃未导出的修改？" });
+  const keep = prompt.getByRole("button", { name: "继续编辑" });
+  await expect(keep).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(prompt.getByRole("button", { name: "丢弃并关闭" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(keep).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(prompt).toHaveCount(0);
+  await expect(close).toBeFocused();
+  expect(nativeDialogs).toEqual([]);
+  page.off("dialog", native);
+}
+
 test("主题跟随系统、手动选择和刷新恢复", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/");
@@ -73,12 +96,14 @@ test("在线表格按需加载，导出的原生工作簿可以重新导入", as
   await page.keyboard.press("Enter");
   await expect(editor.getByRole("status")).toContainText("尚未导出");
   const close = dialog.getByRole("button", { name: "关闭表格" });
-  const cancelDiscard = page.waitForEvent("dialog").then(prompt => prompt.dismiss());
-  await close.click();
-  await cancelDiscard;
+  await cancelOfficeClose(page, close);
   await expect(dialog).toBeVisible();
   expect((await exportWorkbook()).sheets[sheet.id].cellData[0][0].v).toBe("updated-tool");
+  await editor.getByRole("textbox", { name: "工作簿名称" }).fill("未导出变更");
+  await expect(editor.getByRole("status")).toContainText("尚未导出");
   await close.click();
+  await page.getByRole("alertdialog", { name: "丢弃未导出的修改？" })
+    .getByRole("button", { name: "丢弃并关闭" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(open).toBeFocused();
 });
@@ -148,9 +173,7 @@ for (const kind of ["工作簿", "文档"] as const) {
     await expect(name).toHaveValue("工装/点检:2026");
     await name.fill("工装/点检:2026交接");
     await expect(editor.getByRole("status")).toContainText("尚未导出");
-    const cancel = page.waitForEvent("dialog").then(prompt => prompt.dismiss());
-    await dialog.getByRole("button", { name: closeName }).click();
-    await cancel;
+    await cancelOfficeClose(page, dialog.getByRole("button", { name: closeName }));
     await expect(dialog).toBeVisible();
     const save = editor.getByRole("button", { name: `导出${kind} JSON` });
     const [download] = await Promise.all([page.waitForEvent("download"), save.click()]);
@@ -207,9 +230,7 @@ test("作业指导书可导出中文多段落 TXT，关闭前仍提醒保存完�
   expect(text).toBe(paragraphs.join("\n"));
   expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
   await expect(editor.getByRole("status")).toContainText("尚未导出为 JSON");
-  const cancel = page.waitForEvent("dialog").then(prompt => prompt.dismiss());
-  await dialog.getByRole("button", { name: "关闭文档" }).click();
-  await cancel;
+  await cancelOfficeClose(page, dialog.getByRole("button", { name: "关闭文档" }));
   await expect(dialog).toBeVisible();
   const complete = await downloadSnapshot(page, saveJson);
   expect(complete.document.body.dataStream).toBe(sample.document.body.dataStream);
