@@ -15,6 +15,15 @@ import type {
   RecordDetail,
 } from "./model";
 
+const draftController = vi.hoisted(() => vi.fn());
+vi.mock("react-hook-form", async (original) => {
+  const actual = await original<typeof import("react-hook-form")>();
+  return { ...actual, useForm: (config: Parameters<typeof actual.useForm>[0]) => {
+    draftController(config);
+    return actual.useForm(config);
+  } };
+});
+
 const capabilities = { read: true, create: true, update: true, delete: true };
 const definition = {
   name: "采购申请",
@@ -99,6 +108,31 @@ it("sends typed filters and edits using the record's pinned version", async () =
       expect.objectContaining({ expectedVersion: 1, values: { quantity: 6 } }),
     ),
   );
+});
+
+it("edits one controlled row draft without changing scalar types or selected organization", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{ ...ledger, definition: { ...definition, fields: [
+    ...definition.fields,
+    { key: "note", label: "备注", type: "text", required: false },
+    { key: "checked", label: "验收", type: "boolean", required: false },
+    { key: "date", label: "日期", type: "date", required: false },
+  ] } }]);
+  await select(a);
+  expect(draftController).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = within(screen.getByRole("region", { name: "新增记录" }));
+  fireEvent.change(editor.getByLabelText("数量（必填）"), { target: { value: "4.25" } });
+  const note = editor.getByLabelText("备注");
+  fireEvent.change(note, { target: { value: "仍未提交" } });
+  fireEvent.change(note, { target: { value: "" } });
+  fireEvent.change(editor.getByLabelText("日期"), { target: { value: "2026-12-01" } });
+  expect(a.create).not.toHaveBeenCalled();
+  fireEvent.click(editor.getByRole("button", { name: "保存记录" }));
+  await waitFor(() => expect(a.create).toHaveBeenCalledWith("purchase", expect.objectContaining({
+    organizationId: "org", definitionVersion: 2,
+    values: { checked: false, quantity: 4.25, note: null, date: "2026-12-01" },
+  })));
 });
 
 it("keeps draft, selected ledger and filters when cancelling local navigation", async () => {

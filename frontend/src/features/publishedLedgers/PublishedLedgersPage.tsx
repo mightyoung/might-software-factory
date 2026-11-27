@@ -1,3 +1,4 @@
+import { useForm } from "react-hook-form";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useQuery } from "@tanstack/react-query";
@@ -24,10 +25,10 @@ import "./published-ledgers.css";
 type Editor = {
   detail: RecordDetail | null;
   definition: LedgerConfiguration;
-  values: Values;
-  organizationId: string;
   editing: boolean;
 };
+type RowDraft = { values: Values; organizationId: string };
+const EMPTY_ROW: RowDraft = { values: {}, organizationId: "" };
 const display = (value: unknown) =>
   value === null || value === undefined
     ? "—"
@@ -102,9 +103,18 @@ export function PublishedLedgersPage(props: PageProps) {
 function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: PageProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const { watch, setValue, reset, getValues } = useForm<RowDraft>({ defaultValues: EMPTY_ROW });
+  const { values, organizationId } = watch();
+  function closeEditor() {
+    setEditor(null);
+    reset(EMPTY_ROW);
+  }
+  function changeValue(key: string, value: Values[string]) {
+    setValue("values", { ...getValues("values"), [key]: value });
+  }
   const [pendingDelete, setPendingDelete] = useState<{ ledger: PublishedLedger; detail: RecordDetail } | null>(null);
   const [pendingDiscard, setPendingDiscard] = useState<{
-    editor: Editor; directory: PublishedLedger[] | undefined; proceed: () => void;
+    editor: Editor; values: Values; organizationId: string; directory: PublishedLedger[] | undefined; proceed: () => void;
   } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Query>({
@@ -129,7 +139,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const original = editor?.detail?.record.values;
   const dirty =
     !!editor?.editing &&
-    JSON.stringify(editor.values) !== JSON.stringify(original ?? {});
+    JSON.stringify(values) !== JSON.stringify(original ?? {});
   useUnsavedGuard(
     dirty || sending.current || uncertain,
     "当前编辑或操作尚未确认，可在当前标签页返回核对。确定离开吗？",
@@ -165,8 +175,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     ? pendingDelete : null;
   useEffect(() => { setPendingDelete(null); }, [active, ledger, detail, mayDelete]);
   const discardConfirmation = active && !locked && pendingDiscard?.editor === editor
+    && pendingDiscard.values === values && pendingDiscard.organizationId === organizationId
     && pendingDiscard.directory === directory.data ? pendingDiscard : null;
-  useEffect(() => { setPendingDiscard(null); }, [active, editor, directory.data, locked]);
+  useEffect(() => { setPendingDiscard(null); }, [active, editor, values, organizationId, directory.data, locked]);
   const records = useQuery({
     queryKey: ["published-records", ledger?.key, ledger?.definitionVersion, attempt, recordAttempt, query],
     enabled: !!ledger?.capabilities.read,
@@ -189,7 +200,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   }, [directory.error, records.error]);
   function discardThen(proceed: () => void) {
     if (!active || locked || sending.current || deleteConfirmation || discardConfirmation) return;
-    if (dirty && editor) setPendingDiscard({ editor, directory: directory.data, proceed });
+    if (dirty && editor) setPendingDiscard({ editor, values, organizationId, directory: directory.data, proceed });
     else proceed();
   }
   function confirmDiscard() {
@@ -199,7 +210,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   function select(next: PublishedLedger) {
     setSelectedKey(next.key);
     setFilters({});
-    setEditor(null);
+    closeEditor();
     setNotice("");
     setError("");
     setQuery({
@@ -210,9 +221,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   }
   function create() {
     if (!ledger) return;
-    setEditor({
-      detail: null,
-      definition: ledger.definition,
+    reset({
       values: Object.fromEntries(
         ledger.definition.fields
           .filter((field) => field.type === "boolean")
@@ -220,8 +229,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
       ),
       organizationId:
         ledger.organizations.length === 1 ? ledger.organizations[0]!.id : "",
-      editing: true,
     });
+    setEditor({ detail: null, definition: ledger.definition, editing: true });
     setNotice("");
     setError("");
   }
@@ -237,13 +246,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
         queryFn: ({ signal }) => adapter.detail(ledger.key, id, signal),
       });
       if (mine === generation.current) {
-        setEditor({
-          detail,
-          definition: detail.definition,
-          values: detail.record.values,
-          organizationId: detail.record.organizationId,
-          editing: false,
-        });
+        reset({ values: detail.record.values, organizationId: detail.record.organizationId });
+        setEditor({ detail, definition: detail.definition, editing: false });
       }
     } catch (cause) {
       if (mine === generation.current) failed(cause);
@@ -288,7 +292,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     if (!endConfirmation || sending.current || command.current !== pendingEnd) return;
     command.current = null;
     setUncertain(false);
-    setEditor(null);
+    closeEditor();
     setError("");
   }
   function save() {
@@ -296,8 +300,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     const key = ledger.key;
     const record = editor.detail?.record;
     const requestId = crypto.randomUUID();
-    const values = editor.values;
-    const organizationId = editor.organizationId;
+    const draft = getValues();
+    const values = { ...draft.values };
+    const organizationId = draft.organizationId;
     const definitionVersion = ledger.definitionVersion;
     command.current = () => record
       ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
@@ -328,7 +333,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     try {
       await operation();
       if (mine !== generation.current) return;
-      setEditor(null);
+      closeEditor();
       command.current = null;
       setUncertain(false);
       setNotice(success);
@@ -380,7 +385,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
           variant="secondary"
           isDisabled={locked || loading}
           onClick={() => discardThen(() => {
-            setEditor(null);
+            closeEditor();
             setError("");
             setAttempt((value) => value + 1);
           })}
@@ -537,7 +542,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                       label="关闭记录"
                       variant="secondary"
                       isDisabled={locked}
-                      onClick={() => discardThen(() => setEditor(null))}
+                      onClick={() => discardThen(closeEditor)}
                     />
                   </div>
                   {editor.detail && (
@@ -560,24 +565,16 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                         <select
                           required
                           disabled={!!editor.detail || !editing || locked}
-                          value={editor.organizationId}
-                          onChange={(event) =>
-                            setEditor(
-                              (current) =>
-                                current && {
-                                  ...current,
-                                  organizationId: event.target.value,
-                                },
-                            )
-                          }
+                          value={organizationId}
+                          onChange={(event) => setValue("organizationId", event.target.value)}
                         >
                           <option value="">请选择组织</option>
                           {editor.detail &&
                             !ledger.organizations.some(
-                              (org) => org.id === editor.organizationId,
+                              (org) => org.id === organizationId,
                             ) && (
-                              <option value={editor.organizationId}>
-                                {editor.organizationId}
+                              <option value={organizationId}>
+                                {organizationId}
                               </option>
                             )}
                           {ledger.organizations.map((org) => (
@@ -592,21 +589,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                           {field.type === "boolean" ? (
                             <CheckboxInput
                               label={field.label}
-                              value={editor.values[field.key] === true}
+                              value={values[field.key] === true}
                               isDisabled={locked || !editing}
-                              onChange={() =>
-                                setEditor(
-                                  (current) =>
-                                    current && {
-                                      ...current,
-                                      values: {
-                                        ...current.values,
-                                        [field.key]:
-                                          current.values[field.key] !== true,
-                                      },
-                                    },
-                                )
-                              }
+                              onChange={() => changeValue(field.key, getValues("values")[field.key] !== true)}
                             />
                           ) : (
                             <>
@@ -622,24 +607,10 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                                       : "text"
                                 }
                                 step="any"
-                                value={String(editor.values[field.key] ?? "")}
+                                value={String(values[field.key] ?? "")}
                                 onChange={(event) => {
                                   const value = event.target.value;
-                                  setEditor(
-                                    (current) =>
-                                      current && {
-                                        ...current,
-                                        values: {
-                                          ...current.values,
-                                          [field.key]:
-                                            value === ""
-                                              ? null
-                                              : field.type === "number"
-                                                ? Number(value)
-                                                : value,
-                                        },
-                                      },
-                                  );
+                                  changeValue(field.key, value === "" ? null : field.type === "number" ? Number(value) : value);
                                 }}
                               />
                             </>
@@ -651,7 +622,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                       {editing && (
                         <Button
                           label={busy ? "处理中…" : "保存记录"}
-                          isDisabled={locked || !editor.organizationId}
+                          isDisabled={locked || !organizationId}
                           onClick={() => {
                             if (recordForm.current?.reportValidity())
                               save();
