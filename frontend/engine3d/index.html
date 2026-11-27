@@ -86,7 +86,27 @@
       <p id="plan-error" role="alert" hidden></p>
       <ul id="plan-zones" aria-label="已闭合区域"></ul>
     </section>
+    <section class="floorplan" aria-labelledby="simulation-title">
+      <h2 id="simulation-title">串行产线仿真</h2>
+      <p id="simulation-assumptions">仅模拟合成上料、加工、检验三工位。批次在零时刻投入，工位单件加工，下游等待位各 1 个；不使用生产数据。</p>
+      <form class="floorplan-controls" id="simulation-form" aria-describedby="simulation-assumptions">
+        <label>仿真批量（件） <input type="number" id="simulation-batch" value="4" min="1" max="10000" step="1" required></label>
+        <button type="submit" id="simulation-run">运行仿真</button>
+      </form>
+      <p id="simulation-status" role="status" aria-live="polite">等待运行。</p>
+      <div id="simulation-output" hidden>
+        <dl>
+          <dt>完成件数</dt><dd id="sim-completed"></dd>
+          <dt>整批耗时</dt><dd id="sim-makespan"></dd>
+          <dt>瓶颈工位及理论节拍</dt><dd id="sim-bottleneck"></dd>
+          <dt>理论产能</dt><dd id="sim-theoretical"></dd>
+          <dt>仿真批次折算产能</dt><dd id="sim-effective"></dd>
+        </dl>
+        <ul id="sim-stations" aria-label="工位利用率和堵料"></ul>
+      </div>
+    </section>
   </main>
   <script type="module" src="/runtime/main.ts"></script>
+  <script type="module" src="/runtime/simulation.ts"></script>
 </body>
 </html>
