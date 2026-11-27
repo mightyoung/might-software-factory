@@ -22,3 +22,26 @@ export function mountPrefabPlacement(place: (version: PrefabVersion, metres: Flo
     }
   });
 }
+
+export function mountPrefabRelocation(relocate: (metres: FloorMetres) => PrefabPlacement) {
+  const form = document.querySelector<HTMLFormElement>("#prefab-relocate-form")!;
+  const x = document.querySelector<HTMLInputElement>("#prefab-relocate-x")!;
+  const z = document.querySelector<HTMLInputElement>("#prefab-relocate-z")!;
+  const message = document.getElementById("prefab-relocate-message")!;
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (form.hidden) return;
+    try {
+      const moved = relocate([x.valueAsNumber, z.valueAsNumber]);
+      message.textContent = `已移动至 X ${moved.metres[0]}、Z ${moved.metres[1]} 米。`;
+    } catch (failure) {
+      message.textContent = failure instanceof Error ? failure.message : "无法移动组件。";
+    }
+  });
+  return (placement?: PrefabPlacement) => {
+    form.hidden = !placement;
+    x.value = placement ? String(placement.metres[0]) : "";
+    z.value = placement ? String(placement.metres[1]) : "";
+    message.textContent = "";
+  };
+}

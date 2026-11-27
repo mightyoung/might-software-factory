@@ -4,8 +4,8 @@ import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot, hudKeys, type HudKey } from "../schema/studioSnapshot.ts";
-import { mountPrefabPlacement } from "./prefabPlacement.ts";
-import { placePrefab, type PrefabPlacement } from "../core/prefabPlacement.ts";
+import { mountPrefabPlacement, mountPrefabRelocation } from "./prefabPlacement.ts";
+import { placePrefab, relocatePrefab, type PrefabPlacement } from "../core/prefabPlacement.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
@@ -216,6 +216,16 @@ modelInput.addEventListener("change", async () => {
       ? cause.message : "无法读取该本地文件。");
   }
 });
+const showPrefabRelocation = mountPrefabRelocation((metres) => {
+  const pin = selected ? placedPrefabs.get(selected) : undefined;
+  if (!pin) throw new Error("请选择本页放置的组件实例。");
+  const moved = relocatePrefab(sample, pin, metres);
+  if (engine && !engine.replaceScene(moved.scene)) throw new Error("无法更新当前三维场景。");
+  sample = moved.scene;
+  placedPrefabs.set(pin.deviceId, moved.placement);
+  selectDevice(moved.device);
+  return moved.placement;
+});
 function selectDevice(device?: typeof sample.devices[number]) {
   const pin = device ? placedPrefabs.get(device.id) : undefined;
   const dimensions = device && "equipment" in device ? device.equipment.dimensions : undefined;
@@ -223,6 +233,7 @@ function selectDevice(device?: typeof sample.devices[number]) {
     + (pin && dimensions ? ` · ${pin.prefabId} · v${pin.version} · 长 ${dimensions.length} 米` : "") : "未选中设备。";
   for (const [id, button] of buttons) button.setAttribute("aria-pressed", String(id === device?.id));
   selected = device?.id;
+  showPrefabRelocation(pin);
   closeModel();
   displayResize();
 }

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPrefabBank } from "./prefabBank.ts";
-import { placePrefab } from "./prefabPlacement.ts";
+import { placePrefab, relocatePrefab } from "./prefabPlacement.ts";
+import { parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import type { SceneDocument } from "../schema/scene.ts";
 
 const scene: SceneDocument = { schemaVersion: 1, screenId: "synthetic", devices: [] };
@@ -33,4 +34,21 @@ test("rejects duplicate IDs, invalid coordinates or over-capacity placement with
   const full = { ...scene, devices: Array.from({ length: 24 }, (_, i) => ({ ...first.scene.devices[0], id: "other-" + i })) };
   assert.throws(() => placePrefab(full, v1, "prefab-extra", [0, 0]), /24/);
   assert.equal(first.scene.devices.length, 1);
+});
+
+test("relocation keeps the exact device ID, version, geometry and tour reference while replacing only floor coordinates", () => {
+  const v1 = createPrefabBank().save(definition(4));
+  const first = placePrefab(scene, v1, "prefab-1", [2, -3]);
+  const next = relocatePrefab(first.scene, first.placement, [-10, 10]);
+  assert.deepEqual(next.scene.devices, [{ ...first.device, position: [-10, 0, 10] }]);
+  assert.deepEqual(next.placement, { ...first.placement, metres: [-10, 10] });
+  assert.deepEqual(first.placement.metres, [2, -3]);
+  assert.deepEqual(first.scene.devices[0].position, [2, 0, -3]);
+  assert.ok(Object.isFrozen(next.placement) && Object.isFrozen(next.placement.metres));
+  const stop = { deviceId: first.device.id, label: "输送带机位", dwellSeconds: 3 };
+  const reloaded = parseStudioSnapshot(serializeStudioSnapshot(next.scene, { walls: [], zones: [] }, [stop]));
+  assert.deepEqual(reloaded.cameraTour, [stop]);
+  assert.deepEqual(reloaded.scene.devices[0].position, [-10, 0, 10]);
+  for (const x of [Infinity, NaN, 11]) assert.throws(() => relocatePrefab(first.scene, first.placement, [x, 0]), /坐标/);
+  assert.throws(() => relocatePrefab(scene, first.placement, [0, 0]), /实例/);
 });
