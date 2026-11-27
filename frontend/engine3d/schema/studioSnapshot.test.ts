@@ -26,3 +26,13 @@ test("rejects duplicate or crossing geometry, outside assets, unsupported versio
   ]) assert.throws(() => parseStudioSnapshot(JSON.stringify(draft)));
   assert.throws(() => parseStudioSnapshot(" ".repeat(256 * 1024 + 1)), /256/);
 });
+
+test("keeps an authored named camera sequence and refuses unknown or duplicated devices", () => {
+  const devices = [{ id: "sensor-one", label: "传感器", primitive: "box", position: [0,0,0], size: [1,1,1], state: "normal" }];
+  const valid = { ...snapshot, scene: { ...snapshot.scene, devices },
+    cameraTour: [{ deviceId: "sensor-one", label: "入口机位", dwellSeconds: 8 }] };
+  assert.deepEqual(parseStudioSnapshot(JSON.stringify(valid)).cameraTour, valid.cameraTour);
+  assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...valid, cameraTour: [...valid.cameraTour, ...valid.cameraTour] })));
+  assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...valid, cameraTour: [{ ...valid.cameraTour[0], deviceId: "missing" }] })));
+  assert.throws(() => parseStudioSnapshot(JSON.stringify({ ...valid, cameraTour: [{ ...valid.cameraTour[0], dwellSeconds: 31 }] })));
+});

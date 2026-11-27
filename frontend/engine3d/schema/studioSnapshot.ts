@@ -6,9 +6,16 @@ export const MAX_STUDIO_BYTES = 256 * 1024;
 const coord = z.number().int().min(-100).max(100);
 const point = z.tuple([coord, coord]);
 const id = z.number().int().min(1).max(10000);
+const tourPoint = z.strictObject({
+  deviceId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
+  label: z.string().trim().min(1).max(60),
+  dwellSeconds: z.number().int().min(1).max(30),
+});
+export type TourPoint = z.infer<typeof tourPoint>;
 const schema = z.strictObject({
   snapshotVersion: z.literal(1),
   scene: SceneDocumentSchema,
+  cameraTour: z.array(tourPoint).max(20).optional(),
   floorplan: z.strictObject({
     walls: z.array(z.strictObject({ id, start: point, end: point })).max(100),
     zones: z.array(z.strictObject({ id, points: z.array(point).min(3).max(60) })).max(20),
@@ -26,6 +33,14 @@ export function parseStudioSnapshot(raw: string) {
   if (!parsed.success) throw new Error("场景版本、内容或坐标不符合 Studio v1 契约。");
   const value: Snapshot = parsed.data;
   const { walls, zones } = value.floorplan;
+  if (value.cameraTour) {
+    const deviceIds = new Set(value.scene.devices.map(({ id }) => id));
+    const seen = new Set<string>();
+    for (const point of value.cameraTour) {
+      if (!deviceIds.has(point.deviceId) || seen.has(point.deviceId)) throw new Error("巡检机位包含不存在或重复的设备。");
+      seen.add(point.deviceId);
+    }
+  }
   const ids = new Set<number>(), segments = new Set<string>();
   for (const shape of [...walls, ...zones]) {
     if (ids.has(shape.id)) throw new Error("平面形状标识重复。");
@@ -40,8 +55,9 @@ export function parseStudioSnapshot(raw: string) {
   return { ...value, floorplan: { walls, zones: zones.map((zone) => ({ ...zone, area: validatePolygon(zone.points) })) } };
 }
 
-export function serializeStudioSnapshot(scene: SceneDocument, floorplan: ReturnType<FloorplanDraft["snapshot"]>): string {
-  const raw = JSON.stringify({ snapshotVersion: 1, scene, floorplan }, null, 2);
+export function serializeStudioSnapshot(scene: SceneDocument, floorplan: ReturnType<FloorplanDraft["snapshot"]>,
+  cameraTour: readonly TourPoint[] = []): string {
+  const raw = JSON.stringify({ snapshotVersion: 1, scene, floorplan, ...(cameraTour.length ? { cameraTour } : {}) }, null, 2);
   parseStudioSnapshot(raw);
   return raw;
 }

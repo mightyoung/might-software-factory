@@ -1,4 +1,5 @@
 import { mountSyntheticVideo } from "./video.ts";
+import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
@@ -243,6 +244,8 @@ const planEditor = mountFloorplanEditor((snapshot) => {
   displayWallStatus();
 });
 
+const tourEditor = mountTourEditor();
+tourEditor.setScene(sample);
 const importDraft = document.querySelector<HTMLInputElement>("#snapshot-import")!;
 const draftStatus = document.querySelector<HTMLParagraphElement>("#snapshot-status")!;
 const draftError = document.querySelector<HTMLParagraphElement>("#snapshot-error")!;
@@ -260,14 +263,14 @@ function downloadSnapshot(raw: string, filename: string) {
 }
 document.querySelector("#player-export")!.addEventListener("click", async () => {
   try {
-    downloadSnapshot(await createPlayerSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot())), "might-player-v1.json");
+    downloadSnapshot(await createPlayerSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot())), "might-player-v1.json");
     snapshotError();
     draftStatus.textContent = "离线放映文件已交给浏览器下载。";
   } catch (cause) { snapshotError(cause instanceof Error ? cause.message : "放映文件生成失败。"); }
 });
 document.querySelector("#snapshot-export")!.addEventListener("click", () => {
   try {
-    downloadSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot()), "might-scene-draft.json");
+    downloadSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot(), tourEditor.snapshot()), "might-scene-draft.json");
     snapshotError();
     draftStatus.textContent = "场景草稿已交给浏览器下载。";
   } catch (cause) {
@@ -292,6 +295,7 @@ importDraft.addEventListener("change", async () => {
     selectDevice();
     engine?.replaceScene(sample);
     planEditor.restore(next.floorplan);
+    tourEditor.setScene(sample, next.cameraTour ?? []);
     const conveyor = sample.devices.find((device) => device.id === "conveyor-04" && "equipment" in device);
     document.querySelector<HTMLElement>("#conveyor-tool")!.hidden = !conveyor;
     if (conveyor && "equipment" in conveyor) {
