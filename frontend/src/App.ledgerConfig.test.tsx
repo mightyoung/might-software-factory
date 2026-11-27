@@ -10,7 +10,7 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-it("preserves the configuration in the same authenticated tab through real history traversal", async () => {
+it("preserves the local configuration draft and revalidates the directory only on active visits", async () => {
   const path = "/t/demo-tenant/platform/ledger-configurations";
   window.history.replaceState(null, "", "/t/demo-tenant/safety/findings");
   window.history.pushState(null, "", path);
@@ -19,6 +19,7 @@ it("preserves the configuration in the same authenticated tab through real histo
   const grants = ["ledger.configuration.read", "ledger.configuration.manage"];
   const fetchConfig = vi.fn().mockResolvedValue(Response.json({ items: [] }));
   vi.stubGlobal("fetch", fetchConfig);
+  const countDirectoryReads = () => fetchConfig.mock.calls.filter(([url]) => url === "/api/v1/admin/ledger-configurations").length;
   render(<App mode="http" sessionAdapter={{
     ...adapter,
     restore: async () => ({
@@ -28,20 +29,26 @@ it("preserves the configuration in the same authenticated tab through real histo
     }),
   }} />);
   await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
+  expect(countDirectoryReads()).toBe(1);
   fireEvent.change(screen.getByLabelText("台账名称"), { target: { value: "尚未保存的配置" } });
   window.history.back();
   expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeVisible();
   expect(screen.queryByRole("heading", { name: "台账配置" })).not.toBeInTheDocument();
+  expect(countDirectoryReads()).toBe(1);
   window.history.forward();
   expect(await screen.findByRole("heading", { name: "台账配置" })).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
   expect(screen.getByLabelText("台账名称")).toHaveValue("尚未保存的配置");
+  expect(countDirectoryReads()).toBe(2);
   navigate("/safety/findings");
   await waitFor(() => expect(window.location.pathname).toBe("/t/demo-tenant/safety/findings"));
   expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeVisible();
+  expect(countDirectoryReads()).toBe(2);
   navigate(path);
   expect(await screen.findByRole("heading", { name: "台账配置" })).toBeVisible();
+  await waitFor(() => expect(screen.getByLabelText("台账名称")).toBeEnabled());
   expect(screen.getByLabelText("台账名称")).toHaveValue("尚未保存的配置");
-  expect(fetchConfig.mock.calls.filter(([url]) => url === "/api/v1/admin/ledger-configurations")).toHaveLength(1);
+  expect(countDirectoryReads()).toBe(3);
 });
 
 it("discards the hidden editor and a pending retry when the same actor's permissions change", async () => {
