@@ -24,7 +24,7 @@ import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
-import { findingSearchInput, validateFindingSearch, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
+import { findingSearchInput, validateFindingSearch, validateFindingState, withFindingState, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -91,7 +91,7 @@ function FindingsLedgerBody({
   const search = delimiter < 0 ? "" : location.slice(delimiter);
   const selectionReady = useRef(!resetInitialSelection);
   // App supplies TanStack's validated match; standalone uses the identical projection.
-  const { standalone, reporting, relatedId, relatedCode, caseId } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
+  const { standalone, reporting, relatedId, relatedCode, caseId, findingState } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
   const relatedTo = reporting && relatedId ? { id: relatedId, code: relatedCode ?? relatedId } : null;
   const selectedFindingId = selectionReady.current ? caseId : null;
   useEffect(() => {
@@ -102,13 +102,24 @@ function FindingsLedgerBody({
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
   const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
   const published = adapter.publishedDefinition === true;
-  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
-  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
+  function fromRoute() {
+    const values: QueryValues = { ...createEmptyQuery(schema?.queryFields ?? []), ...(findingState && { state: findingState }) };
+    return { status: findingState, draft: values, applied: values };
+  }
+  const [queryState, setQueryState] = useState(fromRoute);
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  // Apply a history change before Query observes the old filters or page.
+  if (queryState.status !== findingState) {
+    setQueryState(fromRoute());
+    setPageIndex(1);
+    setSelectedIds(new Set());
+    setRefreshKey(value => value + 1);
+  }
+  const { draft: query, applied: appliedQuery } = queryState;
   const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
   const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
@@ -224,21 +235,21 @@ function FindingsLedgerBody({
   }
 
   function updateQuery(key: string, value: QueryValue) {
-    setQuery((current) => ({ ...current, [key]: value }));
+    setQueryState(current => ({ ...current, draft: { ...current.draft, [key]: value } }));
   }
 
   function runQuery(nextQuery: QueryValues) {
-    setAppliedQuery({ ...nextQuery });
+    const status = validateFindingState(nextQuery.state);
+    const nextSearch = withFindingState(selectedFindingId ? withoutFindingSelection(search) : search, status);
+    setQueryState({ status, draft: nextQuery, applied: nextQuery });
     setPageIndex(1);
     setSelectedIds(new Set());
-    if (selectedFindingId) navigate(path);
+    if (nextSearch !== search) navigate(path + nextSearch + window.location.hash);
     setRefreshKey((value) => value + 1);
   }
 
   function handleReset() {
-    const emptyQuery = createEmptyQuery(schema?.queryFields ?? []);
-    setQuery(emptyQuery);
-    runQuery(emptyQuery);
+    runQuery(createEmptyQuery(schema?.queryFields ?? []));
   }
 
   function openDetail(record: FindingRecord) {

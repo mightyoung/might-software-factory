@@ -68,8 +68,11 @@ test("台账支持键盘逐行勾选、查看部分选中状态及整页切换",
   }
 });
 
-test("查询框可用键盘清除编号并保留状态与日期条件", async ({ page }) => {
+test("查询框可用键盘清除编号，且仅提交状态会写入 URL 并可前进后退", async ({ page }) => {
   await signIn(page);
+  const rawQuery = "?tag=%2f&tag=%2F&flag=&q=a+b";
+  await page.goto(new URL(page.url()).pathname + rawQuery);
+  await expect(page.locator(".ledger-row").first()).toBeVisible();
   const keyword = page.getByRole("searchbox", { name: "隐患编号" });
   const state = page.getByRole("combobox", { name: "状态", exact: true });
   const from = page.getByLabel("上报日期起", { exact: true });
@@ -105,6 +108,20 @@ test("查询框可用键盘清除编号并保留状态与日期条件", async ({
     { field: "state", operator: "EQ", value: "RECTIFYING" },
     { field: "createdAt", operator: "GTE", value: "2020-01-01T00:00:00+08:00" },
   ]);
+  expect(new URL(page.url()).search).toBe(rawQuery + "&findingState=RECTIFYING");
+  await page.goBack();
+  await expect(state).toHaveValue("");
+  await expect.poll(() => queryRequests.length).toBe(2);
+  expect(JSON.parse(queryRequests[1])).not.toHaveProperty("filterAST");
+  expect(new URL(page.url()).search).toBe(rawQuery);
+  await page.goForward();
+  await expect(state).toHaveValue("RECTIFYING");
+  await expect(from).toHaveValue("");
+  await expect.poll(() => queryRequests.length).toBe(3);
+  expect(JSON.parse(queryRequests[2]).filterAST.conditions).toEqual([
+    { field: "state", operator: "EQ", value: "RECTIFYING" },
+  ]);
+  expect(new URL(page.url()).search).toBe(rawQuery + "&findingState=RECTIFYING");
 });
 
 test.describe("通用台账触屏查询", () => {
