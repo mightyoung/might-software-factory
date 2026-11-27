@@ -171,3 +171,29 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await expect(editor.locator(".plan-wall")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+test("viewport resize handle commits on release and Escape cancels without resizing", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "传送带 04 · 正常" }).click();
+  const size = page.getByRole("group", { name: "保持对侧不动地调整尺寸" }).getByRole("status");
+  await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  const handle = page.locator('#resize-gizmo [data-face="+X"]');
+  const drag = async (cancel) => {
+    await expect(handle).toBeVisible();
+    const axis = (await handle.getAttribute("data-axis")).split(",").map(Number);
+    const box = await handle.boundingBox();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + axis[0] * 0.5, y + axis[1] * 0.5, { steps: 4 });
+    await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+    if (cancel) await page.keyboard.press("Escape");
+    await page.mouse.up();
+  };
+  await drag(true);
+  await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  await drag(false);
+  await expect.poll(async () => Number((await size.textContent()).match(/长 ([\d.]+)/)?.[1])).toBeGreaterThan(4.3);
+  await expect(size).toContainText("宽 1 · 高 0.9 米");
+  await expect(page.getByRole("button", { name: "传送带 04 · 正常" })).toHaveAttribute("aria-pressed", "true");
+});

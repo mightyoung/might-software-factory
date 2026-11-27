@@ -1,4 +1,5 @@
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
+import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
@@ -33,12 +34,14 @@ const messages: Record<RenderStatus, string> = {
   lost: "三维视口暂时中断。你仍可使用二维设备列表。",
   unavailable: "此设备无法使用 WebGL 2。请使用二维设备列表。",
 };
+let updateGizmo = () => {};
 const engine = mountEngine(canvas, sample, (state) => {
   status.textContent = messages[state];
   overview.disabled = state !== "ready";
   // Do not remove a temporarily lost canvas while the browser is restoring it.
   canvas.hidden = state === "unavailable";
-});
+  if (state !== "ready") updateGizmo();
+}, () => updateGizmo());
 
 const buttons = new Map<string, HTMLButtonElement>();
 let selected: string | undefined;
@@ -72,10 +75,10 @@ function displayResize() {
   const { length, width, height } = item.equipment.dimensions;
   resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
 }
-function adjustSelected(delta: number) {
+function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   const item = selectedParametric();
   if (!item || !("equipment" in item)) return;
-  const change = resizeEquipment(item.equipment, resizeFace.value as ResizeFace, delta);
+  const change = resizeEquipment(item.equipment, face, delta);
   const [dx, dy, dz] = change.positionDelta;
   const [x, y, z] = item.position;
   const updated = SceneDocumentSchema.safeParse({
@@ -164,6 +167,10 @@ lengthSelect.addEventListener("change", () => {
   rebuild.textContent = `当前长度：${length} 米。`;
   displayResize();
 });
+updateGizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, () => {
+  const item = selectedParametric();
+  return item && "equipment" in item ? engine?.projectedHandles(item.id, item.equipment.dimensions) ?? [] : [];
+}, (delta, face, id) => { if (selected === id) adjustSelected(delta, face); });
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });
