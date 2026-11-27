@@ -174,24 +174,32 @@ def preview(directory, origin, cert):
                     process.wait(timeout=5)
 
 
-def seed_tool(origin, ca, keeper):
+def seed_tool(origin, ca, actors):
     import requests
-    with requests.Session() as session:
+    def login(session, actor):
         session.trust_env = False
         session.verify = str(ca)
         csrf = origin + "/api/v1/auth/csrf"
         session.get(csrf, timeout=10, allow_redirects=False).raise_for_status()
-        def post(path, body):
-            return session.post(origin + path, json=body, timeout=15, allow_redirects=False,
-                                headers={"X-XSRF-TOKEN": session.cookies["XSRF-TOKEN"],
-                                         "Idempotency-Key": str(uuid4())})
-        assert post("/api/v1/auth/login", {"tenantCode": "d1seed", "loginKey": "d1seed-keeper",
-                                          "password": keeper}).ok
+        response = post(session, "/api/v1/auth/login", {
+            "tenantCode": "d1seed", "loginKey": "d1seed-" + actor, "password": actors[actor]})
+        if not 200 <= response.status_code < 300:
+            raise ValueError("TL-10 fixture login failed")
         session.get(csrf, timeout=10, allow_redirects=False).raise_for_status()
-        response = session.get(origin + "/api/v1/tooling/loan-applications/candidates", timeout=15)
+
+    def post(session, path, body):
+        return session.post(origin + path, json=body, timeout=15, allow_redirects=False,
+                            headers={"X-XSRF-TOKEN": session.cookies["XSRF-TOKEN"],
+                                     "Idempotency-Key": str(uuid4())})
+
+    with requests.Session() as reader, requests.Session() as keeper:
+        login(reader, "reader")
+        response = reader.get(origin + "/api/v1/tooling/loan-applications/candidates",
+                              timeout=15, allow_redirects=False)
         assert response.status_code == 200
         scope, = [item["id"] for item in response.json()["data"]["scopes"] if "D1-SCOPE-A" in item["label"]]
-        created = post("/api/v1/apps/tooling/entities/tool/records", {"definitionVersion": "1",
+        login(keeper, "keeper")
+        created = post(keeper, "/api/v1/apps/tooling/entities/tool/records", {"definitionVersion": "1",
                        "values": {"code": "TL10-" + uuid4().hex, "name": "TL-10 synthetic tool", "custodyScopeId": scope}})
         assert created.status_code == 200
         return scope, created.json()["data"]["id"]
@@ -226,7 +234,7 @@ def run():
         with closing(connect(owned, FIXTURE_ROLE, roles[FIXTURE_ROLE])) as fixture:
             tenant, pin = read_workflow_pin(ROOT, fixture, owned)
             with app(owned, directory, cert, jar_sha, roles[RUNTIME_ROLE], "1", tenant, pin) as (origin, _):
-                scope, tool = seed_tool(origin, cert[0], actors["keeper"])
+                scope, tool = seed_tool(origin, cert[0], actors)
                 print("TL10_HTTP_FIXTURE_READY", flush=True)
                 with preview(directory, origin, cert) as frontend:
                     environment = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"],
