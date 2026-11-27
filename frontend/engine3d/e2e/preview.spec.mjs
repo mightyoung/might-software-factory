@@ -61,3 +61,40 @@ test("without WebGL, the keyboard-operable device list still works on narrow vie
   await expect(page.getByRole("status").filter({ hasText: "已选：排风装置 03 · 告警" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
+
+test("resizing to a narrow viewport refits the selected device without changing the vertical lens", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.addInitScript(() => {
+    const names = new WeakMap();
+    const gl = WebGL2RenderingContext.prototype;
+    const locate = gl.getUniformLocation, upload = gl.uniformMatrix4fv;
+    window.focusMatrices = {};
+    gl.getUniformLocation = function (program, name) {
+      const address = locate.call(this, program, name);
+      if (address && ["projectionMatrix", "viewMatrix"].includes(name)) names.set(address, name);
+      return address;
+    };
+    gl.uniformMatrix4fv = function (...args) {
+      const name = names.get(args[0]);
+      if (name) window.focusMatrices[name] = Array.from(args[2]);
+      return upload.apply(this, args);
+    };
+  });
+  await page.goto("/");
+  const read = () => page.evaluate(() => window.focusMatrices);
+  await expect.poll(async () => (await read()).viewMatrix?.[14]).toBeDefined();
+  const overviewDepth = (await read()).viewMatrix[14];
+  const press = page.getByRole("button", { name: "成型机 02 · 预警" });
+  await press.click();
+  await expect.poll(async () => (await read()).viewMatrix[14]).not.toBe(overviewDepth);
+  const normal = await read();
+  await page.locator("#viewport").evaluate((viewport) => { viewport.style.width = "48px"; });
+  await expect.poll(async () => (await read()).projectionMatrix[0]).toBeGreaterThan(normal.projectionMatrix[0] * 2);
+  const narrow = await read();
+  expect(narrow.projectionMatrix[5]).toBeCloseTo(normal.projectionMatrix[5], 6);
+  expect(narrow.viewMatrix[14]).toBeLessThan(normal.viewMatrix[14]);
+  await expect(press).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "恢复全景" }).click();
+  await expect.poll(async () => (await read()).viewMatrix[14]).toBeCloseTo(overviewDepth, 6);
+  await expect(press).toHaveAttribute("aria-pressed", "false");
+});
