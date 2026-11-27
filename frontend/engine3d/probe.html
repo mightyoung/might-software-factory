@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数字孪生三维渲染探针</title>
+</head>
+<body>
+  <main style="margin:1rem auto;padding:0 1rem;max-width:50rem">
+    <h1>三维绘制批处理探针</h1>
+    <p>可比较同材质、同尺寸、同坐标的 500 个合成方块。显示当前 WebGL 渲染器记录；采集完后会清空测试画布。此页不评估真实显卡帧率、显存或生产场景。</p>
+    <button id="run-probe" type="button">对比绘制</button>
+    <p id="probe-status" role="status">等待运行。</p>
+    <canvas id="probe-canvas" width="480" height="320" style="max-width:100%;height:auto" aria-label="合成方块绘制"></canvas>
+    <dl>
+      <dt>独立网格绘制次数</dt><dd id="probe-draws-individual"></dd>
+      <dt>批处理网格绘制次数</dt><dd id="probe-draws-instanced"></dd>
+      <dt>两种模式三角面数</dt><dd id="probe-triangles"></dd>
+      <dt>两次清理后的跟踪几何体数</dt><dd id="probe-geometry"></dd>
+      <dt>已释放几何体 / 材质 / 实例批</dt><dd id="probe-disposals"></dd>
+    </dl>
+  </main>
+  <script type="module" src="/runtime/instancingProbe.ts"></script>
+</body>
+</html>
