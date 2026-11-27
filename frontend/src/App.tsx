@@ -14,6 +14,7 @@ import { hasPermission, type ApplicationId, type SessionBootstrap } from "./doma
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
 import { withoutFindingSelection } from "./routing/findingSearch";
+import { PermissionConfigRouteScope } from "./routing/permissionConfigRouteScope";
 import { LedgerConfigRouteScope } from "./routing/ledgerConfigRouteScope";
 import { PublishedLedgerRouteScope } from "./routing/publishedLedgerRouteScope";
 import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
@@ -32,9 +33,6 @@ import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
 const FindingReportFormCore = lazy(() => import("./components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
-const PermissionConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.PermissionConfigPage })));
-
-
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -129,6 +127,7 @@ const ROUTES: readonly RouteDef[] = [
     application: "platform",
     permission: "platform.permission.read",
     page: { kind: "permissions", title: "权限配置" },
+    component: lazyRouteComponent(() => import("./features/platform/LedgerConfigPage"), "PermissionConfigRoute"),
   },
 ];
 
@@ -378,14 +377,15 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     content = mode !== "http" ? <StatusPage title="需连接后端" description={route.page.kind === "published-ledgers" ? "请连接后端后使用业务台账。" : "请连接后端后配置台账。"} /> : null;
   } else if (route.page.kind === "permissions") {
     title = route.page.title;
-    content = (
+    const PermissionConfigRoute = matchedComponent;
+    content = PermissionConfigRoute && (
       <Suspense fallback={<p role="status">正在载入权限配置…</p>}>
-        <PermissionConfigPage
-          adapter={permissionAdmin}
-          onPermissionsChanged={refresh}
-          canManage={hasPermission(session, "platform.permission.manage")}
-          onUnauthenticated={expire}
-        />
+        <PermissionConfigRouteScope.Provider value={{
+          adapter: permissionAdmin, onPermissionsChanged: refresh,
+          canManage: hasPermission(session, "platform.permission.manage"), onUnauthenticated: expire,
+        }}>
+          <PermissionConfigRoute />
+        </PermissionConfigRouteScope.Provider>
       </Suspense>
     );
   } else {

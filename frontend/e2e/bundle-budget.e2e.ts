@@ -81,9 +81,10 @@ test("HTTP 已登录默认页和业务台账深链接分别满足冷启动预算
     landing.on("request", request => {
       const pathname = new URL(request.url()).pathname;
       if (pathname === "/api/v1/ledgers" || pathname.startsWith("/api/v1/admin/ledger-configurations")
+        || /^\/api\/v1\/admin\/(?:permissions|roles)$/.test(pathname)
         || /(?:PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage)-/.test(pathname)) deniedReads.push(pathname);
     });
-    for (const route of ["ledgers", "ledger-configurations"]) {
+    for (const route of ["ledgers", "ledger-configurations", "permissions"]) {
       await landing.goto(`${tenantPath}/platform/${route}`);
       await expect(landing.getByRole("heading", { name: "无权访问" })).toBeVisible();
       await landing.waitForLoadState("networkidle");

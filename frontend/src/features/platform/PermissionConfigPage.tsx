@@ -1,6 +1,6 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import {
   PermissionAdminError,
@@ -9,6 +9,8 @@ import {
   type PermissionAdminFailure,
   type RoleView,
 } from "../../adapters/permissionAdmin";
+
+import { PermissionConfigRouteScope, type PermissionConfigRouteProps } from "../../routing/permissionConfigRouteScope";
 
 const APPLICATION_LABEL: Readonly<Record<string, string>> = { safety: "生产安全", equipment: "设备管理", platform: "系统设置" };
 
@@ -34,14 +36,12 @@ export function diffCodes(original: readonly string[], draft: ReadonlySet<string
   };
 }
 
-interface Props {
-  adapter: PermissionAdminAdapter;
-  canManage: boolean;
-  onUnauthenticated: () => void;
-  onPermissionsChanged?: () => Promise<void>;
+export function PermissionConfigRoute() {
+  const scope = useContext(PermissionConfigRouteScope);
+  return scope ? <PermissionConfigPage {...scope} /> : null;
 }
 
-export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: Props) {
+export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: PermissionConfigRouteProps) {
   const lifetime = useRef(0);
   useEffect(() => { lifetime.current += 1;return () => { lifetime.current += 1; }; }, [adapter]);
   const [data, setData] = useState<PermissionAdminData | null>(null);
