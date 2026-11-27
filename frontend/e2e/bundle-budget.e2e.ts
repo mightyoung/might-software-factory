@@ -30,7 +30,7 @@ test("HTTP 冷启动实际加载的资源在首屏预算内，且不预加载台
   const assets = await loadedAssets(page);
   expect(assets.some((file) => file.endsWith(".js"))).toBe(true);
   expect(assets.some((file) => file.endsWith(".css"))).toBe(true);
-  expect(assets.some((file) => /OfficeDialog|PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage/.test(file))).toBe(false);
+  expect(assets.some((file) => /OfficeDialog|PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage|FindingDetails/.test(file))).toBe(false);
   const totals = gzipTotals(assets);
   console.log(`Cold HTTP workbench loaded ${assets.length} JS/CSS assets: ${totals.js} B JS, ${totals.css} B CSS (gzip)`);
   expect(totals.js).toBeLessThanOrEqual(235 * 1024);
@@ -75,7 +75,7 @@ test("HTTP 已登录默认页和业务台账深链接分别满足冷启动预算
     expect(landingTotals.js).toBeGreaterThan(0);
     expect(landingTotals.js).toBeLessThanOrEqual(235 * 1024);
     expect(landingTotals.css).toBeLessThanOrEqual(56 * 1024);
-    expect(landingAssets.some((file) => /OfficeDialog|PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage/.test(file))).toBe(false);
+    expect(landingAssets.some((file) => /OfficeDialog|PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage|FindingDetails/.test(file))).toBe(false);
 
     const deniedReads: string[] = [];
     landing.on("request", request => {

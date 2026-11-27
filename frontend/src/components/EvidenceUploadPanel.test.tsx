@@ -95,6 +95,27 @@ describe("整改证据上传面板", () => {
     expect(onSubmitted).toHaveBeenCalledTimes(1);
   });
 
+  it("marks invalid remediation text without sending a command and counts Unicode code points after trimming", async () => {
+    const run = vi.fn().mockResolvedValue({ state: "ACCEPTANCE_PENDING", roundNo: 2, version: 8 });
+    render(<EvidenceUploadPanel finding={finding} adapter={fake()} commands={{ run }} />);
+    await pick(png());
+    await screen.findByText(/已终结/);
+    const input = screen.getByLabelText("整改说明");
+    const button = screen.getByRole("button", { name: "提交整改" });
+    for (const value of ["  ", "🔧".repeat(4001)]) {
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(button);
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByRole("alert")).toHaveTextContent("最多 4000 个字");
+      expect(run).not.toHaveBeenCalled();
+    }
+    const statement = "🔧".repeat(4000);
+    fireEvent.change(input, { target: { value: ` ${statement} ` } });
+    await act(async () => { fireEvent.click(button); });
+    expect(input).not.toHaveAttribute("aria-invalid", "true");
+    expect(run).toHaveBeenCalledWith("f1", 7, { kind: "submitRemediation", evidenceSetId: "s1", statement }, expect.anything());
+  });
+
   it("同一 SPA 保留模块缓存离开再返回后，从服务端恢复已发布状态并允许提交", async () => {
     const adapter = revisionEnforcingFake(); const run = vi.fn().mockResolvedValue({ state: "ACCEPTANCE_PENDING", roundNo: 2, version: 8 });
     const view = render(<EvidenceUploadPanel finding={finding} adapter={adapter} commands={{ run } as unknown as FindingCommandAdapter} />);

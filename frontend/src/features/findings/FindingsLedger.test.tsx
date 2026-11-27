@@ -202,6 +202,7 @@ describe("隐患台账分页与详情", () => {
     navigate(`/safety/findings?caseId=${record.id}`, true);
 
     render(<FindingsLedger view="all" title="隐患台账" description="合成样例" adapter={adapter} />);
+    await screen.findByRole("heading", { name: "基本信息" });
     const detail = screen.getByRole("complementary", { name: "隐患详情面板" });
     expect(await within(detail).findByText(findingStateLabels[state])).toBeInTheDocument();
     expect(within(detail).getByText("待专业评估")).toBeInTheDocument();

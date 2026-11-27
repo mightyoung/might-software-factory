@@ -3,6 +3,7 @@ import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft"
 import { REASON_MAX, type ActionDef, type CommandInputErrors, type Grade } from "./commandActions";
 
 export interface CommandInput { reason: string; grade: string }
+const gradeSchema = z.custom<Grade>((value) => value === "GENERAL" || value === "MAJOR");
 
 function reasonError(action: ActionDef, reason: string) {
   if (!action.reason) return;
@@ -17,7 +18,7 @@ export function parseCommandInput(action: ActionDef, input: CommandInput):
     const message = reasonError(action, reason);
     if (message) ctx.addIssue({ code: "custom", message });
   })).safeParse(input.reason);
-  const gradeCheck = z.enum(["GENERAL", "MAJOR"]).safeParse(input.grade);
+  const gradeCheck = gradeSchema.safeParse(input.grade);
   const errors: CommandInputErrors = {};
   if (!reasonCheck.success) errors.reason = reasonCheck.error.issues[0].message;
   if (action.grade && !gradeCheck.success) errors.grade = "请选择隐患等级";

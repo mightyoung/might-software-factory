@@ -69,7 +69,8 @@ describe("上报流程", () => {
     expect(within(report).getByText("DEMO-HZ-008")).toBeInTheDocument();
 
     fireEvent.click(within(report).getByRole("button", { name: "查看详情" }));
-    const panel = await screen.findByRole("complementary", { name: "隐患详情面板" });
+    await screen.findByRole("heading", { name: "基本信息" });
+    const panel = screen.getByRole("complementary", { name: "隐患详情面板" });
     expect(within(panel).getByText("DEMO-HZ-008")).toBeInTheDocument();
     expect(within(panel).getByText("通道护栏连接件松动")).toBeInTheDocument();
     expect(within(panel).getByText("紧急")).toBeInTheDocument();
@@ -106,7 +107,8 @@ describe("上报流程", () => {
     // 表单里的提示是“将按补报处理”，成功页是“已按补报处理”：只匹配后者，避免命中随后被替换掉的表单文字。
     expect(await screen.findByText(/已按补报处理/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
-    const panel = await screen.findByRole("complementary", { name: "隐患详情面板" });
+    await screen.findByRole("heading", { name: "基本信息" });
+    const panel = screen.getByRole("complementary", { name: "隐患详情面板" });
     expect(within(panel).getByText("2026-10-20 09:00")).toBeInTheDocument();
     expect(within(panel).getByText("补报")).toBeInTheDocument();
   });
