@@ -70,8 +70,10 @@ public final class StudioPublicationPolicy {
 
     public static void authorizeRead(Caller caller, Target target) { authorize(caller, target, Permission.PLAYER_READ); }
 
+    static void authorizePublish(Caller caller, Target target) { authorize(caller, target, Permission.STUDIO_PUBLISH); }
+
     public static Decision decide(Caller caller, Target target, long expectedVersion, Head head, DraftFacts draft) {
-        authorize(caller, target, Permission.STUDIO_PUBLISH);
+        authorizePublish(caller, target);
         if (head != null && !head.target().equals(target)) throw new Forbidden();
         if (expectedVersion < 0) throw new IllegalArgumentException("Negative expected version");
         var current = head == null ? 0 : head.version();
