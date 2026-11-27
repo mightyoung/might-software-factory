@@ -1,0 +1,21 @@
+:root { font: 16px/1.5 system-ui,sans-serif; background: #edf3f1; color: #182e2c; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1200px; margin: auto; padding: 1rem; }
+input { max-width: 100%; }
+.play-layout { display: grid; grid-template-columns: minmax(12rem,1fr) minmax(0,3fr); gap: .8rem; }
+section { min-width: 0; border: 1px solid #a9bfba; border-radius: .5rem; padding: .8rem; background: white; }
+canvas { display: block; width: 100%; height: clamp(18rem,50vw,32rem); }
+canvas[hidden] { display: none; }
+[role="alert"] { color: #8b1c32; }
+@media (max-width: 650px) { .play-layout { grid-template-columns: 1fr; } }
+#play-hud { margin-bottom: .8rem; }
+#play-hud h2 { margin: 0; font-size: 1.1rem; }
+#play-metrics { margin: .5rem 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .5rem; }
+#play-metrics div { padding: .45rem; background: #e4f1ee; border-radius: .3rem; }
+#play-metrics dd { font: 700 1.4rem/1.4 system-ui,sans-serif; margin: 0; }
+@media (min-aspect-ratio: 2/1) and (min-width: 1600px) {
+  main { max-width: 2560px; }
+  .play-layout { grid-template-columns: minmax(15rem, 1fr) minmax(0,5fr); }
+  canvas { height: min(64vh, 70rem); }
+}
