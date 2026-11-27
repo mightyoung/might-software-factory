@@ -425,7 +425,7 @@ describe("修改密码", () => {
     renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
     fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "old" } });
     fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
     fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
     fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);
@@ -440,7 +440,7 @@ describe("修改密码", () => {
     renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
     fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
-    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "old" } });
     fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
     fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
     fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);

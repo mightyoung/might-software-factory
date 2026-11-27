@@ -1,3 +1,4 @@
+import { LoginPageCore } from "./features/session/LoginPage";
 import { syntheticPresentation } from "./adapters/syntheticPresentation";
 import type { ComponentProps } from "react";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -6,8 +7,6 @@ import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
-import { FindingReportFormCore } from "./components/FindingReportForm";
-import { LoginPageCore } from "./features/session/LoginPage";
 import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
@@ -29,6 +28,7 @@ import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
+const FindingReportFormCore = lazy(() => import("./components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
 const PermissionConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.PermissionConfigPage })));
 const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
 const LedgerConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.LedgerConfigPage })));
@@ -175,7 +175,7 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated, presentation 
   return <section className="ledger-main">
     <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
     <p>可上报你有权提交的隐患。</p>
-    {open && <FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
+    {open && <Suspense fallback={<p role="status">正在载入上报表单…</p>}><FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} /></Suspense>}
   </section>;
 }
 

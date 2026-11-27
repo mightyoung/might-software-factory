@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import type { ComponentProps } from "react";
 import { mockFindingLedger } from "../../adapters/findingLedger";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
   type FindingLedgerAdapter,
@@ -15,7 +15,6 @@ import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetailsCore } from "../../components/FindingDetails";
-import { FindingReportFormCore } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
@@ -56,6 +55,8 @@ const firstPage: PageResult<FindingRecord> = {
   total: 0,
   pageCount: 1,
 };
+
+const FindingReportFormCore = lazy(() => import("../../components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
 
 export function FindingsLedgerCore(props: FindingsLedgerProps) {
   const [scope, setScope] = useState({ adapter: props.adapter, submit: props.submitAdapter, generation: 0 });
@@ -350,6 +351,7 @@ function FindingsLedgerBody({
       </section>}
 
       {reporting && submitAdapter && (
+        <Suspense fallback={<p role="status">正在载入上报表单…</p>}>
         <FindingReportFormCore
           validateDraft={presentation?.validateDraft}
           adapter={submitAdapter}
@@ -360,6 +362,7 @@ function FindingsLedgerBody({
           draftKey={draftKey}
           {...(relatedTo ? { relatedTo } : {})}
         />
+        </Suspense>
       )}
 
       {selectedFindingId && !reporting && (
