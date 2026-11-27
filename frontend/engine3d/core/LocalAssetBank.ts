@@ -13,6 +13,15 @@ export type LocalAssetMetadata = {
 };
 const LIMIT = 32 * 1024 * 1024;
 
+export const validLocalAssetName = (name: string) => name === name.trim() &&
+  name.toLowerCase().endsWith(".glb") && name.length <= 128 && !/[/:\\]|\p{Cc}/u.test(name);
+
+export async function localAssetDigest(bytes: ArrayBuffer): Promise<string> {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+
 export class LocalAssetBank {
   private entries = new Map<string, { asset: LocalAssetMetadata; bytes: ArrayBuffer }>();
   private used = 0;
@@ -25,11 +34,10 @@ export class LocalAssetBank {
   async register(rawName: string, data: ArrayBuffer, sourceUnit: SourceUnit = "m"): Promise<LocalAssetMetadata> {
     if (sourceUnit !== "m" && sourceUnit !== "mm") throw new Error("GLB：模型源单位不合法。");
     const name = rawName.trim();
-    if (!name.toLowerCase().endsWith(".glb") || name.length > 128 || /[/:\\]|\p{Cc}/u.test(name) || data.byteLength > MAX_GLB_BYTES)
+    if (!validLocalAssetName(name) || data.byteLength > MAX_GLB_BYTES)
       throw new Error("GLB：需要大小和名称符合要求的本地模型。");
     const bytes = data.slice(0);
-    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-    const id = Array.from(hash, (b) => b.toString(16).padStart(2, "0")).join("");
+    const id = await localAssetDigest(bytes);
     const prior = this.entries.get(id);
     if (prior) return structuredClone(prior.asset);
     if (this.entries.size >= this.maxEntries || this.used + bytes.byteLength > LIMIT)
