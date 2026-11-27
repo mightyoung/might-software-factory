@@ -130,8 +130,43 @@
         <ul id="sim-stations" aria-label="工位利用率和堵料"></ul>
       </div>
     </section>
+    <section class="floorplan" aria-labelledby="prefab-title">
+      <h2 id="prefab-title">参数化组件库</h2>
+      <p>仅保存在本页内存。相同标识保存新版本，旧版本不变。锚点使用设备局部坐标（米）；本页最多编辑一个锚点。</p>
+      <form id="prefab-form">
+        <div class="floorplan-controls">
+          <label>组件标识 <input id="prefab-id" value="conveyor-standard" maxlength="64" required></label>
+          <label>组件名称 <input id="prefab-name" value="标准输送带" maxlength="80" required></label>
+          <label>设备类型 <select id="prefab-kind"><option value="CONVEYOR">输送带</option><option value="CORRIDOR">通道</option><option value="ROBOT_ARM">机械臂</option><option value="SPIRAL_CONVEYOR">螺旋输送机</option></select></label>
+          <label>预览状态 <select id="prefab-state"><option value="normal">正常</option><option value="warning">预警</option><option value="alarm">告警</option></select></label>
+        </div>
+        <div class="floorplan-controls">
+          <label>组件长度（米） <input id="prefab-length" type="number" value="4" min="0.2" max="36" step="any" required></label>
+          <label>组件宽度（米） <input id="prefab-width" type="number" value="1" min="0.2" max="12" step="any" required></label>
+          <label>组件高度（米） <input id="prefab-height" type="number" value="1" min="0.2" max="12" step="any" required></label>
+        </div>
+        <div class="floorplan-controls">
+          <label>锚点标识（选填） <input id="prefab-anchor" value="exit" maxlength="64"></label>
+          <label>锚点 X（米） <input id="prefab-anchor-x" type="number" value="2" step="any"></label>
+          <label>锚点 Y（米） <input id="prefab-anchor-y" type="number" value="0.5" step="any"></label>
+          <label>锚点 Z（米） <input id="prefab-anchor-z" type="number" value="0" step="any"></label>
+          <button type="submit">保存组件版本</button>
+        </div>
+      </form>
+      <p id="prefab-status" role="status">暂无保存的组件。</p>
+      <p id="prefab-error" role="alert" hidden></p>
+      <ul id="prefab-versions" aria-label="已保存的组件版本"></ul>
+      <figure id="prefab-preview" style="margin-inline:0" hidden>
+        <figcaption id="prefab-preview-caption"></figcaption>
+        <svg id="prefab-footprint" style="max-width:100%" role="img" aria-label="所选版本的设备顶面和锚点" width="260" height="120">
+          <rect id="prefab-outline" stroke="#182e2c" stroke-width="2" vector-effect="non-scaling-stroke"/>
+          <g id="prefab-anchor-markers"></g>
+        </svg>
+      </figure>
+    </section>
   </main>
   <script type="module" src="/runtime/main.ts"></script>
   <script type="module" src="/runtime/simulation.ts"></script>
+  <script type="module" src="/runtime/prefabEditor.ts"></script>
 </body>
 </html>
