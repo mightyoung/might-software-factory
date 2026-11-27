@@ -35,6 +35,8 @@ final class StudioGuardedPublish {
             throw SessionSensitiveException.unavailable();
         }
         try {
+            // Legacy name: this proves the shared tenant business COMMAND lock, not a finding grant.
+            // Future Studio grant and retirement writes must take the exclusive authorization guard.
             if (scope == null || scope.guard() != HumanSessionAuthorityTransaction.Guard.FINDING_COMMAND)
                 throw SessionSensitiveException.unavailable();
             var context = scope.request().context();
