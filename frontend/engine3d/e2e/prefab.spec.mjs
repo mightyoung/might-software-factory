@@ -55,6 +55,7 @@ test("placing successive versions renders new devices without upgrading existing
   await expect.poll(draws).toBeGreaterThan(before);
   await expect(page.locator("#selection")).toContainText("conveyor-standard · v1 · 长 4 米");
   await expect(panel.locator("#prefab-placement-status")).toContainText("X 2、Z -3 米");
+  await expect(page.getByLabel("机位设备").locator('option[value="prefab-instance-1"]')).toHaveText("标准输送带");
   await panel.getByLabel("组件长度（米）").fill("8");
   await save.click();
   await expect(page.locator("#selection")).toContainText("v1 · 长 4 米");

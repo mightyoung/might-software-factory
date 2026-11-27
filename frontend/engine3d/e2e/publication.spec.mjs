@@ -9,6 +9,9 @@ test("synthetic tenant permissions and expected versions protect offline publica
   const read = panel.getByRole("button", { name: "读取已发布版本" });
   const download = panel.getByRole("button", { name: "导出已读放映文件" });
   const alert = panel.getByRole("alert");
+  const hud = page.getByRole("group", { name: "放映指标卡" });
+  await hud.getByLabel("墙体").uncheck();
+  await hud.getByLabel("区域").uncheck();
 
   await actor.selectOption("a-reader");
   await publish.click();
@@ -31,6 +34,10 @@ test("synthetic tenant permissions and expected versions protect offline publica
   await download.click();
   const file = await downloading;
   expect(file.suggestedFilename()).toBe("might-published-test.json");
+  const chunks = [];
+  for await (const chunk of await file.createReadStream()) chunks.push(chunk);
+  const published = JSON.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")).draft);
+  expect(published.hudWidgets).toEqual(["devices", "alarms"]);
   await actor.selectOption("b-reader");
   await expect(download).toBeDisabled();
 });
