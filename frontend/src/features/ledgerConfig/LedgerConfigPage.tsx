@@ -1,6 +1,7 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
@@ -105,51 +106,6 @@ function ConfigurationPreview({
       </table>
       <ConfigurationOrder definition={definition} />
     </div>
-  );
-}
-
-function DraftDiscardDialog({ restoring, onCancel, onConfirm }: {
-  restoring: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const cancel = useRef<HTMLButtonElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
-  const id = useId();
-  useEffect(() => {
-    const opener = document.activeElement;
-    const node = dialog.current!;
-    node.showModal();
-    cancel.current?.focus();
-    return () => {
-      node.close();
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
-    };
-  }, []);
-  return (
-    <dialog ref={dialog} className="workbench-dialog" role="alertdialog" aria-modal="true"
-      aria-labelledby={id} aria-describedby={id + "-description"}
-      onCancel={(event) => { event.preventDefault(); onCancel(); }}
-      onKeyDown={(event) => {
-        if (event.key !== "Tab") return;
-        const [from, to] = event.shiftKey ? [cancel, confirm] : [confirm, cancel];
-        if (document.activeElement === from.current) {
-          event.preventDefault();
-          to.current?.focus();
-        }
-      }}>
-      <h2 id={id}>放弃未保存的修改？</h2>
-      <p id={id + "-description"}>{restoring
-        ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
-        : "切换台账后，当前没有保存的配置修改会丢失。"}</p>
-      <div className="report-actions">
-        <button ref={cancel} type="button" className="button button-subtle" onClick={onCancel}>继续编辑</button>
-        <button ref={confirm} type="button" className="button button-primary" onClick={onConfirm}>
-          {restoring ? "放弃并恢复" : "放弃并切换"}
-        </button>
-      </div>
-    </dialog>
   );
 }
 
@@ -416,8 +372,12 @@ export function LedgerConfigPage({
   }
   return (
     <section className="config-page">
-      {active && pendingSwitch && <DraftDiscardDialog
-        restoring={pendingSwitch.kind === "restore"}
+      {active && pendingSwitch && <WorkbenchConfirmDialog
+        title="放弃未保存的修改？"
+        description={pendingSwitch.kind === "restore"
+          ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
+          : "切换台账后，当前没有保存的配置修改会丢失。"}
+        confirmLabel={pendingSwitch.kind === "restore" ? "放弃并恢复" : "放弃并切换"}
         onCancel={() => setPendingSwitch(null)}
         onConfirm={() => {
           setPendingSwitch(null);

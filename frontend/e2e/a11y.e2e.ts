@@ -250,7 +250,7 @@ test("键盘：改密对话框的焦点陷阱在真实浏览器里成立，Esc �
   await expect(menuButton).toBeFocused();
 });
 
-test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
+test("权限勾选、切换角色与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
   // Test-owned admin contract projection; this checks UI interaction, not server authorization.
   const permissionCodes = ["finding.read", "platform.permission.read", "platform.permission.manage"];
   await page.route("**/api/v1/session/bootstrap", async route => {
@@ -272,8 +272,14 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   ] } }));
   await page.route("**/api/v1/admin/roles", route => route.fulfill({ json: { roles: [
     { id: "ui-role", code: "reporter", name: "上报人", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
+    { id: "ui-role-reviewer", code: "reviewer", name: "安全员", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
   ] } }));
   const writes: string[] = [];
+  const nativeDialogs: string[] = [];
+  page.on("dialog", async dialog => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().includes("/api/v1/admin/")) writes.push(request.url());
   });
@@ -282,6 +288,11 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   await expect(page.getByRole("heading", { name: "上报人" })).toBeVisible();
   const permission = page.getByRole("checkbox", { name: "查看风险管控" });
   const save = page.getByRole("button", { name: "保存", exact: true });
+  const otherRole = page.getByRole("button", { name: /^安全员/ });
+  const backToReporter = page.getByRole("button", { name: /^上报人/ });
+  const confirmation = page.getByRole("alertdialog", { name: "放弃未保存的权限修改？" });
+  const cancelSwitch = confirmation.getByRole("button", { name: "继续编辑" });
+  const confirmSwitch = confirmation.getByRole("button", { name: "放弃并切换" });
   for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
     await page.setViewportSize({ width, height: 900 });
     await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
@@ -291,6 +302,32 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
     await expect(permission).toBeChecked();
     await expect(save).toBeEnabled();
     await scan(page, `权限配置（${theme}）`);
+    await otherRole.focus();
+    await page.keyboard.press("Enter");
+    await expect(cancelSwitch).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirmSwitch).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancelSwitch).toBeFocused();
+    await scan(page, `切换角色确认（${theme}）`);
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toBeFocused();
+    await expect(permission).toBeChecked();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("Enter");
+    await confirmSwitch.focus();
+    await page.keyboard.press("Enter");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await expect(save).toBeDisabled();
+    await backToReporter.click();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await permission.focus();
+    await page.keyboard.press("Space");
+    await expect(permission).toBeChecked();
     const discard = page.getByRole("button", { name: "放弃修改" });
     await discard.focus();
     await page.keyboard.press("Enter");
@@ -298,6 +335,7 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
     await expect(save).toBeDisabled();
   }
   expect(writes).toEqual([]);
+  expect(nativeDialogs).toEqual([]);
 });
 
 test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦点", async ({ page }) => {
