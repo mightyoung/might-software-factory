@@ -1,3 +1,4 @@
+import { MAX_GLB_BYTES, openStaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
 import { SceneDocumentSchema } from "../schema/scene.ts";
 
@@ -37,10 +38,53 @@ const engine = mountEngine(canvas, sample, (state) => {
 });
 
 const buttons = new Map<string, HTMLButtonElement>();
+let selected: string | undefined;
+let readVersion = 0;
+const modelInput = document.querySelector<HTMLInputElement>("#local-model")!;
+const modelResult = document.querySelector<HTMLParagraphElement>("#model-result")!;
+const modelError = document.querySelector<HTMLParagraphElement>("#model-error")!;
+const modelClose = document.querySelector<HTMLButtonElement>("#close-model")!;
+function error(message = "") {
+  modelError.textContent = message;
+  modelError.hidden = !message;
+}
+function closeModel() {
+  readVersion++;
+  engine?.hideModel(selected);
+  modelResult.textContent = "";
+  modelClose.hidden = true;
+  error();
+}
+modelClose.addEventListener("click", () => { closeModel(); modelInput.focus(); });
+modelInput.addEventListener("change", async () => {
+  const file = modelInput.files?.[0];
+  modelInput.value = "";
+  if (!file) return;
+  const mine = ++readVersion;
+  error();
+  if (!file.name.toLowerCase().endsWith(".glb") || file.size > MAX_GLB_BYTES) {
+    error("请选择不超过 8 MiB 的 .glb 文件。");
+    return;
+  }
+  try {
+    const bytes = await file.arrayBuffer();
+    if (mine !== readVersion) return;
+    const model = openStaticGlb(bytes);
+    const rendered = engine?.showModel(model);
+    if (!rendered) model.dispose();
+    const { triangles, vertices, dimensions } = model.metrics;
+    modelResult.textContent = `${file.name}：${triangles} 个三角面，${vertices} 个顶点，${dimensions.map((v) => Number(v.toFixed(3))).join(" × ")} 米。${rendered ? "" : "当前只能查看模型数据。"}`;
+    modelClose.hidden = false;
+  } catch (cause) {
+    if (mine === readVersion) error(cause instanceof Error && cause.message.startsWith("GLB：")
+      ? cause.message : "无法读取该本地文件。");
+  }
+});
 function selectDevice(device?: typeof sample.devices[number]) {
   selection.textContent = device ? `已选：${device.label} · ${labels[device.state]}` : "未选中设备。";
   for (const [id, button] of buttons) button.setAttribute("aria-pressed", String(id === device?.id));
-  engine?.focus(device?.id);
+  selected = device?.id;
+  closeModel();
 }
 for (const device of sample.devices) {
   const row = document.createElement("li");
@@ -68,4 +112,6 @@ lengthSelect.addEventListener("change", () => {
   engine?.replaceScene(sample);
   rebuild.textContent = `当前长度：${length} 米。`;
 });
-window.addEventListener("pagehide", (event) => { if (!event.persisted) engine?.dispose(); });
+window.addEventListener("pagehide", (event) => {
+  if (!event.persisted) { readVersion++; engine?.dispose(); }
+});
