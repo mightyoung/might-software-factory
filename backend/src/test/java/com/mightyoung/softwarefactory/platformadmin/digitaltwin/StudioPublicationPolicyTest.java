@@ -12,8 +12,8 @@ class StudioPublicationPolicyTest {
     private static final UUID SOUTH = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private static final Target A = new Target(NORTH, "workshop");
     private static final Target B = new Target(SOUTH, "workshop");
-    private static final Caller PUBLISH = new Caller(NORTH, Set.of(Permission.STUDIO_PUBLISH));
-    private static final Caller READ = new Caller(NORTH, Set.of(Permission.PLAYER_READ));
+    private static final Caller PUBLISH = new Caller(NORTH, UUID.randomUUID(), UUID.randomUUID(), true, Set.of());
+    private static final Caller READ = new Caller(NORTH, UUID.randomUUID(), UUID.randomUUID(), false, Set.of(A.screenKey()));
     private static final String HASH = "a".repeat(64);
     private static final DraftFacts DRAFT = new DraftFacts("workshop", HASH, 3, List.of(
             new Wall(1, new Point(0, 0), new Point(30, 40))),
@@ -21,13 +21,28 @@ class StudioPublicationPolicyTest {
 
     @Test void explicitPermissionsAndTenantOwnershipAreIndependentAndFailClosed() {
         authorizeRead(READ, A);
+        assertThrows(Forbidden.class, () -> authorizeRead(READ, new Target(NORTH, "other")));
+        var granted = new java.util.HashSet<>(Set.of(A.screenKey()));
+        var actor = UUID.randomUUID();
+        var member = UUID.randomUUID();
+        var mixed = new Caller(NORTH, actor, member, true, granted);
+        assertEquals(actor, mixed.actorId());
+        assertEquals(member, mixed.memberId());
+        granted.add("other");
+        assertThrows(Forbidden.class, () -> authorizeRead(mixed, new Target(NORTH, "other")));
+        authorizePublish(mixed, new Target(NORTH, "other"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Caller(NORTH, UUID.randomUUID(), UUID.randomUUID(), false, Set.of("*")));
+        var cleared = new Caller(NORTH, actor, member, false, Set.of());
+        assertThrows(Forbidden.class, () -> authorizeRead(cleared, A));
+        assertThrows(Forbidden.class, () -> authorizePublish(cleared, A));
         assertThrows(Forbidden.class, () -> authorizeRead(PUBLISH, A));
         assertThrows(Forbidden.class, () -> authorizeRead(READ, B));
         assertThrows(Forbidden.class, () -> authorizeRead(null, A));
         assertThrows(Forbidden.class, () -> decide(READ, A, 0, null, DRAFT));
         assertThrows(Forbidden.class, () -> decide(PUBLISH, B, 0, null, DRAFT));
         assertThrows(Forbidden.class, () -> decide(PUBLISH, A, 1, new Head(B, 1, HASH), DRAFT));
-        assertEquals(1L, decide(new Caller(SOUTH, Set.of(Permission.STUDIO_PUBLISH)), B, 0, null, DRAFT).version());
+        assertEquals(1L, decide(new Caller(SOUTH, UUID.randomUUID(), UUID.randomUUID(), true, Set.of()), B, 0, null, DRAFT).version());
     }
 
     @Test void optimisticRevisionDetectsStaleEvenWhenCanonicalBytesAreUnchanged() {

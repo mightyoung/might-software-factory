@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class StudioPlayerPublicationTest {
     private static final Target TARGET = new Target(UUID.randomUUID(), "floor");
-    private static final Caller READER = new Caller(TARGET.tenantId(), Set.of(Permission.PLAYER_READ));
+    private static final Caller READER = new Caller(TARGET.tenantId(), UUID.randomUUID(), UUID.randomUUID(), false, Set.of(TARGET.screenKey()));
     private static final byte[] INPUT = """
             {"snapshotVersion":1,"scene":{"schemaVersion":1,"screenId":"floor","devices":[]},
              "floorplan":{"walls":[],"zones":[]}}
@@ -23,8 +23,9 @@ class StudioPlayerPublicationTest {
         var calls = new AtomicInteger();
         var reader = new StudioPlayerPublication((target, version) -> { calls.incrementAndGet(); return Optional.empty(); });
         assertThrows(Forbidden.class, () -> reader.read(null, TARGET, -1L));
-        assertThrows(Forbidden.class, () -> reader.read(new Caller(UUID.randomUUID(), Set.of(Permission.PLAYER_READ)), TARGET, 8L));
-        assertThrows(Forbidden.class, () -> reader.read(new Caller(TARGET.tenantId(), Set.of(Permission.STUDIO_PUBLISH)), TARGET, null));
+        assertThrows(Forbidden.class, () -> reader.read(READER, new Target(TARGET.tenantId(), "other"), null));
+        assertThrows(Forbidden.class, () -> reader.read(new Caller(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), false, Set.of(TARGET.screenKey())), TARGET, 8L));
+        assertThrows(Forbidden.class, () -> reader.read(new Caller(TARGET.tenantId(), UUID.randomUUID(), UUID.randomUUID(), true, Set.of()), TARGET, null));
         assertEquals(0, calls.get());
     }
 

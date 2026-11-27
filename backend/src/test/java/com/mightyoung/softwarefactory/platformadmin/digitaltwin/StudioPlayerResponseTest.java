@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class StudioPlayerResponseTest {
     private static final Target TARGET = new Target(UUID.randomUUID(), "floor");
-    private static final Caller READER = new Caller(TARGET.tenantId(), Set.of(Permission.PLAYER_READ));
+    private static final Caller READER = new Caller(TARGET.tenantId(), UUID.randomUUID(), UUID.randomUUID(), false, Set.of(TARGET.screenKey()));
     private static final StudioDraftDecoder.Decoded DRAFT = StudioDraftDecoder.decode("""
             {"snapshotVersion":1,"scene":{"schemaVersion":1,"screenId":"floor","devices":[]},
              "floorplan":{"walls":[],"zones":[]}}
@@ -33,8 +33,8 @@ class StudioPlayerResponseTest {
     @Test void deniedRequestsAreIdenticalAndDoNotQueryOrDiscloseMetadata() {
         var calls = new AtomicInteger();
         var reader = new StudioPlayerPublication((target, version) -> { calls.incrementAndGet(); return Optional.empty(); });
-        var foreign = new Caller(UUID.randomUUID(), Set.of(Permission.PLAYER_READ));
-        var noRead = new Caller(TARGET.tenantId(), Set.of(Permission.STUDIO_PUBLISH));
+        var foreign = new Caller(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), false, Set.of(TARGET.screenKey()));
+        var noRead = new Caller(TARGET.tenantId(), UUID.randomUUID(), UUID.randomUUID(), true, Set.of());
         var response = assertInstanceOf(StudioPlayerResponse.Failure.class, StudioPlayerResponse.read(reader, foreign, TARGET, 8L));
         assertEquals(response, StudioPlayerResponse.read(reader, noRead, TARGET, -1L));
         assertEquals(403, response.status());
