@@ -74,6 +74,10 @@ jobs:
         working-directory: frontend
         run: npm run check:bundle
 
+      - name: Verify synthetic production entry boots
+        working-directory: frontend
+        run: node tools/verify-production-startup.mjs synthetic
+
       - name: Smoke test the synthetic production build in Chrome
         working-directory: frontend
         env:
@@ -103,6 +107,10 @@ jobs:
         env:
           VITE_API_MODE: http
         run: npm run build && npm run check:bundle
+
+      - name: Verify HTTP production entry boots
+        working-directory: frontend
+        run: node tools/verify-production-startup.mjs http
 
       - name: HTTP production end-to-end tests
         env:
