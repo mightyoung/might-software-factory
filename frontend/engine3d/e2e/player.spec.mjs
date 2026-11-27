@@ -36,3 +36,28 @@ test("Studio exports a local playback file and Player opens it without editor co
   await expect(player.getByRole("status").filter({ hasText: "正在放映 sample-workshop" })).toBeVisible();
   expect(urls).toHaveLength(count);
 });
+
+test("Player tour starts only on request, advances in order and manual selection interrupts", async ({ page, context }) => {
+  await page.goto("/");
+  const d = page.waitForEvent("download");
+  await page.getByRole("button", { name: "生成离线放映文件" }).click();
+  const payload = [];
+  for await (const chunk of await (await d).createReadStream()) payload.push(chunk);
+  const player = await context.newPage();
+  await player.clock.install();
+  await player.goto("/player.html");
+  await player.getByLabel("载入放映文件").setInputFiles({
+    name: "tour.json", mimeType: "application/json", buffer: Buffer.concat(payload),
+  });
+  const start = player.getByRole("button", { name: "开始设备巡检" });
+  await expect(start).toBeEnabled();
+  await expect(player.getByRole("button", { name: "循环泵 01 · 正常" })).toHaveAttribute("aria-pressed", "false");
+  await start.click();
+  await expect(player.getByText("已选：循环泵 01。")).toBeVisible();
+  await player.clock.runFor(3100);
+  await expect(player.getByText("已选：成型机 02。")).toBeVisible();
+  await player.getByRole("button", { name: "排风装置 03 · 告警" }).click();
+  await expect(player.getByText("设备巡检已因手动选择暂停。")).toBeVisible();
+  await player.clock.runFor(3100);
+  await expect(player.getByText("已选：排风装置 03。")).toBeVisible();
+});
