@@ -33,7 +33,7 @@ test("draws devices, preserves selection during WebGL loss and draws again after
   await expect.poll(getDraws).toBeGreaterThan(beforeRebuild);
 
   await page.evaluate(() => {
-    const gl = document.querySelector("canvas").getContext("webgl2");
+    const gl = document.querySelector("#viewport").getContext("webgl2");
     window.loss = gl.getExtension("WEBGL_lose_context");
     if (!window.loss) throw new Error("Chrome has no WEBGL_lose_context test extension");
     window.loss.loseContext();
@@ -64,7 +64,7 @@ test("without WebGL, the keyboard-operable device list still works on narrow vie
   });
   await page.goto("/");
   await expect(page.getByRole("status").filter({ hasText: "此设备无法使用 WebGL 2" })).toBeVisible();
-  await expect(page.locator("canvas")).toBeHidden();
+  await expect(page.locator("#viewport")).toBeHidden();
   const fan = page.getByRole("button", { name: "排风装置 03 · 告警" });
   await fan.focus();
   await page.keyboard.press("Enter");
