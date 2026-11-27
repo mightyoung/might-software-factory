@@ -65,3 +65,42 @@ test("placing successive versions renders new devices without upgrading existing
   await expect(page.locator("#selection")).toContainText("v1 · 长 4 米");
   await expect(page.locator("#resize-tool")).toBeHidden();
 });
+
+test("moving a session prefab updates the exported floor position without breaking its tour stop", async ({ page }) => {
+  await page.goto("/");
+  const form = page.locator("#prefab-relocate-form");
+  await expect(form).toBeHidden();
+  await page.getByRole("button", { name: "保存组件版本" }).click();
+  await page.getByLabel("放置 X（米）").fill("2");
+  await page.getByLabel("放置 Z（米）").fill("-3");
+  await page.getByRole("button", { name: "放入合成场景" }).click();
+  await expect(form.getByLabel("移动 X（米）")).toHaveValue("2");
+  await expect(form.getByLabel("移动 Z（米）")).toHaveValue("-3");
+  await page.getByLabel("机位设备").selectOption("prefab-instance-1");
+  await page.getByLabel("机位名称").fill("组件巡检");
+  await page.getByRole("button", { name: "添加机位" }).click();
+
+  await form.getByLabel("移动 X（米）").fill("-6.5");
+  await form.getByLabel("移动 Z（米）").fill("4");
+  await form.getByRole("button", { name: "应用位置" }).click();
+  await expect(form.locator("#prefab-relocate-message")).toContainText("X -6.5、Z 4 米");
+  await expect(page.locator("#selection")).toContainText("conveyor-standard · v1 · 长 4 米");
+  await expect(page.locator("#tour-edit-list")).toContainText("组件巡检");
+
+  const result = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出场景草稿" }).click();
+  const { readFile } = await import("node:fs/promises");
+  const download = await result;
+  const raw = await readFile(await download.path());
+  const snapshot = JSON.parse(raw.toString());
+  const instances = snapshot.scene.devices.filter((device) => device.id === "prefab-instance-1");
+  expect(instances).toHaveLength(1);
+  expect(instances[0].position).toEqual([-6.5, 0, 4]);
+  expect(snapshot.cameraTour).toEqual([{ deviceId: "prefab-instance-1", label: "组件巡检", dwellSeconds: 3 }]);
+
+  await page.locator("#snapshot-import").setInputFiles({ name: "scene.json", mimeType: "application/json", buffer: raw });
+  await expect(page.locator("#snapshot-status")).toContainText("已读取");
+  await page.locator("#devices").getByRole("button", { name: "标准输送带 · 正常", exact: true }).click();
+  await expect(form).toBeHidden();
+  await expect(page.locator("#tour-edit-list")).toContainText("组件巡检");
+});

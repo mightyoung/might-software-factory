@@ -14,6 +14,15 @@
         <h2 id="devices-title">二维设备列表</h2>
         <ul id="devices"></ul>
         <p id="selection" role="status">未选中设备。</p>
+        <form id="prefab-relocate-form" hidden>
+          <fieldset>
+            <legend>移动所选组件实例</legend>
+            <label>移动 X（米） <input id="prefab-relocate-x" type="number" min="-10" max="10" step="any" required></label>
+            <label>移动 Z（米） <input id="prefab-relocate-z" type="number" min="-10" max="10" step="any" required></label>
+            <button type="submit">应用位置</button>
+            <p id="prefab-relocate-message" role="status"></p>
+          </fieldset>
+        </form>
         <fieldset id="conveyor-tool">
           <legend>传送带参数</legend>
           <label for="conveyor-length">长度（米）</label>
