@@ -43,7 +43,7 @@ function PublishedRecordsTable({ definition, rows, locked, onOpen }: {
   definition: LedgerConfiguration;
   rows: readonly LedgerRecord[];
   locked: boolean;
-  onOpen(id: string): Promise<void>;
+  onOpen(id: string): void;
 }) {
   const columns = useMemo(() => definition.listFields.map((key) => ({
     id: key,
@@ -73,7 +73,7 @@ function PublishedRecordsTable({ definition, rows, locked, onOpen }: {
                 <td key={column.id}>{record.getValue<string>(column.id)}</td>
               ))}
               <td>
-                <Button label="查看记录" variant="secondary" isDisabled={locked} onClick={() => void onOpen(record.id)} />
+                <Button label="查看记录" variant="secondary" isDisabled={locked} onClick={() => onOpen(record.id)} />
               </td>
             </tr>
           ))}
@@ -102,6 +102,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ ledger: PublishedLedger; detail: RecordDetail } | null>(null);
+  const [pendingDiscard, setPendingDiscard] = useState<{
+    editor: Editor; directory: PublishedLedger[] | undefined; proceed: () => void;
+  } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Query>({
     page: 1,
@@ -157,6 +160,9 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const deleteConfirmation = mayDelete && pendingDelete?.ledger === ledger && pendingDelete.detail === detail
     ? pendingDelete : null;
   useEffect(() => { setPendingDelete(null); }, [active, ledger, detail, mayDelete]);
+  const discardConfirmation = active && !locked && pendingDiscard?.editor === editor
+    && pendingDiscard.directory === directory.data ? pendingDiscard : null;
+  useEffect(() => { setPendingDiscard(null); }, [active, editor, directory.data, locked]);
   const records = useQuery({
     queryKey: ["published-records", ledger?.key, ledger?.definitionVersion, attempt, recordAttempt, query],
     enabled: !!ledger?.capabilities.read,
@@ -177,11 +183,16 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     const failure = directory.error ?? records.error;
     if (failure) failed(failure);
   }, [directory.error, records.error]);
-  function mayDiscard() {
-    return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
+  function discardThen(proceed: () => void) {
+    if (!active || locked || sending.current || deleteConfirmation || discardConfirmation) return;
+    if (dirty && editor) setPendingDiscard({ editor, directory: directory.data, proceed });
+    else proceed();
+  }
+  function confirmDiscard() {
+    setPendingDiscard(null);
+    if (!sending.current) discardConfirmation?.proceed();
   }
   function select(next: PublishedLedger) {
-    if (busy || !mayDiscard()) return;
     setSelectedKey(next.key);
     setFilters({});
     setEditor(null);
@@ -194,7 +205,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     });
   }
   function create() {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger) return;
     setEditor({
       detail: null,
       definition: ledger.definition,
@@ -211,7 +222,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     setError("");
   }
   async function open(id: string) {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger) return;
     const mine = generation.current;
     setBusy(true);
     setError("");
@@ -274,7 +285,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     setError("");
   }
   function save() {
-    if (!ledger || !editor || locked || sending.current || deleteConfirmation) return;
+    if (!ledger || !editor || locked || sending.current || deleteConfirmation || discardConfirmation) return;
     const key = ledger.key;
     const record = editor.detail?.record;
     const requestId = crypto.randomUUID();
@@ -287,7 +298,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     void send("记录已保存。");
   }
   function requestDelete() {
-    if (mayDelete && ledger && detail && !sending.current && !command.current) {
+    if (mayDelete && ledger && detail && !discardConfirmation && !sending.current && !command.current) {
       setPendingDelete({ ledger, detail });
     }
   }
@@ -340,19 +351,24 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
         onCancel={() => setPendingDelete(null)}
         onConfirm={confirmDelete}
       />}
+      {discardConfirmation && <WorkbenchConfirmDialog
+        title="放弃未保存的记录修改？"
+        description="当前记录的未保存修改将丢失。"
+        confirmLabel="确认放弃"
+        onCancel={() => setPendingDiscard(null)}
+        onConfirm={confirmDiscard}
+      />}
       <div className="page-heading">
         <h1>业务台账</h1>
         <Button
           label="刷新台账"
           variant="secondary"
           isDisabled={locked || loading}
-          onClick={() => {
-            if (mayDiscard()) {
-              setEditor(null);
-              setError("");
-              setAttempt((value) => value + 1);
-            }
-          }}
+          onClick={() => discardThen(() => {
+            setEditor(null);
+            setError("");
+            setAttempt((value) => value + 1);
+          })}
         />
       </div>
       {loading && <p role="status">正在读取已发布台账…</p>}
@@ -374,7 +390,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
               key={item.key}
               aria-current={ledger?.key === item.key ? "true" : undefined}
               disabled={locked}
-              onClick={() => select(item)}
+              onClick={() => discardThen(() => select(item))}
             >
               {item.definition.name}
             </button>
@@ -389,7 +405,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                   <Button
                     label="新增记录"
                     isDisabled={locked || loading}
-                    onClick={create}
+                    onClick={() => discardThen(create)}
                   />
                 )}
               </div>
@@ -457,7 +473,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                         definition={ledger.definition}
                         rows={result.records}
                         locked={locked}
-                        onOpen={open}
+                        onOpen={(id) => discardThen(() => { void open(id); })}
                       />
                       {result.total === 0 && <p>没有符合条件的记录。</p>}
                       <div className="published-actions">
@@ -506,9 +522,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                       label="关闭记录"
                       variant="secondary"
                       isDisabled={locked}
-                      onClick={() => {
-                        if (mayDiscard()) setEditor(null);
-                      }}
+                      onClick={() => discardThen(() => setEditor(null))}
                     />
                   </div>
                   {editor.detail && (
