@@ -44,7 +44,7 @@ export function exporterGlb(change?: (json: Record<string, any>, bin: DataView) 
   return encodeGlb(json, bin);
 }
 
-function encodeGlb(json: unknown, bin: ArrayBuffer): ArrayBuffer {
+export function encodeGlb(json: unknown, bin: ArrayBuffer): ArrayBuffer {
   const encoded = new TextEncoder().encode(JSON.stringify(json));
   const jsonLength = Math.ceil(encoded.length / 4) * 4;
   const data = new ArrayBuffer(28 + jsonLength + bin.byteLength);
