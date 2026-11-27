@@ -67,7 +67,7 @@ final class StudioPublish {
         return staged.committedDecision();
     }
 
-    private static void bindTenant(Connection connection, UUID tenantId) {
+    static void bindTenant(Connection connection, UUID tenantId) {
         String tenant = tenantId.toString();
         try {
             if (connection.getAutoCommit() || connection.isReadOnly()
