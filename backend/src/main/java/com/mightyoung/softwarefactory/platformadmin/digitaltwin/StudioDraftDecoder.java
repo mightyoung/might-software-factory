@@ -26,7 +26,7 @@ import static com.mightyoung.softwarefactory.platformadmin.digitaltwin.StudioPub
 
 /** Dormant allowlisted Studio v1 decoder. No tenant, transport or storage. */
 public final class StudioDraftDecoder {
-    private static final int MAX_BYTES = 256 * 1024;
+    static final int MAX_BYTES = 256 * 1024;
     private static final Pattern ID = Pattern.compile("[a-z][a-z0-9_-]{0,63}");
     // ECMAScript String.trim matches the browser's label handling, including NBSP and BOM.
     private static final Pattern LABEL_TRIM = Pattern.compile("^[\\s\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|[\\s\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$");
