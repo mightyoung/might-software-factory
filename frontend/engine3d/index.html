@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/runtime/style.css">
+  <title>Might 3D · 设备模型预览</title>
+</head>
+<body>
+  <main>
+    <header><p>软件工厂 · 三维引擎原型</p><h1>设备模型预览</h1><p>仅展示合成设备，不连接生产台账。</p></header>
+    <div class="workspace">
+      <section aria-labelledby="devices-title">
+        <h2 id="devices-title">二维设备列表</h2>
+        <ul id="devices"></ul>
+        <p id="selection" role="status">未选中设备。</p>
+      </section>
+      <section aria-labelledby="viewport-title">
+        <div class="viewport-heading">
+          <h2 id="viewport-title">三维视口</h2>
+          <button id="overview" type="button">恢复全景</button>
+        </div>
+        <p id="status" role="status">正在初始化三维视口…</p>
+        <canvas id="viewport" aria-label="合成设备三维视口"></canvas>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/runtime/main.ts"></script>
+</body>
+</html>
