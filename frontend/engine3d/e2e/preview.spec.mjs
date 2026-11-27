@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { syntheticGlb } from "../core/glbFixture.ts";
+import { exporterGlb, multiMeshGlb, syntheticGlb } from "../core/glbFixture.ts";
 
 test("draws devices, preserves selection during WebGL loss and draws again after restore", async ({ page }) => {
   const errors = [];
@@ -271,4 +271,32 @@ test("Studio locally imports and exports a versioned draft and rejects invalid g
   const bytes = [];
   for await (const value of stream) bytes.push(value);
   expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(draft);
+});
+
+test("local exporter-shaped GLB honors parent transform without network or texture loads", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  await page.getByLabel("选择 GLB 文件").setInputFiles({
+    name: "exporter.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(exporterGlb()),
+  });
+  await expect(page.getByText("exporter.glb：2 个三角面，4 个顶点，3 × 2 × 1 米。")).toBeVisible();
+  expect(network).toEqual([]);
+});
+
+test("local multi-mesh preview computes combined dimensions and preserves previous selection on invalid graph", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  const input = page.getByLabel("选择 GLB 文件");
+  await input.setInputFiles({ name: "two-meshes.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(multiMeshGlb()) });
+  const valid = page.getByText("two-meshes.glb：2 个三角面，6 个顶点，5 × 2 × 3 米。");
+  await expect(valid).toBeVisible();
+  const bad = multiMeshGlb((doc) => { doc.nodes[2].children = [0]; });
+  await input.setInputFiles({ name: "cycle.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(bad) });
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(valid).toBeVisible();
+  expect(network).toEqual([]);
 });
