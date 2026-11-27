@@ -48,7 +48,32 @@ interface FindingsLedgerProps {
   onUnauthenticated?: () => void;
 }
 
-const FindingDetailsCore = lazy(() => import("../../components/FindingDetails").then(({ FindingDetailsCore }) => ({ default: FindingDetailsCore })));
+type DetailShellProps = Pick<ComponentProps<typeof import("../../components/FindingDetails").FindingDetailsCore>, "onClose" | "error" | "onRetry">;
+
+function DetailShell({ onClose, error, onRetry, failed }: DetailShellProps & { failed?: boolean }) {
+  return (
+    <aside className="detail-panel" aria-label="隐患详情面板">
+      <div className="detail-heading">
+        <h2>隐患详情</h2>
+        <button className="icon-button" type="button" aria-label="关闭详情" onClick={onClose}>×</button>
+      </div>
+      {error || failed ? (
+        <div className="detail-error" role="alert">
+          <p>{error ? findingReadFailureMessage(error, "detail") : "无法载入隐患详情界面。请重新加载页面。"}</p>
+          <button className="button button-subtle" type="button" onClick={error ? onRetry : () => window.location.reload()}>
+            {error ? "重试读取" : "重新加载页面"}
+          </button>
+        </div>
+      ) : <p className="detail-state" role="status">正在载入隐患详情…</p>}
+    </aside>
+  );
+}
+
+// Only replace a failed module import; do not catch errors thrown by the view or the data request.
+const FindingDetailsCore = lazy(() => import("../../components/FindingDetails").then(
+  ({ FindingDetailsCore }) => ({ default: FindingDetailsCore }),
+  () => ({ default: (props: DetailShellProps) => <DetailShell {...props} failed /> }),
+));
 
 const firstPage: PageResult<FindingRecord> = {
   items: [],
@@ -221,6 +246,8 @@ function FindingsLedgerBody({
   }
 
   /** 独立标签页里“关闭”：能关就关；不是脚本打开的标签页关不掉，就退回台账。 */
+  function retryDetail() { setDetailRefreshKey((value) => value + 1); }
+
   function closeTab() {
     closeCurrentTab();
     navigate(path, true);
@@ -367,15 +394,7 @@ function FindingsLedgerBody({
       )}
 
       {selectedFindingId && !reporting && (
-        <Suspense fallback={
-          <aside className="detail-panel" aria-label="隐患详情面板">
-            <div className="detail-heading">
-              <h2>隐患详情</h2>
-              <button className="icon-button" type="button" aria-label="关闭详情" onClick={closeTab}>×</button>
-            </div>
-            <p className="detail-state" role="status">正在载入隐患详情…</p>
-          </aside>
-        }>
+        <Suspense fallback={<DetailShell onClose={closeTab} error={publishedDetailBlocked ? listError : detailError} onRetry={retryDetail} />}>
           <FindingDetailsCore
             Fields={presentation?.Fields}
             Actions={presentation?.Actions}
@@ -384,7 +403,7 @@ function FindingsLedgerBody({
             loading={!publishedDetailBlocked && detailLoading}
             error={publishedDetailBlocked ? listError : detailError}
             onClose={closeTab}
-            onRetry={() => setDetailRefreshKey((value) => value + 1)}
+            onRetry={retryDetail}
             commandAdapter={commandAdapter}
             evidenceAdapter={evidenceAdapter}
             onOpenRelated={(id) => openInNewTab(`${path}?tab=1&caseId=${encodeURIComponent(id)}`)}
