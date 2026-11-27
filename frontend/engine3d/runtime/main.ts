@@ -1,3 +1,4 @@
+import { mountSyntheticVideo } from "./video.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
@@ -294,3 +295,5 @@ importDraft.addEventListener("change", async () => {
     if (mine === snapshotRevision) snapshotError(cause instanceof Error ? cause.message : "场景草稿读取失败。");
   }
 });
+
+mountSyntheticVideo();
