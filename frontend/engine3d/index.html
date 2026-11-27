@@ -64,6 +64,9 @@
             <p>本地源节点关系；视口仍以合并网格渲染。</p>
             <ul id="model-nodes" aria-label="源节点"></ul>
           </details>
+          <button id="model-thumbnail-button" type="button" hidden>生成本地缩略图</button>
+          <p id="model-thumbnail-status" role="status"></p>
+          <canvas id="model-thumbnail" width="128" height="96" role="img" aria-label="当前模型的本地缩略图" hidden></canvas>
           <p id="unit-warning" role="status" hidden></p>
           <p id="model-error" role="alert" hidden></p>
           <button id="close-model" type="button" hidden>返回合成场景</button>

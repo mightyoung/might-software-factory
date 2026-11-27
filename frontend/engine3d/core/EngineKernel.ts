@@ -1,3 +1,4 @@
+import { paintPreviewThumbnail } from "./thumbnail.ts";
 import { createVisualReferenceSlot, type ReferencePoint } from "./visualReference.ts";
 import type { SourceUnit } from "./modelUnits.ts";
 import { Color, DirectionalLight, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
@@ -37,7 +38,14 @@ export function mountEngine(
   let floorplan: ReturnType<typeof buildFloorplanGeometry> | null = null;
   let previewMesh: Mesh | null = null;
   let visualReference: ReturnType<typeof createVisualReferenceSlot> | null = null;
+  let thumbnail: { target: HTMLCanvasElement; complete: (captured: boolean) => void } | undefined;
+  function cancelThumbnail() {
+    const pending = thumbnail;
+    thumbnail = undefined;
+    pending?.complete(false);
+  }
   function clearModel() {
+    cancelThumbnail();
     if (previewMesh) scene.remove(previewMesh);
     previewMesh = null;
     preview.clear();
@@ -58,7 +66,7 @@ export function mountEngine(
     frame = requestAnimationFrame(() => {
       frame = 0;
       const { clientWidth: width, clientHeight: height } = canvas;
-      if (!width || !height) return;
+      if (!width || !height) { cancelThumbnail(); return; }
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
       if (renderer.getPixelRatio() !== ratio) renderer.setPixelRatio(ratio);
       if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
@@ -67,6 +75,15 @@ export function mountEngine(
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.render(scene, camera);
+      if (thumbnail) {
+        const { target, complete } = thumbnail;
+        thumbnail = undefined;
+        let captured = false;
+        // Copy while this frame is still readable, without preserveDrawingBuffer or a second WebGL context.
+        try { captured = paintPreviewThumbnail(canvas, target); }
+        catch { /* A thumbnail failure must not stop the primary renderer. */ }
+        complete(captured);
+      }
       onFrame?.();
     });
   }
@@ -81,9 +98,9 @@ export function mountEngine(
     render();
     return true;
   }
-  const lose = (event: Event) => { event.preventDefault(); lost = true; stop(); onStatus("lost"); };
+  const lose = (event: Event) => { event.preventDefault(); lost = true; stop(); cancelThumbnail(); onStatus("lost"); };
   const restore = () => { lost = false; render(); onStatus("ready"); };
-  const visibility = () => { if (doc.hidden) stop(); else render(); };
+  const visibility = () => { if (doc.hidden) { stop(); cancelThumbnail(); } else render(); };
   const resize = new ResizeObserver(render);
   resize.observe(canvas);
   doc.addEventListener("visibilitychange", visibility);
@@ -149,6 +166,12 @@ export function mountEngine(
       visualReference.dispose();
       visualReference = null;
       render();
+    },
+    requestPreviewThumbnail(target: HTMLCanvasElement, complete: (captured: boolean) => void) {
+      if (disposed || lost || doc.hidden || !preview.current || thumbnail || !canvas.clientWidth || !canvas.clientHeight) return false;
+      thumbnail = { target, complete };
+      render();
+      return true;
     },
     showModel(model: StaticGlb) {
       if (disposed) return false;
