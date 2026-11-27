@@ -50,6 +50,18 @@ describe("流程命令面板", () => {
     expect(screen.queryByRole("button", { name: "确认发现" })).not.toBeInTheDocument();
   });
 
+  it("rejects a grade outside the workflow input contract before sending a command", async () => {
+    const { run } = setup("SAFETY_CONFIRM_PENDING");
+    fireEvent.click(await screen.findByRole("button", { name: "安全确认" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /意见/ }), { target: { value: "确认现场情况" } });
+    const grade = screen.getByRole("combobox", { name: /隐患等级/ });
+    grade.append(new Option("无效", "INVALID"));
+    fireEvent.change(grade, { target: { value: "INVALID" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认安全确认" }));
+    expect(screen.getByText("请选择隐患等级")).toBeInTheDocument();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("必填意见为空或只有空白时拦截，不发请求", async () => {
     const { run } = setup("PERSON_CONFIRM_PENDING");
     fireEvent.click(await screen.findByRole("button", { name: "确认发现" }));

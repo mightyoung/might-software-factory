@@ -2,7 +2,7 @@ import { useId, type FormEvent } from "react";
 import type { FindingCommandAdapter } from "../adapters/findingCommands";
 import type { FindingRecord } from "../domain/finding";
 import { DispatchCandidatePicker } from "./DispatchCandidatePicker";
-import { BLOCKED, FAILURE_MESSAGE, type ActionDef, type CommandInputErrors, type DispatchErrors, type DispatchValues, type Grade } from "../features/findings/commandActions";
+import { BLOCKED, FAILURE_MESSAGE, type ActionDef, type CommandInputErrors, type DispatchErrors, type DispatchValues } from "../features/findings/commandActions";
 import { FindingReviewHistory } from "./FindingReviewHistory";
 import { useFindingCommandRunner } from "../features/findings/useFindingCommandRunner";
 
@@ -21,14 +21,14 @@ export interface FindingCommandPanelProps {
 interface FormProps {
   action: ActionDef;
   reason: string;
-  grade: "" | Grade;
+  grade: string;
   errors: CommandInputErrors;
   busy: boolean;
   retry: boolean;
   canSubmit: boolean;
   fieldsBlocked: boolean;
   onReason: (value: string) => void;
-  onGrade: (value: "" | Grade) => void;
+  onGrade: (value: string) => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   /** 派单用的表单状态与候选查询；非派单动作不用。 */
@@ -52,7 +52,7 @@ function CommandForm({ action, reason, grade, errors, busy, retry, canSubmit, fi
           <label htmlFor={`${uid}-grade`}>
             隐患等级<span className="required-mark" aria-hidden="true"> *</span>
           </label>
-          <select id={`${uid}-grade`} value={grade} disabled={busy || fieldsBlocked} aria-invalid={Boolean(errors.grade)} onChange={(event) => onGrade(event.target.value as "" | Grade)}>
+          <select id={`${uid}-grade`} value={grade} disabled={busy || fieldsBlocked} aria-invalid={Boolean(errors.grade)} onChange={(event) => onGrade(event.target.value)}>
             <option value="">请选择</option>
             <option value="GENERAL">一般</option>
             <option value="MAJOR">重大</option>
