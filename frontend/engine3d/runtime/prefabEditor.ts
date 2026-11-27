@@ -14,7 +14,12 @@ const caption = document.getElementById("prefab-preview-caption")!;
 const ink = { normal: "#54776d", warning: "#957323", alarm: "#9c3846" } as const;
 const stateName = { normal: "正常", warning: "预警", alarm: "告警" } as const;
 
+let selectedVersion: PrefabVersion | undefined;
 function show(selected: PrefabVersion, saved: boolean) {
+  selectedVersion = selected;
+  const place = document.querySelector<HTMLButtonElement>("#prefab-place")!;
+  place.disabled = false;
+  document.getElementById("prefab-place-version")!.textContent = `将放置 ${selected.id} · v${selected.version}；后续保存新版本不会更新已放置实例。`;
   error.hidden = true;
   status.textContent = (saved ? "已保存：" : "已选择：") + selected.name + "，版本 " + selected.version + "。";
   const { length, width, height } = selected.equipment.dimensions;
@@ -83,3 +88,5 @@ form.addEventListener("submit", (event) => {
     error.hidden = false;
   }
 });
+
+export function selectedPrefabVersion() { return selectedVersion; }
