@@ -9,3 +9,13 @@ canvas { display: block; width: 100%; height: clamp(18rem,50vw,32rem); }
 canvas[hidden] { display: none; }
 [role="alert"] { color: #8b1c32; }
 @media (max-width: 650px) { .play-layout { grid-template-columns: 1fr; } }
+#play-hud { margin-bottom: .8rem; }
+#play-hud h2 { margin: 0; font-size: 1.1rem; }
+#play-metrics { margin: .5rem 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .5rem; }
+#play-metrics div { padding: .45rem; background: #e4f1ee; border-radius: .3rem; }
+#play-metrics dd { font: 700 1.4rem/1.4 system-ui,sans-serif; margin: 0; }
+@media (min-aspect-ratio: 2/1) and (min-width: 1600px) {
+  main { max-width: 2560px; }
+  .play-layout { grid-template-columns: minmax(15rem, 1fr) minmax(0,5fr); }
+  canvas { height: min(64vh, 70rem); }
+}

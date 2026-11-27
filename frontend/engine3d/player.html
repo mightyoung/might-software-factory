@@ -15,6 +15,10 @@
     <input id="play-file" type="file" accept=".json,application/json">
     <p id="play-status" role="status">等待放映文件。</p>
     <p id="play-error" role="alert" hidden></p>
+    <section aria-labelledby="play-hud-title" id="play-hud" hidden>
+      <h2 id="play-hud-title">场景指标</h2>
+      <dl id="play-metrics"></dl>
+    </section>
     <div class="play-layout">
       <section aria-labelledby="play-device-title">
         <h2 id="play-device-title">二维设备列表</h2>
