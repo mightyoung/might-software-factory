@@ -3,6 +3,8 @@ import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot, hudKeys, type HudKey } from "../schema/studioSnapshot.ts";
+import { mountPrefabPlacement } from "./prefabPlacement.ts";
+import { placePrefab, type PrefabPlacement } from "../core/prefabPlacement.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
@@ -50,6 +52,8 @@ const engine = mountEngine(canvas, sample, (state) => {
 }, () => updateGizmo());
 
 const buttons = new Map<string, HTMLButtonElement>();
+const placedPrefabs = new Map<string, PrefabPlacement>();
+let nextPrefabId = 1;
 let selected: string | undefined;
 let readVersion = 0;
 const modelInput = document.querySelector<HTMLInputElement>("#local-model")!;
@@ -130,7 +134,8 @@ function displayInspection() {
   unitWarning.hidden = !report.checkUnits;
 }
 modelUnit.addEventListener("change", displayInspection);
-const selectedParametric = () => sample.devices.find((item) => item.id === selected && "equipment" in item);
+const selectedParametric = () => sample.devices.find((item) =>
+  item.id === selected && "equipment" in item && !placedPrefabs.has(item.id));
 function displayResize() {
   const item = selectedParametric();
   resizeTool.hidden = !item;
@@ -194,28 +199,44 @@ modelInput.addEventListener("change", async () => {
   }
 });
 function selectDevice(device?: typeof sample.devices[number]) {
-  selection.textContent = device ? `已选：${device.label} · ${labels[device.state]}` : "未选中设备。";
+  const pin = device ? placedPrefabs.get(device.id) : undefined;
+  const dimensions = device && "equipment" in device ? device.equipment.dimensions : undefined;
+  selection.textContent = device ? `已选：${device.label} · ${labels[device.state]}`
+    + (pin && dimensions ? ` · ${pin.prefabId} · v${pin.version} · 长 ${dimensions.length} 米` : "") : "未选中设备。";
   for (const [id, button] of buttons) button.setAttribute("aria-pressed", String(id === device?.id));
   selected = device?.id;
   closeModel();
   displayResize();
 }
+function registerDeviceButton(device: typeof sample.devices[number], pin?: PrefabPlacement) {
+  const row = document.createElement("li");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = `${device.label} · ${labels[device.state]}` + (pin ? ` · ${pin.prefabId} · v${pin.version}` : "");
+  button.setAttribute("aria-pressed", "false");
+  button.addEventListener("click", () => selectDevice(sample.devices.find(({ id }) => id === device.id)));
+  buttons.set(device.id, button);
+  row.append(button);
+  devices.append(row);
+}
 function renderDevices() {
   buttons.clear();
   devices.replaceChildren();
-  for (const device of sample.devices) {
-    const row = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = `${device.label} · ${labels[device.state]}`;
-    button.setAttribute("aria-pressed", "false");
-    button.addEventListener("click", () => selectDevice(device));
-    buttons.set(device.id, button);
-    row.append(button);
-    devices.append(row);
-  }
+  for (const device of sample.devices) registerDeviceButton(device, placedPrefabs.get(device.id));
 }
 renderDevices();
+mountPrefabPlacement((template, metres) => {
+  while (sample.devices.some(({ id }) => id === `prefab-instance-${nextPrefabId}`)) nextPrefabId++;
+  const result = placePrefab(sample, template, `prefab-instance-${nextPrefabId}`, metres);
+  if (engine && !engine.replaceScene(result.scene)) throw new Error("无法更新当前三维场景。");
+  nextPrefabId++;
+  sample = result.scene;
+  placedPrefabs.set(result.device.id, result.placement);
+  registerDeviceButton(result.device, result.placement);
+  tourEditor.setScene(sample);
+  selectDevice(result.device);
+  return result.placement;
+});
 overview.addEventListener("click", () => selectDevice());
 const lengthSelect = document.querySelector<HTMLSelectElement>("#conveyor-length")!;
 const rebuild = document.querySelector<HTMLParagraphElement>("#conveyor-rebuild")!;
@@ -300,6 +321,8 @@ importDraft.addEventListener("change", async () => {
     const next = parseStudioSnapshot(raw);
     // Validate all shapes before mutating either visible editor.
     sample = next.scene;
+    // The file stores copied devices, not page-only prefab pins. Never reuse stale provenance.
+    placedPrefabs.clear();
     renderDevices();
     selectDevice();
     engine?.replaceScene(sample);

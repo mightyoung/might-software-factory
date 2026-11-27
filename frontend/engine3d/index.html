@@ -193,6 +193,14 @@
       </form>
       <p id="prefab-status" role="status">暂无保存的组件。</p>
       <p id="prefab-error" role="alert" hidden></p>
+      <form id="prefab-placement-form" class="floorplan-controls">
+        <p id="prefab-place-version">先保存或选择一个组件版本。</p>
+        <label>放置 X（米） <input id="prefab-place-x" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <label>放置 Z（米） <input id="prefab-place-z" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <button id="prefab-place" type="submit" disabled>放入合成场景</button>
+        <p id="prefab-placement-status" role="status"></p>
+        <p id="prefab-placement-error" role="alert" hidden></p>
+      </form>
       <ul id="prefab-versions" aria-label="已保存的组件版本"></ul>
       <figure id="prefab-preview" style="margin-inline:0" hidden>
         <figcaption id="prefab-preview-caption"></figcaption>
@@ -205,6 +213,5 @@
   </main>
   <script type="module" src="/runtime/main.ts"></script>
   <script type="module" src="/runtime/simulation.ts"></script>
-  <script type="module" src="/runtime/prefabEditor.ts"></script>
 </body>
 </html>
