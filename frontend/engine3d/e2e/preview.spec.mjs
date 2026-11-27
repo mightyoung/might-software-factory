@@ -235,3 +235,40 @@ test("session asset bank registers a valid GLB without upload and deduplicates c
   await expect(bank.getByRole("button")).toHaveCount(0);
   expect(network).toEqual([]);
 });
+
+test("Studio locally imports and exports a versioned draft and rejects invalid geometry atomically", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "场景草稿文件" });
+  const file = panel.getByLabel("读取场景草稿");
+  const draft = {
+    snapshotVersion: 1,
+    scene: { schemaVersion: 1, screenId: "round-trip", devices: [
+      { id: "synthetic-well", label: "合成设备", primitive: "box", position: [0, 0, 0], size: [1, 2, 3], state: "normal" },
+    ] },
+    floorplan: {
+      walls: [{ id: 1, start: [0, 0], end: [20, 0] }],
+      zones: [{ id: 2, points: [[0, 0], [20, 0], [20, 30], [0, 30]] }],
+    },
+  };
+  async function load(value) {
+    await file.setInputFiles({ name: "draft.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(value)) });
+  }
+  await load(draft);
+  await expect(panel.getByRole("status")).toContainText("已读取 round-trip，共 1 个设备");
+  await expect(page.getByRole("button", { name: "合成设备 · 正常" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "已闭合区域" })).toContainText("区域 2：6 平方米");
+  await load({ ...draft, scene: { ...draft.scene, screenId: "invalid" }, floorplan: { ...draft.floorplan,
+    zones: [{ id: 2, points: [[0, 0], [20, 30], [0, 30], [30, 0]] }] } });
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await expect(panel.getByRole("status")).toContainText("round-trip");
+  await expect(page.getByRole("list", { name: "已闭合区域" })).toContainText("区域 2：6 平方米");
+
+  const downloading = page.waitForEvent("download");
+  await panel.getByRole("button", { name: "导出场景草稿" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe("might-scene-draft.json");
+  const stream = await download.createReadStream();
+  const bytes = [];
+  for await (const value of stream) bytes.push(value);
+  expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(draft);
+});

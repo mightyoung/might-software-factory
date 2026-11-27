@@ -1,8 +1,8 @@
 export type Point = readonly [number, number];
 export type GridStep = "0.1" | "0.5" | "1";
 export type FloorplanMode = "wall" | "zone";
-type Wall = { id: number; start: Point; end: Point };
-type Zone = { id: number; points: readonly Point[]; area: number };
+export type Wall = { id: number; start: Point; end: Point };
+export type Zone = { id: number; points: readonly Point[]; area: number };
 
 const steps = { "0.1": 1, "0.5": 5, "1": 10 } as const; // decimetres
 const same = (a: Point, b: Point) => a[0] === b[0] && a[1] === b[1];
@@ -27,7 +27,7 @@ export function polygonArea(points: readonly Point[]): number {
   return Math.abs(double) / 200;
 }
 
-function checkPolygon(points: readonly Point[]) {
+export function validatePolygon(points: readonly Point[]) {
   const n = points.length;
   if (n < 3) throw new Error("区域至少需要三个点。");
   if (new Set(points.map((point) => point.join(","))).size !== n) throw new Error("区域不能包含重复顶点。");
@@ -55,6 +55,15 @@ export class FloorplanDraft {
   setMode(mode: FloorplanMode) { if (mode !== this.mode) { this.mode = mode; this.cancel(); } }
   setGrid(grid: GridStep) { this.grid = grid; }
   cancel() { this.vertices = []; }
+  snapshot() {
+    return { walls: structuredClone(this.walls), zones: structuredClone(this.zones.map(({ id, points }) => ({ id, points }))) };
+  }
+  restore(plan: { walls: Wall[]; zones: Zone[] }) {
+    this.walls.splice(0, this.walls.length, ...structuredClone(plan.walls));
+    this.zones.splice(0, this.zones.length, ...structuredClone(plan.zones));
+    this.nextId = 1 + Math.max(0, ...this.walls.map((shape) => shape.id), ...this.zones.map((shape) => shape.id));
+    this.cancel();
+  }
   preview(rawMetres: Point, ortho = false): Point {
     if (rawMetres.some((value) => !Number.isFinite(value) || Math.abs(value) > 10))
       throw new Error("坐标必须在预览范围 ±10 米内。");
@@ -83,7 +92,7 @@ export class FloorplanDraft {
   }
   finishZone(): Zone {
     if (this.mode !== "zone" || this.zones.length >= 20) throw new Error("请选择画区域，最多保留 20 个。");
-    const area = checkPolygon(this.vertices);
+    const area = validatePolygon(this.vertices);
     const zone = { id: this.nextId++, points: [...this.vertices], area };
     this.zones.push(zone);
     this.cancel();

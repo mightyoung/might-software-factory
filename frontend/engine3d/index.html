@@ -14,7 +14,7 @@
         <h2 id="devices-title">二维设备列表</h2>
         <ul id="devices"></ul>
         <p id="selection" role="status">未选中设备。</p>
-        <fieldset>
+        <fieldset id="conveyor-tool">
           <legend>传送带参数</legend>
           <label for="conveyor-length">长度（米）</label>
           <select id="conveyor-length"><option value="4">4</option><option value="8">8</option></select>
@@ -66,6 +66,15 @@
         </div>
       </section>
     </div>
+    <section class="floorplan" aria-labelledby="snapshot-label">
+      <h2 id="snapshot-label">场景草稿文件</h2>
+      <p>仅保存设备和顶视图几何，不打包会话模型或发布到工作台。读取成功会替换当前设备和平面草稿，请先导出需要保留的内容。</p>
+      <button id="snapshot-export" type="button">导出场景草稿</button>
+      <label for="snapshot-import">读取场景草稿</label>
+      <input id="snapshot-import" type="file" accept=".json,application/json">
+      <p id="snapshot-status" role="status"></p>
+      <p id="snapshot-error" role="alert" hidden></p>
+    </section>
     <section class="floorplan" aria-labelledby="floorplan-label">
       <h2 id="floorplan-label">顶视平面绘图</h2>
       <p>本页草稿不会保存到业务场景。图上点选，或输入坐标加点；按住 Shift 可锁定横向或纵向。</p>

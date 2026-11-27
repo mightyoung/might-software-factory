@@ -1,3 +1,4 @@
+import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
@@ -195,17 +196,22 @@ function selectDevice(device?: typeof sample.devices[number]) {
   closeModel();
   displayResize();
 }
-for (const device of sample.devices) {
-  const row = document.createElement("li");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = `${device.label} · ${labels[device.state]}`;
-  button.setAttribute("aria-pressed", "false");
-  button.addEventListener("click", () => selectDevice(device));
-  buttons.set(device.id, button);
-  row.append(button);
-  devices.append(row);
+function renderDevices() {
+  buttons.clear();
+  devices.replaceChildren();
+  for (const device of sample.devices) {
+    const row = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${device.label} · ${labels[device.state]}`;
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => selectDevice(device));
+    buttons.set(device.id, button);
+    row.append(button);
+    devices.append(row);
+  }
 }
+renderDevices();
 overview.addEventListener("click", () => selectDevice());
 const lengthSelect = document.querySelector<HTMLSelectElement>("#conveyor-length")!;
 const rebuild = document.querySelector<HTMLParagraphElement>("#conveyor-rebuild")!;
@@ -230,7 +236,61 @@ window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });
 
-mountFloorplanEditor((snapshot) => {
+const planEditor = mountFloorplanEditor((snapshot) => {
   wallCount = engine?.replaceFloorplan(snapshot) ? snapshot.walls.length : 0;
   displayWallStatus();
+});
+
+const importDraft = document.querySelector<HTMLInputElement>("#snapshot-import")!;
+const draftStatus = document.querySelector<HTMLParagraphElement>("#snapshot-status")!;
+const draftError = document.querySelector<HTMLParagraphElement>("#snapshot-error")!;
+function snapshotError(message = "") {
+  draftError.textContent = message;
+  draftError.hidden = !message;
+}
+document.querySelector("#snapshot-export")!.addEventListener("click", () => {
+  try {
+    const raw = serializeStudioSnapshot(sample, planEditor.snapshot());
+    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "might-scene-draft.json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    snapshotError();
+    draftStatus.textContent = "场景草稿已交给浏览器下载。";
+  } catch (cause) {
+    snapshotError(cause instanceof Error ? cause.message : "场景草稿导出失败。");
+  }
+});
+let snapshotRevision = 0;
+importDraft.addEventListener("change", async () => {
+  const file = importDraft.files?.[0];
+  importDraft.value = "";
+  if (!file) return;
+  const mine = ++snapshotRevision;
+  try {
+    if (!file.name.toLowerCase().endsWith(".json") || file.size > MAX_STUDIO_BYTES)
+      throw new Error("请选择不超过 256 KiB 的 JSON 场景草稿。");
+    const raw = await file.text();
+    if (mine !== snapshotRevision) return;
+    const next = parseStudioSnapshot(raw);
+    // Validate all shapes before mutating either visible editor.
+    sample = next.scene;
+    renderDevices();
+    selectDevice();
+    engine?.replaceScene(sample);
+    planEditor.restore(next.floorplan);
+    const conveyor = sample.devices.find((device) => device.id === "conveyor-04" && "equipment" in device);
+    document.querySelector<HTMLElement>("#conveyor-tool")!.hidden = !conveyor;
+    if (conveyor && "equipment" in conveyor) {
+      const { length } = conveyor.equipment.dimensions;
+      lengthSelect.value = String(length);
+      rebuild.textContent = `当前长度：${length} 米。`;
+    }
+    snapshotError();
+    draftStatus.textContent = `已读取 ${sample.screenId}，共 ${sample.devices.length} 个设备。`;
+  } catch (cause) {
+    if (mine === snapshotRevision) snapshotError(cause instanceof Error ? cause.message : "场景草稿读取失败。");
+  }
 });
