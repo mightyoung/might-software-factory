@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { LedgerConfigRouteScope } from "../../routing/ledgerConfigRouteScope";
 import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
@@ -677,12 +678,8 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   );
 }
 
-export default function HttpLedgerConfigPage(props: {
-  active?: boolean;
-  canManage: boolean;
-  canPublish: boolean;
-  onUnauthenticated: () => void;
-}) {
+export default function HttpLedgerConfigPage() {
+  const scope = useContext(LedgerConfigRouteScope);
   const adapter = useMemo(() => createHttpLedgerConfig(createHttpClient()), []);
-  return <LedgerConfigPage {...props} adapter={adapter} />;
+  return scope && <LedgerConfigPage {...scope} adapter={adapter} />;
 }
