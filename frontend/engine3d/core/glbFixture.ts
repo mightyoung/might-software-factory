@@ -58,3 +58,40 @@ function encodeGlb(json: unknown, bin: ArrayBuffer): ArrayBuffer {
   bytes.set(new Uint8Array(bin), 28 + jsonLength);
   return data;
 }
+
+export function multiMeshGlb(change?: (json: Record<string, any>) => void, counts = [3, 3], indexCounts = [3, 0]): ArrayBuffer {
+  const first = 12 * counts[0], second = 12 * counts[1];
+  const firstIndices = indexCounts[0] * 2;
+  const secondIndices = indexCounts[1] * 2;
+  const other = (first + firstIndices + 3) & ~3;
+  const normalOffset = other + second;
+  const secondIndexOffset = normalOffset + first;
+  const bin = new ArrayBuffer((secondIndexOffset + secondIndices + 3) & ~3);
+  new Float32Array(bin, 0, 9).set([0, 0, 0, 1, 0, 0, 0, 2, 0]);
+  new Float32Array(bin, other, 9).set([0, 0, 0, 1, 0, 0, 0, 0, 3]);
+  const normals = new Float32Array(bin, normalOffset, first / 4);
+  for (let i = 0; i < normals.length; i += 3) normals[i] = 1;
+  new Uint16Array(bin, first, 3).set([0, 1, 2]);
+  const secondPrimitive: { attributes: Record<string, number>; indices?: number } = { attributes: { POSITION: 2 } };
+  const json = {
+    asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }],
+    nodes: [{ children: [1, 2] }, { mesh: 0 }, { mesh: 1, translation: [4, 0, 0] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 3 }, indices: 1 }] }, { primitives: [secondPrimitive] }],
+    buffers: [{ byteLength: bin.byteLength }],
+    bufferViews: [{ buffer: 0, byteLength: first }, { buffer: 0, byteOffset: first, byteLength: firstIndices },
+      { buffer: 0, byteOffset: other, byteLength: second }, { buffer: 0, byteOffset: normalOffset, byteLength: first }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: counts[0], type: "VEC3" },
+      { bufferView: 1, componentType: 5123, count: indexCounts[0], type: "SCALAR" },
+      { bufferView: 2, componentType: 5126, count: counts[1], type: "VEC3" },
+      { bufferView: 3, componentType: 5126, count: counts[0], type: "VEC3" },
+    ],
+  };
+  if (secondIndices) {
+    secondPrimitive.indices = 4;
+    json.bufferViews.push({ buffer: 0, byteOffset: secondIndexOffset, byteLength: secondIndices });
+    json.accessors.push({ bufferView: 4, componentType: 5123, count: indexCounts[1], type: "SCALAR" });
+  }
+  change?.(json);
+  return encodeGlb(json, bin);
+}

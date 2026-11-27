@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { exporterGlb, syntheticGlb } from "./glbFixture.ts";
+import { exporterGlb, multiMeshGlb, syntheticGlb } from "./glbFixture.ts";
 import { openStaticGlb, type StaticGlb } from "./glbIntake.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 
@@ -28,12 +28,12 @@ test("rejects malformed, out-of-scope or out-of-budget GLB before display", () =
 test("50 replacements and repeated clear dispose each owned geometry exactly once", () => {
   const slot = new PreviewSlot();
   let disposals = 0;
-  const load = (): StaticGlb => {
-    const model = openStaticGlb(syntheticGlb());
+  const load = (i: number): StaticGlb => {
+    const model = openStaticGlb(i % 2 === 0 ? syntheticGlb() : multiMeshGlb());
     model.geometry.addEventListener("dispose", () => disposals++);
     return model;
   };
-  for (let i = 0; i < 50; i++) slot.replace(load());
+  for (let i = 0; i < 50; i++) slot.replace(load(i));
   assert.equal(disposals, 49);
   slot.clear();
   slot.clear();
@@ -81,4 +81,26 @@ test("transforms imported normals with inverse transpose under nonuniform scale"
   assert.ok(Math.abs(n.getX(0) - 1 / Math.sqrt(5)) < 1e-6);
   assert.ok(Math.abs(n.getY(0) - 2 / Math.sqrt(5)) < 1e-6);
   model.dispose();
+});
+
+test("flattens a small branching scene, rebasing mixed indices and generating missing normals", () => {
+  const model = openStaticGlb(multiMeshGlb());
+  assert.deepEqual(model.metrics, { vertices: 6, triangles: 2, dimensions: [5, 2, 3] });
+  assert.deepEqual(Array.from(model.geometry.getIndex()!.array), [0, 1, 2, 3, 4, 5]);
+  const normals = model.geometry.getAttribute("normal");
+  assert.equal(normals.getX(0), 1);
+  assert.equal(normals.getZ(0), 0);
+  assert.equal(normals.getY(3), -1);
+  model.dispose();
+});
+
+test("rejects invalid branching and applies vertex/index limits to the whole model", () => {
+  for (const input of [
+    multiMeshGlb((doc) => { doc.nodes[1].children = [2]; }),
+    multiMeshGlb((doc) => { doc.nodes[2].children = [0]; }),
+    multiMeshGlb((doc) => { doc.nodes[2].mesh = 0; }),
+    multiMeshGlb((doc) => { doc.scenes[0].nodes = [0, 1]; }),
+  ]) assert.throws(() => openStaticGlb(input), /GLB/);
+  assert.throws(() => openStaticGlb(multiMeshGlb(undefined, [60_000, 60_000])), /总顶点/);
+  assert.throws(() => openStaticGlb(multiMeshGlb(undefined, [3, 3], [300_000, 300_000])), /总三角/);
 });
