@@ -190,9 +190,20 @@ test("viewport resize handle commits on release and Escape cancels without resiz
   await page.getByRole("button", { name: "传送带 04 · 正常" }).click();
   const size = page.getByRole("group", { name: "保持对侧不动地调整尺寸" }).getByRole("status");
   await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  const undo = page.getByRole("button", { name: "撤销上次尺寸调整" });
+  const redo = page.getByRole("button", { name: "重做尺寸调整" });
+  const conveyor = async () => {
+    const pending = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出场景草稿" }).click();
+    const chunks = [];
+    for await (const value of await (await pending).createReadStream()) chunks.push(value);
+    return JSON.parse(Buffer.concat(chunks).toString()).scene.devices.find(({ id }) => id === "conveyor-04");
+  };
+  const original = await conveyor();
   const handle = page.locator('#resize-gizmo [data-face="+X"]');
   const drag = async (cancel) => {
     await expect(handle).toBeVisible();
+    await handle.scrollIntoViewIfNeeded();
     const axis = (await handle.getAttribute("data-axis")).split(",").map(Number);
     const box = await handle.boundingBox();
     const x = box.x + box.width / 2, y = box.y + box.height / 2;
@@ -205,9 +216,21 @@ test("viewport resize handle commits on release and Escape cancels without resiz
   };
   await drag(true);
   await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  await expect(undo).toBeDisabled();
   await drag(false);
   await expect.poll(async () => Number((await size.textContent()).match(/长 ([\d.]+)/)?.[1])).toBeGreaterThan(4.3);
   await expect(size).toContainText("宽 1 · 高 0.9 米");
+  const moved = await conveyor();
+  expect(moved.position[0]).toBeGreaterThan(original.position[0]);
+  await undo.click();
+  await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  expect(await conveyor()).toEqual(original);
+  await redo.click();
+  expect(await conveyor()).toEqual(moved);
+  await undo.click();
+  await page.getByRole("button", { name: "伸出 0.5 米" }).click();
+  await expect(size).toHaveText("长 4.5 · 宽 1 · 高 0.9 米。");
+  await expect(redo).toBeDisabled();
   await expect(page.getByRole("button", { name: "传送带 04 · 正常" })).toHaveAttribute("aria-pressed", "true");
 });
 

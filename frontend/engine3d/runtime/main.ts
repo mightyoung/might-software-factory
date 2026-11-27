@@ -1,3 +1,4 @@
+import { createResizeHistory } from "../core/resizeHistory.ts";
 import { mountMeshoptExperiment } from "./meshoptExperiment.ts";
 import { mountAssetVerification } from "./assetVerification.ts";
 import { mountSyntheticVideo } from "./video.ts";
@@ -227,6 +228,46 @@ function displayResize() {
   const { length, width, height } = item.equipment.dimensions;
   resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
 }
+const resizeHistory = createResizeHistory();
+const undoResize = document.querySelector<HTMLButtonElement>("#resize-undo")!;
+const redoResize = document.querySelector<HTMLButtonElement>("#resize-redo")!;
+const historyStatus = document.getElementById("resize-history-status")!;
+function syncResizeHistory(message = "") {
+  undoResize.disabled = !resizeHistory.canUndo();
+  redoResize.disabled = !resizeHistory.canRedo();
+  historyStatus.textContent = message;
+}
+function commitResize(next: typeof sample) {
+  if (engine && !engine.replaceScene(next)) return false;
+  sample = next;
+  return true;
+}
+function recordResize(next: typeof sample, id: string) {
+  const prior = sample;
+  if (!commitResize(next)) return false;
+  resizeHistory.record(prior, next, id);
+  syncResizeHistory();
+  return true;
+}
+function syncConveyorLength() {
+  const conveyor = sample.devices.find((device) => device.id === "conveyor-04" && "equipment" in device);
+  if (!conveyor || !("equipment" in conveyor)) return;
+  const { length } = conveyor.equipment.dimensions;
+  lengthSelect.value = String(length);
+  rebuild.textContent = `当前长度：${length} 米。`;
+}
+function applyResizeHistory(direction: "undo" | "redo") {
+  const result = resizeHistory.step(direction, sample, commitResize);
+  if (!result) { syncResizeHistory("无法应用该尺寸历史。"); return; }
+  selectDevice(sample.devices.find((device) => device.id === result.id));
+  syncConveyorLength();
+  syncResizeHistory(direction === "undo" ? "已撤销尺寸调整。" : "已重做尺寸调整。");
+  const [current, opposite] = direction === "undo" ? [undoResize, redoResize] : [redoResize, undoResize];
+  if (current.disabled) opposite.focus();
+}
+undoResize.addEventListener("click", () => applyResizeHistory("undo"));
+redoResize.addEventListener("click", () => applyResizeHistory("redo"));
+
 function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   const item = selectedParametric();
   if (!item || !("equipment" in item)) return;
@@ -239,11 +280,9 @@ function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
         equipment: { ...item.equipment, dimensions: change.dimensions } } : device),
   });
   if (!updated.success) { resizeResult.textContent = "尺寸调整会超出场景范围。"; return; }
-  sample = updated.data;
+  if (!recordResize(updated.data, item.id)) { resizeResult.textContent = "无法更新当前三维场景。"; return; }
   closeModel();
-  engine?.replaceScene(sample);
-  engine?.focus(item.id);
-  if (item.id === "conveyor-04") { lengthSelect.selectedIndex = change.dimensions.length === 4 ? 0 : change.dimensions.length === 8 ? 1 : -1; rebuild.textContent = `当前长度：${change.dimensions.length} 米。`; }
+  if (item.id === "conveyor-04") syncConveyorLength();
   displayResize();
 }
 document.querySelector("#resize-in")!.addEventListener("click", () => adjustSelected(-0.5));
@@ -357,14 +396,14 @@ const rebuild = document.querySelector<HTMLParagraphElement>("#conveyor-rebuild"
 lengthSelect.addEventListener("change", () => {
   const length = Number(lengthSelect.value);
   if (length !== 4 && length !== 8) return;
-  sample = SceneDocumentSchema.parse({
+  const next = SceneDocumentSchema.parse({
     ...sample,
     devices: sample.devices.map((device) => "equipment" in device && device.id === "conveyor-04"
       ? { ...device, equipment: { ...device.equipment, dimensions: { ...device.equipment.dimensions, length } } }
       : device),
   });
-  engine?.replaceScene(sample);
-  rebuild.textContent = `当前长度：${length} 米。`;
+  recordResize(next, "conveyor-04");
+  syncConveyorLength();
   displayResize();
 });
 updateGizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, () => {
@@ -438,6 +477,8 @@ importDraft.addEventListener("change", async () => {
     // Validate all shapes before mutating either visible editor.
     visualReference.clear();
     sample = next.scene;
+    resizeHistory.clear();
+    syncResizeHistory();
     // The file stores copied devices, not page-only prefab pins. Never reuse stale provenance.
     placedPrefabs.clear();
     renderDevices();

@@ -52,6 +52,13 @@
           <p>也可拖动视口里的金色手柄。按 Esc 或中途取消不会改变尺寸。</p>
         </fieldset>
         <fieldset>
+          <legend>设备尺寸历史</legend>
+          <button id="resize-undo" type="button" disabled>撤销上次尺寸调整</button>
+          <button id="resize-redo" type="button" disabled>重做尺寸调整</button>
+          <p id="resize-history-status" role="status"></p>
+          <p>当前草稿最近 20 次；不包含平面、机位或组件操作。</p>
+        </fieldset>
+        <fieldset>
           <legend>本地 GLB 模型</legend>
           <label for="model-unit">模型源单位</label>
           <select id="model-unit"><option value="m">米（GLB 默认）</option><option value="mm">毫米（明确导入）</option></select>
