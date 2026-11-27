@@ -54,6 +54,33 @@
         <canvas id="viewport" aria-label="合成设备三维视口"></canvas>
       </section>
     </div>
+    <section class="floorplan" aria-labelledby="floorplan-label">
+      <h2 id="floorplan-label">顶视平面绘图</h2>
+      <p>本页草稿不会保存到业务场景。图上点选，或输入坐标加点；按住 Shift 可锁定横向或纵向。</p>
+      <div class="floorplan-controls">
+        <label>绘制模式 <select id="plan-mode"><option value="wall">墙段</option><option value="zone">区域</option></select></label>
+        <label>吸附网格 <select id="plan-grid"><option value="0.1">0.1 米</option><option value="0.5" selected>0.5 米</option><option value="1">1 米</option></select></label>
+        <label><input id="plan-ortho" type="checkbox"> 正交锁定</label>
+        <button id="plan-close" type="button" disabled>闭合区域</button>
+        <button id="plan-cancel" type="button">清除当前草稿</button>
+      </div>
+      <svg id="floorplan-map" viewBox="-100 -100 200 200" aria-label="顶视图，横轴 X，纵轴 Z" role="img">
+        <defs><pattern id="plan-pattern" width="5" height="5" patternUnits="userSpaceOnUse">
+          <path id="plan-grid-lines" d="M 5 0 H 0 V 5" fill="none" stroke="#aac3bd" stroke-width=".35"/>
+        </pattern></defs>
+        <rect x="-100" y="-100" width="200" height="200" fill="url(#plan-pattern)"/>
+        <path d="M -100 0 H 100 M 0 -100 V 100" fill="none" stroke="#648983" stroke-width=".4"/>
+        <g id="plan-features"></g>
+      </svg>
+      <form id="plan-coordinates" class="floorplan-controls">
+        <label>X（米） <input id="plan-x" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <label>Z（米） <input id="plan-z" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <button type="submit">添加坐标点</button>
+      </form>
+      <p id="plan-summary" role="status">墙段 0 条，区域 0 个。</p>
+      <p id="plan-error" role="alert" hidden></p>
+      <ul id="plan-zones" aria-label="已闭合区域"></ul>
+    </section>
   </main>
   <script type="module" src="/runtime/main.ts"></script>
 </body>

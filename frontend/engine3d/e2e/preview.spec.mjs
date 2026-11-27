@@ -137,3 +137,37 @@ test("keyboard face resizing and explicit GLB units work in the isolated editor"
   await source.selectOption("m");
   await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
 });
+
+test("top-view pointer snaps an orthogonal wall and keyboard builds only simple zones", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/");
+  const editor = page.getByRole("region", { name: "顶视平面绘图" });
+  const map = editor.getByRole("img", { name: "顶视图，横轴 X，纵轴 Z" });
+  await expect(map).toBeVisible();
+  const box = await map.boundingBox();
+  await map.click({ position: { x: box.width * 0.5, y: box.height * 0.5 } });
+  await map.click({ position: { x: box.width * 0.7, y: box.height * 0.55 }, modifiers: ["Shift"] });
+  await expect(editor.locator(".plan-wall")).toHaveAttribute("points", "0,0 40,0");
+  await expect(editor.getByRole("status")).toContainText("墙段 1 条");
+  await editor.getByLabel("绘制模式").selectOption("zone");
+  await editor.getByLabel("吸附网格").selectOption("0.1");
+  const append = async (x, z) => {
+    await editor.getByLabel("X（米）").fill(String(x));
+    const zInput = editor.getByLabel("Z（米）");
+    await zInput.fill(String(z));
+    await zInput.press("Enter");
+  };
+  for (const [x, z] of [[0, 0], [4, 4], [0, 4], [3, 0]]) await append(x, z);
+  await editor.getByRole("button", { name: "闭合区域" }).click();
+  await expect(editor.getByRole("alert")).toContainText("不能交叉");
+  await expect(editor.getByRole("status")).toContainText("草稿 4 个点");
+  await expect(editor.locator(".plan-zone")).toHaveCount(0);
+  await editor.getByRole("button", { name: "清除当前草稿" }).click();
+  for (const [x, z] of [[0, 0], [4, 0], [4, 3], [0, 3]]) await append(x, z);
+  await expect(editor.getByRole("status")).toContainText("当前草稿约 12 平方米");
+  await editor.getByRole("button", { name: "闭合区域" }).click();
+  await expect(editor.getByRole("listitem")).toContainText("12 平方米");
+  await expect(editor.locator(".plan-zone")).toHaveAttribute("points", "0,0 40,0 40,30 0,30");
+  await expect(editor.locator(".plan-wall")).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
