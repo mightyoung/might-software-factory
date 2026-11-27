@@ -76,3 +76,10 @@ A 另有只发布管理员；没有发布流。探针拒绝非指定回环 PG18/
 它不颁发 `Caller` 或自证连接所有权，不设置租户，不关闭连接，不在异常时退回通用权限。
 接线仍必须由真实操作拥有者先核对人类会话、活跃身份与 epoch，再调用
 `requireGuarded` / `requireRead` 认证该物理连接；需要撤权串行时先持对应 guard。
+
+`StudioGuardedPublish` 接上了现有受管**发布**边界，仍未注册：它只借用已绑定的
+顶层连接，由 `withGuarded` / `requireGuarded` 核真实业务 guard 与连接，并要求
+`requireGuardedCheckedCurrent` 返回 ENFORCING 后才查场景管理员关系、调用同步发布回调。
+事务结束与发布结果的提交由外层拥有者负责。现有普通 `withRead` 需要只读
+REPEATABLE READ，而现有业务 guard 需要 READ COMMITTED 写事务，不能把两者拼成
+具备严格撤权串行的 Player 路径。该读路径仍未接线。
