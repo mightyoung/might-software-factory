@@ -1,3 +1,4 @@
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { useForm } from "react-hook-form";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./commandActions";
 interface Options { finding: FindingRecord; adapter: FindingCommandAdapter; onChanged: () => void; onUnauthenticated?: () => void; onForbidden?: () => void; readBlocked?: boolean; refreshing?: boolean; }
 export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthenticated,onForbidden,readBlocked=false,refreshing=false}:Options) {
+  const [historyClient] = useState(createWorkspaceQueryClient);
   const [history, setHistory] = useState<ReviewHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(Boolean(adapter.history));
   const [historyFailure, setHistoryFailure] = useState(false);
@@ -59,19 +61,25 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
 
   useEffect(() => {
     if (!adapter.history) return;
-    const abort = new AbortController();
-    historyRequest.current += 1;
+    const queryKey = ["finding-review-history", finding.id, finding.version, ++historyRequest.current];
+    let current = true;
     setHistoryLoading(true);
     setHistoryFailure(false);
-    adapter.history(finding.id, { signal: abort.signal }).then(value => {
-      if (!abort.signal.aborted) setHistory(value);
+    historyClient.fetchQuery({
+      queryKey,
+      queryFn: ({ signal }) => adapter.history!(finding.id, { signal }),
+    }).then(value => {
+      if (current) setHistory(value);
     }).catch(error => {
-      if (abort.signal.aborted) return;
+      if (!current) return;
       setHistoryFailure(true);
       if (error instanceof FindingCommandError && ["unauthenticated", "forbidden"].includes(error.kind)) clearProtectedState(error.kind);
-    }).finally(() => { if (!abort.signal.aborted) setHistoryLoading(false); });
-    return () => abort.abort();
-  }, [adapter, finding.id, finding.version, refresh]);
+    }).finally(() => { if (current) setHistoryLoading(false); });
+    return () => {
+      current = false;
+      void historyClient.cancelQueries({ queryKey, exact: true });
+    };
+  }, [adapter, finding.id, finding.version, historyClient, refresh]);
 
   const uncertain = failure === "unavailable" && attempt.current !== null;
   const active = uncertain ? draftAction : actions.find((action) => action.id === activeId) ?? draftAction;
