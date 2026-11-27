@@ -29,9 +29,11 @@ public final class StudioPlayerPublication {
         @Override public byte[] canonicalBytes() { return canonicalBytes.clone(); }
     }
 
+    static final class InvalidVersion extends IllegalArgumentException {}
+
     public Optional<Published> read(Caller caller, Target target, Long version) {
         authorizeRead(caller, target);
-        if (version != null && version < 1) throw new IllegalArgumentException("Invalid published version");
+        if (version != null && version < 1) throw new InvalidVersion();
         return lookup.find(target, version).map(publication -> verified(target, version, publication));
     }
 
