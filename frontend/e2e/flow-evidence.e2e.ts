@@ -17,6 +17,10 @@ test("整改中的记录：选择 PNG → 隔离扫描 → 终结发布 → 提�
   const tab = await openInTab(page, () => page.getByRole("button", { name: "详情" }).first().click());
 
   const file = tab.getByLabel(/选择图片/);
+  await expect(file).toBeVisible();
+  expect(await tab.evaluate(() => performance.getEntriesByType("resource").some(({ name }) =>
+    /\/FindingDetails-[^/]+\.js$/.test(new URL(name).pathname)
+  ))).toBe(true);
   await file.setInputFiles({ name: "notes.pdf", mimeType: "application/pdf", buffer: Buffer.from("x") });
   await expect(tab.getByRole("alert")).toContainText("只支持 PNG 或 JPEG");
 

@@ -14,7 +14,6 @@ import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
-import { FindingDetailsCore } from "../../components/FindingDetails";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
@@ -48,6 +47,8 @@ interface FindingsLedgerProps {
   /** 读取或提交收到“未登录”时通知应用回到登录页。 */
   onUnauthenticated?: () => void;
 }
+
+const FindingDetailsCore = lazy(() => import("../../components/FindingDetails").then(({ FindingDetailsCore }) => ({ default: FindingDetailsCore })));
 
 const firstPage: PageResult<FindingRecord> = {
   items: [],
@@ -366,26 +367,36 @@ function FindingsLedgerBody({
       )}
 
       {selectedFindingId && !reporting && (
-        <FindingDetailsCore
-          Fields={presentation?.Fields}
-          Actions={presentation?.Actions}
-          definition={publishedDetailBlocked ? null : detailSnapshot.definition}
-          finding={publishedDetailBlocked ? null : detail}
-          loading={!publishedDetailBlocked && detailLoading}
-          error={publishedDetailBlocked ? listError : detailError}
-          onClose={closeTab}
-          onRetry={() => setDetailRefreshKey((value) => value + 1)}
-          commandAdapter={commandAdapter}
-          evidenceAdapter={evidenceAdapter}
-          onOpenRelated={(id) => openInNewTab(`${path}?tab=1&caseId=${encodeURIComponent(id)}`)}
-          {...(submitAdapter ? { onCreateRelated: (record: FindingRecord) => openReport({ id: record.id, code: record.code }) } : {})}
-          onForbidden={() => { setDetailSnapshot({ record: null, definition: null }); setDetailError("forbidden"); }}
-          onCommandChanged={() => {
-            setDetailRefreshKey((value) => value + 1);
-            setRefreshKey((value) => value + 1);
-          }}
-          onUnauthenticated={onUnauthenticated}
-        />
+        <Suspense fallback={
+          <aside className="detail-panel" aria-label="隐患详情面板">
+            <div className="detail-heading">
+              <h2>隐患详情</h2>
+              <button className="icon-button" type="button" aria-label="关闭详情" onClick={closeTab}>×</button>
+            </div>
+            <p className="detail-state" role="status">正在载入隐患详情…</p>
+          </aside>
+        }>
+          <FindingDetailsCore
+            Fields={presentation?.Fields}
+            Actions={presentation?.Actions}
+            definition={publishedDetailBlocked ? null : detailSnapshot.definition}
+            finding={publishedDetailBlocked ? null : detail}
+            loading={!publishedDetailBlocked && detailLoading}
+            error={publishedDetailBlocked ? listError : detailError}
+            onClose={closeTab}
+            onRetry={() => setDetailRefreshKey((value) => value + 1)}
+            commandAdapter={commandAdapter}
+            evidenceAdapter={evidenceAdapter}
+            onOpenRelated={(id) => openInNewTab(`${path}?tab=1&caseId=${encodeURIComponent(id)}`)}
+            {...(submitAdapter ? { onCreateRelated: (record: FindingRecord) => openReport({ id: record.id, code: record.code }) } : {})}
+            onForbidden={() => { setDetailSnapshot({ record: null, definition: null }); setDetailError("forbidden"); }}
+            onCommandChanged={() => {
+              setDetailRefreshKey((value) => value + 1);
+              setRefreshKey((value) => value + 1);
+            }}
+            onUnauthenticated={onUnauthenticated}
+          />
+        </Suspense>
       )}
     </div>
   );
