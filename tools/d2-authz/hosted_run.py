@@ -247,6 +247,8 @@ def run():
                     if child.returncode != 0:
                         # Only a source line coordinate, not browser selectors, account data or page snapshots.
                         sites = re.findall(r"withdraw-after-issue\.mjs:(\d{1,4}):\d+", child.stderr)
+                        markers = re.findall(r"TL10_LOGIN_(?:HTTP_[0-9]{3}|TOOLING_MISSING)", child.stderr)
+                        print("TL10_BROWSER_STAGE=" + (markers[0] if markers else "UI_OR_NETWORK"), file=sys.stderr)
                         print("TL10_BROWSER_FAILED site=" + (sites[0] if sites else "unknown"), file=sys.stderr)
                         raise ValueError("TL-10 browser acceptance failed")
                     report = json.loads(child.stdout)
