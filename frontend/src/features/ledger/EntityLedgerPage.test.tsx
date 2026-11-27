@@ -57,6 +57,23 @@ describe("stable standard write requests", () => {
   function form(a: EntityLedgerAdapter, unauthenticated = vi.fn()) {
     return render(<EntityLedgerForm definition={DEF} use="EDIT" adapter={a} record={RECORD} owner="t/a" draftKey="edit" onSuccess={vi.fn()} onUnauthenticated={unauthenticated} onRefresh={vi.fn()} />);
   }
+  it("associates invalid metadata text with its field and preserves empty optional values as null", async () => {
+    const a = adapter();
+    form(a);
+    const note = screen.getByLabelText("说明");
+    fireEvent.change(note, { target: { value: "🔧".repeat(4001) } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(note).toHaveAccessibleDescription("字符无效或超过长度限制。");
+    expect(a.update).not.toHaveBeenCalled();
+    fireEvent.change(note, { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "  W-01  " } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(a.update).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(a.update).mock.calls[0]?.[2]).toEqual({
+      code: "  W-01  ", note: null, external: null, count: 2, when: null, state: "NORMAL",
+    });
+  });
+
   it("unknown submit preserves input and repeats exactly the same key only after a manual retry", async () => {
     const a = adapter();vi.mocked(a.update).mockRejectedValue(new ApiError(0, "NETWORK", null, true));form(a);
     fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "kept" } });fireEvent.click(screen.getByRole("button", { name: "保存" }));

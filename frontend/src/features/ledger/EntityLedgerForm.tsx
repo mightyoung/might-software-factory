@@ -86,13 +86,14 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
       const field = definition.inputFields[key]!;
       const id = `entity-field-${key}`;
       const disabled = busy || locked;
+      const errorId = errors[key] ? `${id}-error` : undefined;
       return <div className="report-field" key={key}>
         {field.type !== "REFERENCE" && <label htmlFor={id}>{field.label}{field.required ? " *" : ""}</label>}
         {field.type === "REFERENCE" ? <ReferencePicker id={id} label={field.label} referenceKey={field.referenceKey!} definition={definition} use={use} adapter={adapter} value={draft[key] ?? ""} disabled={disabled} onUnauthenticated={onUnauthenticated} onValidated={value => setReferenceChoices(current => ({ ...current, [key]: value }))} onChange={value => { change(key, value); setReferenceChoices(current => ({ ...current, [key]: value })); }} />
-          : field.type === "MULTILINE_TEXT" ? <textarea id={id} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errors[key])} onChange={event => change(key, event.target.value)} />
+          : field.type === "MULTILINE_TEXT" ? <textarea id={id} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={event => change(key, event.target.value)} />
             : field.type === "ENUM" ? <select id={id} value={draft[key] ?? ""} disabled={disabled} onChange={event => change(key, event.target.value)}><option value="">请选择</option>{field.allowedValues.map(value => <option key={value} value={value}>{valueLabel(definition.fields[key]?.valueLabels, value)}</option>)}</select>
-              : <input id={id} type="text" inputMode={field.type === "INTEGER" ? "numeric" : undefined} placeholder={field.type === "DATE_TIME" ? "2026-11-15T10:30:00+08:00" : undefined} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errors[key])} onChange={event => change(key, event.target.value)} />}
-        {errors[key] && <p role="alert">{errors[key]}</p>}
+              : <input id={id} type="text" inputMode={field.type === "INTEGER" ? "numeric" : undefined} placeholder={field.type === "DATE_TIME" ? "2026-11-15T10:30:00+08:00" : undefined} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={event => change(key, event.target.value)} />}
+        {errorId && <p id={errorId} role="alert">{errors[key]}</p>}
       </div>;
     })}
     {error && <p role="alert">{error}</p>}
