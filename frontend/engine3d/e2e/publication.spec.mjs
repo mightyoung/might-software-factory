@@ -1,0 +1,36 @@
+import { expect, test } from "@playwright/test";
+
+test("synthetic tenant permissions and expected versions protect offline publication", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "合成发布验收" });
+  const actor = panel.getByLabel("模拟身份");
+  const target = panel.getByLabel("目标租户");
+  const publish = panel.getByRole("button", { name: "模拟发布当前草稿" });
+  const read = panel.getByRole("button", { name: "读取已发布版本" });
+  const download = panel.getByRole("button", { name: "导出已读放映文件" });
+  const alert = panel.getByRole("alert");
+
+  await actor.selectOption("a-reader");
+  await publish.click();
+  await expect(alert).toContainText("无权");
+  await actor.selectOption("a-writer");
+  await publish.click();
+  await expect(panel.getByRole("status")).toContainText("合成发布成功：第 1 版");
+  await panel.getByLabel("预期版本").fill("0");
+  await publish.click();
+  await expect(alert).toContainText("发布版本冲突");
+  await actor.selectOption("a-reader");
+  await target.selectOption("tenant-b");
+  await read.click();
+  await expect(alert).toContainText("无权");
+  await expect(download).toBeDisabled();
+  await target.selectOption("tenant-a");
+  await read.click();
+  await expect(panel.getByRole("status")).toContainText("已读取不可变版本 1");
+  const downloading = page.waitForEvent("download");
+  await download.click();
+  const file = await downloading;
+  expect(file.suggestedFilename()).toBe("might-published-test.json");
+  await actor.selectOption("b-reader");
+  await expect(download).toBeDisabled();
+});
