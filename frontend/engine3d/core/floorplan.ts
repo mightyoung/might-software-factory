@@ -3,6 +3,7 @@ export type GridStep = "0.1" | "0.5" | "1";
 export type FloorplanMode = "wall" | "zone";
 export type Wall = { id: number; start: Point; end: Point };
 export type Zone = { id: number; points: readonly Point[]; area: number };
+type CommittedShape = { kind: "wall"; value: Wall } | { kind: "zone"; value: Zone };
 
 const steps = { "0.1": 1, "0.5": 5, "1": 10 } as const; // decimetres
 const same = (a: Point, b: Point) => a[0] === b[0] && a[1] === b[1];
@@ -51,6 +52,40 @@ export class FloorplanDraft {
   readonly zones: Zone[] = [];
   private vertices: Point[] = [];
   private nextId = 1;
+  private readonly committed: CommittedShape[] = [];
+  private readonly undone: CommittedShape[] = [];
+  private get editingZone() { return this.mode === "zone" && this.vertices.length > 0; }
+  get canUndo() { return !this.editingZone && this.committed.length > 0; }
+  get canRedo() { return !this.editingZone && this.undone.length > 0; }
+  private record(shape: CommittedShape) {
+    this.undone.length = 0;
+    this.committed.push(structuredClone(shape));
+    if (this.committed.length > 20) this.committed.shift();
+  }
+  private allocateId() {
+    if (this.nextId > 10_000) throw new Error("草稿图形编号已满。");
+    return this.nextId++;
+  }
+  undo() {
+    if (!this.canUndo) return false;
+    const shape = this.committed.at(-1)!;
+    const shapes = shape.kind === "wall" ? this.walls : this.zones;
+    if (shapes.at(-1)?.id !== shape.value.id) return false;
+    shapes.pop();
+    this.committed.pop();
+    this.undone.push(shape);
+    this.cancel();
+    return true;
+  }
+  redo() {
+    if (!this.canRedo) return false;
+    const shape = this.undone.pop()!;
+    if (shape.kind === "wall") this.walls.push(structuredClone(shape.value));
+    else this.zones.push(structuredClone(shape.value));
+    this.committed.push(shape);
+    this.cancel();
+    return true;
+  }
   get points(): readonly Point[] { return this.vertices; }
   setMode(mode: FloorplanMode) { if (mode !== this.mode) { this.mode = mode; this.cancel(); } }
   setGrid(grid: GridStep) { this.grid = grid; }
@@ -62,6 +97,7 @@ export class FloorplanDraft {
     this.walls.splice(0, this.walls.length, ...structuredClone(plan.walls));
     this.zones.splice(0, this.zones.length, ...structuredClone(plan.zones));
     this.nextId = 1 + Math.max(0, ...this.walls.map((shape) => shape.id), ...this.zones.map((shape) => shape.id));
+    this.committed.length = this.undone.length = 0;
     this.cancel();
   }
   preview(rawMetres: Point, ortho = false): Point {
@@ -82,7 +118,9 @@ export class FloorplanDraft {
       if (this.walls.length >= 100) throw new Error("最多画 100 条墙段。");
       if (this.walls.some(({ start, end }) => same(start, anchor) && same(end, point) || same(start, point) && same(end, anchor)))
         throw new Error("这条墙段已存在。");
-      this.walls.push({ id: this.nextId++, start: anchor, end: point });
+      const wall = { id: this.allocateId(), start: anchor, end: point };
+      this.walls.push(wall);
+      this.record({ kind: "wall", value: wall });
       this.vertices = [point];
     } else {
       if (this.vertices.length >= 60) throw new Error("每个区域最多 60 个顶点。");
@@ -93,8 +131,9 @@ export class FloorplanDraft {
   finishZone(): Zone {
     if (this.mode !== "zone" || this.zones.length >= 20) throw new Error("请选择画区域，最多保留 20 个。");
     const area = validatePolygon(this.vertices);
-    const zone = { id: this.nextId++, points: [...this.vertices], area };
+    const zone = { id: this.allocateId(), points: [...this.vertices], area };
     this.zones.push(zone);
+    this.record({ kind: "zone", value: zone });
     this.cancel();
     return zone;
   }

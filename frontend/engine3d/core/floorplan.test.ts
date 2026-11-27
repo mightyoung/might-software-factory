@@ -46,3 +46,53 @@ test("rejects closed self-intersections, duplicates, and degenerate inputs witho
     assert.equal(tool.points.length, 0);
   }
 });
+
+test("undo and redo stable committed walls and zones without replacing the open polygon", () => {
+  const draft = new FloorplanDraft();
+  draft.add([0, 0]); draft.add([4, 0]);
+  const wall = draft.walls[0];
+  draft.setMode("zone");
+  draft.add([0, 0]); draft.add([4, 0]); draft.add([0, 3]);
+  assert.equal(draft.canUndo, false);
+  assert.equal(draft.undo(), false);
+  assert.equal(draft.points.length, 3);
+  const zone = draft.finishZone();
+  assert.equal(draft.undo(), true);
+  assert.deepEqual(draft.walls, [wall]);
+  assert.deepEqual(draft.zones, []);
+  assert.equal(draft.undo(), true);
+  assert.deepEqual(draft.walls, []);
+  assert.equal(draft.redo(), true);
+  assert.equal(draft.redo(), true);
+  assert.deepEqual(draft.walls, [wall]);
+  assert.deepEqual(draft.zones, [zone]);
+  draft.undo();
+  draft.setMode("wall");
+  draft.add([0, 0]); draft.add([0, 4]);
+  assert.equal(draft.canRedo, false);
+  assert.ok(draft.walls[1].id > zone.id);
+  draft.restore({ walls: draft.walls, zones: draft.zones });
+  assert.equal(draft.canUndo, false);
+  assert.equal(draft.canRedo, false);
+});
+
+test("only recent 20 committed shapes enter history and failed edits never erase redo", () => {
+  const draft = new FloorplanDraft();
+  draft.setGrid("0.1");
+  for (let i = 0; i < 22; i++) draft.add([i / 10, 0]);
+  for (let i = 0; i < 20; i++) assert.equal(draft.undo(), true);
+  assert.equal(draft.canUndo, false);
+  assert.equal(draft.walls.length, 1);
+  draft.add([0, 0]);
+  assert.throws(() => draft.add([0.1, 0]), /已存在/);
+  assert.equal(draft.canRedo, true);
+});
+
+test("does not create a history entry for an ID outside the exported draft schema", () => {
+  const draft = new FloorplanDraft();
+  draft.restore({ walls: [{ id: 10_000, start: [0, 0], end: [0, 20] }], zones: [] });
+  draft.add([0, 0]);
+  assert.throws(() => draft.add([1, 0]), /编号/);
+  assert.equal(draft.walls.length, 1);
+  assert.equal(draft.canUndo, false);
+});

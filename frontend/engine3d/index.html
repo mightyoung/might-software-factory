@@ -173,6 +173,8 @@
         <label><input id="plan-ortho" type="checkbox"> 正交锁定</label>
         <button id="plan-close" type="button" disabled>闭合区域</button>
         <button id="plan-cancel" type="button">清除当前草稿</button>
+        <button id="plan-undo" type="button" disabled>撤销墙段或区域</button>
+        <button id="plan-redo" type="button" disabled>重做墙段或区域</button>
       </div>
       <svg id="floorplan-map" viewBox="-100 -100 200 200" aria-label="顶视图，横轴 X，纵轴 Z" role="img">
         <defs><pattern id="plan-pattern" width="5" height="5" patternUnits="userSpaceOnUse">
@@ -188,6 +190,7 @@
         <button type="submit">添加坐标点</button>
       </form>
       <p id="plan-summary" role="status">墙段 0 条，区域 0 个。</p>
+      <p id="plan-history-help">最近 20 次已完成图形；撤销或重做会结束当前墙线。正在绘制区域时请先闭合或清除该区域。</p>
       <p id="plan-error" role="alert" hidden></p>
       <ul id="plan-zones" aria-label="已闭合区域"></ul>
     </section>
