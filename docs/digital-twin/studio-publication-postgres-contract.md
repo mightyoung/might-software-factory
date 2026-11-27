@@ -53,3 +53,12 @@ SHA-256 是同一份规范化字节的指纹，不对 JSONB 的重新序列化�
 同时回滚版本与指针。再验证相同 screen 的异租户、错误租户外键、固定版本仍原样返回、
 历史不可改、无权不查询、无当前版本 fallback。测试应观察真提交而非仅事务回调结束；
 不把此草案或已有 fake 单元测试称为数据库验收。
+
+`StudioPublicationWrites` now implements the dormant JDBC statements on one borrowed connection.
+The registered active screen is checked before stream initialization; existing heads use a separate
+digest read after locking the stream. Only an accepted next snapshot can be appended and the same
+snapshot can attempt the conditional pointer update once. This class is **not** a
+`PublicationUnit`: the real owner must append and validate the scoped audit receipt on that same
+physical connection before advancing, and commit before returning success. Audit action/policy
+registration and the scoped same-connection audit adapter remain activation prerequisites; the
+deferred FK does not prove actor/action/receipt semantics.
