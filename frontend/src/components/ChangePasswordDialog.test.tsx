@@ -44,6 +44,22 @@ describe("修改密码对话框", () => {
     expect(screen.getByLabelText("新密码")).toHaveValue(NEW);
   });
 
+  it("把服务端新密码错误绑定到输入框，而不回显服务端内容", async () => {
+    setup(vi.fn(async () => { throw new SessionError("invalid_request", false, null, ["next"]); }));
+    fill();
+    const field = screen.getByLabelText("新密码");
+    await waitFor(() => expect(field).toHaveAttribute("aria-invalid", "true"));
+    expect(field).toHaveAccessibleDescription(/新密码不符合要求/);
+    expect(field).toHaveValue(NEW);
+  });
+
+  it("没有已知字段时保留原有的服务端通用提示", async () => {
+    setup(vi.fn(async () => { throw new SessionError("invalid_request", false); }));
+    fill();
+    expect(await screen.findByRole("alert")).toHaveTextContent("新密码不符合要求");
+    expect(screen.getByLabelText("新密码")).toHaveAttribute("aria-invalid", "false");
+  });
+
   it("被限流：显示倒计时并暂时禁用提交", async () => {
     setup(vi.fn(async () => { throw new SessionError("rate_limited", false, 30); }));
     fill();
