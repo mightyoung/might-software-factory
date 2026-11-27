@@ -5,7 +5,28 @@ import { beginExpiry, clearAllDrafts, onSignedIn, peekEntityDraft, stashEntityDr
 import { EntityLedgerForm } from "./EntityLedgerForm";
 import { adapter, DEF, ID, OTHER_ID, RECORD } from "./testFixture";
 afterEach(() => { cleanup();clearAllDrafts(); });
+const useDraftForm = vi.hoisted(() => vi.fn());
+vi.mock("react-hook-form", async (original) => {
+  const actual = await original<typeof import("react-hook-form")>();
+  return { ...actual, useForm: (config: Parameters<typeof actual.useForm>[0]) => {
+    useDraftForm(config);
+    return actual.useForm(config);
+  } };
+});
 describe("owner-scoped transient ledger drafts", () => {
+  it.each(["CREATE", "EDIT"] as const)("initializes %s with original metadata keys and raw strings", (use) => {
+    const draftKey = `account/member/${use}`;
+    stashEntityDraft("t/a", draftKey, { values: { code: "  原编号  ", count: "002", note: "" }, definitionVersion: "1", key: null, fingerprint: null, locked: false });
+    const a = adapter();
+    render(<EntityLedgerForm definition={DEF} use={use} adapter={a} record={RECORD} owner="t/a" draftKey={draftKey} onSuccess={vi.fn()} onUnauthenticated={vi.fn()} onRefresh={vi.fn()} />);
+    const expected = { code: "  原编号  ", count: "002", note: "", external: "", when: "", state: "NORMAL" };
+    expect(useDraftForm).toHaveBeenLastCalledWith({ defaultValues: use === "CREATE" ? { ...expected, scope: OTHER_ID } : expected });
+    expect(screen.getByLabelText("编号 *")).toHaveValue(expected.code);
+    expect(screen.getByLabelText("数量")).toHaveValue("002");
+    expect(a.create).not.toHaveBeenCalled();
+    expect(a.update).not.toHaveBeenCalled();
+  });
+
   it.each(["refresh", "expiry"])("retries an unknown searched reference verbatim after %s, despite new defaults and definition", async recovery => {
     const first = adapter();vi.mocked(first.create).mockRejectedValue(new ApiError(0, "NETWORK", null, true));
     vi.mocked(first.reference).mockImplementation(async (_definition, _key, _use, search) => ({ options: [{ id: search ? OTHER_ID : ID, label: search ? "搜索范围" : "默认范围" }], hasMore: !search }));

@@ -1,3 +1,4 @@
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { useForm } from "react-hook-form";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -9,14 +10,13 @@ import {
 } from "../../adapters/findingCommands";
 import { newIdempotencyKey } from "../../adapters/findingSubmit";
 import { findingStateLabels, type FindingRecord } from "../../domain/finding";
-import { parseCommandInput, type CommandInput } from "./commandInput";
+import { parseCommandInput, validateDispatchInput, type CommandInput } from "./commandInput";
 
 import {
   ACTIONS,
   EMPTY_DISPATCH,
   REFRESH_ON,
   reviewActions,
-  validateDispatchInput,
   type ActionDef,
   type CommandInputErrors,
   type DispatchErrors,
@@ -24,6 +24,7 @@ import {
 } from "./commandActions";
 interface Options { finding: FindingRecord; adapter: FindingCommandAdapter; onChanged: () => void; onUnauthenticated?: () => void; onForbidden?: () => void; readBlocked?: boolean; refreshing?: boolean; }
 export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthenticated,onForbidden,readBlocked=false,refreshing=false}:Options) {
+  const [historyClient] = useState(createWorkspaceQueryClient);
   const [history, setHistory] = useState<ReviewHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(Boolean(adapter.history));
   const [historyFailure, setHistoryFailure] = useState(false);
@@ -36,10 +37,9 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   const canSearchCandidates = Boolean(adapter.searchDispatchCandidates);
   const unavailable = finding.state === "SAFETY_DISPATCH_PENDING" ? (canSearchCandidates ? [] : [{ label: "分派整改", reason: "当前连接没有派单候选查询能力。" }]) : [];
   const [activeId, setActiveId] = useState<string | null>(null);
-  const { watch, setValue, getValues, reset } = useForm<CommandInput>({ defaultValues: { reason: "", grade: "" } });
-  const { reason, grade } = watch();
+  const { watch, setValue, getValues, reset } = useForm<CommandInput & { dispatch: DispatchValues }>({ defaultValues: { reason: "", grade: "", dispatch: EMPTY_DISPATCH } });
+  const { reason, grade, dispatch } = watch();
   const [errors, setErrors] = useState<CommandInputErrors>({});
-  const [dispatch, setDispatch] = useState<DispatchValues>(EMPTY_DISPATCH);
   const [dispatchErrors, setDispatchErrors] = useState<DispatchErrors>({});
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<FindingCommandFailureKind | null>(null);
@@ -59,19 +59,25 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
 
   useEffect(() => {
     if (!adapter.history) return;
-    const abort = new AbortController();
-    historyRequest.current += 1;
+    const queryKey = ["finding-review-history", finding.id, finding.version, ++historyRequest.current];
+    let current = true;
     setHistoryLoading(true);
     setHistoryFailure(false);
-    adapter.history(finding.id, { signal: abort.signal }).then(value => {
-      if (!abort.signal.aborted) setHistory(value);
+    historyClient.fetchQuery({
+      queryKey,
+      queryFn: ({ signal }) => adapter.history!(finding.id, { signal }),
+    }).then(value => {
+      if (current) setHistory(value);
     }).catch(error => {
-      if (abort.signal.aborted) return;
+      if (!current) return;
       setHistoryFailure(true);
       if (error instanceof FindingCommandError && ["unauthenticated", "forbidden"].includes(error.kind)) clearProtectedState(error.kind);
-    }).finally(() => { if (!abort.signal.aborted) setHistoryLoading(false); });
-    return () => abort.abort();
-  }, [adapter, finding.id, finding.version, refresh]);
+    }).finally(() => { if (current) setHistoryLoading(false); });
+    return () => {
+      current = false;
+      void historyClient.cancelQueries({ queryKey, exact: true });
+    };
+  }, [adapter, finding.id, finding.version, historyClient, refresh]);
 
   const uncertain = failure === "unavailable" && attempt.current !== null;
   const active = uncertain ? draftAction : actions.find((action) => action.id === activeId) ?? draftAction;
@@ -83,7 +89,6 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     setActiveId(null);
     setDraftAction(null);
     reset();
-    setDispatch(EMPTY_DISPATCH);
     setHistory(null);
     if (kind === "unauthenticated") onUnauthenticated?.();
     else onForbidden?.();
@@ -109,7 +114,6 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
     setActiveId(id);
     setDraftAction(actions.find(action => action.id === id) ?? null);
     reset();
-    setDispatch(EMPTY_DISPATCH);
     setDispatchErrors({});
     setErrors({});
     setFailure(null);
@@ -120,14 +124,15 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!active || pending || refreshing || version === undefined || !canSubmit) return;
-    const parsed = uncertain ? null : parseCommandInput(active, getValues());
-    const dispatchFound = active.dispatch && !uncertain ? validateDispatchInput(dispatch) : {};
+    const input = getValues();
+    const parsed = uncertain ? null : parseCommandInput(active, input);
+    const dispatchFound = active.dispatch && !uncertain ? validateDispatchInput(input.dispatch) : {};
     setErrors(parsed && !parsed.success ? parsed.errors : {});
     setDispatchErrors(dispatchFound);
     setFailure(null);
     if (Object.keys(dispatchFound).length > 0 || (parsed && !parsed.success)) return;
 
-    const command = parsed ? active.build({ ...parsed.input, dispatch }) : attempt.current!.command;
+    const command = parsed ? active.build({ ...parsed.input, dispatch: input.dispatch }) : attempt.current!.command;
     const commandVersion = uncertain ? attempt.current!.version : version;
     const payload = JSON.stringify([finding.id, commandVersion, command]);
     if (attempt.current?.payload !== payload) attempt.current = { payload, key: newIdempotencyKey(), command, version: commandVersion };
@@ -141,7 +146,6 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
       setActiveId(null);
       setDraftAction(null);
       reset();
-      setDispatch(EMPTY_DISPATCH);
       attempt.current = null;
       setRefresh(value => value + 1);
       onChanged();
@@ -162,5 +166,5 @@ export function useFindingCommandRunner({finding,adapter,onChanged,onUnauthentic
   }
 
 
-  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason:(value:string)=>setValue("reason",value),grade,setGrade:(value:string)=>setValue("grade",value),errors,dispatch,setDispatch,dispatchErrors,pending,failure,done,submit };
+  return { history,historyLoading,historyFailure,refreshHistory:()=>setRefresh(value=>value+1),pagePending,loadMore,actions,unavailable,active,activeId,uncertain,canSubmit,version,open,cancel:()=>{setActiveId(null);setDraftAction(null);},reason,setReason:(value:string)=>setValue("reason",value),grade,setGrade:(value:string)=>setValue("grade",value),errors,dispatch,setDispatch:(values:DispatchValues)=>setValue("dispatch",values),dispatchErrors,pending,failure,done,submit };
 }

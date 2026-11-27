@@ -1,6 +1,5 @@
 import type { FindingCommand, FindingCommandFailureKind, FindingReviewHistory as ReviewHistory } from "../../adapters/findingCommands";
 import type { FindingState } from "../../domain/finding";
-import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft";
 import { wallTimeToIso } from "../../domain/time";
 export type Grade = "GENERAL" | "MAJOR";
 export const REASON_MAX = 4000;
@@ -110,15 +109,4 @@ export const UNAVAILABLE: Partial<Record<FindingState, readonly { label: string;
 export interface CommandInputErrors {
   reason?: string;
   grade?: string;
-}
-
-/** 派单本地校验；服务端仍会重新校验。到期时间只检查格式，是否合理由服务端判断。 */
-export function validateDispatchInput(values: DispatchValues): DispatchErrors {
-  const errors: DispatchErrors = {};
-  if (!values.assigneeMemberId) errors.assignee = "请选择整改责任人";
-  if (!values.dueAt) errors.dueAt = "请填写整改期限";
-  else if (wallTimeToIso(values.dueAt) === null) errors.dueAt = "整改期限格式不正确";
-  if (codePointLength(values.requirements) > REQUIREMENTS_MAX) errors.requirements = `不能超过 ${REQUIREMENTS_MAX} 个字`;
-  else if (!hasVisibleCharacter(values.requirements)) errors.requirements = "请填写整改要求";
-  return errors;
 }

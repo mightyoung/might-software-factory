@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FindingCommandPanel } from "./FindingCommandPanel";
@@ -171,6 +172,33 @@ describe("分派整改", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("associates dispatch field errors with their input, without making a write", () => {
+    const { run } = dispatchSetup();
+    fireEvent.click(screen.getByRole("button", { name: "分派整改" }));
+    fireEvent.change(screen.getByLabelText(/整改要求/), { target: { value: "🔧".repeat(4001) } });
+    fireEvent.click(screen.getByRole("button", { name: "确认分派整改" }));
+    expect(screen.getByLabelText(/整改期限/)).toHaveAccessibleDescription(/请填写整改期限/);
+    expect(screen.getByLabelText(/整改要求/)).toHaveAccessibleDescription("不能超过 4000 个字");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("replays the exact dispatch payload and key after the result is uncertain", async () => {
+    const { run } = dispatchSetup();
+    run.mockRejectedValueOnce(new FindingCommandError("unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "分派整改" }));
+    fireEvent.click(await screen.findByLabelText("张伟"));
+    fireEvent.change(screen.getByLabelText(/整改期限/), { target: { value: "2026-12-01T18:00" } });
+    fireEvent.change(screen.getByLabelText(/整改要求/), { target: { value: "  复测防护罩  " } });
+    fireEvent.click(screen.getByRole("button", { name: "确认分派整改" }));
+    const retry = await screen.findByRole("button", { name: "重试" });
+    expect(screen.getByLabelText(/整改期限/)).toBeDisabled();
+    expect(screen.getByLabelText(/整改要求/)).toBeDisabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run.mock.calls[1].slice(0, 3)).toEqual(["f1", 4, { kind: "dispatch", assigneeMemberId: "m2", dueAt: "2026-12-01T18:00:00+08:00", requirements: "复测防护罩" }]);
+    expect(run.mock.calls[1][3].idempotencyKey).toBe(run.mock.calls[0][3].idempotencyKey);
+  });
+
   it("输入姓名开头会防抖后重新搜索；没有结果时说明", async () => {
     const search: Search = vi.fn(async (_id, q) => page(q.prefix === "赵" ? [] : people));
     dispatchSetup(search);
@@ -179,6 +207,39 @@ describe("分派整改", () => {
     fireEvent.change(screen.getByLabelText("按姓名开头搜索成员"), { target: { value: "赵" } });
     expect(await screen.findByText("没有符合条件的成员。")).toBeInTheDocument();
     expect(search).toHaveBeenLastCalledWith("f1", expect.objectContaining({ prefix: "赵" }), expect.anything());
+  });
+
+  it("cancels the old scoped query after an input change and never writes on search or denial", async () => {
+    const query = vi.spyOn(QueryClient.prototype, "fetchQuery");
+    let finishOld!: (value: ReturnType<typeof page>) => void;
+    const old = new Promise<ReturnType<typeof page>>((resolve) => { finishOld = resolve; });
+    const search = vi.fn().mockReturnValueOnce(old).mockRejectedValueOnce(new FindingCommandError("forbidden"));
+    try {
+      const { run } = dispatchSetup(search);
+      fireEvent.click(screen.getByRole("button", { name: "分派整改" }));
+      await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+      expect(query.mock.calls.filter(([call]) => call.queryKey[0] === "dispatch-candidates")).toHaveLength(1);
+      const oldSignal: AbortSignal = search.mock.calls[0][2];
+      fireEvent.change(screen.getByRole("searchbox"), { target: { value: "赵" } });
+      expect(oldSignal.aborted).toBe(true);
+      expect(search).toHaveBeenCalledTimes(1);
+      finishOld(page(people));
+      expect(await screen.findByRole("alert")).toHaveTextContent("无权");
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(screen.queryByLabelText("张三")).not.toBeInTheDocument();
+      expect(run).not.toHaveBeenCalled();
+    } finally { query.mockRestore(); }
+  });
+
+  it("reports an expired candidate-lookup session exactly once, without retrying or writing", async () => {
+    const onUnauthenticated = vi.fn();
+    const adapter = { run: vi.fn(), searchDispatchCandidates: vi.fn().mockRejectedValue(new FindingCommandError("unauthenticated")) };
+    render(<FindingCommandPanel finding={record("SAFETY_DISPATCH_PENDING")} adapter={adapter} onChanged={vi.fn()} onUnauthenticated={onUnauthenticated} />);
+    fireEvent.click(screen.getByRole("button", { name: "分派整改" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("登录已失效");
+    expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+    expect(adapter.searchDispatchCandidates).toHaveBeenCalledTimes(1);
+    expect(adapter.run).not.toHaveBeenCalled();
   });
 
   it("分页：加载更多带上 afterMemberId 并追加", async () => {

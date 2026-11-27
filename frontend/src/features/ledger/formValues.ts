@@ -1,4 +1,7 @@
+import * as z from "zod/mini";
 import { validTimestamp, validUnicode, UUID, type LedgerDefinition, type LedgerDraft, type LedgerUse, type LedgerValues } from "./model";
+
+const scalarText = z.custom<string>((value) => typeof value === "string" && validUnicode(value));
 
 export function initialDraft(definition: LedgerDefinition, use: LedgerUse, values: LedgerValues = {}): LedgerDraft {
   return Object.fromEntries(Object.entries(definition.inputFields).filter(([, field]) => field.uses.includes(use)).map(([key]) => [key, values[key] === null || values[key] === undefined ? "" : String(values[key])]));
@@ -9,7 +12,7 @@ export function formValues(definition: LedgerDefinition, use: LedgerUse, draft: 
     if (!field.uses.includes(use)) continue;
     const raw = draft[key] ?? "";
     if (raw === "") { values[key] = null; if (field.required) errors[key] = "请填写此项。"; continue; }
-    if (!validUnicode(raw) || (field.maxLength > 0 && [...raw].length > field.maxLength)) { errors[key] = "字符无效或超过长度限制。"; continue; }
+    if (!scalarText.safeParse(raw).success || (field.maxLength > 0 && [...raw].length > field.maxLength)) { errors[key] = "字符无效或超过长度限制。"; continue; }
     if (field.type === "INTEGER") {
       if (!/^-?\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) { errors[key] = "请输入安全范围内的整数。"; continue; }
       values[key] = Number(raw);

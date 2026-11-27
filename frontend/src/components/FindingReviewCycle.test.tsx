@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FindingDetails } from "./FindingDetails";
@@ -16,6 +17,30 @@ function setup(data = snapshot(), run = vi.fn().mockResolvedValue({ state: "REPO
   return { ...view, adapter, run, props };
 }
 describe("review cycles (mock HTTP authority snapshots)", () => {
+  it("runs one scoped Query history read per snapshot and cancels a superseded version", async () => {
+    const fetchQuery = vi.spyOn(QueryClient.prototype, "fetchQuery");
+    let resolveOld!: (history: History) => void;
+    const old = new Promise<History>((resolve) => { resolveOld = resolve; });
+    const history = vi.fn().mockReturnValueOnce(old)
+      .mockResolvedValueOnce(snapshot({ currentVersion: 13, availableReviewActions: ["NOT_ESTABLISHED"] }));
+    const adapter = { run: vi.fn(), history };
+    const onChanged = vi.fn();
+    try {
+      const view = render(<FindingCommandPanel finding={finding} adapter={adapter} onChanged={onChanged} />);
+      expect(history).toHaveBeenCalledTimes(1);
+      expect(fetchQuery).toHaveBeenCalledTimes(1);
+      const oldSignal: AbortSignal = history.mock.calls[0][1].signal;
+      view.rerender(<FindingCommandPanel finding={{ ...finding, version: 2 }} adapter={adapter} onChanged={onChanged} />);
+      expect(await screen.findByRole("button", { name: "判定未成立" })).toBeInTheDocument();
+      expect(oldSignal.aborted).toBe(true);
+      resolveOld(snapshot());
+      await waitFor(() => expect(fetchQuery).toHaveBeenCalledTimes(2));
+      expect(history).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "安全确认" })).not.toBeInTheDocument();
+      expect(adapter.run).not.toHaveBeenCalled();
+    } finally { fetchQuery.mockRestore(); }
+  });
+
   it("uses server stage/version/cycle; return omits grade even after an approval draft", async () => {
     const { run } = setup();
     fireEvent.click(await screen.findByRole("button", { name: "安全确认" }));

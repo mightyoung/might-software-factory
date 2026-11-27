@@ -8,7 +8,7 @@ const dist = join(import.meta.dirname, "..", "dist");
 const editorChunk = file => file.startsWith("LedgerConfigPage-") || file.startsWith("PermissionConfigPage-");
 const recordsChunk = file => file.startsWith("PublishedLedgersPage-");
 const bundles = [
-  { name: "工作台核心（含 Astryx）", directory: "assets", include: file => !editorChunk(file) && !recordsChunk(file) && !file.startsWith("OfficeDialog-"), limits: { js: 246, css: 56 } },
+  { name: "工作台核心（含 Astryx）", directory: "assets", include: file => !editorChunk(file) && !recordsChunk(file) && !file.startsWith("OfficeDialog-"), limits: { js: 248, css: 56 } },
   { name: "按需载入的 Office 对话框", directory: "assets", include: file => file.startsWith("OfficeDialog-"), limits: { js: 1.5, css: 1 } },
   { name: "按需载入的台账与权限配置页", directory: "assets", include: editorChunk, limits: { js: 9, css: 1.5 } },
   { name: "按需载入的业务台账页", directory: "assets", include: recordsChunk, limits: { js: 6, css: 1.5 } },

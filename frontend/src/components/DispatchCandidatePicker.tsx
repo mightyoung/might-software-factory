@@ -6,6 +6,7 @@ import {
   type FindingCommandAdapter,
   type FindingCommandFailureKind,
 } from "../adapters/findingCommands";
+import { createWorkspaceQueryClient } from "../api/workspaceQueryClient";
 import { codePointLength } from "../domain/findingDraft";
 
 const PREFIX_MAX = 100;
@@ -43,7 +44,8 @@ interface Options {
 /** 按显示名前缀搜索候选：输入防抖，新请求取消旧请求，分页追加。 */
 function useDispatchCandidates({ findingId, findingVersion, adapter, onStale, onUnauthenticated }: Options, prefix: string) {
   const [state, setState] = useState<CandidateState>(INITIAL);
-  const controller = useRef<AbortController | null>(null);
+  const [client] = useState(createWorkspaceQueryClient);
+  const request = useRef<readonly unknown[] | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
   function receive(page: DispatchCandidatePage, append: boolean) {
@@ -61,18 +63,27 @@ function useDispatchCandidates({ findingId, findingVersion, adapter, onStale, on
   function fail(error: unknown) {
     const kind = error instanceof FindingCommandError ? error.kind : "unavailable";
     if (kind === "unauthenticated") onUnauthenticated?.();
-    setState((current) => ({ ...current, status: "error", failure: kind, loadingMore: false }));
+    setState((current) => ({ ...(kind === "forbidden" || kind === "unauthenticated" ? INITIAL : current), status: "error", failure: kind, loadingMore: false }));
+  }
+
+  function cancelRead() {
+    const queryKey = request.current;
+    request.current = null;
+    if (queryKey) void client.cancelQueries({ queryKey, exact: true });
   }
 
   async function fetchPage(afterMemberId: string | null, append: boolean) {
-    controller.current?.abort();
-    const abort = new AbortController();
-    controller.current = abort;
+    cancelRead();
+    const queryKey = ["dispatch-candidates", findingId, findingVersion, prefix, afterMemberId, reloadTick];
+    request.current = queryKey;
     try {
-      const page = await adapter.searchDispatchCandidates!(findingId, { prefix, afterMemberId, limit: PAGE_SIZE }, abort.signal);
-      if (!abort.signal.aborted) receive(page, append);
+      const page = await client.fetchQuery({
+        queryKey,
+        queryFn: ({ signal }) => adapter.searchDispatchCandidates!(findingId, { prefix, afterMemberId, limit: PAGE_SIZE }, signal),
+      });
+      if (request.current === queryKey) receive(page, append);
     } catch (error) {
-      if (!abort.signal.aborted) fail(error);
+      if (request.current === queryKey) fail(error);
     }
   }
 
@@ -82,11 +93,11 @@ function useDispatchCandidates({ findingId, findingVersion, adapter, onStale, on
     const timer = window.setTimeout(() => void fetchPage(null, false), prefix ? DEBOUNCE_MS : 0);
     return () => {
       window.clearTimeout(timer);
-      controller.current?.abort();
+      cancelRead();
     };
-    // fetchPage 每次渲染重建；只在查询词、记录或手动重试变化时重新搜索。
+    // fetchPage 每次渲染重建；只在查询词、记录、版本、适配器或手动重试变化时重新搜索。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefix, findingId, reloadTick]);
+  }, [prefix, findingId, findingVersion, adapter, reloadTick]);
 
   return {
     state,
@@ -133,7 +144,7 @@ export function DispatchCandidatePicker({ value, onChange, error, disabled, ...o
       />
       {tooLong && <p className="field-error">搜索词不能超过 {PREFIX_MAX} 个字</p>}
       <p className="field-hint">候选只是提示；提交时服务端会再次校验权限、版本和成员资格。</p>
-      {chosen && value === chosen.memberId && <p className="field-hint" role="status">已选：{chosen.displayName}</p>}
+      {chosen && state.failure !== "forbidden" && state.failure !== "unauthenticated" && value === chosen.memberId && <p className="field-hint" role="status">已选：{chosen.displayName}</p>}
 
       {state.status === "loading" && <p className="field-hint" role="status">正在加载候选成员…</p>}
       {state.status === "error" && (

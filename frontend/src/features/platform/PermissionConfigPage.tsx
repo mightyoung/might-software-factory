@@ -1,3 +1,4 @@
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -44,7 +45,10 @@ export function PermissionConfigRoute() {
 export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: PermissionConfigRouteProps) {
   const lifetime = useRef(0);
   useEffect(() => { lifetime.current += 1;return () => { lifetime.current += 1; }; }, [adapter]);
-  const [data, setData] = useState<PermissionAdminData | null>(null);
+  const client = useMemo(createWorkspaceQueryClient, [adapter]);
+  const [loaded, setLoaded] = useState<{ adapter: PermissionAdminAdapter; data: PermissionAdminData } | null>(null);
+  const data = loaded?.adapter === adapter ? loaded.data : null;
+  const request = useRef(0);
   const [loadError, setLoadError] = useState<PermissionAdminFailure | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<{
@@ -58,33 +62,38 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   const reload = useCallback(
-    async (signal?: AbortSignal, keepSelection?: string | null) => {
-      const mine = lifetime.current;
+    async (keepSelection?: string | null) => {
+      const mine = ++request.current;
       try {
-        const next = await adapter.load(signal);
-        if (signal?.aborted || mine !== lifetime.current) return;
+        const next = await client.fetchQuery({
+          queryKey: ["permission-admin-catalog"],
+          queryFn: ({ signal }) => adapter.load(signal),
+        });
+        if (mine !== request.current) return;
         setPendingSwitch(null);
-        setData(next);
+        setLoaded({ adapter, data: next });
         setLoadError(null);
         const wanted = keepSelection ?? null;
         const selected = next.roles.find((role) => role.id === wanted) ?? next.roles[0] ?? null;
         setSelectedId(selected?.id ?? null);
         setDraft(new Set(selected?.permissionCodes ?? []));
       } catch (error) {
-        if (signal?.aborted || mine !== lifetime.current) return;
+        if (mine !== request.current) return;
         const kind = failureOf(error);
         if (kind === "unauthenticated") onUnauthenticated();
         else setLoadError(kind);
       }
     },
-    [adapter, onUnauthenticated],
+    [adapter, client, onUnauthenticated],
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void reload(controller.signal);
-    return () => controller.abort();
-  }, [reload]);
+    void reload();
+    return () => {
+      request.current += 1;
+      void client.cancelQueries();
+    };
+  }, [client, reload]);
 
   const selected: RoleView | null = useMemo(
     () => data?.roles.find((role) => role.id === selectedId) ?? null,
@@ -141,9 +150,10 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
       const updated = await adapter.saveRolePermissions(selected.id, [...draft].sort(), selected.version);
       if (mine !== lifetime.current) return;
       persisted = true;
-      setData((current) =>
-        current ? { ...current, roles: current.roles.map((role) => (role.id === updated.id ? updated : role)) } : current,
-      );
+      setLoaded((current) => current?.adapter === adapter ? {
+        adapter,
+        data: { ...current.data, roles: current.data.roles.map((role) => (role.id === updated.id ? updated : role)) },
+      } : current);
       setDraft(new Set(updated.permissionCodes));
       await onPermissionsChanged?.();
       if (mine !== lifetime.current) return;
@@ -157,7 +167,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
         return;
       }
       setNotice({ tone: "error", text: FAILURE_MESSAGE[kind] });
-      if (kind === "conflict") await reload(undefined, selected.id);
+      if (kind === "conflict") await reload(selected.id);
     } finally {
       if (mine === lifetime.current) setSaving(false);
     }

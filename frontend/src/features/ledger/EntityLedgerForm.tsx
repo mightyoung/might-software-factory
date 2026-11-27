@@ -1,3 +1,4 @@
+import { useForm } from "react-hook-form";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError } from "../../api/httpClient";
 import { useLeaveGuard } from "../../routing/router";
@@ -12,7 +13,10 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
   onSuccess(result: LedgerCommand): void; onUnauthenticated(): void; onRefresh(): void;
 }) {
   const restored = useRef(peekEntityDraft(owner, draftKey));
-  const [draft, setDraft] = useState<LedgerDraft>(() => ({ ...initialDraft(definition, use, record?.values), ...restored.current?.values }));
+  const defaults = useRef<LedgerDraft | null>(null);
+  defaults.current ??= { ...initialDraft(definition, use, record?.values), ...restored.current?.values };
+  const { getValues, setValue, watch } = useForm<LedgerDraft>({ defaultValues: defaults.current });
+  const draft = watch();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,11 +41,12 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
       stashEntityDraft(owner, draftKey, { request: current.pending ?? undefined, values: current.draft, definitionVersion: definition.definitionVersion, key: current.pending?.key ?? null, fingerprint: current.pending?.fingerprint ?? null, locked: current.locked, expectedVersion: expectedVersion.current });
     }
   }, [owner, draftKey, definition.definitionVersion]);
-  function change(key: string, value: string) { setDraft(current => ({ ...current, [key]: value })); setDirty(true); setErrors(current => ({ ...current, [key]: "" })); }
+  function change(key: string, value: string) { setValue(key, value); setDirty(true); setErrors(current => ({ ...current, [key]: "" })); }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || (!reviewed && !locked)) return;
     const generation = lifetime.current;
+    const draft = getValues();
     let request = pending;
     if (!locked) {
       const validation = formValues(definition, use, draft);
@@ -86,13 +91,14 @@ export function EntityLedgerForm({ definition, use, adapter, record, owner, draf
       const field = definition.inputFields[key]!;
       const id = `entity-field-${key}`;
       const disabled = busy || locked;
+      const errorId = errors[key] ? `${id}-error` : undefined;
       return <div className="report-field" key={key}>
         {field.type !== "REFERENCE" && <label htmlFor={id}>{field.label}{field.required ? " *" : ""}</label>}
         {field.type === "REFERENCE" ? <ReferencePicker id={id} label={field.label} referenceKey={field.referenceKey!} definition={definition} use={use} adapter={adapter} value={draft[key] ?? ""} disabled={disabled} onUnauthenticated={onUnauthenticated} onValidated={value => setReferenceChoices(current => ({ ...current, [key]: value }))} onChange={value => { change(key, value); setReferenceChoices(current => ({ ...current, [key]: value })); }} />
-          : field.type === "MULTILINE_TEXT" ? <textarea id={id} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errors[key])} onChange={event => change(key, event.target.value)} />
+          : field.type === "MULTILINE_TEXT" ? <textarea id={id} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={event => change(key, event.target.value)} />
             : field.type === "ENUM" ? <select id={id} value={draft[key] ?? ""} disabled={disabled} onChange={event => change(key, event.target.value)}><option value="">请选择</option>{field.allowedValues.map(value => <option key={value} value={value}>{valueLabel(definition.fields[key]?.valueLabels, value)}</option>)}</select>
-              : <input id={id} type="text" inputMode={field.type === "INTEGER" ? "numeric" : undefined} placeholder={field.type === "DATE_TIME" ? "2026-11-15T10:30:00+08:00" : undefined} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errors[key])} onChange={event => change(key, event.target.value)} />}
-        {errors[key] && <p role="alert">{errors[key]}</p>}
+              : <input id={id} type="text" inputMode={field.type === "INTEGER" ? "numeric" : undefined} placeholder={field.type === "DATE_TIME" ? "2026-11-15T10:30:00+08:00" : undefined} value={draft[key] ?? ""} disabled={disabled} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={event => change(key, event.target.value)} />}
+        {errorId && <p id={errorId} role="alert">{errors[key]}</p>}
       </div>;
     })}
     {error && <p role="alert">{error}</p>}

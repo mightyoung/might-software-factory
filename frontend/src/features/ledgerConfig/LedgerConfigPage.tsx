@@ -1,3 +1,4 @@
+import { useForm } from "react-hook-form";
 import { useQuery } from "@tanstack/react-query";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { Button } from "@astryxdesign/core/Button";
@@ -19,12 +20,12 @@ import type {
 } from "./model";
 import "./ledger-config.css";
 
-const empty = (): LedgerConfiguration => ({
-  name: "",
+const EMPTY_METADATA = { key: "", name: "" };
+const EMPTY_STRUCTURE: Omit<LedgerConfiguration, "name"> = {
   fields: [],
   listFields: [],
   queryFields: [],
-});
+};
 const fieldTypes = {
   text: "文本",
   number: "数字",
@@ -130,9 +131,11 @@ export function LedgerConfigPage(props: LedgerConfigProps) {
 }
 
 function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated, active = true }: LedgerConfigProps) {
-  const [key, setKey] = useState("");
+  const { watch, setValue, reset } = useForm({ defaultValues: EMPTY_METADATA });
+  const { key, name } = watch();
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
-  const [draft, setDraft] = useState<LedgerConfiguration>(empty);
+  const [structure, setStructure] = useState(EMPTY_STRUCTURE);
+  const draft = { name, ...structure };
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
   const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
@@ -146,8 +149,9 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   const [recovery, setRecovery] = useState<Operation | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<SwitchDraft | null>(null);
   useEffect(() => { setPendingSwitch(null); }, [adapter, active]);
+  const { name: savedName, ...savedStructure } = snapshot?.definition ?? { name: "", ...EMPTY_STRUCTURE };
   const dirty = snapshot
-    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
+    ? name !== savedName || JSON.stringify(structure) !== JSON.stringify(savedStructure)
     : Boolean(key || draft.name || draft.fields.length);
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
@@ -221,7 +225,9 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   }
   function showSnapshot(next: ConfigurationSnapshot) {
     setSnapshot(next);
-    setDraft(next.definition);
+    const { name, ...structure } = next.definition;
+    setValue("name", name);
+    setStructure(structure);
     setCompared(null);
     setCopySource(null);
   }
@@ -242,7 +248,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
       if (mine !== lifetime.current) return;
       const latest = versions[0];
       if (!latest) throw new Error("Empty configuration history");
-      setKey(item.key);
+      setValue("key", item.key);
       showSnapshot(latest);
       setHistory(versions);
     } catch (cause) {
@@ -252,9 +258,15 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     }
   }
   function create(source: ConfigurationSnapshot | null) {
-    setKey("");
     setSnapshot(null);
-    setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
+    if (source) {
+      const { name, ...structure } = structuredClone(source.definition);
+      reset({ key: "", name: name + "副本" });
+      setStructure(structure);
+    } else {
+      reset(EMPTY_METADATA);
+      setStructure(EMPTY_STRUCTURE);
+    }
     setCopySource(source);
     setHistory([]);
     setCompared(null);
@@ -262,7 +274,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     setNotice("");
   }
   function updateField(index: number, patch: Partial<LedgerField>) {
-    setDraft((current) => {
+    setStructure((current) => {
       const previous = current.fields[index]!;
       const fields = current.fields.map((field, position) =>
         position === index ? { ...field, ...patch } : field,
@@ -280,7 +292,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     });
   }
   function toggleView(property: "listFields" | "queryFields", field: string) {
-    setDraft((current) => ({
+    setStructure((current) => ({
       ...current,
       [property]: current[property].includes(field)
         ? current[property].filter((value) => value !== field)
@@ -457,7 +469,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
                 value={key}
                 disabled={snapshot !== null}
                 pattern="[a-z][a-z0-9_]*"
-                onChange={(event) => setKey(event.target.value)}
+                onChange={(event) => setValue("key", event.target.value)}
                 placeholder="purchase_request"
               />
             </label>
@@ -465,12 +477,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
               台账名称
               <input
                 value={draft.name}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    name: event.target.value,
-                  }))
-                }
+                onChange={(event) => setValue("name", event.target.value)}
               />
             </label>
             <h2>字段</h2>
@@ -537,7 +544,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
                   variant="secondary"
                   isDisabled={!canManage || locked}
                   onClick={() =>
-                    setDraft((current) => ({
+                    setStructure((current) => ({
                       ...current,
                       fields: current.fields.filter(
                         (_, position) => position !== index,
@@ -559,7 +566,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
                 variant="secondary"
                 isDisabled={locked || loading}
                 onClick={() =>
-                  setDraft((current) => ({
+                  setStructure((current) => ({
                     ...current,
                     fields: [
                       ...current.fields,
@@ -574,7 +581,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
             definition={draft}
             disabled={!canManage || locked || loading}
             onChange={(property, keys) =>
-              setDraft((current) => ({ ...current, [property]: keys }))
+              setStructure((current) => ({ ...current, [property]: keys }))
             }
           />
           <LedgerViewPreview definition={draft} />

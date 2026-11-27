@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 import { codePointLength, hasVisibleCharacter } from "../../domain/findingDraft";
-import { REASON_MAX, type ActionDef, type CommandInputErrors, type Grade } from "./commandActions";
+import { wallTimeToIso } from "../../domain/time";
+import { REQUIREMENTS_MAX, REASON_MAX, type DispatchErrors, type DispatchValues, type ActionDef, type CommandInputErrors, type Grade } from "./commandActions";
 
 export interface CommandInput { reason: string; grade: string }
 const gradeSchema = z.custom<Grade>((value) => value === "GENERAL" || value === "MAJOR");
@@ -27,4 +28,21 @@ export function parseCommandInput(action: ActionDef, input: CommandInput):
     reason: action.cycleText ? input.reason : input.reason.trim(),
     grade: gradeCheck.success ? gradeCheck.data : "GENERAL",
   } };
+}
+
+
+const dispatchDeadline = z.custom<string>((value) => typeof value === "string" && wallTimeToIso(value) !== null);
+const dispatchRequirements = z.custom<string>((value) =>
+  typeof value === "string" && codePointLength(value) <= REQUIREMENTS_MAX && hasVisibleCharacter(value),
+);
+
+/** The server remains authoritative for assignment eligibility and deadline policy. */
+export function validateDispatchInput({ assigneeMemberId, dueAt, requirements }: DispatchValues): DispatchErrors {
+  const errors: DispatchErrors = {};
+  if (!assigneeMemberId) errors.assignee = "请选择整改责任人";
+  if (!dispatchDeadline.safeParse(dueAt).success) errors.dueAt = dueAt ? "整改期限格式不正确" : "请填写整改期限";
+  if (!dispatchRequirements.safeParse(requirements).success) errors.requirements = codePointLength(requirements) > REQUIREMENTS_MAX
+    ? `不能超过 ${REQUIREMENTS_MAX} 个字`
+    : "请填写整改要求";
+  return errors;
 }
