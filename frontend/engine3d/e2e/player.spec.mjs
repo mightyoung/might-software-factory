@@ -61,3 +61,35 @@ test("Player tour starts only on request, advances in order and manual selection
   await player.clock.runFor(3100);
   await expect(player.getByText("已选：排风装置 03。")).toBeVisible();
 });
+
+test("authored names and dwell times survive Studio export into Player", async ({ page, context }) => {
+  await page.goto("/");
+  const editor = page.getByRole("region", { name: "巡检机位编排" });
+  async function add(id, title, seconds) {
+    await editor.getByLabel("机位设备").selectOption(id);
+    await editor.getByLabel("机位名称").fill(title);
+    await editor.getByLabel("停留（秒）").fill(String(seconds));
+    await editor.getByRole("button", { name: "添加机位" }).click();
+  }
+  await add("fan-03", "排风观察", 2);
+  await add("pump-01", "循环机位", 5);
+  await expect(editor.getByRole("listitem")).toHaveText([/排风观察 · 2 秒/, /循环机位 · 5 秒/]);
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "生成离线放映文件" }).click();
+  const chunks = [];
+  for await (const chunk of await (await downloading).createReadStream()) chunks.push(chunk);
+  const player = await context.newPage();
+  await player.clock.install();
+  await player.goto("/player.html");
+  await player.getByLabel("载入放映文件").setInputFiles({
+    name: "authored-tour.json", mimeType: "application/json", buffer: Buffer.concat(chunks),
+  });
+  await player.getByRole("button", { name: "开始设备巡检" }).click();
+  await expect(player.getByText("正在放映机位：排风观察。")).toBeVisible();
+  await player.clock.runFor(2100);
+  await expect(player.getByText("正在放映机位：循环机位。")).toBeVisible();
+  await player.clock.runFor(3100);
+  await expect(player.getByText("正在放映机位：循环机位。")).toBeVisible();
+  await player.clock.runFor(2100);
+  await expect(player.getByText("设备巡检已完成。")).toBeVisible();
+});
