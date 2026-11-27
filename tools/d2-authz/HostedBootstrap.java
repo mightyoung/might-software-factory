@@ -124,8 +124,7 @@ class HostedBootstrap {
                 sql(c, "select set_config('app.tenant_id',?,true)", tenant.toString());
                 UUID org = id(tenant, "org"), scope = id(tenant, "custody");
                 sql(c, "insert into public.tenant(id,code,name,status,auth_epoch) values (?,'d1seed','D1 isolated tooling seed v1','ACTIVE',1)", tenant);
-                for (String app : List.of("platform", "tooling"))
-                    sql(c, "insert into public.tenant_application(tenant_id,application_key,enabled,version) values (?,?,true,1)", tenant, app);
+                sql(c, "insert into public.tenant_application(tenant_id,application_key,enabled,version) values (?,'tooling',true,1)", tenant);
                 sql(c, "insert into public.org_unit(tenant_id,id,code,name,active) values (?,?,'D1-ORG-A','AU-08 synthetic organization',true)", tenant, org);
                 sql(c, "insert into public.tool_custody_scope(tenant_id,id,organization_id,code,name,active) values (?,?,?,'D1-SCOPE-A','AU-08 synthetic custody',true)", tenant, scope, org);
                 for (String actor : List.of("reader","keeper")) seedActor(c, tenant, org, scope, actor);
