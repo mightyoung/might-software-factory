@@ -1,6 +1,6 @@
 import { CameraTour } from "../core/CameraTour.ts";
 import { mountEngine } from "../core/EngineKernel.ts";
-import type { TourPoint } from "../schema/studioSnapshot.ts";
+import { hudKeys, hudLabels, type TourPoint } from "../schema/studioSnapshot.ts";
 import { MAX_PLAYER_BYTES, parsePlayerSnapshot } from "../schema/playerSnapshot.ts";
 
 const fileInput = document.querySelector<HTMLInputElement>("#play-file")!;
@@ -8,6 +8,8 @@ const canvas = document.querySelector<HTMLCanvasElement>("#play-canvas")!;
 const list = document.querySelector<HTMLUListElement>("#play-list")!;
 const status = document.querySelector<HTMLParagraphElement>("#play-status")!;
 const error = document.querySelector<HTMLParagraphElement>("#play-error")!;
+const metrics = document.querySelector<HTMLDListElement>("#play-metrics")!;
+const hud = document.querySelector<HTMLElement>("#play-hud")!;
 const graphics = document.querySelector<HTMLParagraphElement>("#play-graphics")!;
 const selection = document.querySelector<HTMLParagraphElement>("#play-selection")!;
 const labels = { normal: "正常", warning: "预警", alarm: "告警" };
@@ -67,7 +69,7 @@ fileInput.addEventListener("change", async () => {
   try {
     if (!file.name.toLowerCase().endsWith(".json") || file.size > MAX_PLAYER_BYTES)
       throw new Error("请选择大小符合要求的 JSON 放映文件。");
-    const { scene, floorplan, cameraTour } = await parsePlayerSnapshot(await file.text());
+    const { scene, floorplan, cameraTour, hudWidgets } = await parsePlayerSnapshot(await file.text());
     if (mine !== revision) return;
     if (engine) engine.replaceScene(scene);
     else engine = mountEngine(canvas, scene, (state) => {
@@ -99,6 +101,17 @@ fileInput.addEventListener("change", async () => {
       return row;
     }));
     selection.hidden = true;
+    const values = { devices: scene.devices.length, alarms: scene.devices.filter((item) => item.state === "alarm").length,
+      walls: floorplan.walls.length, zones: floorplan.zones.length };
+    const visible = hudWidgets ?? hudKeys;
+    metrics.replaceChildren(...visible.map((key) => {
+      const item = document.createElement("div"), label = document.createElement("dt"), number = document.createElement("dd");
+      label.textContent = hudLabels[key];
+      number.textContent = String(values[key]);
+      item.append(label, number);
+      return item;
+    }));
+    hud.hidden = visible.length === 0;
     error.hidden = true;
   } catch (cause) {
     if (mine !== revision) return;

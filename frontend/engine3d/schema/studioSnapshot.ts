@@ -12,10 +12,15 @@ const tourPoint = z.strictObject({
   dwellSeconds: z.number().int().min(1).max(30),
 });
 export type TourPoint = z.infer<typeof tourPoint>;
+export const hudKeys = ["devices", "alarms", "walls", "zones"] as const;
+export type HudKey = typeof hudKeys[number];
+export const hudLabels: Record<HudKey, string> = { devices: "设备", alarms: "告警", walls: "墙体", zones: "区域" };
+
 const schema = z.strictObject({
   snapshotVersion: z.literal(1),
   scene: SceneDocumentSchema,
   cameraTour: z.array(tourPoint).max(20).optional(),
+  hudWidgets: z.array(z.enum(hudKeys)).max(4).refine((keys) => new Set(keys).size === keys.length).optional(),
   floorplan: z.strictObject({
     walls: z.array(z.strictObject({ id, start: point, end: point })).max(100),
     zones: z.array(z.strictObject({ id, points: z.array(point).min(3).max(60) })).max(20),
@@ -56,8 +61,9 @@ export function parseStudioSnapshot(raw: string) {
 }
 
 export function serializeStudioSnapshot(scene: SceneDocument, floorplan: ReturnType<FloorplanDraft["snapshot"]>,
-  cameraTour: readonly TourPoint[] = []): string {
-  const raw = JSON.stringify({ snapshotVersion: 1, scene, floorplan, ...(cameraTour.length ? { cameraTour } : {}) }, null, 2);
+  cameraTour: readonly TourPoint[] = [], hudWidgets?: readonly HudKey[]): string {
+  const raw = JSON.stringify({ snapshotVersion: 1, scene, floorplan, ...(cameraTour.length ? { cameraTour } : {}),
+    ...(hudWidgets ? { hudWidgets } : {}) }, null, 2);
   parseStudioSnapshot(raw);
   return raw;
 }

@@ -93,3 +93,24 @@ test("authored names and dwell times survive Studio export into Player", async (
   await player.clock.runFor(2100);
   await expect(player.getByText("设备巡检已完成。")).toBeVisible();
 });
+
+test("authored HUD selection works on an ultrawide Player and omits unchecked cards", async ({ page, context }) => {
+  await page.goto("/");
+  const hud = page.getByRole("group", { name: "放映指标卡" });
+  await hud.getByLabel("墙体").uncheck();
+  await hud.getByLabel("区域").uncheck();
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "生成离线放映文件" }).click();
+  const chunks = [];
+  for await (const chunk of await (await downloading).createReadStream()) chunks.push(chunk);
+  const player = await context.newPage();
+  await player.setViewportSize({ width: 2560, height: 720 });
+  await player.goto("/player.html");
+  await player.getByLabel("载入放映文件").setInputFiles({
+    name: "hud.json", mimeType: "application/json", buffer: Buffer.concat(chunks),
+  });
+  const metrics = player.getByRole("region", { name: "场景指标" });
+  await expect(metrics.locator("dt")).toHaveText(["设备", "告警"]);
+  await expect(metrics.locator("dd")).toHaveText(["7", "1"]);
+  expect(await player.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(2560);
+});
