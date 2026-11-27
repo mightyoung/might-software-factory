@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSyntheticPermissionAdmin } from "../../adapters/syntheticPermissionAdmin";
@@ -13,6 +14,28 @@ describe("diffCodes", () => {
 afterEach(() => { cleanup();vi.restoreAllMocks(); });
 
 describe("PermissionConfigPage", () => {
+  it("scopes role catalog queries to the current adapter and ignores superseded responses", async () => {
+    const query = vi.spyOn(QueryClient.prototype, "fetchQuery");
+    const onUnauthenticated = vi.fn();
+    const base = createSyntheticPermissionAdmin();
+    const authorized = await base.load();
+    let returnOld!: (value: typeof authorized) => void;
+    const oldLoad = vi.fn().mockReturnValue(new Promise<typeof authorized>((resolve) => { returnOld = resolve; }));
+    const deniedLoad = vi.fn().mockRejectedValue(new PermissionAdminError("forbidden"));
+    const saveRolePermissions = vi.fn(base.saveRolePermissions);
+    const view = render(<PermissionConfigPage adapter={{ load: oldLoad, saveRolePermissions }} canManage onUnauthenticated={onUnauthenticated} />);
+    expect(query).toHaveBeenCalledTimes(1);
+    const oldSignal: AbortSignal = oldLoad.mock.calls[0][0];
+    view.rerender(<PermissionConfigPage adapter={{ load: deniedLoad, saveRolePermissions }} canManage onUnauthenticated={onUnauthenticated} />);
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => { returnOld(authorized); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("没有修改权限配置");
+    expect(screen.queryByRole("button", { name: /上报人/ })).not.toBeInTheDocument();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(deniedLoad).toHaveBeenCalledTimes(1);
+    expect(saveRolePermissions).not.toHaveBeenCalled();
+  });
+
   it("lets a manager toggle and save a role", async () => {
     render(<PermissionConfigPage adapter={createSyntheticPermissionAdmin()} canManage onUnauthenticated={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: /上报人/ }));
