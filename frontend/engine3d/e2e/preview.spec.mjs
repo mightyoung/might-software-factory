@@ -142,11 +142,13 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await page.setViewportSize({ width: 390, height: 900 });
   await page.addInitScript(() => {
     window.lastFrameDraws = 0;
+    window.planBufferReleases = 0;
     const gl = WebGL2RenderingContext.prototype;
     const clear = gl.clear;
-    const draw = gl.drawElements;
+    const draw = gl.drawElements, remove = gl.deleteBuffer;
     gl.clear = function (...args) { window.lastFrameDraws = 0; return clear.apply(this, args); };
     gl.drawElements = function (...args) { window.lastFrameDraws++; return draw.apply(this, args); };
+    gl.deleteBuffer = function (...args) { window.planBufferReleases++; return remove.apply(this, args); };
   });
   await page.goto("/");
   const frameDraws = () => page.evaluate(() => window.lastFrameDraws);
@@ -164,6 +166,8 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await expect(editor.getByRole("status")).toContainText("墙段 1 条");
   await editor.getByLabel("绘制模式").selectOption("zone");
   await editor.getByLabel("吸附网格").selectOption("0.1");
+  const undo = editor.getByRole("button", { name: "撤销墙段或区域" });
+  const redo = editor.getByRole("button", { name: "重做墙段或区域" });
   const append = async (x, z) => {
     await editor.getByLabel("X（米）").fill(String(x));
     const zInput = editor.getByLabel("Z（米）");
@@ -178,10 +182,26 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await editor.getByRole("button", { name: "清除当前草稿" }).click();
   for (const [x, z] of [[0, 0], [4, 0], [4, 3], [0, 3]]) await append(x, z);
   await expect(editor.getByRole("status")).toContainText("当前草稿约 12 平方米");
+  await expect(undo).toBeDisabled();
   await editor.getByRole("button", { name: "闭合区域" }).click();
   await expect(editor.getByRole("listitem")).toContainText("12 平方米");
   await expect(editor.locator(".plan-zone")).toHaveAttribute("points", "0,0 40,0 40,30 0,30");
   await expect(editor.locator(".plan-wall")).toHaveCount(1);
+  await undo.click();
+  await expect(editor.locator(".plan-zone")).toHaveCount(0);
+  await expect(editor.locator(".plan-wall")).toHaveCount(1);
+  const released = () => page.evaluate(() => window.planBufferReleases);
+  const before = await released();
+  await undo.click();
+  await expect(editor.locator(".plan-wall")).toHaveCount(0);
+  await expect.poll(released).toBeGreaterThan(before);
+  await expect.poll(frameDraws).toBe(baselineDraws);
+  await redo.click();
+  await expect(editor.locator(".plan-wall")).toHaveAttribute("points", "0,0 40,0");
+  await expect.poll(frameDraws).toBeGreaterThan(baselineDraws);
+  await redo.click();
+  await expect(editor.locator(".plan-zone")).toHaveAttribute("points", "0,0 40,0 40,30 0,30");
+  await expect(editor.getByRole("listitem")).toHaveText("区域 2：12 平方米");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 

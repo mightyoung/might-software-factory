@@ -10,6 +10,8 @@ export function mountFloorplanEditor(onWalls: (snapshot: FloorplanGeometrySnapsh
   const mode = document.querySelector<HTMLSelectElement>("#plan-mode")!;
   const grid = document.querySelector<HTMLSelectElement>("#plan-grid")!;
   const ortho = document.querySelector<HTMLInputElement>("#plan-ortho")!;
+  const undo = document.querySelector<HTMLButtonElement>("#plan-undo")!;
+  const redo = document.querySelector<HTMLButtonElement>("#plan-redo")!;
   const close = document.querySelector<HTMLButtonElement>("#plan-close")!;
   const summary = document.querySelector<HTMLParagraphElement>("#plan-summary")!;
   const error = document.querySelector<HTMLParagraphElement>("#plan-error")!;
@@ -35,6 +37,8 @@ export function mountFloorplanEditor(onWalls: (snapshot: FloorplanGeometrySnapsh
   }
   function render() {
     renderView();
+    undo.disabled = !draft.canUndo;
+    redo.disabled = !draft.canRedo;
     close.disabled = draft.mode !== "zone" || draft.points.length < 3;
     const area = draft.mode === "zone" && draft.points.length >= 3 ? ` 当前草稿约 ${polygonArea(draft.points)} 平方米。` : "";
     summary.textContent = `墙段 ${draft.walls.length} 条，区域 ${draft.zones.length} 个。 草稿 ${draft.points.length} 个点。${area}`;
@@ -85,6 +89,14 @@ export function mountFloorplanEditor(onWalls: (snapshot: FloorplanGeometrySnapsh
   }));
   close.addEventListener("click", () => apply(() => { draft.finishZone(); }));
   document.querySelector("#plan-cancel")!.addEventListener("click", () => apply(() => draft.cancel()));
+  undo.addEventListener("click", () => {
+    apply(() => { draft.undo(); });
+    if (undo.disabled && !redo.disabled) redo.focus();
+  });
+  redo.addEventListener("click", () => {
+    apply(() => { draft.redo(); });
+    if (redo.disabled && !undo.disabled) undo.focus();
+  });
   render();
   return {
     snapshot: () => draft.snapshot(),
