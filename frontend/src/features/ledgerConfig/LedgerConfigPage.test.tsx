@@ -16,6 +16,15 @@ import {
   type LedgerConfigAdapter,
 } from "./model";
 
+const metadataForm = vi.hoisted(() => vi.fn());
+vi.mock("react-hook-form", async (original) => {
+  const actual = await original<typeof import("react-hook-form")>();
+  return { ...actual, useForm: (config: Parameters<typeof actual.useForm>[0]) => {
+    metadataForm(config);
+    return actual.useForm(config);
+  } };
+});
+
 const first: ConfigurationSnapshot = {
   key: "purchase",
   version: 1,
@@ -58,6 +67,21 @@ afterEach(() => {
 });
 
 describe("LedgerConfigPage", () => {
+  it("puts only scalar metadata in the form controller without normalizing internal fields", async () => {
+    const api = adapter();
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    expect(metadataForm).toHaveBeenLastCalledWith({ defaultValues: { key: "", name: "" } });
+    fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
+    const name = await screen.findByDisplayValue("采购申请");
+    expect(screen.getByLabelText("台账标识")).toHaveValue("purchase");
+    fireEvent.change(name, { target: { value: "  采购配置  " } });
+    expect(api.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledWith(
+      "purchase", { ...first.definition, name: "  采购配置  " }, 1, expect.any(String),
+    ));
+  });
+
   it("copies a saved historical version into an independent first draft", async () => {
     const api = adapter();
     const historical = {
