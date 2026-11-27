@@ -220,10 +220,16 @@
         <button type="submit">核验本地文件</button>
       </form>
       <p id="asset-verification-result" role="status" aria-live="polite">等待选择文件。</p>
+      <form id="reference-placement-form" class="floorplan-controls">
+        <label>参考位置 X（米） <input id="reference-x" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <label>参考位置 Z（米） <input id="reference-z" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <button type="submit" id="reference-place" disabled>放置临时参考</button>
+        <button type="button" id="reference-remove" disabled>移除临时参考</button>
+      </form>
+      <p id="reference-placement-status" role="status">当前场景没有临时参考。仅一件；导入草稿或关闭页面清除，不写入导出结果。</p>
     </section>
   </main>
   <script type="module" src="/runtime/main.ts"></script>
   <script type="module" src="/runtime/simulation.ts"></script>
-  <script type="module" src="/runtime/assetVerification.ts"></script>
 </body>
 </html>

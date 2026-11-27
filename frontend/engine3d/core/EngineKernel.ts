@@ -1,3 +1,5 @@
+import { createVisualReferenceSlot, type ReferencePoint } from "./visualReference.ts";
+import type { SourceUnit } from "./modelUnits.ts";
 import { Color, DirectionalLight, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { buildFloorplanGeometry, type FloorplanGeometrySnapshot } from "./floorplanGeometry.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
@@ -12,7 +14,7 @@ export function mountEngine(
   canvas: HTMLCanvasElement, sceneDocument: SceneDocument,
   onStatus: (status: RenderStatus) => void,
   onFrame?: () => void,
-  options: { sceneMode?: SceneBuildMode } = {},
+  options: { sceneMode?: SceneBuildMode; allowVisualReference?: boolean } = {},
 ) {
   let renderer: WebGLRenderer;
   try {
@@ -34,12 +36,14 @@ export function mountEngine(
   const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56 });
   let floorplan: ReturnType<typeof buildFloorplanGeometry> | null = null;
   let previewMesh: Mesh | null = null;
+  let visualReference: ReturnType<typeof createVisualReferenceSlot> | null = null;
   function clearModel() {
     if (previewMesh) scene.remove(previewMesh);
     previewMesh = null;
     preview.clear();
     objects.group.visible = true;
     if (floorplan) floorplan.group.visible = true;
+    if (visualReference) visualReference.group.visible = true;
   }
   let frame = 0;
   let disposed = false;
@@ -126,6 +130,26 @@ export function mountEngine(
         return [{ deviceId: id, face, x, y, axis: [endX - x, endY - y] as [number, number] }];
       });
     },
+    placeVisualReference(model: StaticGlb, unit: SourceUnit, point: ReferencePoint) {
+      if (disposed || lost || !options.allowVisualReference) return false;
+      if (visualReference) visualReference.replace(model, unit, point);
+      else {
+        const next = createVisualReferenceSlot();
+        try { next.replace(model, unit, point); }
+        catch (failure) { next.dispose(); throw failure; }
+        visualReference = next;
+        scene.add(next.group);
+      }
+      visualReference.group.visible = !preview.current;
+      render();
+      return true;
+    },
+    removeVisualReference() {
+      if (!visualReference) return;
+      visualReference.dispose();
+      visualReference = null;
+      render();
+    },
     showModel(model: StaticGlb) {
       if (disposed) return false;
       if (model === preview.current) return true;
@@ -140,6 +164,7 @@ export function mountEngine(
       previewMesh = mesh;
       objects.group.visible = false;
       if (floorplan) floorplan.group.visible = false;
+      if (visualReference) visualReference.group.visible = false;
       scene.add(mesh);
       target.set(0, model.metrics.dimensions[1] * scale / 2, 0);
       camera.position.copy(target).add(new Vector3(8, 6, 9));
@@ -178,6 +203,8 @@ export function mountEngine(
       canvas.removeEventListener("webglcontextrestored", restore);
       clearModel();
       previewMaterial.dispose();
+      visualReference?.dispose();
+      visualReference = null;
       floorplan?.dispose();
       floorplan = null;
       objects.dispose();
