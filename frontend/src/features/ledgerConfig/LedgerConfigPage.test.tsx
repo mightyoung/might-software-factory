@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RouteLink } from "../../routing/router";
+import { RouteLeaveProvider, RouteLink } from "../../routing/router";
 import { ApiError } from "../../api/httpClient";
 import { LedgerConfigPage } from "./LedgerConfigPage";
 import {
@@ -331,10 +331,10 @@ describe("LedgerConfigPage", () => {
     const api = adapter();
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
-      <>
+      <RouteLeaveProvider>
         <RouteLink to="/safety/findings">隐患台账</RouteLink>
         <LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />
-      </>,
+      </RouteLeaveProvider>,
     );
     fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
     fireEvent.change(await screen.findByLabelText("台账名称"), {
@@ -343,14 +343,16 @@ describe("LedgerConfigPage", () => {
     const departure = new Event("beforeunload", { cancelable: true });
     expect(window.dispatchEvent(departure)).toBe(false);
     fireEvent.click(screen.getByRole("link", { name: "隐患台账" }));
-    expect(ask).toHaveBeenCalledTimes(1);
+    const leave = await screen.findByRole("alertdialog", { name: "离开当前页面？" });
+    expect(leave).toHaveTextContent("配置尚未保存");
+    fireEvent.click(within(leave).getByRole("button", { name: "继续编辑" }));
     const select = screen.getByRole("button", { name: /采购申请/ });
     fireEvent.click(select);
     fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "继续编辑" }));
     expect(api.versions).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "新建台账" }));
     const discard = await screen.findByRole("alertdialog");
-    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask).not.toHaveBeenCalled();
     expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请新版");
     fireEvent.click(within(discard).getByRole("button", { name: "放弃并切换" }));
     expect(screen.getByLabelText("台账名称")).toHaveValue("");
