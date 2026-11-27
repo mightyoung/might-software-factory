@@ -18,6 +18,10 @@
     <div class="play-layout">
       <section aria-labelledby="play-device-title">
         <h2 id="play-device-title">二维设备列表</h2>
+        <p>巡检按设备清单前 20 项顺序播放，每项 3 秒。手动选择或切走页面时暂停。</p>
+        <button id="tour-play" type="button" disabled>开始设备巡检</button>
+        <button id="tour-pause" type="button" disabled>暂停巡检</button>
+        <p id="tour-status" role="status"></p>
         <ul id="play-list"></ul>
         <p id="play-selection" role="status" hidden></p>
       </section>
