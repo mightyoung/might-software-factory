@@ -1,6 +1,6 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
@@ -27,6 +27,11 @@ const fieldTypes = {
   date: "日期",
   boolean: "是/否",
 };
+
+type SwitchDraft =
+  | { kind: "select"; item: ConfigurationSummary }
+  | { kind: "create"; source: ConfigurationSnapshot | null }
+  | { kind: "restore"; version: number };
 
 type Operation = {
   action: "save" | "restore" | "publish";
@@ -103,6 +108,51 @@ function ConfigurationPreview({
   );
 }
 
+function DraftDiscardDialog({ restoring, onCancel, onConfirm }: {
+  restoring: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  useEffect(() => {
+    const opener = document.activeElement;
+    const node = dialog.current!;
+    node.showModal();
+    cancel.current?.focus();
+    return () => {
+      node.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+  return (
+    <dialog ref={dialog} className="workbench-dialog" role="alertdialog" aria-modal="true"
+      aria-labelledby={id} aria-describedby={id + "-description"}
+      onCancel={(event) => { event.preventDefault(); onCancel(); }}
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+        const [from, to] = event.shiftKey ? [cancel, confirm] : [confirm, cancel];
+        if (document.activeElement === from.current) {
+          event.preventDefault();
+          to.current?.focus();
+        }
+      }}>
+      <h2 id={id}>放弃未保存的修改？</h2>
+      <p id={id + "-description"}>{restoring
+        ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
+        : "切换台账后，当前没有保存的配置修改会丢失。"}</p>
+      <div className="report-actions">
+        <button ref={cancel} type="button" className="button button-subtle" onClick={onCancel}>继续编辑</button>
+        <button ref={confirm} type="button" className="button button-primary" onClick={onConfirm}>
+          {restoring ? "放弃并恢复" : "放弃并切换"}
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
 export function LedgerConfigPage({
   adapter,
   canManage,
@@ -132,6 +182,8 @@ export function LedgerConfigPage({
   const lifetime = useRef(0);
   const runningOperation = useRef(false);
   const [recovery, setRecovery] = useState<Operation | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<SwitchDraft | null>(null);
+  useEffect(() => { setPendingSwitch(null); }, [adapter, active]);
   const dirty = snapshot
     ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
     : Boolean(key || draft.name || draft.fields.length);
@@ -184,9 +236,17 @@ export function LedgerConfigPage({
     };
   }, [adapter, loadAttempt]); // The adapter is recreated at the identity boundary.
 
-  function discardAllowed() {
-    if (locked || runningOperation.current) return false;
-    return !dirty || window.confirm("切换会丢弃未保存的配置。确定切换？");
+  function switchDraft(target: SwitchDraft, confirmed = false) {
+    if (!active || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
+    if (dirty && !confirmed) {
+      setPendingSwitch((current) => current ?? target);
+    } else if (target.kind === "select") {
+      void select(target.item);
+    } else if (target.kind === "create") {
+      create(target.source);
+    } else {
+      mutate("restore", target.version);
+    }
   }
   function showSnapshot(next: ConfigurationSnapshot) {
     setSnapshot(next);
@@ -201,7 +261,6 @@ export function LedgerConfigPage({
     ]);
   }
   async function select(item: ConfigurationSummary) {
-    if (!discardAllowed()) return;
     const mine = lifetime.current;
     setBusy(true);
     setError("");
@@ -220,8 +279,7 @@ export function LedgerConfigPage({
       if (mine === lifetime.current) setBusy(false);
     }
   }
-  function create(source: ConfigurationSnapshot | null = null) {
-    if (!discardAllowed()) return;
+  function create(source: ConfigurationSnapshot | null) {
     setKey("");
     setSnapshot(null);
     setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
@@ -358,6 +416,14 @@ export function LedgerConfigPage({
   }
   return (
     <section className="config-page">
+      {active && pendingSwitch && <DraftDiscardDialog
+        restoring={pendingSwitch.kind === "restore"}
+        onCancel={() => setPendingSwitch(null)}
+        onConfirm={() => {
+          setPendingSwitch(null);
+          switchDraft(pendingSwitch, true);
+        }}
+      />}
       <div className="page-heading">
         <h1>台账配置</h1>
         {canManage && (
@@ -365,7 +431,7 @@ export function LedgerConfigPage({
             label="新建台账"
             variant="secondary"
             isDisabled={locked}
-            onClick={() => create()}
+            onClick={() => switchDraft({ kind: "create", source: null })}
           />
         )}
       </div>
@@ -393,7 +459,7 @@ export function LedgerConfigPage({
               type="button"
               disabled={locked}
               aria-current={snapshot?.key === item.key ? "true" : undefined}
-              onClick={() => void select(item)}
+              onClick={() => switchDraft({ kind: "select", item })}
             >
               {item.definition.name || item.key}
               <small>
@@ -593,16 +659,13 @@ export function LedgerConfigPage({
                       isDisabled={locked}
                       onClick={() => setCompared(entry)}
                     />
-                    {canManage && <Button label={`复制版本 ${entry.version}为新台账`} variant="secondary" isDisabled={locked} onClick={() => create(entry)} />}
+                    {canManage && <Button label={`复制版本 ${entry.version}为新台账`} variant="secondary" isDisabled={locked} onClick={() => switchDraft({ kind: "create", source: entry })} />}
                     {canManage && (
                       <Button
                         label={`恢复版本 ${entry.version}为新草稿`}
                         variant="secondary"
                         isDisabled={locked}
-                        onClick={() => {
-                          if (discardAllowed())
-                            void mutate("restore", entry.version);
-                        }}
+                        onClick={() => switchDraft({ kind: "restore", version: entry.version })}
                       />
                     )}
                   </li>
