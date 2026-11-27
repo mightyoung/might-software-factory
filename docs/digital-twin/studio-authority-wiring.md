@@ -70,3 +70,9 @@ A 另有只发布管理员；没有发布流。探针拒绝非指定回环 PG18/
 实例标记核验；检测失败应在任何 DDL 前终止。只有经批准的专有 bootstrap 才能装草案、
 创建合成夹具并提供只读角色；本草案不包含初始化、DDL 执行器、授权、Maven profile 或
 工作流。它只测试关系和 RLS，不证明受管会话、撤权锁、真实应用事务或发布功能。
+
+`StudioAuthorityQueries` 是包内、未接线的 JDBC 查询实现：只消费受管调用者传入的当前
+上下文和物理连接，执行固定 tenant/member 或 tenant/member/screen 查询。
+它不颁发 `Caller` 或自证连接所有权，不设置租户，不关闭连接，不在异常时退回通用权限。
+接线仍必须由真实操作拥有者先核对人类会话、活跃身份与 epoch，再调用
+`requireGuarded` / `requireRead` 认证该物理连接；需要撤权串行时先持对应 guard。
