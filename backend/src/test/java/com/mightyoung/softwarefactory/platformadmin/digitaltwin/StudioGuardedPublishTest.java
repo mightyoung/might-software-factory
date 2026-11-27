@@ -220,6 +220,83 @@ class StudioGuardedPublishTest {
         verify(connection, never()).prepareStatement(StudioPublicationWrites.POINTER_SQL);
     }
 
+    @Test void publishOwnerBindsVerifiedTenantAndWaitsForActualSpringCommitCall() throws Exception {
+        var scope = prepare();
+        var guard = mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class);
+        var owner = owner(guard);
+        var tenantSetting = prepareOwnerConnection();
+        allowPublication();
+        update(StudioPublicationWrites.CREATE_SQL, 1);
+        setupLock(UUID.randomUUID(), null);
+        var append = update(StudioPublicationWrites.APPEND_SQL, 1);
+        var audit = update(StudioPublicationAudit.INSERT_SQL, 1);
+        var pointer = update(StudioPublicationWrites.POINTER_SQL, 1);
+        assertEquals(StudioPublicationPolicy.Outcome.APPEND, owner.publish(request, target(), 0, sourceBytes()).outcome());
+        var order = inOrder(connection, tenantSetting, guard, callers, append, audit, pointer);
+        order.verify(connection).setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+        order.verify(tenantSetting).setString(1, context.tenantId().toString());
+        order.verify(tenantSetting, times(2)).executeQuery();
+        order.verify(guard).forBusinessCommand(context.tenantId());
+        order.verify(callers).requireGuarded(scope, boundary, source, connection);
+        order.verify(append).executeUpdate();
+        order.verify(audit).executeUpdate();
+        order.verify(pointer).executeUpdate();
+        order.verify(connection).commit();
+    }
+
+    @Test void publishOwnerCommitExceptionNeverReturnsDecision() throws Exception {
+        prepare();
+        var owner = owner(mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class));
+        prepareOwnerConnection();
+        allowPublication();
+        update(StudioPublicationWrites.CREATE_SQL, 1);
+        setupLock(UUID.randomUUID(), null);
+        update(StudioPublicationWrites.APPEND_SQL, 1);
+        update(StudioPublicationAudit.INSERT_SQL, 1);
+        update(StudioPublicationWrites.POINTER_SQL, 1);
+        doThrow(new java.sql.SQLException("simulated commit failure")).when(connection).commit();
+        assertThrows(org.springframework.transaction.TransactionException.class,
+                () -> owner.publish(request, target(), 0, sourceBytes()));
+        verify(connection).commit();
+        assertFalse(TransactionSynchronizationManager.hasResource(source));
+    }
+
+    @Test void publishOwnerPreflightRefusesForeignTenantAndExistingTransactionWithoutSql() {
+        when(request.context()).thenReturn(context);
+        var guard = mock(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard.class);
+        var owner = owner(guard);
+        assertThrows(StudioPublicationPolicy.Forbidden.class,
+                () -> owner.publish(request, new StudioPublicationPolicy.Target(UUID.randomUUID(), "floor"), 0, sourceBytes()));
+        inParent(() -> assertThrows(SessionSensitiveException.class,
+                () -> owner.publish(request, target(), 0, sourceBytes())));
+        verifyNoInteractions(source, connection, guard);
+    }
+
+    private StudioPublish owner(com.mightyoung.softwarefactory.authorization.AuthorizationWriteGuard guard) {
+        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(source);
+        return new StudioPublish(source, manager, guard, command());
+    }
+
+    private PreparedStatement prepareOwnerConnection() throws Exception {
+        when(source.getConnection()).thenReturn(connection);
+        var isolation = new java.util.concurrent.atomic.AtomicInteger(Connection.TRANSACTION_REPEATABLE_READ);
+        var auto = new java.util.concurrent.atomic.AtomicBoolean(true);
+        doAnswer(invocation -> { isolation.set(invocation.getArgument(0)); return null; }).when(connection).setTransactionIsolation(anyInt());
+        doAnswer(invocation -> { auto.set(invocation.getArgument(0)); return null; }).when(connection).setAutoCommit(anyBoolean());
+        when(connection.getTransactionIsolation()).thenAnswer(invocation -> isolation.get());
+        when(connection.getAutoCommit()).thenAnswer(invocation -> auto.get());
+        var binding = mock(PreparedStatement.class);
+        when(connection.prepareStatement(StudioPublish.TENANT_SQL)).thenReturn(binding);
+        when(connection.prepareStatement(StudioPublish.TENANT_CHECK_SQL)).thenReturn(binding);
+        when(binding.executeQuery()).thenAnswer(invocation -> {
+            var rows = mock(ResultSet.class);
+            when(rows.next()).thenReturn(true, false);
+            when(rows.getString(1)).thenReturn(context.tenantId().toString());
+            return rows;
+        });
+        return binding;
+    }
+
     private StudioPublicationCommand command() {
         return new StudioPublicationCommand(new StudioGuardedPublish(source, callers, human));
     }
