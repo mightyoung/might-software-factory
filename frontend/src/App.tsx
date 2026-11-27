@@ -13,6 +13,7 @@ import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
+import { withoutFindingSelection } from "./routing/findingSearch";
 import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
@@ -243,13 +244,10 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const reportOnly = canReportHere && !canReadRoute;
   // Do not consume the reset at /login or an intermediate canonical redirect. Never
   // mount a new identity's reader while a previous identity's URL selection remains.
-  const parameters = new URLSearchParams(splitLocation(location).search);
-  let selectionResetTarget: string | null = null;
-  if (session && !redirect && (pendingSelectionReset.current || reportOnly) && parameters.has("caseId")) {
-    parameters.delete("caseId");
-    const suffix = parameters.toString();
-    selectionResetTarget = `${pathname}${suffix ? `?${suffix}` : ""}`;
-  }
+  const { search } = splitLocation(location);
+  const retainedSearch = session && !redirect && (pendingSelectionReset.current || reportOnly)
+    ? withoutFindingSelection(search) : search;
+  const selectionResetTarget = retainedSearch !== search ? pathname + retainedSearch : null;
   const resetInitialSelection = pendingSelectionReset.current;
   useLayoutEffect(() => {
     if (identityKey) previousIdentity.current = identityKey;
@@ -355,6 +353,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         adapter={findingStore.ledger}
         synthetic={mode === "synthetic"}
         resetInitialSelection={resetInitialSelection}
+        routeSearch={workspaceRoutes.findingSearch(session.tenant.id, parsed.rest, search)}
         submitAdapter={findingStore.submit}
         commandAdapter={findingStore.commands}
         evidenceAdapter={findingStore.evidence}

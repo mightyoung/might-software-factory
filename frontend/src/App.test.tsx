@@ -31,10 +31,11 @@ describe("已登录时的应用路由与导航", () => {
   beforeEach(() => setPath("/safety/findings"));
 
   it("旧的无租户路径被规范化为带租户前缀的路径，并保留查询串", async () => {
-    renderSignedIn("demo.manager", "/safety/findings?caseId=00000000-0000-4000-8000-000000000001");
+    const query = "?caseId=00000000-0000-4000-8000-000000000001&caseId=ignored&tag=%2f&tag=%2F&empty=&q=a+b";
+    renderSignedIn("demo.manager", "/safety/findings" + query);
     expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
-    expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000001");
+    expect(window.location.search).toBe(query);
   });
 
   it("根路径进入第一个有权应用的入口", async () => {
@@ -382,7 +383,7 @@ describe("security-context URL selection lifetime", () => {
     second.ledger.get = vi.fn(second.ledger.get);
     let current = first;
     const adapter: SessionAdapter = { ...base, restore: async () => firstSession, login: async () => { current = second; return secondSession; } };
-    setPath(`${T}/safety/findings?caseId=00000000-0000-4000-8000-000000000001`);
+    setPath(`${T}/safety/findings?tag=%2f&caseId=00000000-0000-4000-8000-000000000001&tag=%2F&%63aseId=second&empty=&q=a+b`);
     render(<App sessionAdapter={adapter} createFindingStore={() => current} />);
     await screen.findByRole("heading", { name: "登录" });
     await waitFor(() => expect(window.location.pathname).toBe("/login"));
@@ -390,7 +391,7 @@ describe("security-context URL selection lifetime", () => {
     fillAndSubmit("second", "password");
     await screen.findByRole("heading", { name: "隐患台账" });
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
-    expect(window.location.search).not.toContain("caseId");
+    expect(window.location.search).toBe("?tag=%2f&tag=%2F&empty=&q=a+b");
     expect(second.ledger.get).not.toHaveBeenCalled();
     expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
   });
@@ -399,11 +400,13 @@ describe("security-context URL selection lifetime", () => {
     const { createSyntheticFindingStore } = await import("./adapters/syntheticFindingStore");
     const store = createSyntheticFindingStore(); store.ledger.get = vi.fn(store.ledger.get);
     const id = "00000000-0000-4000-8000-000000000001";
-    setPath(`/safety/findings?caseId=${id}`);
+    const query = `?caseId=${id}&caseId=ignored&tag=%2f&tag=%2F&empty=`;
+    setPath("/safety/findings" + query);
     render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} findingStore={store} />);
     await screen.findByRole("complementary", { name: "隐患详情面板" });
     await waitFor(() => expect(store.ledger.get).toHaveBeenCalledWith(id, expect.objectContaining({ signal: expect.any(AbortSignal) })));
-    expect(window.location.search).toBe(`?caseId=${id}`);
+    expect(vi.mocked(store.ledger.get).mock.calls.every(([selected]) => selected === id)).toBe(true);
+    expect(window.location.search).toBe(query);
   });
 });
 
