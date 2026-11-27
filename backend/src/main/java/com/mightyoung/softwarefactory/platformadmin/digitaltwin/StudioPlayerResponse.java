@@ -1,6 +1,7 @@
 package com.mightyoung.softwarefactory.platformadmin.digitaltwin;
 
 import java.util.Map;
+import java.util.Optional;
 
 import static com.mightyoung.softwarefactory.platformadmin.digitaltwin.StudioPublicationPolicy.*;
 
@@ -11,13 +12,16 @@ public sealed interface StudioPlayerResponse permits StudioPlayerResponse.Conten
 
     static StudioPlayerResponse read(StudioPlayerPublication reader, Caller caller, Target target, Long version) {
         try {
-            var found = reader.read(caller, target, version);
-            return found.isPresent() ? new Content(found.get()) : new Failure(MappedError.NOT_FOUND);
+            return fromPublication(reader.read(caller, target, version));
         } catch (Forbidden rejected) {
             return new Failure(MappedError.FORBIDDEN);
         } catch (StudioPlayerPublication.InvalidVersion rejected) {
             return new Failure(MappedError.INVALID_REQUEST);
         }
+    }
+
+    static StudioPlayerResponse fromPublication(Optional<StudioPlayerPublication.Published> found) {
+        return found.isPresent() ? new Content(found.get()) : new Failure(MappedError.NOT_FOUND);
     }
 
     final class Content implements StudioPlayerResponse {
