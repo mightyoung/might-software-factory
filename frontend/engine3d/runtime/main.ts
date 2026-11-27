@@ -4,8 +4,8 @@ import { mountPublication } from "./publication.ts";
 import { mountTourEditor } from "./tourEditor.ts";
 import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot, hudKeys, type HudKey } from "../schema/studioSnapshot.ts";
-import { mountPrefabPlacement, mountPrefabRelocation } from "./prefabPlacement.ts";
-import { placePrefab, relocatePrefab, type PrefabPlacement } from "../core/prefabPlacement.ts";
+import { mountPrefabPlacement, mountPrefabRelocation, mountPrefabRemoval } from "./prefabPlacement.ts";
+import { placePrefab, relocatePrefab, removePrefab, type PrefabPlacement } from "../core/prefabPlacement.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
@@ -226,6 +226,19 @@ const showPrefabRelocation = mountPrefabRelocation((metres) => {
   selectDevice(moved.device);
   return moved.placement;
 });
+const showPrefabRemoval = mountPrefabRemoval((pin) => {
+  if (selected !== pin.deviceId || placedPrefabs.get(pin.deviceId) !== pin) throw new Error("所选组件实例已变化。");
+  const next = removePrefab(sample, pin, tourEditor.snapshot());
+  // Scene replacement disposes the old scene resources only on success.
+  if (engine && !engine.replaceScene(next)) throw new Error("无法更新当前三维场景。");
+  sample = next;
+  placedPrefabs.delete(pin.deviceId);
+  buttons.get(pin.deviceId)?.closest("li")?.remove();
+  buttons.delete(pin.deviceId);
+  tourEditor.setScene(sample);
+  selectDevice();
+  (buttons.values().next().value ?? overview).focus();
+});
 function selectDevice(device?: typeof sample.devices[number]) {
   const pin = device ? placedPrefabs.get(device.id) : undefined;
   const dimensions = device && "equipment" in device ? device.equipment.dimensions : undefined;
@@ -234,6 +247,7 @@ function selectDevice(device?: typeof sample.devices[number]) {
   for (const [id, button] of buttons) button.setAttribute("aria-pressed", String(id === device?.id));
   selected = device?.id;
   showPrefabRelocation(pin);
+  showPrefabRemoval(pin);
   closeModel();
   displayResize();
 }

@@ -45,3 +45,51 @@ export function mountPrefabRelocation(relocate: (metres: FloorMetres) => PrefabP
     message.textContent = "";
   };
 }
+
+export function mountPrefabRemoval(remove: (pin: PrefabPlacement) => void) {
+  const controls = document.getElementById("prefab-remove-controls")!;
+  const open = document.getElementById("prefab-remove")!;
+  const prompt = document.getElementById("prefab-remove-confirmation")!;
+  const target = document.getElementById("prefab-remove-target")!;
+  const confirm = document.getElementById("prefab-remove-confirm")!;
+  const cancel = document.getElementById("prefab-remove-cancel")!;
+  const message = document.getElementById("prefab-remove-message")!;
+  let selected: PrefabPlacement | undefined;
+  let armed: PrefabPlacement | undefined;
+  function reset() {
+    armed = undefined;
+    prompt.hidden = true;
+    open.hidden = false;
+    target.textContent = "";
+  }
+  open.addEventListener("click", () => {
+    if (!selected) return;
+    armed = selected;
+    target.textContent = `从当前草稿移除 ${armed.prefabId} · v${armed.version}（${armed.deviceId}）？不会删除组件库版本。`;
+    message.textContent = "";
+    open.hidden = true;
+    prompt.hidden = false;
+    cancel.focus();
+  });
+  cancel.addEventListener("click", () => {
+    reset();
+    open.focus();
+  });
+  confirm.addEventListener("click", () => {
+    if (!armed || armed !== selected) return;
+    try {
+      remove(armed);
+      message.textContent = "已从当前草稿移除组件实例。";
+    } catch (failure) {
+      reset();
+      open.focus();
+      message.textContent = failure instanceof Error ? failure.message : "无法移除组件实例。";
+    }
+  });
+  return (placement?: PrefabPlacement) => {
+    reset();
+    selected = placement;
+    controls.hidden = !placement;
+    message.textContent = "";
+  };
+}

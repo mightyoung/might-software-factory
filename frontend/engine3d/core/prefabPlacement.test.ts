@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPrefabBank } from "./prefabBank.ts";
-import { placePrefab, relocatePrefab } from "./prefabPlacement.ts";
+import { placePrefab, relocatePrefab, removePrefab } from "./prefabPlacement.ts";
 import { parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import type { SceneDocument } from "../schema/scene.ts";
 
@@ -51,4 +51,21 @@ test("relocation keeps the exact device ID, version, geometry and tour reference
   assert.deepEqual(reloaded.scene.devices[0].position, [-10, 0, 10]);
   for (const x of [Infinity, NaN, 11]) assert.throws(() => relocatePrefab(first.scene, first.placement, [x, 0]), /坐标/);
   assert.throws(() => relocatePrefab(scene, first.placement, [0, 0]), /实例/);
+});
+
+test("removing an instance rejects a live tour dependency and never removes the template or other devices", () => {
+  const bank = createPrefabBank();
+  const template = bank.save(definition(4));
+  const first = placePrefab(scene, template, "prefab-1", [1, -1]);
+  const second = placePrefab(first.scene, template, "prefab-2", [4, 5]);
+  const protectedStop = { deviceId: "prefab-2", label: "需要保留", dwellSeconds: 3 };
+  assert.throws(() => removePrefab(second.scene, second.placement, [protectedStop]), /巡检机位/);
+  const keptStop = { ...protectedStop, deviceId: "prefab-1" };
+  const next = removePrefab(second.scene, second.placement, [keptStop]);
+  assert.deepEqual(next.devices, first.scene.devices);
+  assert.equal(second.scene.devices.length, 2);
+  assert.equal(bank.get(template.id, template.version), template);
+  assert.throws(() => removePrefab(next, second.placement, []), /实例/);
+  const snapshot = parseStudioSnapshot(serializeStudioSnapshot(next, { walls: [], zones: [] }, [keptStop]));
+  assert.deepEqual(snapshot.cameraTour, [keptStop]);
 });
