@@ -1,12 +1,20 @@
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
 import { SceneDocumentSchema } from "../schema/scene.ts";
 
-const sample = SceneDocumentSchema.parse({
+let sample = SceneDocumentSchema.parse({
   schemaVersion: 1, screenId: "sample-workshop",
   devices: [
     { id: "pump-01", label: "循环泵 01", primitive: "cylinder", position: [-4, 0, 1], size: [2.4, 2.1, 2.4], state: "normal" },
     { id: "press-02", label: "成型机 02", primitive: "box", position: [1, 0, -2], size: [3, 3, 2], state: "warning" },
     { id: "fan-03", label: "排风装置 03", primitive: "box", position: [5, 0, 1], size: [2, 2, 2.6], state: "alarm" },
+    { id: "conveyor-04", label: "传送带 04", position: [-3, 0, 6], state: "normal",
+      equipment: { kind: "CONVEYOR", dimensions: { length: 4, width: 1, height: 0.9 } } },
+    { id: "corridor-05", label: "廊道 05", position: [0, 0, -7], state: "normal",
+      equipment: { kind: "CORRIDOR", dimensions: { length: 8, width: 1.8, height: 1.2 } } },
+    { id: "robot-06", label: "机械臂 06", position: [5, 0, -4], state: "warning",
+      equipment: { kind: "ROBOT_ARM", dimensions: { length: 2, width: 1.8, height: 2.2 } } },
+    { id: "spiral-07", label: "螺旋传送机 07", position: [7, 0, 5], state: "normal",
+      equipment: { kind: "SPIRAL_CONVEYOR", dimensions: { length: 3, width: 3, height: 3.3 } } },
   ],
 });
 
@@ -46,4 +54,18 @@ for (const device of sample.devices) {
   devices.append(row);
 }
 overview.addEventListener("click", () => selectDevice());
+const lengthSelect = document.querySelector<HTMLSelectElement>("#conveyor-length")!;
+const rebuild = document.querySelector<HTMLParagraphElement>("#conveyor-rebuild")!;
+lengthSelect.addEventListener("change", () => {
+  const length = Number(lengthSelect.value);
+  if (length !== 4 && length !== 8) return;
+  sample = SceneDocumentSchema.parse({
+    ...sample,
+    devices: sample.devices.map((device) => "equipment" in device && device.id === "conveyor-04"
+      ? { ...device, equipment: { ...device.equipment, dimensions: { ...device.equipment.dimensions, length } } }
+      : device),
+  });
+  engine?.replaceScene(sample);
+  rebuild.textContent = `当前长度：${length} 米。`;
+});
 window.addEventListener("pagehide", (event) => { if (!event.persisted) engine?.dispose(); });
