@@ -76,8 +76,15 @@ const bank = new LocalAssetBank();
 const bankList = document.querySelector<HTMLUListElement>("#model-bank")!;
 const bankInfo = document.querySelector<HTMLParagraphElement>("#model-bank-info")!;
 const saveModel = document.querySelector<HTMLButtonElement>("#save-model")!;
+const exportAssets = document.querySelector<HTMLButtonElement>("#export-asset-metadata")!;
+exportAssets.addEventListener("click", () => {
+  const manifest = bank.manifest();
+  if (manifest.assets.length) downloadSnapshot(JSON.stringify(manifest, null, 2), "might-local-asset-metadata-v1.json");
+});
 function renderBank() {
-  bankList.replaceChildren(...bank.list().map((asset) => {
+  const assets = bank.list();
+  exportAssets.hidden = assets.length === 0;
+  bankList.replaceChildren(...assets.map((asset) => {
     const row = document.createElement("li");
     const load = document.createElement("button"), remove = document.createElement("button");
     load.type = remove.type = "button";
@@ -85,7 +92,12 @@ function renderBank() {
     remove.textContent = `移除 ${asset.name}`;
     load.addEventListener("click", () => {
       const bytes = bank.read(asset.id);
-      if (bytes) { readVersion++; error(); showLocalModel(asset.name, bytes); }
+      if (bytes) {
+        readVersion++;
+        error();
+        modelUnit.value = asset.sourceUnit;
+        showLocalModel(asset.name, bytes);
+      }
     });
     remove.addEventListener("click", () => {
       bank.remove(asset.id);
@@ -93,7 +105,11 @@ function renderBank() {
       bankInfo.textContent = `已从会话模型库移除 ${asset.name}。`;
       bankInfo.focus();
     });
-    row.append(load, " ", remove);
+    const info = document.createElement("p");
+    const unit = asset.sourceUnit === "mm" ? "毫米" : "米";
+    const sizes = asset.dimensionsMetres.map((value) => Number(value.toFixed(6))).join(" × ");
+    info.textContent = `源单位：${unit}；${sizes} 米；${asset.metrics.triangles} 个三角面；SHA-256 ${asset.id.slice(0, 12)}…`;
+    row.append(load, " ", remove, info);
     return row;
   }));
 }
@@ -103,9 +119,10 @@ saveModel.addEventListener("click", async () => {
   saveModel.disabled = true;
   try {
     const existing = new Set(bank.list().map((asset) => asset.id));
-    const stored = await bank.register(current.name, current.source);
+    const sourceUnit: SourceUnit = modelUnit.value === "mm" ? "mm" : "m";
+    const stored = await bank.register(current.name, current.source, sourceUnit);
     renderBank();
-    bankInfo.textContent = existing.has(stored.id) ? `文件内容相同，沿用 ${stored.name}。`
+    bankInfo.textContent = existing.has(stored.id) ? `文件内容相同，沿用 ${stored.name} 及首次登记的源单位。`
       : `已留存 ${stored.name}。模型库共 ${bank.list().length} 个。`;
   } catch (cause) {
     bankInfo.textContent = cause instanceof Error ? cause.message : "无法加入会话模型库。";

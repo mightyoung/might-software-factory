@@ -28,3 +28,27 @@ test("validates content, caps objects, and leaves previous entries unchanged on 
   await assert.rejects(bank.register("second.glb", second), /容量/);
   assert.deepEqual(bank.list().map((entry) => entry.id), [added.id]);
 });
+
+test("retains first declared unit and exports bounded, detached verified metadata only", async () => {
+  const bank = new LocalAssetBank();
+  const raw = syntheticGlb();
+  const first = await bank.register("millimetres.glb", raw, "mm");
+  const duplicate = await bank.register("metres.glb", raw, "m");
+  assert.deepEqual(duplicate, first);
+  assert.equal(first.sourceUnit, "mm");
+  assert.deepEqual(first.dimensionsMetres, [0.002, 0.002, 0.002]);
+  assert.equal(first.checkUnits, false);
+  assert.match(first.id, /^[a-f0-9]{64}$/);
+  const manifest = bank.manifest();
+  assert.equal(manifest.format, "might-local-asset-metadata-v1");
+  assert.equal(manifest.assets[0].metrics.triangles, 4);
+  assert.equal(manifest.assets[0].size, raw.byteLength);
+  manifest.assets[0].metrics.dimensions[0] = 900;
+  assert.deepEqual(bank.manifest().assets[0], first);
+  assert.equal(Object.hasOwn(manifest.assets[0], "bytes"), false);
+  assert.equal(Object.hasOwn(manifest.assets[0], "url"), false);
+  assert.equal(bank.remove(first.id), true);
+  assert.deepEqual(bank.manifest().assets, []);
+  await assert.rejects(bank.register("bad.glb", raw, "unsupported"), /单位/);
+  await assert.rejects(bank.register("https://example.test/model.glb", raw), /GLB/);
+});
