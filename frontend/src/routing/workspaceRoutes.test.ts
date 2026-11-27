@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import { expect, it, vi } from "vitest";
 import { createWorkspaceRouteMatcher } from "./workspaceRoutes";
 
 const finding = { rest: "safety/findings", permission: "safety.finding.read" };
@@ -34,4 +35,18 @@ it("validates only the known finding deep-link fields without coercing first val
     standalone: false, reporting: false, findingState: null, caseId: "", relatedId: null, relatedCode: "",
   });
   expect(router.findingSearch("东区", "safety/Findings", raw)).toBeUndefined();
+});
+
+it("registers a lazy page as the actual matched route component without loading it for unauthorized routes", () => {
+  const load = vi.fn(async () => ({ default: () => null }));
+  const page = lazyRouteComponent(load);
+  const routes = createWorkspaceRouteMatcher([
+    finding,
+    { rest: "platform/ledgers", permission: "ledger.directory.open", component: page },
+  ]);
+  expect(routes.componentFor("platform/ledgers")).toBe(page);
+  expect(routes.match("tenant", "platform/ledgers").component).toBe(page);
+  expect(routes.match("tenant", "platform/Ledgers").component).toBeUndefined();
+  expect(routes.match("tenant", "safety/findings").component).toBeUndefined();
+  expect(load).not.toHaveBeenCalled();
 });

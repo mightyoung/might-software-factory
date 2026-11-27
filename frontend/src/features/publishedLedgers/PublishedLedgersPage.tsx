@@ -2,7 +2,8 @@ import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useQuery } from "@tanstack/react-query";
 import { tableFeatures, useTable } from "@tanstack/react-table";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { PublishedLedgerRouteScope } from "../../routing/publishedLedgerRouteScope";
 import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { unknownOutcome } from "../toolLoans/model";
@@ -691,22 +692,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     </section>
   );
 }
-export default function HttpPublishedLedgersPage({
-  onUnauthenticated,
-  active,
-}: {
-  onUnauthenticated(): void;
-  active?: boolean;
-}) {
-  const adapter = useMemo(
-    () => createPublishedLedgerAdapter(createHttpClient()),
-    [],
-  );
-  return (
-    <PublishedLedgersPage
-      adapter={adapter}
-      active={active}
-      onUnauthenticated={onUnauthenticated}
-    />
-  );
+export default function HttpPublishedLedgersPage() {
+  const scope = useContext(PublishedLedgerRouteScope);
+  const adapter = useMemo(() => createPublishedLedgerAdapter(createHttpClient()), []);
+  return scope && <PublishedLedgersPage adapter={adapter} {...scope} />;
 }
