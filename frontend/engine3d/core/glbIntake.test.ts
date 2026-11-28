@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { exporterGlb, syntheticGlb } from "./glbFixture.ts";
+import { exporterGlb, multiMeshGlb, syntheticGlb } from "./glbFixture.ts";
 import { openStaticGlb, type StaticGlb } from "./glbIntake.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 
@@ -61,4 +61,17 @@ test("transforms imported normals with inverse transpose under nonuniform scale"
   assert.ok(Math.abs(n.getX(0) - 1 / Math.sqrt(5)) < 1e-6);
   assert.ok(Math.abs(n.getY(0) - 2 / Math.sqrt(5)) < 1e-6);
   model.dispose();
+});
+
+test("flattens small branching and multi-root scenes, rebasing mixed indices and generating missing normals", () => {
+  for (const separateRoots of [false, true]) {
+    const model = openStaticGlb(multiMeshGlb(separateRoots));
+    assert.deepEqual(model.metrics, { vertices: 6, triangles: 2, dimensions: [5, 2, 3] });
+    assert.deepEqual(Array.from(model.geometry.getIndex()!.array), [0, 1, 2, 3, 4, 5]);
+    const normals = model.geometry.getAttribute("normal");
+    assert.equal(normals.getX(0), 1);
+    assert.equal(normals.getZ(0), 0);
+    assert.equal(normals.getY(3), -1);
+    model.dispose();
+  }
 });

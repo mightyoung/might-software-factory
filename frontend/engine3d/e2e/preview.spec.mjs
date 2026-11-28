@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { exporterGlb, syntheticGlb } from "../core/glbFixture.ts";
+import { exporterGlb, multiMeshGlb, syntheticGlb } from "../core/glbFixture.ts";
 
 test("draws devices, preserves selection during WebGL loss and draws again after restore", async ({ page }) => {
   const errors = [];
@@ -413,5 +413,28 @@ test("session asset bank registers a valid GLB without upload and deduplicates c
   await bank.getByRole("button", { name: "移除 asset-a.glb" }).click();
   await expect(bank.getByRole("status")).toContainText("已从会话模型库移除");
   await expect(bank.getByRole("button")).toHaveCount(0);
+  expect(network).toEqual([]);
+});
+
+test("local multi-mesh preview draws and reports combined dimensions without network requests", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.multiMeshDraws = 0;
+    const draw = WebGL2RenderingContext.prototype.drawElements;
+    WebGL2RenderingContext.prototype.drawElements = function (...args) {
+      if (args[0] === this.TRIANGLES && args[1] === 6 && args[2] === this.UNSIGNED_INT) window.multiMeshDraws++;
+      return draw.apply(this, args);
+    };
+  });
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  const draws = () => page.evaluate(() => window.multiMeshDraws);
+  const before = await draws();
+  await page.getByLabel("选择 GLB 文件").setInputFiles({
+    name: "two-meshes.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(multiMeshGlb()),
+  });
+  await expect(page.getByText("two-meshes.glb：2 个三角面，6 个顶点，5 × 2 × 3 米。")).toBeVisible();
+  await expect.poll(draws).toBeGreaterThan(before);
   expect(network).toEqual([]);
 });
