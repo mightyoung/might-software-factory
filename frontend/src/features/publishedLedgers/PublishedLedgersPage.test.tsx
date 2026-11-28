@@ -233,3 +233,14 @@ it("does not offer writes to a reader", async () => {
     screen.queryByRole("button", { name: "删除草稿" }),
   ).not.toBeInTheDocument();
 });
+
+it("removes the old directory and records when a refresh is refused", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValueOnce([ledger]).mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: /^刷新台账$/ }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
+  expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
+  expect(a.create).not.toHaveBeenCalled();
+});
