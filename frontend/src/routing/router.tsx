@@ -1,5 +1,9 @@
 import { createBrowserHistory } from "@tanstack/react-router";
-import { useEffect, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import {
+  createContext, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore,
+  type AnchorHTMLAttributes, type Dispatch, type MouseEvent, type ReactNode, type SetStateAction,
+} from "react";
+import { WorkbenchConfirmDialog } from "../components/WorkbenchConfirmDialog";
 
 // One history per browser document; raw search remains untouched for legacy deep links.
 let browserHistory: ReturnType<typeof createBrowserHistory> | undefined;
@@ -51,6 +55,43 @@ export function closeCurrentTab(): void {
   tabCloser();
 }
 
+type LeaveGuard = { message: string };
+const leaveGuards = new Set<LeaveGuard>();
+type LeaveRequest = {
+  from: string;
+  to: string;
+  guards: LeaveGuard[];
+  onNavigate?: () => void;
+};
+const LeaveConfirmation = createContext<Dispatch<SetStateAction<LeaveRequest | null>> | null>(null);
+
+/** One host, outside the quick navigation dialog, prevents Escape or Tab reaching that dialog. */
+export function RouteLeaveProvider({ children }: { children: ReactNode }) {
+  const [pending, setPending] = useState<LeaveRequest | null>(null);
+  useEffect(() => subscribe(() => setPending(null)), []);
+
+  function confirm() {
+    setPending(null);
+    if (!pending || window.location.href !== pending.from || pending.guards.length !== leaveGuards.size
+      || !pending.guards.every(guard => leaveGuards.has(guard))) return;
+    navigate(pending.to);
+    pending.onNavigate?.();
+  }
+
+  return (
+    <LeaveConfirmation.Provider value={setPending}>
+      {children}
+      {pending && <WorkbenchConfirmDialog
+        title="离开当前页面？"
+        description={pending.guards.map(guard => guard.message).join(" ")}
+        confirmLabel="确认离开"
+        onCancel={() => setPending(null)}
+        onConfirm={confirm}
+      />}
+    </LeaveConfirmation.Provider>
+  );
+}
+
 interface RouteLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   to: string;
   children: ReactNode;
@@ -58,6 +99,7 @@ interface RouteLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
 }
 
 export function RouteLink({ to, onClick, onNavigate, children, ...props }: RouteLinkProps) {
+  const requestLeave = useContext(LeaveConfirmation);
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     onClick?.(event);
     if (
@@ -71,7 +113,11 @@ export function RouteLink({ to, onClick, onNavigate, children, ...props }: Route
       return;
     }
     event.preventDefault();
-    if (!confirmLeave()) return;
+    if (leaveGuards.size !== 0) {
+      const request = { from: window.location.href, to, onNavigate, guards: [...leaveGuards] };
+      requestLeave?.(current => current ?? request);
+      return;
+    }
     navigate(to);
     onNavigate?.();
   }
@@ -83,22 +129,11 @@ export function RouteLink({ to, onClick, onNavigate, children, ...props }: Route
   );
 }
 
-type LeaveGuard = () => boolean;
-const leaveGuards = new Set<LeaveGuard>();
-
-/** 用户主动点应用内链接离开前询问；系统发起的跳转（登录失效、规范化地址）用 navigate，不经过它。 */
-function confirmLeave(): boolean {
-  return [...leaveGuards].every((guard) => guard());
-}
-
-/**
- * 有未保存内容时，点击应用内链接（侧栏、顶栏）先确认。浏览器的前进 / 后退按钮拦不住（History API 没有可靠的取消办法），
- * 刷新或关闭标签页由调用方另用 beforeunload 处理。
- */
+/** Only app links ask; system redirects and browser history retain their original behavior. */
 export function useLeaveGuard(active: boolean, message: string): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return;
-    const guard: LeaveGuard = () => window.confirm(message);
+    const guard = { message };
     leaveGuards.add(guard);
     return () => {
       leaveGuards.delete(guard);

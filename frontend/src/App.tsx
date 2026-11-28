@@ -12,7 +12,7 @@ import { SessionProviderWithAdapter as SessionProvider, useSession } from "./fea
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
-import { navigate, useLocation } from "./routing/router";
+import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
 import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
@@ -440,7 +440,9 @@ export function AppCore({
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter demoPresentation={demoPresentation} createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        <RouteLeaveProvider>
+          <AppRouter demoPresentation={demoPresentation} createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        </RouteLeaveProvider>
       </SessionProvider>
     </ModeProvider>
   );
