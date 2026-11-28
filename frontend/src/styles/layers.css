@@ -1,0 +1,2 @@
+/* Order must be loaded before the vendor CSS. Existing legacy rules stay unlayered until audited. */
+@layer reset, legacy, astryx-base, astryx-theme;

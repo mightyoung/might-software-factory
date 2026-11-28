@@ -48,9 +48,10 @@ export function closeCurrentTab(): void {
 interface RouteLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   to: string;
   children: ReactNode;
+  onNavigate?(): void;
 }
 
-export function RouteLink({ to, onClick, children, ...props }: RouteLinkProps) {
+export function RouteLink({ to, onClick, onNavigate, children, ...props }: RouteLinkProps) {
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     onClick?.(event);
     if (
@@ -66,6 +67,7 @@ export function RouteLink({ to, onClick, children, ...props }: RouteLinkProps) {
     event.preventDefault();
     if (!confirmLeave()) return;
     navigate(to);
+    onNavigate?.();
   }
 
   return (
