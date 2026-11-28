@@ -55,6 +55,10 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Verify Astryx upgrade safeguards
+        working-directory: frontend
+        run: node --test tools/upgrade-astryx.test.mjs
+
       - name: Production build
         working-directory: frontend
         run: npm run build

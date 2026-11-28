@@ -11,6 +11,9 @@ export default defineConfig(({ mode, command }) => ({
   } : {},
   plugins: [react()],
   build: {
+    // Keep the HTTP workbench under its existing gzip limit without moving lazy boundaries.
+    minify: "terser",
+    terserOptions: { compress: { passes: 2 }, maxWorkers: 2 },
     rolldownOptions: {
       output: {
         codeSplitting: {
