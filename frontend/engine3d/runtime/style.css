@@ -34,3 +34,5 @@ fieldset p { overflow-wrap: anywhere; }
 #resize-gizmo { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .resize-handle { position: absolute; transform: translate(-50%, -50%); width: 16px; height: 16px; border: 2px solid #674400; border-radius: 50%; background: #ffcb45; pointer-events: auto; cursor: grab; touch-action: none; }
 .resize-handle:active { cursor: grabbing; }
+
+#snapshot-import { max-width: 100%; }
