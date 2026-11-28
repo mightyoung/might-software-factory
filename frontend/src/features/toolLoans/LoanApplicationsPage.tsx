@@ -106,7 +106,7 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
     {tabs}
     {error && <p role="alert">{error}</p>}
     {form ? <LoanForm key={`${selected?.id ?? "new"}/${form}`} adapter={adapter} owner={owner} identityKey={JSON.stringify([identityScope?.accountId, identityScope?.memberId])} action={form} record={selected}
-      onUnauthenticated={onUnauthenticated} onClose={() => setForm(null)} onSaved={record => { setSelected(record);setForm(null);setRevision(value => value + 1); }} /> : <>
+      onUnauthenticated={onUnauthenticated} onClose={() => setForm(null)} onResolved={record => { setSelected(record);setForm(null);setRevision(value => value + 1); }} /> : <>
       {read && <button onClick={() => setRevision(value => value + 1)} disabled={loading}>刷新申请</button>}
       {loading && <p role="status">正在读取申请…</p>}
       {read && !loading && records.length === 0 && <p>暂无本人借用申请。</p>}
@@ -131,9 +131,9 @@ export function LoanApplicationsPage({ adapter, owner, identityScope, permission
   </section>;
 }
 
-function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticated, onClose, onSaved }: {
+function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticated, onClose, onResolved }: {
   adapter: LoanAdapter; owner: string; identityKey: string; action: Action; record: LoanRecord | null;
-  onUnauthenticated(): void; onClose(): void; onSaved(record: LoanRecord): void;
+  onUnauthenticated(): void; onClose(): void; onResolved(record: LoanRecord): void;
 }) {
   const [currentRecord, setCurrentRecord] = useState(record);
   const draftKey = JSON.stringify([identityKey, "tool-loan", record?.id ?? "new", action]);
@@ -211,7 +211,7 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
     try {
       const result = await adapter.command(request.action, request.id, request.input, request.key);
       if (mine !== lifetime.current) return;
-      discardEntityDraft(owner, draftKey);onSaved(result);
+      discardEntityDraft(owner, draftKey);onResolved(result);
     } catch (failure) {
       if (mine !== lifetime.current) return;
       // The server checks the same-key receipt before checking the published version
@@ -261,7 +261,12 @@ function LoanForm({ adapter, owner, identityKey, action, record, onUnauthenticat
           if (currentRecord) {
             const latest = await adapter.detail(currentRecord.id);
             if (mine !== lifetime.current) return;
-            if (latest.state !== "PENDING_ISSUE") { setError("申请已结束，请返回列表核对。");return; }
+            if (latest.state !== "PENDING_ISSUE") {
+              if (action !== "cancel") { setError("申请已结束，请返回列表核对。");return; }
+              discardEntityDraft(owner, draftKey);
+              onResolved(latest);
+              return;
+            }
             setCurrentRecord(latest);
           }
           if (action === "create") {

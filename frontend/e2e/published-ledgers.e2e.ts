@@ -55,7 +55,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     definitionVersion: 2,
     definition,
     capabilities,
-    organizations: [{ id: "org", name: "生产部" }],
+    organizations: [{ id: "org", name: "生产部" }, { id: "warehouse", name: "仓库" }],
   };
   let record: null | {
     id: string;
@@ -145,6 +145,25 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   });
   await page.getByRole("button", { name: "新增记录", exact: true }).click();
   let editor = page.getByRole("region", { name: "新增记录", exact: true });
+  const closeDraft = editor.getByRole("button", { name: "关闭记录" });
+  const organization = editor.getByRole("combobox", { name: "所属组织" });
+  // The untouched false checkbox and unselected organization are both baseline values.
+  await closeDraft.click();
+  await expect(editor).toBeHidden();
+
+  await page.getByRole("button", { name: "新增记录", exact: true }).click();
+  await organization.selectOption("warehouse");
+  const [discardMessage] = await Promise.all([
+    page.waitForEvent("dialog").then(async (dialog) => {
+      const message = dialog.message();
+      await dialog.dismiss();
+      return message;
+    }),
+    closeDraft.click(),
+  ]);
+  expect(discardMessage).toContain("未保存");
+  await expect(organization).toHaveValue("warehouse");
+  await organization.selectOption("org");
   await editor.getByLabel("采购数量（必填）").fill("5");
   await editor.getByRole("checkbox", { name: "已确认" }).focus();
   await page.keyboard.press("Space");
@@ -152,6 +171,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await page.keyboard.press("Enter");
   await expect(page.getByRole("alert")).toContainText("操作未确认成功");
   await expect(editor.getByLabel("采购数量（必填）")).toBeDisabled();
+  await expect(organization).toBeDisabled();
   await page.evaluate(() => {
     window.history.pushState(null, "", "/t/demo/not-registered");
     window.dispatchEvent(new PopStateEvent("popstate"));

@@ -24,6 +24,7 @@ type Editor = {
   definition: LedgerConfiguration;
   values: Values;
   organizationId: string;
+  initial: { values: Values; organizationId: string };
   editing: boolean;
 };
 const display = (value: unknown) =>
@@ -110,6 +111,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const [recordAttempt, setRecordAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [filterError, setFilterError] = useState("");
   const [notice, setNotice] = useState("");
   const recordForm = useRef<HTMLFormElement>(null);
   const generation = useRef(0);
@@ -117,29 +119,30 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const sending = useRef(false);
   const [uncertain, setUncertain] = useState(false);
   const locked = busy || uncertain;
-  const original = editor?.detail?.record.values;
-  const dirty =
-    !!editor?.editing &&
-    JSON.stringify(editor.values) !== JSON.stringify(original ?? {});
+  const dirty = !!editor?.editing && (
+    editor.organizationId !== editor.initial.organizationId ||
+    JSON.stringify(editor.values) !== JSON.stringify(editor.initial.values)
+  );
   useUnsavedGuard(
     dirty || sending.current || uncertain,
     "当前编辑或操作尚未确认，可在当前标签页返回核对。确定离开吗？",
     active,
   );
-  function failed(cause: unknown) {
+  function failureMessage(cause: unknown) {
     const status = cause instanceof ApiError ? cause.status : 0;
-    if (status === 401) {
-      onUnauthenticated();
-      return;
-    }
+    if (status === 401) return "";
     // Denial of this attempt does not confirm an earlier uncertain result.
     if (status === 403)
-      setError("当前授权不允许此操作，" + (uncertain ? "原结果未确认。" : "请刷新台账核对权限。"));
-    else if (status === 409)
-      setError("记录或台账定义已更新。输入已保留，请重新打开记录核对。");
-    else if (status === 400 || status === 422)
-      setError("请检查必填字段、数值、日期和所属组织。");
-    else setError("操作未确认成功。请重试，写入重试会沿用原请求标识。");
+      return "当前授权不允许此操作，" + (uncertain ? "原结果未确认。" : "请刷新台账核对权限。");
+    if (status === 409)
+      return "记录或台账定义已更新。输入已保留，请重新打开记录核对。";
+    if (status === 400 || status === 422)
+      return "请检查必填字段、数值、日期和所属组织。";
+    return "操作未确认成功。请重试，写入重试会沿用原请求标识。";
+  }
+  function failed(cause: unknown) {
+    if (cause instanceof ApiError && cause.status === 401) onUnauthenticated();
+    else setError(failureMessage(cause));
   }
   // AppShell remounts its children on identity changes. Scope this client to
   // this mounted HTTP page and adapter rather than sharing readable data globally.
@@ -165,18 +168,20 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
       void reads.cancelQueries({ queryKey: ["published-record-detail"] });
     };
   }, [reads, attempt]);
+  const readFailure = directory.error ?? records.error;
+  const readError = readFailure ? failureMessage(readFailure) : "";
   useEffect(() => {
     if (directory.error) setSelectedKey(null);
-    const failure = directory.error ?? records.error;
-    if (failure) failed(failure);
-  }, [directory.error, records.error]);
+    if (readFailure instanceof ApiError && readFailure.status === 401) onUnauthenticated();
+  }, [directory.error, readFailure, onUnauthenticated]);
   function mayDiscard() {
     return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
   }
   function select(next: PublishedLedger) {
-    if (busy || !mayDiscard()) return;
+    if (!mayDiscard()) return;
     setSelectedKey(next.key);
     setFilters({});
+    setFilterError("");
     setEditor(null);
     setNotice("");
     setError("");
@@ -187,10 +192,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     });
   }
   function create() {
-    if (!ledger || busy || !mayDiscard()) return;
-    setEditor({
-      detail: null,
-      definition: ledger.definition,
+    if (!ledger || !mayDiscard()) return;
+    const initial = {
       values: Object.fromEntries(
         ledger.definition.fields
           .filter((field) => field.type === "boolean")
@@ -198,13 +201,13 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
       ),
       organizationId:
         ledger.organizations.length === 1 ? ledger.organizations[0]!.id : "",
-      editing: true,
-    });
+    };
+    setEditor({ detail: null, definition: ledger.definition, ...initial, initial, editing: true });
     setNotice("");
     setError("");
   }
   async function open(id: string) {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger || !mayDiscard()) return;
     const mine = generation.current;
     setBusy(true);
     setError("");
@@ -220,6 +223,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
           definition: detail.definition,
           values: detail.record.values,
           organizationId: detail.record.organizationId,
+          initial: detail.record,
           editing: false,
         });
       }
@@ -238,7 +242,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
       const value = filters[field.key];
       if (!value) continue;
       if (field.type === "number" && !Number.isFinite(Number(value))) {
-        setError("查询数值格式无效。");
+        setFilterError("查询数值格式无效。");
         return;
       }
       next.push({
@@ -252,7 +256,10 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
               : value,
       });
     }
+    setFilterError("");
     setQuery((current) => ({ ...current, filters: next, page: 1 }));
+    // Explicit submission always reads again, even when the filter key is unchanged.
+    setRecordAttempt(value => value + 1);
   }
   function refreshRecords() {
     setRecordAttempt(value => value + 1);
@@ -325,13 +332,14 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
             if (mayDiscard()) {
               setEditor(null);
               setError("");
+              setFilterError("");
               setAttempt((value) => value + 1);
             }
           }}
         />
       </div>
       {loading && <p role="status">正在读取已发布台账…</p>}
-      {error && <p role="alert">{error}</p>}
+      {(readError || filterError || error) && <p role="alert">{[readError, filterError, error].filter(Boolean).join(" ")}</p>}
       {uncertain && (
         <div className="published-actions">
           <Button label="重试原操作" isDisabled={busy} onClick={() => void send("原操作已确认。")} />
@@ -505,7 +513,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                         所属组织
                         <select
                           required
-                          disabled={!!editor.detail || !editing || locked}
+                          disabled={!!editor.detail}
                           value={editor.organizationId}
                           onChange={(event) =>
                             setEditor(
