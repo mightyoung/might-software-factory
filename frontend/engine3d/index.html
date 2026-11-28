@@ -23,11 +23,12 @@
         <fieldset id="resize-tool" hidden>
           <legend>保持对侧不动地调整尺寸</legend>
           <label for="resize-face">设备局部面</label>
-          <select id="resize-face">
+          <select id="resize-face" aria-describedby="resize-face-help">
             <option value="+X">+X · 长</option><option value="-X">−X · 长</option>
             <option value="+Z">+Z · 宽</option><option value="-Z">−Z · 宽</option>
             <option value="+Y">+Y · 高（底面固定）</option>
           </select>
+          <p id="resize-face-help">传送带和廊道可固定对侧调整长、宽；机械臂和螺旋传送机只支持固定底面调整高度。</p>
           <div><button id="resize-in" type="button">收进 0.5 米</button>
           <button id="resize-out" type="button">伸出 0.5 米</button></div>
           <p id="resize-result" role="status"></p>

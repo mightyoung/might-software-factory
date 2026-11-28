@@ -69,3 +69,25 @@ describe("stable standard write requests", () => {
     const a = adapter();vi.mocked(a.update).mockRejectedValue(new ApiError(status, code, null, false));form(a);fireEvent.change(screen.getByLabelText("编号 *"), { target: { value: "kept" } });fireEvent.click(screen.getByRole("button", { name: "保存" }));expect(await screen.findByRole("alert")).toHaveTextContent(message);expect(screen.getByLabelText("编号 *")).toHaveValue("kept");expect(a.update).toHaveBeenCalledTimes(1);
   });
 });
+
+it("drops rows immediately when unchanged-route grants are revoked", async () => {
+  const a = adapter();
+  const route = parseEntityRoute("apps/inventory/entities/widget")!;
+  const common = { adapter: a, route, tenantId: "t", actorId: "a", onUnauthenticated: vi.fn() };
+  const view = render(<EntityLedgerPage {...common} permissions={["widget.read"]} />);
+  expect(await screen.findByText("W-01")).toBeInTheDocument();
+  view.rerender(<EntityLedgerPage {...common} permissions={[]} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("当前没有执行此操作的权限");
+  expect(screen.queryByText("W-01")).not.toBeInTheDocument();
+  expect(a.query).toHaveBeenCalledTimes(1);
+});
+
+it("hides unverified rows of the previous page while a fresh page is being authorized", async () => {
+  const a = adapter();
+  page(a);
+  expect(await screen.findByText("W-01")).toBeInTheDocument();
+  vi.mocked(a.query).mockImplementationOnce(() => new Promise(() => {}));
+  fireEvent.change(screen.getByRole("combobox", { name: "每页条数" }), { target: { value: "50" } });
+  expect(await screen.findByText("查询中…")).toBeInTheDocument();
+  expect(screen.queryByText("W-01")).not.toBeInTheDocument();
+});

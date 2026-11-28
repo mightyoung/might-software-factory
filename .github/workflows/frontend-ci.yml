@@ -55,6 +55,17 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Verify bundle graph accounting
+        working-directory: frontend
+        run: node --test tools/measure-bundle-graph.test.mjs
+
+      - name: Verify Astryx upgrade safeguards
+        working-directory: frontend
+        run: |
+          node --test tools/upgrade-astryx.test.mjs
+          npm exec --offline -- astryx theme build src/themes/might/mightTheme.ts --check
+          node tools/generate-astryx-root-tokens.mjs --check
+
       - name: Production build
         working-directory: frontend
         run: npm run build

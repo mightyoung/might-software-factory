@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { syntheticGlb } from "./glbFixture.ts";
+import { exporterGlb, syntheticGlb } from "./glbFixture.ts";
 import { openStaticGlb, type StaticGlb } from "./glbIntake.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 
@@ -39,4 +39,26 @@ test("50 replacements and repeated clear dispose each owned geometry exactly onc
   slot.clear();
   assert.equal(disposals, 50);
   assert.equal(slot.current, null);
+});
+
+test("reads interleaved exporter normals, flat material and baked ancestor transforms", () => {
+  const model = openStaticGlb(exporterGlb());
+  assert.deepEqual(model.metrics, { vertices: 4, triangles: 2, dimensions: [3, 2, 1] });
+  assert.deepEqual(Array.from(model.geometry.getAttribute("normal").array.slice(0, 3)), [0, 1, 0]);
+  model.dispose();
+});
+
+test("transforms imported normals with inverse transpose under nonuniform scale", () => {
+  const model = openStaticGlb(exporterGlb((doc, bin) => {
+    delete doc.nodes[0].rotation;
+    doc.nodes[0].matrix = [2,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+    [0, 1, 2, 3].forEach((i) => {
+      bin.setFloat32(i * 24 + 12, Math.SQRT1_2, true);
+      bin.setFloat32(i * 24 + 16, Math.SQRT1_2, true);
+    });
+  }));
+  const n = model.geometry.getAttribute("normal");
+  assert.ok(Math.abs(n.getX(0) - 1 / Math.sqrt(5)) < 1e-6);
+  assert.ok(Math.abs(n.getY(0) - 2 / Math.sqrt(5)) < 1e-6);
+  model.dispose();
 });

@@ -202,17 +202,47 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     page.getByRole("status").filter({ hasText: "已发布版本 3" }),
   ).toBeVisible();
   await page.getByLabel("台账名称").fill("回退后继续编辑");
-  const stay = page.waitForEvent("dialog");
-  await Promise.all([
-    stay.then((dialog) => dialog.dismiss()),
-    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
-  ]);
+  const nativeLeaveDialogs: string[] = [];
+  const nativeLeave = async (dialog: import("@playwright/test").Dialog) => {
+    nativeLeaveDialogs.push(dialog.type());
+    await dialog.dismiss();
+  };
+  page.on("dialog", nativeLeave);
+  const leave = page.getByRole("alertdialog", { name: "离开当前页面？" });
+  const stay = leave.getByRole("button", { name: "继续编辑" });
+  const confirmLeave = leave.getByRole("button", { name: "确认离开" });
+  const home = page.getByRole("link", { name: "MIGHT 工作台首页" });
+  await home.focus();
+  await page.keyboard.press("Enter");
+  await expect(stay).toBeFocused();
+  await expect(leave).toContainText("配置尚未保存");
+  await page.keyboard.press("Escape");
+  await expect(leave).toHaveCount(0);
+  await expect(home).toBeFocused();
   await expect(page.getByLabel("台账名称")).toHaveValue("回退后继续编辑");
-  const leave = page.waitForEvent("dialog");
-  await Promise.all([
-    leave.then((dialog) => dialog.accept()),
-    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
-  ]);
+
+  const quick = page.getByRole("dialog", { name: "快捷导航" });
+  await page.keyboard.press("Control+k");
+  const quickTarget = quick.getByRole("link", { name: "生产安全", exact: true });
+  await quickTarget.focus();
+  await page.keyboard.press("Enter");
+  await expect(stay).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(confirmLeave).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(stay).toBeFocused();
+  const { violations } = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(violations.map(({ id }) => id)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(leave).toHaveCount(0);
+  await expect(quick).toBeVisible();
+  await expect(quickTarget).toBeFocused();
+  await page.keyboard.press("Enter");
+  await confirmLeave.click();
+  await expect(quick).toHaveCount(0);
+  expect(nativeLeaveDialogs).toEqual([]);
+  page.off("dialog", nativeLeave);
   await expect(page.locator(".ledger-row").first()).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: "台账配置" })).toBeVisible();
@@ -299,8 +329,44 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     ).toBe(true);
   }
   await test.step("独立调整列表与查询顺序，预览只读，保存后重新载入", async () => {
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "新建台账", exact: true }).click();
+    const nativeDialogs: string[] = [];
+    const nativeDialog = async (dialog: import("@playwright/test").Dialog) => {
+      nativeDialogs.push(dialog.type());
+      await dialog.dismiss();
+    };
+    page.on("dialog", nativeDialog);
+    const create = page.getByRole("button", { name: "新建台账", exact: true });
+    const confirmation = page.getByRole("alertdialog", { name: "放弃未保存的修改？" });
+    const keepEditing = confirmation.getByRole("button", { name: "继续编辑" });
+    const discard = confirmation.getByRole("button", { name: "放弃并切换" });
+    const savesBeforeSwitch = saveAttempts.length;
+    for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await create.focus();
+      await page.keyboard.press("Enter");
+      await expect(keepEditing).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(discard).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(keepEditing).toBeFocused();
+      const { violations } = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      expect(violations.map(({ id }) => id)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(confirmation).toBeHidden();
+      await expect(create).toBeFocused();
+      await expect(page.getByLabel("台账名称")).toHaveValue("采购申请副本");
+    }
+    await create.click();
+    await discard.click();
+    await expect(confirmation).toBeHidden();
+    await expect(page.getByLabel("台账名称")).toHaveValue("");
+    expect(nativeDialogs).toEqual([]);
+    expect(saveAttempts).toHaveLength(savesBeforeSwitch);
+    page.off("dialog", nativeDialog);
     await page.getByLabel("台账标识").fill("ordered_purchase");
     await page.getByLabel("台账名称").fill("排序采购验收");
     for (const [key, label, type] of [

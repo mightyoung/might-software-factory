@@ -1,6 +1,10 @@
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { tableFeatures, useTable, type RowData } from "@tanstack/react-table";
+import { useMemo } from "react";
 import type { LedgerColumn } from "../domain/ledger";
 import { useAppMode } from "../mode";
+
+const tableFeaturesForLedger = tableFeatures({});
 
 interface LedgerTableProps<T> {
   columns: readonly LedgerColumn<T>[];
@@ -14,7 +18,7 @@ interface LedgerTableProps<T> {
   onOpen: (row: T) => void;
 }
 
-export function LedgerTable<T>({
+export function LedgerTable<T extends RowData>({
   columns,
   rows,
   getKey,
@@ -24,9 +28,23 @@ export function LedgerTable<T>({
   onTogglePage,
   onOpen,
 }: LedgerTableProps<T>) {
-  const demo = useAppMode() === "synthetic";
-  const selectedCount = rows.filter((row) => selectedIds.has(getKey(row))).length;
-  const someSelected = selectedCount > 0 && selectedCount < rows.length;
+  const contextMode = useAppMode();
+  const demo = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
+  // TanStack rows cache accessor results. Rebuild when the schema or identity reader changes.
+  const data = useMemo(() => [...rows], [rows, columns, getKey]);
+  const columnDefs = useMemo(() => columns.map((column) => ({
+    id: column.key,
+    accessorFn: (row: T) => column.read(row),
+  })), [columns]);
+  const table = useTable({
+    features: tableFeaturesForLedger,
+    data,
+    columns: columnDefs,
+    getRowId: getKey,
+  });
+  const visibleRows = table.getRowModel().rows;
+  const selectedCount = visibleRows.filter((row) => selectedIds.has(row.id)).length;
+  const someSelected = selectedCount > 0 && selectedCount < visibleRows.length;
   const pageSelection = someSelected ? "indeterminate" : selectedCount > 0;
 
   return (
@@ -40,7 +58,7 @@ export function LedgerTable<T>({
                 isLabelHidden
                 label="选择本页记录"
                 value={pageSelection}
-                isDisabled={rows.length === 0}
+                isDisabled={visibleRows.length === 0}
                 onChange={onTogglePage}
               />
             </th>
@@ -55,41 +73,42 @@ export function LedgerTable<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
-            const id = getKey(row);
+          {visibleRows.map((row) => {
+            const { id, original } = row;
             return (
               <tr key={id} className="ledger-row">
                 <td className="selection-column" onClick={(event) => event.stopPropagation()}>
                   <CheckboxInput
                     size="sm"
                     isLabelHidden
-                    label={`选择 ${getLabel ? getLabel(row) : id}`}
+                    label={`选择 ${getLabel ? getLabel(original) : id}`}
                     value={selectedIds.has(id)}
                     onChange={() => onToggleRow(id)}
                   />
                 </td>
-                {columns.map((column) => (
-                  <td key={column.key}>
-                    {column.kind === "status" ? (
-                      <span className={`status-label status-${column.tone?.(row) ?? "default"}`}>
-                        {column.read(row)}
-                      </span>
-                    ) : (
-                      <span className="cell-ellipsis" title={column.read(row)}>
-                        {column.read(row)}
-                      </span>
-                    )}
-                  </td>
-                ))}
+                {columns.map((column) => {
+                  const value = row.getValue<string>(column.key);
+                  return (
+                    <td key={column.key}>
+                      {column.kind === "status" ? (
+                        <span className={`status-label status-${column.tone?.(original) ?? "default"}`}>
+                          {value}
+                        </span>
+                      ) : (
+                        <span className="cell-ellipsis" title={value}>{value}</span>
+                      )}
+                    </td>
+                  );
+                })}
                 <td className="table-action-column">
-                  <button className="text-button" type="button" onClick={() => onOpen(row)}>
+                  <button className="text-button" type="button" onClick={() => onOpen(original)}>
                     详情
                   </button>
                 </td>
               </tr>
             );
           })}
-          {rows.length === 0 && (
+          {visibleRows.length === 0 && (
             <tr>
               <td colSpan={columns.length + 2} className="empty-cell">
                 当前筛选条件下没有{demo ? "演示" : ""}记录。
