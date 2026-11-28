@@ -1,4 +1,3 @@
-import { LoginPageCore } from "./features/session/LoginPage";
 import { lazyRouteComponent, type RouteComponent } from "@tanstack/react-router";
 import { syntheticPresentation } from "./adapters/syntheticPresentation";
 import type { ComponentProps } from "react";
@@ -8,6 +7,8 @@ import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
+import { FindingReportFormCore } from "./components/FindingReportForm";
+import { LoginPageCore } from "./features/session/LoginPage";
 import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
@@ -16,7 +17,6 @@ import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
 import { withoutFindingSelection } from "./routing/findingSearch";
 import { PermissionConfigRouteScope } from "./routing/permissionConfigRouteScope";
 import { LedgerConfigRouteScope } from "./routing/ledgerConfigRouteScope";
-import { PublishedLedgerRouteScope } from "./routing/publishedLedgerRouteScope";
 import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
@@ -32,7 +32,7 @@ import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
 
-const FindingReportFormCore = lazy(() => import("./components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
+const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -74,11 +74,7 @@ interface RouteDef {
 }
 
 const ROUTES: readonly RouteDef[] = [
-  {
-    rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open",
-    page: { kind: "published-ledgers", title: "业务台账" },
-    component: lazyRouteComponent(() => import("./features/publishedLedgers/PublishedLedgersPage")),
-  },
+  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账" } },
   {
     rest: "platform/ledger-configurations",
     application: "platform",
@@ -132,7 +128,6 @@ const ROUTES: readonly RouteDef[] = [
 ];
 
 const workspaceRoutes = createWorkspaceRouteMatcher(ROUTES);
-const PublishedLedgerRoute = workspaceRoutes.componentFor("platform/ledgers");
 const LedgerConfigRoute = workspaceRoutes.componentFor("platform/ledger-configurations");
 
 function applicationOfPath(rest: string): ApplicationId | null {
@@ -185,7 +180,7 @@ function FindingReportPage({ adapter, draftKey, onUnauthenticated, presentation 
   return <section className="ledger-main">
     <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
     <p>可上报你有权提交的隐患。</p>
-    {open && <Suspense fallback={<p role="status">正在载入上报表单…</p>}><FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} /></Suspense>}
+    {open && <FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
   </section>;
 }
 
@@ -292,7 +287,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const platformHttp = mode === "http" && session.applications.some(app => app.id === "platform");
   const activeLedgerPage = !routingTransition && authorizedApplication === "platform" && canReadRoute ? route?.page.kind : undefined;
   const isConfigOpen = activeLedgerPage === "ledger-configurations" && matchedComponent === LedgerConfigRoute;
-  const isRecordsOpen = activeLedgerPage === "published-ledgers" && matchedComponent === PublishedLedgerRoute;
+  const isRecordsOpen = activeLedgerPage === "published-ledgers";
   const canKeepLedgerConfig = platformHttp &&
     (hasPermission(session, "ledger.configuration.read") || canManageLedgerConfig || canPublishLedgerConfig);
 
@@ -420,11 +415,9 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
           </LedgerConfigRouteScope.Provider>
         </RetainedRoute>
       )}
-      {platformHttp && PublishedLedgerRoute && hasPermission(session, "ledger.directory.open") && (
+      {platformHttp && hasPermission(session, "ledger.directory.open") && (
         <RetainedRoute active={isRecordsOpen} loading="正在载入业务台账…">
-          <PublishedLedgerRouteScope.Provider value={{ active: isRecordsOpen, onUnauthenticated: expire }}>
-            <PublishedLedgerRoute />
-          </PublishedLedgerRouteScope.Provider>
+          <PublishedLedgersPage active={isRecordsOpen} onUnauthenticated={expire} />
         </RetainedRoute>
       )}
     </AppShell>

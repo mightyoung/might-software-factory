@@ -1,6 +1,4 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useForm } from "react-hook-form";
-import * as z from "zod/mini";
 import { FindingSubmitError } from "../adapters/findingSubmit";
 import { CREATE_DRAFT_FIELDS, validatePublishedFindingDraft, type FindingDefinition } from "../adapters/findingDefinition";
 import { useAppMode } from "../mode";
@@ -56,12 +54,6 @@ const SUBMIT_FAILURE_MESSAGE: Record<FindingSubmitFailureKind, string> = {
   unavailable: "服务暂时不可用，上报尚未确认成功。可以直接重试，重试不会重复创建记录。",
 };
 
-const draftValues = z.custom<FindingDraft>((value: unknown) =>
-  typeof value === "object" && value !== null && DRAFT_FIELD_ORDER.every((field) =>
-    field in value && typeof (value as Record<string, unknown>)[field] === "string",
-  ),
-);
-
 export function FindingReportFormCore(props:FindingReportFormProps) {
   const [scope,setScope]=useState({adapter:props.adapter,draftKey:props.draftKey,generation:0});
   if(scope.adapter!==props.adapter||scope.draftKey!==props.draftKey){setScope({adapter:props.adapter,draftKey:props.draftKey,generation:scope.generation+1});return null;}
@@ -82,13 +74,8 @@ function FindingReportFormBody({
   const uid = useId();
   const [initial] = useState(() => createEmptyDraft(now()));
   const [restored] = useState(() => (draftKey ? peekDraft(draftKey) : undefined));
-  const form = useForm<FindingDraft>({ defaultValues: restored?.draft ?? initial });
-  const draft = form.watch();
-  const errors: FindingDraftErrors = {};
-  for (const field of DRAFT_FIELD_ORDER) {
-    const message = form.formState.errors[field]?.message;
-    if (message) errors[field] = message;
-  }
+  const [draft, setDraft] = useState<FindingDraft>(restored?.draft ?? initial);
+  const [errors, setErrors] = useState<FindingDraftErrors>({});
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const contextMode = useAppMode();
   const live = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "http";
@@ -128,23 +115,14 @@ function FindingReportFormBody({
     focus.focusNow("source");
   }, [focus.focusNow]);
 
-  function replaceErrors(found: FindingDraftErrors, type: "client" | "server"): FindingDraftErrors {
-    form.clearErrors();
-    const known: FindingDraftErrors = {};
-    for (const field of DRAFT_FIELD_ORDER) {
-      const message = found[field];
-      if (typeof message === "string" && message) {
-        known[field] = message;
-        form.setError(field, { type, message });
-      }
-    }
-    return known;
-  }
-
   function update<K extends FindingDraftField>(key: K, value: FindingDraft[K]) {
-    form.setValue<FindingDraftField>(key, value);
-    // 编辑只清除自己的错误，不掩盖其他待修正项。
-    form.clearErrors(key);
+    setDraft((current) => ({ ...current, [key]: value }));
+    // 编辑某个字段后清除它自己的错误，其他字段的错误保留到下次提交。
+    setErrors((current) => {
+      if (!(key in current)) return current;
+      const { [key]: _removed, ...rest } = current;
+      return rest;
+    });
   }
 
   function requestClose() {
@@ -163,40 +141,26 @@ function FindingReportFormBody({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting || (published&&!definition) || (!definition && !validateDraft)) return;
-    const schema = draftValues.check(z.superRefine((input, context) => {
-      const found = definition ? validatePublishedFindingDraft(input, definition, now()) : validateDraft!(input, now());
-      for (const field of DRAFT_FIELD_ORDER) {
-        const message = found[field];
-        if (message) context.addIssue({ code: "custom", path: [field], message });
-      }
-    }));
-    const parsed = schema.safeParse(form.getValues());
-    const issues: FindingDraftErrors = {};
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues) {
-        const field = DRAFT_FIELD_ORDER.find((field) => field === issue.path[0]);
-        if (field) issues[field] = issue.message;
-        else issues.description = "上报草稿内容不完整，请检查后再提交。";
-      }
-    }
-    const found = replaceErrors(issues, "client");
+    const found = definition?validatePublishedFindingDraft(draft,definition,now()):validateDraft!(draft, now());
+    setErrors(found);
     const orgMissing = needsOrganization && (!organizationId||orgs.selected?.id!==organizationId);
     setOrgError(orgMissing ? "请选择所属组织" : null);
-    if (orgMissing || !parsed.success || hasDraftErrors(found)) {
+    if (orgMissing || hasDraftErrors(found)) {
       // 组织在表单最上方：缺它时先把焦点交给它，其余错误随后按顺序处理。
       if (orgMissing) orgRef.current?.focus();
       else focus.focusFirstError(found);
       return;
     }
-    const outcome = await submit.send(normalizeDraft(parsed.data), needsOrganization ? organizationId : undefined, relatedTo?.id);
+    const outcome = await submit.send(normalizeDraft(draft), needsOrganization ? organizationId : undefined, relatedTo?.id);
     if (outcome.fieldErrors) {
-      const fields = replaceErrors(outcome.fieldErrors, "server");
-      if (hasDraftErrors(fields)) focus.focusFirstError(fields);
+      setErrors(outcome.fieldErrors);
+      focus.focusFirstError(outcome.fieldErrors);
     }
   }
 
   function startAnother() {
-    form.reset(createEmptyDraft(now()));
+    setDraft(createEmptyDraft(now()));
+    setErrors({});
     setOrgError(null);
     setConfirmDiscard(false);
     submit.reset();

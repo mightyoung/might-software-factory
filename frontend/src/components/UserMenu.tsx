@@ -1,6 +1,5 @@
-import { lazy, Suspense, useEffect, useId, useRef, useState } from "react";
-
-const ChangePasswordDialog = lazy(() => import("./ChangePasswordDialog").then(({ ChangePasswordDialog }) => ({ default: ChangePasswordDialog })));
+import { useEffect, useId, useRef, useState } from "react";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
 
 interface UserMenuProps {
   displayName: string;
@@ -87,7 +86,6 @@ export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }
         </div>
       )}
       {changingPassword && onChangePassword && (
-        <Suspense fallback={<p role="status">正在载入修改密码…</p>}>
         <ChangePasswordDialog
           onSubmit={onChangePassword}
           onClose={() => {
@@ -96,7 +94,6 @@ export function UserMenu({ displayName, tenantName, onLogout, onChangePassword }
             queueMicrotask(() => buttonRef.current?.focus());
           }}
         />
-        </Suspense>
       )}
     </div>
   );

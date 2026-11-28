@@ -1,7 +1,5 @@
 import { ThemeSelector } from "../theme/ThemeProvider";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useForm } from "react-hook-form";
-import * as z from "zod/mini";
 import { DemoLoginAccounts } from "./DemoLoginAccounts";
 import { SessionError } from "../../domain/session";
 import { useSession, type SessionState } from "./SessionProvider";
@@ -24,20 +22,11 @@ function failureMessage(error: unknown): string {
   return "账号或密码不正确。";
 }
 
-type LoginValues = { username: string; password: string; tenantCode: string };
-const loginValues = z.custom<LoginValues>((data: unknown) =>
-  typeof data === "object" && data !== null
-  && "username" in data && typeof data.username === "string"
-  && "password" in data && typeof data.password === "string"
-  && "tenantCode" in data && typeof data.tenantCode === "string",
-);
-
 export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAccounts?: typeof DemoLoginAccounts }) {
   const { login, requiresTenantCode } = useSession();
-  const { register, getValues, resetField, setValue } = useForm<LoginValues>({
-    defaultValues: { tenantCode: "", username: "", password: "" },
-  });
-  const sending = useRef(false);
+  const [tenantCode, setTenantCode] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [retryUntil, setRetryUntil] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
@@ -66,12 +55,7 @@ export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAc
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || Date.now() < blockedUntil.current) return;
-    // Empty values and whitespace are deliberately left to the existing session adapter.
-    const values = loginValues.safeParse(getValues());
-    if (!values.success) return;
-    const { tenantCode, username, password } = values.data;
-    sending.current = true;
+    if (pending || Date.now() < blockedUntil.current) return;
     setPending(true);
     setError(null);
     try {
@@ -87,14 +71,12 @@ export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAc
         setRemainingSeconds(seconds);
         setRetryUntil(blockedUntil.current);
       }
-      resetField("password");
-      sending.current = false;
+      setPassword("");
       setPending(false);
       usernameRef.current?.focus();
     }
   }
 
-  const usernameInput = register("username");
   return (
     <main className="login-page" aria-label="登录">
       <div className="login-theme"><ThemeSelector /></div>
@@ -124,10 +106,12 @@ export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAc
               <label className="login-field">
                 <span>租户编码</span>
                 <input
-                  {...register("tenantCode")}
+                  name="tenantCode"
                   type="text"
                   autoComplete="organization"
                   autoFocus
+                  value={tenantCode}
+                  onChange={(event) => setTenantCode(event.target.value)}
                   disabled={pending}
                 />
               </label>
@@ -135,23 +119,24 @@ export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAc
             <label className="login-field">
               <span>账号</span>
               <input
-                {...usernameInput}
-                ref={(element) => {
-                  usernameInput.ref(element);
-                  usernameRef.current = element;
-                }}
+                ref={usernameRef}
+                name="username"
                 type="text"
                 autoComplete="username"
                 autoFocus={!requiresTenantCode}
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
                 disabled={pending}
               />
             </label>
             <label className="login-field">
               <span>密码</span>
               <input
-                {...register("password")}
+                name="password"
                 type="password"
                 autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
                 disabled={pending}
               />
             </label>
@@ -161,7 +146,7 @@ export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAc
           </form>
 
           {!requiresTenantCode && DemoAccounts && <DemoAccounts pending={pending} onSelect={(name) => {
-            setValue("username", name);
+            setUsername(name);
             usernameRef.current?.focus();
           }} />}
         </section>
