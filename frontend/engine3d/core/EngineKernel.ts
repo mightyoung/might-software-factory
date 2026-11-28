@@ -21,7 +21,7 @@ export function mountEngine(
   const camera = new PerspectiveCamera(48, 1, 0.1, overviewFar);
   const origin = new Vector3();
   let focusedId: string | undefined;
-  const objects = buildSceneObjects(sceneDocument);
+  let objects = buildSceneObjects(sceneDocument);
   const grid = new GridHelper(32, 32, 0x668d86, 0xbaccc8);
   const key = new DirectionalLight(0xffffff, 2);
   key.position.set(6, 15, 8);
@@ -77,6 +77,16 @@ export function mountEngine(
 
   return {
     focus,
+    replaceScene(next: SceneDocument) {
+      if (disposed) return false;
+      const previous = objects;
+      objects = buildSceneObjects(next);
+      scene.remove(previous.group);
+      previous.dispose();
+      scene.add(objects.group);
+      render();
+      return true;
+    },
     setState(id: string, state: DeviceState) {
       const changed = objects.setState(id, state);
       if (changed) render();

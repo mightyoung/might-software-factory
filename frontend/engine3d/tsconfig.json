@@ -5,6 +5,6 @@
     "strict": true, "noUnusedLocals": true, "noUnusedParameters": true, "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["core/**/*.ts", "runtime/**/*.ts", "schema/**/*.ts"],
+  "include": ["core/**/*.ts", "runtime/**/*.ts", "schema/**/*.ts", "sim/**/*.ts"],
   "exclude": ["**/*.test.ts"]
 }
