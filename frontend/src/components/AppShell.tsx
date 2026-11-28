@@ -1,8 +1,7 @@
 import { officeEditors, type OfficeEditorKind } from "../features/office/editors";
 import { Text } from "@astryxdesign/core/Text";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { ThemeSelector, useTheme } from "../features/theme/ThemeProvider";
-import { useState, type ReactNode } from "react";
 import type { AppMenuState } from "../features/session/useAppMenu";
 import {
   visibleMenuNodes,
@@ -17,6 +16,60 @@ import { useAppMode } from "../mode";
 import { UserMenu } from "./UserMenu";
 
 const OfficeDialog = lazy(() => import("../features/office/OfficeDialog").then(module => ({ default: module.OfficeDialog })));
+
+const sidebarKey = "might.sidebar.collapsed";
+
+function sidebarPreference() {
+  try { return localStorage.getItem(sidebarKey) === "1"; }
+  catch { return false; }
+}
+
+function QuickNavigation({ session, menu, onClose }: Pick<AppShellProps, "session" | "menu"> & { onClose(): void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const opener = document.activeElement;
+    const modal = dialog.current!;
+    modal.showModal();
+    search.current?.focus();
+    return () => {
+      modal.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+  const applicationNames = new Map(session.applications.map(app => [app.entryPath, app.name]));
+  const pages = new Map(applicationNames);
+  if (menu.status === "ready") {
+    const visible = visibleMenuNodes(menu.menu.nodes, session);
+    for (const item of visible.flatMap(node => node.children ?? [node])) {
+      if (item.path) pages.set(item.path, item.label);
+    }
+  }
+  const term = query.trim().toLocaleLowerCase();
+  const results = [...pages].filter(([path, label]) =>
+    label.toLocaleLowerCase().includes(term) || applicationNames.get(path)?.toLocaleLowerCase().includes(term),
+  );
+  return <dialog ref={dialog} className="quick-navigation" aria-labelledby="quick-navigation-title"
+    onCancel={event => { event.preventDefault(); onClose(); }}
+    onKeyDown={event => {
+      if (event.key !== "Tab") return;
+      const items = event.currentTarget.querySelectorAll<HTMLElement>("input, a[href], button");
+      const first = items[0], last = items[items.length - 1];
+      if (document.activeElement === (event.shiftKey ? first : last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+    }}>
+    <h2 id="quick-navigation-title">快捷导航</h2>
+    <input ref={search} type="search" aria-label="搜索页面" placeholder="输入台账或模块名称…" value={query}
+      onChange={event => setQuery(event.target.value)} />
+    {results.length ? <ul>{results.map(([path, label]) => <li key={path}>
+      <RouteLink to={tenantPath(session.tenant.id, path)} onNavigate={onClose}>{label}</RouteLink>
+    </li>)}</ul> : <p role="status">没有匹配的页面</p>}
+    <button className="button" type="button" onClick={onClose}>关闭</button>
+  </dialog>;
+}
 
 const ICON_GLYPH: Record<MenuIcon, { glyph: string; className: string }> = {
   warning: { glyph: "◇", className: "glyph-warning" },
@@ -99,16 +152,19 @@ function Sidebar({
   menu,
   currentRest,
   onRetryMenu,
-  synthetic,
+  synthetic: contextSynthetic,
+  collapsed,
 }: {
+  collapsed: boolean;
   synthetic: boolean;
   session: SessionBootstrap;
   menu: AppMenuState;
   currentRest: string;
   onRetryMenu: () => void;
 }) {
+  const synthetic = import.meta.env.MSF_BROWSER_MODE === undefined ? contextSynthetic : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" id="workspace-sidebar" hidden={collapsed}>
       {menu.status === "ready" ? (
         <>
           <div className="sidebar-title">{menu.menu.title}</div>
@@ -144,8 +200,22 @@ function Sidebar({
 }
 
 export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
-  const synthetic = useAppMode() === "synthetic";
+  const contextMode = useAppMode();
+  const synthetic = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
   const [officeKind, setOfficeKind] = useState<OfficeEditorKind | null>(null);
+  const [collapsed, setCollapsed] = useState(sidebarPreference);
+  const [quickNavigation, setQuickNavigation] = useState(false);
+  useEffect(() => {
+    function openNavigation(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.altKey || event.shiftKey
+        || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k"
+        || document.querySelector("dialog[open], [aria-modal=true]")) return;
+      event.preventDefault();
+      setQuickNavigation(true);
+    }
+    window.addEventListener("keydown", openNavigation);
+    return () => window.removeEventListener("keydown", openNavigation);
+  }, []);
   const { resolvedTheme } = useTheme();
   const home = session.applications[0];
   return (
@@ -172,6 +242,14 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
           ))}
         </nav>
         <div className="topbar-right">
+          {application && <button className="button office-open" type="button" aria-controls="workspace-sidebar"
+            aria-expanded={!collapsed} onClick={() => {
+              const next = !collapsed;
+              setCollapsed(next);
+              try { localStorage.setItem(sidebarKey, next ? "1" : "0"); } catch { /* optional preference */ }
+            }}>{collapsed ? "展开导航" : "收起导航"}</button>}
+          <button className="button office-open" type="button" aria-keyshortcuts="Control+K Meta+K"
+            onClick={() => setQuickNavigation(true)}>快捷导航</button>
           {(["sheet", "doc"] as const).map(kind => (
             <button className="button office-open" type="button" key={kind} onClick={() => setOfficeKind(kind)}>
               {officeEditors[kind].title}
@@ -185,11 +263,12 @@ export function AppShell({ session, application, currentRest, menu, onRetryMenu,
         </div>
       </header>
 
+      {quickNavigation && <QuickNavigation session={session} menu={menu} onClose={() => setQuickNavigation(false)} />}
       {officeKind && <Suspense fallback={<p role="status">正在加载{officeEditors[officeKind].title}…</p>}>
         <OfficeDialog kind={officeKind} theme={resolvedTheme} onClose={() => setOfficeKind(null)} />
       </Suspense>}
       <div className="workspace">
-        {application && <Sidebar synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}
+        {application && <Sidebar collapsed={collapsed} synthetic={synthetic} session={session} menu={menu} currentRest={currentRest} onRetryMenu={onRetryMenu} />}
         <main className="main-region" aria-label={title}>
           {children}
         </main>

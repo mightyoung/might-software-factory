@@ -103,7 +103,12 @@ export function PublishedLedgersPage({
         );
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) failed(cause);
+        if (!controller.signal.aborted) {
+          // The directory owns visibility; do not leave the old result on a refused refresh.
+          setLedgers([]);
+          setLedger(null);
+          failed(cause);
+        }
       })
       .finally(() => {
         if (mine === generation.current) setLoading(false);

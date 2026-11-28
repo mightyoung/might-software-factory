@@ -67,12 +67,15 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     updatedAt: string;
   } = null;
   let creates = 0;
+  let refuseDirectory = false;
   let firstCreate: unknown;
   const queries: unknown[] = [];
   await page.route("**/api/v1/ledgers**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/v1/ledgers")
-      return route.fulfill({ json: { items: [item] } });
+      return refuseDirectory
+        ? route.fulfill({ status: 403, json: { code: "FORBIDDEN", message: "Directory permission revoked" } })
+        : route.fulfill({ json: { items: [item] } });
     if (path.endsWith("/query")) {
       queries.push(route.request().postDataJSON());
       return route.fulfill({
@@ -211,4 +214,11 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "删除草稿" }).click();
   await expect(page.getByText("共 0 条记录")).toBeVisible();
+
+  refuseDirectory = true;
+  await page.getByRole("button", { name: "刷新台账", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("当前授权不允许此操作");
+  await expect(page.getByRole("button", { name: "采购申请", exact: true })).toHaveCount(0);
+  await expect(page.getByText("共 0 条记录")).toHaveCount(0);
+  expect(creates).toBe(1);
 });
