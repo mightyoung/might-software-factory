@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/player/style.css">
+  <title>Might 3D · 离线只读放映</title>
+</head>
+<body>
+  <main>
+    <p>软件工厂 · 三维放映</p>
+    <h1>离线只读放映</h1>
+    <p>选择 Studio 生成的放映文件。放映不写入场景，不需要联网。文件摘要用于校验内容，不是授权凭据。</p>
+    <label for="play-file">载入放映文件</label>
+    <input id="play-file" type="file" accept=".json,application/json">
+    <p id="play-status" role="status">等待放映文件。</p>
+    <p id="play-error" role="alert" hidden></p>
+    <div class="play-layout">
+      <section aria-labelledby="play-device-title">
+        <h2 id="play-device-title">二维设备列表</h2>
+        <p>巡检按设备清单前 20 项顺序播放，每项 3 秒。手动选择或切走页面时暂停。</p>
+        <button id="tour-play" type="button" disabled>开始设备巡检</button>
+        <button id="tour-pause" type="button" disabled>暂停巡检</button>
+        <p id="tour-status" role="status"></p>
+        <ul id="play-list"></ul>
+        <p id="play-selection" role="status" hidden></p>
+      </section>
+      <section aria-labelledby="play-canvas-title">
+        <h2 id="play-canvas-title">三维视口</h2>
+        <p id="play-graphics" role="status"></p>
+        <canvas id="play-canvas" aria-label="只读放映视口"></canvas>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/player/main.ts"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import {
   PermissionAdminError,
   type PermissionAdminAdapter,
@@ -8,6 +9,8 @@ import {
   type PermissionAdminFailure,
   type RoleView,
 } from "../../adapters/permissionAdmin";
+
+import { PermissionConfigRouteScope, type PermissionConfigRouteProps } from "../../routing/permissionConfigRouteScope";
 
 const APPLICATION_LABEL: Readonly<Record<string, string>> = { safety: "生产安全", equipment: "设备管理", platform: "系统设置" };
 
@@ -33,19 +36,23 @@ export function diffCodes(original: readonly string[], draft: ReadonlySet<string
   };
 }
 
-interface Props {
-  adapter: PermissionAdminAdapter;
-  canManage: boolean;
-  onUnauthenticated: () => void;
-  onPermissionsChanged?: () => Promise<void>;
+export function PermissionConfigRoute() {
+  const scope = useContext(PermissionConfigRouteScope);
+  return scope ? <PermissionConfigPage {...scope} /> : null;
 }
 
-export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: Props) {
+export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, onPermissionsChanged }: PermissionConfigRouteProps) {
   const lifetime = useRef(0);
   useEffect(() => { lifetime.current += 1;return () => { lifetime.current += 1; }; }, [adapter]);
   const [data, setData] = useState<PermissionAdminData | null>(null);
   const [loadError, setLoadError] = useState<PermissionAdminFailure | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<{
+    adapter: PermissionAdminAdapter;
+    from: string | null;
+    to: string;
+  } | null>(null);
+  useEffect(() => { setPendingSwitch(null); }, [adapter, canManage]);
   const [draft, setDraft] = useState<ReadonlySet<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
@@ -56,6 +63,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
       try {
         const next = await adapter.load(signal);
         if (signal?.aborted || mine !== lifetime.current) return;
+        setPendingSwitch(null);
         setData(next);
         setLoadError(null);
         const wanted = keepSelection ?? null;
@@ -92,16 +100,28 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
   const diff = selected ? diffCodes(selected.permissionCodes, draft) : { added: [], removed: [] };
   const dirty = diff.added.length + diff.removed.length > 0;
 
+  const pendingRole = canManage && !saving && pendingSwitch?.adapter === adapter && pendingSwitch.from === selectedId
+    ? data?.roles.find((role) => role.id === pendingSwitch.to)
+    : undefined;
+
+  function requestSwitch(role: RoleView) {
+    if (saving || pendingRole || role.id === selectedId) return;
+    if (dirty && canManage) {
+      setPendingSwitch({ adapter, from: selectedId, to: role.id });
+      return;
+    }
+    select(role);
+  }
+
   function select(role: RoleView) {
-    if (saving) return;
-    if (dirty && !window.confirm("当前角色有未保存的修改，切换后将丢弃，继续吗？")) return;
+    setPendingSwitch(null);
     setSelectedId(role.id);
     setDraft(new Set(role.permissionCodes));
     setNotice(null);
   }
 
   function toggle(code: string) {
-    if (!canManage) return;
+    if (!canManage || saving || pendingRole) return;
     setNotice(null);
     setDraft((current) => {
       const next = new Set(current);
@@ -112,7 +132,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
   }
 
   async function save() {
-    if (!selected || !dirty || saving) return;
+    if (!canManage || !selected || !dirty || saving || pendingRole) return;
     const mine = lifetime.current;
     let persisted = false;
     setSaving(true);
@@ -156,6 +176,13 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
 
   return (
     <section className="perm-page">
+      {pendingRole && <WorkbenchConfirmDialog
+        title="放弃未保存的权限修改？"
+        description="切换角色会丢弃当前角色尚未保存的权限修改。"
+        confirmLabel="放弃并切换"
+        onCancel={() => setPendingSwitch(null)}
+        onConfirm={() => select(pendingRole)}
+      />}
       <h1>权限配置</h1>
       <p className="perm-lead">
         按角色勾选可使用的功能。{canManage ? "保存后立即生效，菜单和接口都会按新权限判断。" : "你只有查看权限，无法修改。"}
@@ -169,7 +196,7 @@ export function PermissionConfigPage({ adapter, canManage, onUnauthenticated, on
               className={`perm-role ${role.id === selectedId ? "perm-role-current" : ""}`}
               aria-current={role.id === selectedId ? "true" : undefined}
               disabled={saving}
-              onClick={() => select(role)}
+              onClick={() => requestSwitch(role)}
             >
               <span>{role.name}</span>
               <small>{role.memberCount} 人 · {role.permissionCodes.length} 项权限</small>

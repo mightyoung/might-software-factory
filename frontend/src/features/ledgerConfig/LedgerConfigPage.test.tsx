@@ -6,8 +6,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { RouteLink } from "../../routing/router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RouteLeaveProvider, RouteLink } from "../../routing/router";
 import { ApiError } from "../../api/httpClient";
 import { LedgerConfigPage } from "./LedgerConfigPage";
 import {
@@ -43,12 +43,48 @@ function adapter(): LedgerConfigAdapter {
     publish: vi.fn().mockResolvedValue({ ...first, publishedVersion: 1 }),
   };
 }
+beforeEach(() => {
+  // jsdom lacks the native top-layer methods; browser CI verifies actual modality and focus.
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
+});
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
   vi.restoreAllMocks();
 });
 
 describe("LedgerConfigPage", () => {
+  it("guards workflow-only changes and resets local selection when reloading the same version", async () => {
+    const api = adapter();
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    const entry = await screen.findByRole("button", { name: /采购申请/ });
+    fireEvent.click(entry);
+    await waitFor(() => expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请"));
+    const editor = within(await screen.findByRole("region", { name: "流程设计" }));
+    await waitFor(() => expect(editor.getByRole("button", { name: "插入办理节点" })).not.toBeDisabled());
+    fireEvent.click(editor.getByRole("button", { name: "插入办理节点" }));
+    expect(editor.getByLabelText("节点名称")).toHaveValue("办理");
+    fireEvent.click(entry);
+    const confirmation = () => screen.queryByRole("alertdialog", { name: "放弃未保存的修改？" });
+    const cancel = await screen.findByRole("button", { name: "继续编辑" });
+    fireEvent.click(cancel);
+    await waitFor(() => expect(confirmation()).not.toBeInTheDocument());
+    expect(editor.getByLabelText("节点名称")).toHaveValue("办理");
+    expect(api.versions).toHaveBeenCalledTimes(1);
+    expect(api.save).not.toHaveBeenCalled();
+    fireEvent.click(entry);
+    const discard = await screen.findByRole("button", { name: "放弃并切换" });
+    fireEvent.click(discard);
+    await waitFor(() => expect(confirmation()).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("节点名称")).toHaveValue("登记"));
+    expect(api.versions).toHaveBeenCalledTimes(2);
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
   it("copies a saved historical version into an independent first draft", async () => {
     const api = adapter();
     const historical = {
@@ -88,8 +124,8 @@ describe("LedgerConfigPage", () => {
     fireEvent.change(await screen.findByLabelText("台账名称"), {
       target: { value: "未保存的更改" },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "放弃未保存的修改？" })).getByRole("button", { name: "放弃并切换" }));
     expect(
       screen.getByText(/已从台账 采购申请（purchase）的版本 1/),
     ).toBeInTheDocument();
@@ -168,12 +204,17 @@ describe("LedgerConfigPage", () => {
     fireEvent.change(await screen.findByLabelText("台账名称"), {
       target: { value: "待保存" },
     });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const copy = screen.getByRole("button", { name: "复制版本 1为新台账" });
+    fireEvent.click(copy);
+    const dialog = await screen.findByRole("alertdialog", { name: "放弃未保存的修改？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(screen.getByLabelText("台账名称")).toHaveValue("待保存");
     expect(screen.getByLabelText("台账标识")).toHaveValue("purchase");
-    confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "复制版本 1为新台账" }));
+    expect(api.save).not.toHaveBeenCalled();
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    fireEvent.click(copy);
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "放弃未保存的修改？" })).getByRole("button", { name: "放弃并切换" }));
     fireEvent.change(screen.getByLabelText("台账标识"), {
       target: { value: "purchase" },
     });
@@ -262,7 +303,14 @@ describe("LedgerConfigPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
     fireEvent.click(await screen.findByRole("button", { name: "比较版本 1" }));
     expect(screen.getByText("配置内容相同。")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "恢复版本 1为新草稿" }));
+    fireEvent.change(screen.getByLabelText("台账名称"), { target: { value: "未保存" } });
+    const restore = screen.getByRole("button", { name: "恢复版本 1为新草稿" });
+    fireEvent.click(restore);
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "继续编辑" }));
+    expect(screen.getByLabelText("台账名称")).toHaveValue("未保存");
+    expect(api.restore).not.toHaveBeenCalled();
+    fireEvent.click(restore);
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "放弃并恢复" }));
     expect(
       await screen.findByText(/已从版本 1 创建新草稿 2/),
     ).toBeInTheDocument();
@@ -310,10 +358,10 @@ describe("LedgerConfigPage", () => {
     const api = adapter();
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
-      <>
+      <RouteLeaveProvider>
         <RouteLink to="/safety/findings">隐患台账</RouteLink>
         <LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />
-      </>,
+      </RouteLeaveProvider>,
     );
     fireEvent.click(await screen.findByRole("button", { name: /采购申请/ }));
     fireEvent.change(await screen.findByLabelText("台账名称"), {
@@ -322,10 +370,20 @@ describe("LedgerConfigPage", () => {
     const departure = new Event("beforeunload", { cancelable: true });
     expect(window.dispatchEvent(departure)).toBe(false);
     fireEvent.click(screen.getByRole("link", { name: "隐患台账" }));
-    expect(ask).toHaveBeenCalledTimes(1);
+    const leave = await screen.findByRole("alertdialog", { name: "离开当前页面？" });
+    expect(leave).toHaveTextContent("配置尚未保存");
+    fireEvent.click(within(leave).getByRole("button", { name: "继续编辑" }));
+    const select = screen.getByRole("button", { name: /采购申请/ });
+    fireEvent.click(select);
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "继续编辑" }));
+    expect(api.versions).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "新建台账" }));
-    expect(ask).toHaveBeenCalledTimes(2);
+    const discard = await screen.findByRole("alertdialog");
+    expect(ask).not.toHaveBeenCalled();
     expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请新版");
+    fireEvent.click(within(discard).getByRole("button", { name: "放弃并切换" }));
+    expect(screen.getByLabelText("台账名称")).toHaveValue("");
+    expect(api.save).not.toHaveBeenCalled();
   });
 
   it.each(["save", "restore", "publish"] as const)(
