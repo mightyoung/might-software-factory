@@ -84,7 +84,7 @@ it("sends typed filters and edits using the record's pinned version", async () =
       expect.any(AbortSignal),
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "查看记录" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
   await screen.findByText("定义版本 1 · 记录版本 1");
   fireEvent.click(screen.getByRole("button", { name: "编辑草稿" }));
   const editor = screen.getByRole("region", { name: "记录详情" });
@@ -99,6 +99,62 @@ it("sends typed filters and edits using the record's pinned version", async () =
       expect.objectContaining({ expectedVersion: 1, values: { quantity: 6 } }),
     ),
   );
+});
+
+it("requires accessible confirmation for the current draft and retries only its original deletion", async () => {
+  const prototype = HTMLDialogElement.prototype;
+  const previousShow = Object.getOwnPropertyDescriptor(prototype, "showModal");
+  const previousClose = Object.getOwnPropertyDescriptor(prototype, "close");
+  Object.defineProperties(prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
+  const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    const a = adapter();
+    vi.mocked(a.remove).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true));
+    const props = { adapter: a, onUnauthenticated: vi.fn() };
+    const view = render(<PublishedLedgersPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
+    const remove = await screen.findByRole("button", { name: "删除草稿" });
+    const confirmation = () => screen.findByRole("alertdialog", { name: "删除这条草稿记录？" });
+    remove.focus();
+    fireEvent.click(remove);
+    const dialog = await confirmation();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveFocus();
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(remove).toHaveFocus();
+    expect(screen.getByRole("region", { name: "记录详情" })).toBeInTheDocument();
+    expect(a.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    await confirmation();
+    view.rerender(<PublishedLedgersPage {...props} active={false} />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    view.rerender(<PublishedLedgersPage {...props} active />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(a.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    fireEvent.click(within(await confirmation()).getByRole("button", { name: "确认删除" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("heading", { name: "业务台账" })).toHaveFocus();
+    expect(a.remove).toHaveBeenCalledExactlyOnceWith("purchase", "record", {
+      requestId: expect.any(String), expectedVersion: 1,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试原操作" }));
+    await waitFor(() => expect(a.remove).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(a.remove).mock.calls[1]).toEqual(vi.mocked(a.remove).mock.calls[0]);
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    nativeConfirm.mockRestore();
+    for (const [name, descriptor] of [["showModal", previousShow], ["close", previousClose]] as const) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
+  }
 });
 
 it("reuses the create request after an unknown result and preserves conflict input", async () => {
@@ -137,6 +193,7 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   fireEvent.click(within(editor).getByRole("button", { name: "保存记录" }));
   await screen.findByRole("alert");
   expect(quantity).toBeDisabled();
+  expect(within(editor).getByLabelText("所属组织")).toBeDisabled();
   expect(screen.getByRole("button", { name: "新增记录" })).toHaveAttribute("aria-disabled", "true");
   const retry = screen.getByRole("button", { name: "重试原操作" });
   fireEvent.click(retry);
@@ -232,4 +289,144 @@ it("does not offer writes to a reader", async () => {
   expect(
     screen.queryByRole("button", { name: "删除草稿" }),
   ).not.toBeInTheDocument();
+});
+
+it("keeps a draft when only its organization changed and discarding is declined", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{
+    ...ledger,
+    organizations: [...ledger.organizations, { id: "warehouse", name: "仓库" }],
+  }]);
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  const organization = within(editor).getByLabelText("所属组织");
+  fireEvent.change(organization, { target: { value: "warehouse" } });
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭记录" }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(organization).toHaveValue("warehouse");
+    expect(organization).toBeInTheDocument();
+  } finally {
+    confirmation.mockRestore();
+  }
+});
+
+it("closes a new draft with only unchanged default values without asking", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{
+    ...ledger,
+    definition: {
+      ...definition,
+      fields: [...definition.fields, { key: "gift", label: "赠品", type: "boolean", required: false }],
+    },
+  }]);
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  expect(within(editor).getByLabelText("赠品")).not.toBeChecked();
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭记录" }));
+    expect(confirmation).not.toHaveBeenCalled();
+    expect(editor).not.toBeInTheDocument();
+  } finally {
+    confirmation.mockRestore();
+  }
+});
+
+it("does not keep old ledger names or list results after a fresh directory denial", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValueOnce([ledger]).mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: /^刷新台账$/ }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
+  expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
+  expect(a.create).not.toHaveBeenCalled();
+});
+
+it("cancels the previous adapter read and never shows its records under a new adapter", async () => {
+  const old = adapter(), next = adapter();
+  let signal: AbortSignal | undefined;
+  let complete!: (items: PublishedLedger[]) => void;
+  vi.mocked(old.list).mockImplementation(current => {
+    signal = current;
+    return new Promise(resolve => { complete = resolve; });
+  });
+  vi.mocked(next.list).mockResolvedValue([{ ...ledger, key: "shift", definition: { ...definition, name: "交接记录" } }]);
+  const dom = render(<PublishedLedgersPage adapter={old} onUnauthenticated={vi.fn()} />);
+  await waitFor(() => expect(old.list).toHaveBeenCalledOnce());
+  dom.rerender(<PublishedLedgersPage adapter={next} onUnauthenticated={vi.fn()} />);
+  await screen.findByRole("button", { name: "交接记录" });
+  expect(signal?.aborted).toBe(true);
+  complete([ledger]);
+  expect(screen.queryByRole("button", { name: "采购申请" })).not.toBeInTheDocument();
+});
+
+it("aborts an in-flight detail read when leaving the bound adapter", async () => {
+  const a = adapter();
+  vi.mocked(a.detail).mockImplementation(() => new Promise(() => {}));
+  const unauthenticated = vi.fn();
+  const view = render(<PublishedLedgersPage adapter={a} onUnauthenticated={unauthenticated} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看记录" }));
+  const signal = vi.mocked(a.detail).mock.calls[0]?.[2];
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(signal?.aborted).toBe(false);
+  view.rerender(<PublishedLedgersPage adapter={adapter()} onUnauthenticated={unauthenticated} />);
+  expect(signal?.aborted).toBe(true);
+  expect(screen.queryByRole("region", { name: "记录详情" })).not.toBeInTheDocument();
+});
+
+it.each(["refused", "empty"] as const)(
+  "runs the same successful query again and replaces old rows when %s",
+  async outcome => {
+    const a = adapter();
+    await select(a);
+    const query = vi.mocked(a.query);
+    if (outcome === "refused") {
+      query.mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+    } else {
+      query.mockResolvedValueOnce({ records: [], total: 0, page: 1, size: 20, hasMore: false });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    if (outcome === "refused") {
+      expect(await screen.findByRole("alert")).toHaveTextContent("当前授权不允许");
+    } else {
+      await screen.findByText("共 0 条记录");
+    }
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[1]).toEqual(query.mock.calls[0]?.[1]);
+    expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看记录" })).not.toBeInTheDocument();
+  },
+);
+
+it("retries the same failed query and clears its read error after success", async () => {
+  const a = adapter();
+  const query = vi.mocked(a.query);
+  query.mockRejectedValueOnce(new ApiError(403, "FORBIDDEN", null, false));
+  render(<PublishedLedgersPage adapter={a} onUnauthenticated={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("当前授权不允许");
+  fireEvent.click(screen.getByRole("button", { name: "查询" }));
+  await screen.findByText("共 1 条记录");
+  expect(query).toHaveBeenCalledTimes(2);
+  expect(query.mock.calls[1]?.[1]).toEqual(query.mock.calls[0]?.[1]);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("notifies session expiry and hides prior rows when the same query returns 401", async () => {
+  const a = adapter();
+  const expired = vi.fn();
+  render(<PublishedLedgersPage adapter={a} onUnauthenticated={expired} />);
+  fireEvent.click(await screen.findByRole("button", { name: "采购申请" }));
+  await screen.findByText("共 1 条记录");
+  vi.mocked(a.query).mockRejectedValueOnce(new ApiError(401, "UNAUTHORIZED", null, false));
+  fireEvent.click(screen.getByRole("button", { name: "查询" }));
+  await waitFor(() => expect(expired).toHaveBeenCalledOnce());
+  expect(a.query).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
 });
