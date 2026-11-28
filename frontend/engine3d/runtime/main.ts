@@ -1,3 +1,4 @@
+import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { resizeEquipment, resizeFaces, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
@@ -174,3 +175,5 @@ lengthSelect.addEventListener("change", () => {
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });
+
+mountFloorplanEditor();
