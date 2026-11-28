@@ -137,6 +137,7 @@ it("freezes an unknown operation until the exact body is reconciled", async () =
   fireEvent.click(within(editor).getByRole("button", { name: "保存记录" }));
   await screen.findByRole("alert");
   expect(quantity).toBeDisabled();
+  expect(within(editor).getByLabelText("所属组织")).toBeDisabled();
   expect(screen.getByRole("button", { name: "新增记录" })).toHaveAttribute("aria-disabled", "true");
   const retry = screen.getByRole("button", { name: "重试原操作" });
   fireEvent.click(retry);
@@ -232,6 +233,51 @@ it("does not offer writes to a reader", async () => {
   expect(
     screen.queryByRole("button", { name: "删除草稿" }),
   ).not.toBeInTheDocument();
+});
+
+it("keeps a draft when only its organization changed and discarding is declined", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{
+    ...ledger,
+    organizations: [...ledger.organizations, { id: "warehouse", name: "仓库" }],
+  }]);
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  const organization = within(editor).getByLabelText("所属组织");
+  fireEvent.change(organization, { target: { value: "warehouse" } });
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭记录" }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(organization).toHaveValue("warehouse");
+    expect(organization).toBeInTheDocument();
+  } finally {
+    confirmation.mockRestore();
+  }
+});
+
+it("closes a new draft with only unchanged default values without asking", async () => {
+  const a = adapter();
+  vi.mocked(a.list).mockResolvedValue([{
+    ...ledger,
+    definition: {
+      ...definition,
+      fields: [...definition.fields, { key: "gift", label: "赠品", type: "boolean", required: false }],
+    },
+  }]);
+  await select(a);
+  fireEvent.click(screen.getByRole("button", { name: "新增记录" }));
+  const editor = screen.getByRole("region", { name: "新增记录" });
+  expect(within(editor).getByLabelText("赠品")).not.toBeChecked();
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭记录" }));
+    expect(confirmation).not.toHaveBeenCalled();
+    expect(editor).not.toBeInTheDocument();
+  } finally {
+    confirmation.mockRestore();
+  }
 });
 
 it("removes the old directory and records when a refresh is refused", async () => {
