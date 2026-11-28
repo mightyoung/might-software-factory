@@ -1,3 +1,4 @@
+import { createPlayerSnapshot } from "../schema/playerSnapshot.ts";
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
@@ -285,15 +286,24 @@ function snapshotError(message = "") {
   draftError.textContent = message;
   draftError.hidden = !message;
 }
+function downloadSnapshot(raw: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+document.querySelector("#player-export")!.addEventListener("click", async () => {
+  try {
+    downloadSnapshot(await createPlayerSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot())), "might-player-v1.json");
+    snapshotError();
+    draftStatus.textContent = "离线放映文件已交给浏览器下载。";
+  } catch (cause) { snapshotError(cause instanceof Error ? cause.message : "放映文件生成失败。"); }
+});
 document.querySelector("#snapshot-export")!.addEventListener("click", () => {
   try {
-    const raw = serializeStudioSnapshot(sample, planEditor.snapshot());
-    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "might-scene-draft.json";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadSnapshot(serializeStudioSnapshot(sample, planEditor.snapshot()), "might-scene-draft.json");
     snapshotError();
     draftStatus.textContent = "场景草稿已交给浏览器下载。";
   } catch (cause) {

@@ -1,0 +1,11 @@
+:root { font: 16px/1.5 system-ui,sans-serif; background: #edf3f1; color: #182e2c; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1200px; margin: auto; padding: 1rem; }
+input { max-width: 100%; }
+.play-layout { display: grid; grid-template-columns: minmax(12rem,1fr) minmax(0,3fr); gap: .8rem; }
+section { min-width: 0; border: 1px solid #a9bfba; border-radius: .5rem; padding: .8rem; background: white; }
+canvas { display: block; width: 100%; height: clamp(18rem,50vw,32rem); }
+canvas[hidden] { display: none; }
+[role="alert"] { color: #8b1c32; }
+@media (max-width: 650px) { .play-layout { grid-template-columns: 1fr; } }
