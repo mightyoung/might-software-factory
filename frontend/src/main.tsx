@@ -1,3 +1,4 @@
+import "./styles/layers.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AppCore } from "./App";
@@ -5,6 +6,8 @@ import "@astryxdesign/core/astryx.css";
 import "./styles.css";
 import "./shell.css";
 import "./operational.css";
+import "./astryx-themes";
+import "./themes/might/might.fallback.css";
 import "./features/theme/astryx-theme.css";
 import { ThemeProvider } from "./features/theme/ThemeProvider";
 import { parseAppMode } from "./mode";
