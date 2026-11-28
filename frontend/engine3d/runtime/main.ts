@@ -1,8 +1,9 @@
-import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
+import { mountFloorplanEditor } from "./floorplanEditor.ts";
+import { resizeEquipment, resizeFaces, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
-import { SceneDocumentSchema } from "../schema/scene.ts";
+import { SceneDocumentSchema, type ParametricEquipment } from "../schema/scene.ts";
 
 let sample = SceneDocumentSchema.parse({
   schemaVersion: 1, screenId: "sample-workshop",
@@ -64,17 +65,25 @@ function displayInspection() {
 }
 modelUnit.addEventListener("change", displayInspection);
 const selectedParametric = () => sample.devices.find((item) => item.id === selected && "equipment" in item);
+const canResizeFace = (kind: ParametricEquipment["kind"], face: ResizeFace) =>
+  face === "+Y" || (resizeFaces.includes(face) && (kind === "CONVEYOR" || kind === "CORRIDOR"));
 function displayResize() {
   const item = selectedParametric();
   resizeTool.hidden = !item;
   if (!item || !("equipment" in item)) return;
+  for (const option of resizeFace.options) {
+    option.disabled = !canResizeFace(item.equipment.kind, option.value as ResizeFace);
+  }
+  if (!canResizeFace(item.equipment.kind, resizeFace.value as ResizeFace)) resizeFace.value = "+Y";
   const { length, width, height } = item.equipment.dimensions;
   resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
 }
 function adjustSelected(delta: number) {
   const item = selectedParametric();
   if (!item || !("equipment" in item)) return;
-  const change = resizeEquipment(item.equipment, resizeFace.value as ResizeFace, delta);
+  const face = resizeFace.value as ResizeFace;
+  if (!canResizeFace(item.equipment.kind, face)) { displayResize(); return; }
+  const change = resizeEquipment(item.equipment, face, delta);
   const [dx, dy, dz] = change.positionDelta;
   const [x, y, z] = item.position;
   const updated = SceneDocumentSchema.safeParse({
@@ -166,3 +175,5 @@ lengthSelect.addEventListener("change", () => {
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });
+
+mountFloorplanEditor();

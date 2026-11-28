@@ -35,7 +35,7 @@ export function exporterGlb(change?: (json: Record<string, any>, bin: DataView) 
     bufferViews: [{ buffer: 0, byteLength: 96, byteStride: 24, target: 34962 },
       { buffer: 0, byteOffset: 96, byteLength: 12, target: 34963 }],
     accessors: [
-      { bufferView: 0, componentType: 5126, count: 4, type: "VEC3" },
+      { bufferView: 0, componentType: 5126, count: 4, type: "VEC3", min: [0, 0, 0], max: [1, 2, 3] },
       { bufferView: 0, byteOffset: 12, componentType: 5126, count: 4, type: "VEC3" },
       { bufferView: 1, componentType: 5123, count: 6, type: "SCALAR" },
     ],
