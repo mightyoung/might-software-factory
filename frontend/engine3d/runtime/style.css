@@ -30,3 +30,7 @@ fieldset p { overflow-wrap: anywhere; }
 .plan-zone { fill: #69bdae; fill-opacity: .4; stroke: #255c55; stroke-width: .8; }
 .plan-draft { fill: none; stroke: #805100; stroke-width: 1; stroke-dasharray: 2 2; }
 .plan-dot { fill: #805100; }
+.viewport-stage { position: relative; }
+#resize-gizmo { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.resize-handle { position: absolute; transform: translate(-50%, -50%); width: 16px; height: 16px; border: 2px solid #674400; border-radius: 50%; background: #ffcb45; pointer-events: auto; cursor: grab; touch-action: none; }
+.resize-handle:active { cursor: grabbing; }

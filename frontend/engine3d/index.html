@@ -32,6 +32,7 @@
           <div><button id="resize-in" type="button">收进 0.5 米</button>
           <button id="resize-out" type="button">伸出 0.5 米</button></div>
           <p id="resize-result" role="status"></p>
+          <p>也可拖动视口里的金色手柄。按 Esc 或中途取消不会改变尺寸。</p>
         </fieldset>
         <fieldset>
           <legend>本地 GLB 模型</legend>
@@ -52,7 +53,10 @@
           <button id="overview" type="button">恢复全景</button>
         </div>
         <p id="status" role="status">正在初始化三维视口…</p>
-        <canvas id="viewport" aria-label="合成设备三维视口"></canvas>
+        <div class="viewport-stage">
+          <canvas id="viewport" aria-label="合成设备三维视口"></canvas>
+          <div id="resize-gizmo" aria-hidden="true"></div>
+        </div>
       </section>
     </div>
     <section class="floorplan" aria-labelledby="floorplan-label">

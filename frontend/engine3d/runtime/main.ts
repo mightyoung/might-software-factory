@@ -1,4 +1,5 @@
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
+import { mountResizeGizmo } from "./resizeGizmo.ts";
 import { resizeEquipment, resizeFaces, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
@@ -33,12 +34,15 @@ const messages: Record<RenderStatus, string> = {
   lost: "三维视口暂时中断。你仍可使用二维设备列表。",
   unavailable: "此设备无法使用 WebGL 2。请使用二维设备列表。",
 };
+let updateGizmo = () => {};
+let cancelGizmo = () => {};
 const engine = mountEngine(canvas, sample, (state) => {
   status.textContent = messages[state];
   overview.disabled = state !== "ready";
   // Do not remove a temporarily lost canvas while the browser is restoring it.
   canvas.hidden = state === "unavailable";
-});
+  if (state !== "ready") updateGizmo();
+}, () => updateGizmo());
 
 const buttons = new Map<string, HTMLButtonElement>();
 let selected: string | undefined;
@@ -78,10 +82,9 @@ function displayResize() {
   const { length, width, height } = item.equipment.dimensions;
   resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
 }
-function adjustSelected(delta: number) {
+function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   const item = selectedParametric();
   if (!item || !("equipment" in item)) return;
-  const face = resizeFace.value as ResizeFace;
   if (!canResizeFace(item.equipment.kind, face)) { displayResize(); return; }
   const change = resizeEquipment(item.equipment, face, delta);
   const [dx, dy, dz] = change.positionDelta;
@@ -94,6 +97,7 @@ function adjustSelected(delta: number) {
   if (!updated.success) { resizeResult.textContent = "尺寸调整会超出场景范围。"; return; }
   sample = updated.data;
   closeModel();
+  cancelGizmo();
   engine?.replaceScene(sample);
   engine?.focus(item.id);
   if (item.id === "conveyor-04") { lengthSelect.selectedIndex = change.dimensions.length === 4 ? 0 : change.dimensions.length === 8 ? 1 : -1; rebuild.textContent = `当前长度：${change.dimensions.length} 米。`; }
@@ -168,10 +172,19 @@ lengthSelect.addEventListener("change", () => {
       ? { ...device, equipment: { ...device.equipment, dimensions: { ...device.equipment.dimensions, length } } }
       : device),
   });
+  cancelGizmo();
   engine?.replaceScene(sample);
   rebuild.textContent = `当前长度：${length} 米。`;
   displayResize();
 });
+const gizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, canvas, () => {
+  const item = selectedParametric();
+  if (!item || !("equipment" in item)) return [];
+  const { kind, dimensions } = item.equipment;
+  return engine?.projectedHandles(item.id, dimensions).filter(({ face }) => canResizeFace(kind, face)) ?? [];
+}, (delta, face, id) => { if (selected === id) adjustSelected(delta, face); });
+updateGizmo = gizmo.update;
+cancelGizmo = gizmo.cancel;
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });

@@ -3,13 +3,15 @@ import { PreviewSlot } from "./PreviewSlot.ts";
 import type { StaticGlb } from "./glbIntake.ts";
 import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
 import { buildSceneObjects } from "./sceneObjects.ts";
-import type { DeviceState, SceneDocument } from "../schema/scene.ts";
+import { resizeFaces, type ResizeFace } from "./equipmentResize.ts";
+import type { DeviceState, ParametricEquipment, SceneDocument } from "../schema/scene.ts";
 
 export type RenderStatus = "ready" | "lost" | "unavailable";
 
 export function mountEngine(
   canvas: HTMLCanvasElement, sceneDocument: SceneDocument,
   onStatus: (status: RenderStatus) => void,
+  onFrame?: () => void,
 ) {
   let renderer: WebGLRenderer;
   try {
@@ -67,6 +69,7 @@ export function mountEngine(
         camera.updateProjectionMatrix();
       }
       renderer.render(scene, camera);
+      onFrame?.();
     });
   }
   function focus(id?: string) {
@@ -89,6 +92,32 @@ export function mountEngine(
 
   return {
     focus,
+    projectedHandles(id: string, { length, width, height }: ParametricEquipment["dimensions"]) {
+      const object = objects.devices.get(id);
+      if (disposed || lost || preview.current || !object) return [];
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return [];
+      object.updateWorldMatrix(true, false);
+      function project(point: Vector3): [number, number, number] {
+        const world = object!.localToWorld(point).project(camera);
+        return [(world.x + 1) * w / 2, (1 - world.y) * h / 2, world.z];
+      }
+      const center: Record<ResizeFace, [number, number, number]> = {
+        "+X": [length / 2, height / 2, 0], "-X": [-length / 2, height / 2, 0],
+        "+Z": [0, height / 2, width / 2], "-Z": [0, height / 2, -width / 2],
+        "+Y": [0, height, 0],
+      };
+      return resizeFaces.flatMap((face) => {
+        const point = new Vector3(...center[face]);
+        const [x, y, depth] = project(point.clone());
+        const axis = face[1] === "X" ? "x" : face[1] === "Y" ? "y" : "z";
+        point[axis] += face[0] === "+" ? 1 : -1;
+        const [endX, endY] = project(point);
+        if (![x, y, depth, endX, endY].every(Number.isFinite) || Math.abs(depth) > 1 ||
+            x < 8 || x > w - 8 || y < 8 || y > h - 8 || Math.hypot(endX - x, endY - y) < 6) return [];
+        return [{ deviceId: id, face, x, y, axis: [endX - x, endY - y] as [number, number] }];
+      });
+    },
     showModel(model: StaticGlb) {
       if (disposed) return false;
       if (model === preview.current) return true;

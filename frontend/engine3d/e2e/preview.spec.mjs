@@ -310,3 +310,70 @@ test("local exporter-shaped GLB honors parent transform without network or textu
   await expect.poll(draws).toBeGreaterThan(before);
   expect(network).toEqual([]);
 });
+
+test("viewport resize handle commits on release and Escape cancels without resizing", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "传送带 04 · 正常" }).click();
+  const size = page.getByRole("group", { name: "保持对侧不动地调整尺寸" }).getByRole("status");
+  await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  const handle = page.locator('#resize-gizmo [data-face="+X"]');
+  const drag = async (cancel) => {
+    await expect(handle).toBeVisible();
+    const axis = (await handle.getAttribute("data-axis")).split(",").map(Number);
+    const box = await handle.boundingBox();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + axis[0] * 0.5, y + axis[1] * 0.5, { steps: 4 });
+    await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+    if (cancel) await page.keyboard.press("Escape");
+    await page.mouse.up();
+  };
+  await drag(true);
+  await expect(size).toHaveText("长 4 · 宽 1 · 高 0.9 米。");
+  await drag(false);
+  await expect.poll(async () => Number((await size.textContent()).match(/长 ([\d.]+)/)?.[1])).toBeGreaterThan(4.3);
+  await expect(size).toContainText("宽 1 · 高 0.9 米");
+  await expect(page.getByRole("button", { name: "传送带 04 · 正常" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("irregular equipment shows only the grounded height handle", async ({ page }) => {
+  await page.goto("/");
+  for (const name of ["机械臂 06 · 预警", "螺旋传送机 07 · 正常"]) {
+    await page.getByRole("button", { name }).click();
+    await expect(page.locator('.resize-handle[data-face="+Y"]')).toBeVisible();
+    for (const face of ["+X", "-X", "+Z", "-Z"]) {
+      await expect(page.locator(`.resize-handle[data-face="${face}"]`)).toBeHidden();
+    }
+  }
+});
+
+test("a viewport change or same-device rebuild cancels an active resize drag", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "传送带 04 · 正常" }).click();
+  const handle = page.locator('.resize-handle[data-face="+X"]');
+  const size = page.getByRole("group", { name: "保持对侧不动地调整尺寸" }).getByRole("status");
+  for (const change of ["viewport", "model"]) {
+    await expect(handle).toBeVisible();
+    const axis = (await handle.getAttribute("data-axis")).split(",").map(Number);
+    const box = await handle.boundingBox();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + axis[0] * 0.5, y + axis[1] * 0.5);
+    // Change the state and release in the same task, before frame/resize observers can fire.
+    await handle.evaluate((node, change) => {
+      if (change === "viewport") {
+        const viewport = document.querySelector("#viewport");
+        viewport.style.width = (viewport.clientWidth - 40) + "px";
+      } else {
+        const selector = document.querySelector("#conveyor-length");
+        selector.value = "8";
+        selector.dispatchEvent(new Event("change"));
+      }
+      node.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, clientX: 100, clientY: 100 }));
+    }, change);
+    await page.mouse.up();
+    await expect(size).toHaveText(`长 ${change === "model" ? 8 : 4} · 宽 1 · 高 0.9 米。`);
+  }
+});
