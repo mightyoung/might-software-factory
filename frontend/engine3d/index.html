@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/runtime/style.css">
+  <title>Might 3D · 设备模型预览</title>
+</head>
+<body>
+  <main>
+    <header><p>软件工厂 · 三维引擎原型</p><h1>设备模型预览</h1><p>仅展示合成设备，不连接生产台账。</p></header>
+    <div class="workspace">
+      <section aria-labelledby="devices-title">
+        <h2 id="devices-title">二维设备列表</h2>
+        <ul id="devices"></ul>
+        <p id="selection" role="status">未选中设备。</p>
+        <fieldset>
+          <legend>传送带参数</legend>
+          <label for="conveyor-length">长度（米）</label>
+          <select id="conveyor-length"><option value="4">4</option><option value="8">8</option></select>
+          <p id="conveyor-rebuild" role="status">当前长度：4 米。</p>
+        </fieldset>
+        <fieldset id="resize-tool" hidden>
+          <legend>保持对侧不动地调整尺寸</legend>
+          <label for="resize-face">设备局部面</label>
+          <select id="resize-face" aria-describedby="resize-face-help">
+            <option value="+X">+X · 长</option><option value="-X">−X · 长</option>
+            <option value="+Z">+Z · 宽</option><option value="-Z">−Z · 宽</option>
+            <option value="+Y">+Y · 高（底面固定）</option>
+          </select>
+          <p id="resize-face-help">传送带和廊道可固定对侧调整长、宽；机械臂和螺旋传送机只支持固定底面调整高度。</p>
+          <div><button id="resize-in" type="button">收进 0.5 米</button>
+          <button id="resize-out" type="button">伸出 0.5 米</button></div>
+          <p id="resize-result" role="status"></p>
+        </fieldset>
+        <fieldset>
+          <legend>本地 GLB 模型</legend>
+          <label for="model-unit">模型源单位</label>
+          <select id="model-unit"><option value="m">米（GLB 默认）</option><option value="mm">毫米（明确导入）</option></select>
+          <label for="local-model">选择 GLB 文件</label>
+          <input id="local-model" type="file" accept=".glb,model/gltf-binary" aria-describedby="model-hint">
+          <p id="model-hint">上限 8 MiB，当前仅支持无纹理静态单网格。文件不会上传。</p>
+          <p id="model-result" role="status"></p>
+          <p id="unit-warning" role="status" hidden></p>
+          <p id="model-error" role="alert" hidden></p>
+          <button id="close-model" type="button" hidden>返回合成场景</button>
+        </fieldset>
+      </section>
+      <section aria-labelledby="viewport-title">
+        <div class="viewport-heading">
+          <h2 id="viewport-title">三维视口</h2>
+          <button id="overview" type="button">恢复全景</button>
+        </div>
+        <p id="status" role="status">正在初始化三维视口…</p>
+        <canvas id="viewport" aria-label="合成设备三维视口"></canvas>
+      </section>
+    </div>
+    <section class="floorplan" aria-labelledby="floorplan-label">
+      <h2 id="floorplan-label">顶视平面绘图</h2>
+      <p>本页草稿不会保存到业务场景。图上点选，或输入坐标加点；按住 Shift 可锁定横向或纵向。</p>
+      <div class="floorplan-controls">
+        <label>绘制模式 <select id="plan-mode"><option value="wall">墙段</option><option value="zone">区域</option></select></label>
+        <label>吸附网格 <select id="plan-grid"><option value="0.1">0.1 米</option><option value="0.5" selected>0.5 米</option><option value="1">1 米</option></select></label>
+        <label><input id="plan-ortho" type="checkbox"> 正交锁定</label>
+        <button id="plan-close" type="button" disabled>闭合区域</button>
+        <button id="plan-cancel" type="button">清除当前草稿</button>
+      </div>
+      <svg id="floorplan-map" viewBox="-100 -100 200 200" aria-label="顶视图，横轴 X，纵轴 Z" role="img">
+        <defs><pattern id="plan-pattern" width="5" height="5" patternUnits="userSpaceOnUse">
+          <path id="plan-grid-lines" d="M 5 0 H 0 V 5" fill="none" stroke="#aac3bd" stroke-width=".35"/>
+        </pattern></defs>
+        <rect x="-100" y="-100" width="200" height="200" fill="url(#plan-pattern)"/>
+        <path d="M -100 0 H 100 M 0 -100 V 100" fill="none" stroke="#648983" stroke-width=".4"/>
+        <g id="plan-features"></g>
+      </svg>
+      <form id="plan-coordinates" class="floorplan-controls">
+        <label>X（米） <input id="plan-x" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <label>Z（米） <input id="plan-z" type="number" value="0" min="-10" max="10" step="any" required></label>
+        <button type="submit">添加坐标点</button>
+      </form>
+      <p id="plan-summary" role="status">墙段 0 条，区域 0 个。</p>
+      <p id="plan-error" role="alert" hidden></p>
+      <ul id="plan-zones" aria-label="已闭合区域"></ul>
+    </section>
+  </main>
+  <script type="module" src="/runtime/main.ts"></script>
+</body>
+</html>
