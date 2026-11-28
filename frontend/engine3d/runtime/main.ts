@@ -6,7 +6,7 @@ import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { LocalAssetBank } from "../core/LocalAssetBank.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
-import { SceneDocumentSchema, type ParametricEquipment } from "../schema/scene.ts";
+import { SceneDocumentSchema, type ParametricEquipment, type SceneDocument } from "../schema/scene.ts";
 
 let sample = SceneDocumentSchema.parse({
   schemaVersion: 1, screenId: "sample-workshop",
@@ -127,6 +127,9 @@ function displayInspection() {
   unitWarning.hidden = !report.checkUnits;
 }
 modelUnit.addEventListener("change", displayInspection);
+type Device = SceneDocument["devices"][number];
+const isPresetConveyor = (device: Device): device is Extract<Device, { equipment: ParametricEquipment }> =>
+  device.id === "conveyor-04" && "equipment" in device && device.equipment.kind === "CONVEYOR";
 const selectedParametric = () => sample.devices.find((item) => item.id === selected && "equipment" in item);
 const canResizeFace = (kind: ParametricEquipment["kind"], face: ResizeFace) =>
   face === "+Y" || (resizeFaces.includes(face) && (kind === "CONVEYOR" || kind === "CORRIDOR"));
@@ -159,7 +162,7 @@ function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   cancelGizmo();
   engine?.replaceScene(sample);
   engine?.focus(item.id);
-  if (item.id === "conveyor-04") { lengthSelect.selectedIndex = change.dimensions.length === 4 ? 0 : change.dimensions.length === 8 ? 1 : -1; rebuild.textContent = `当前长度：${change.dimensions.length} 米。`; }
+  if (isPresetConveyor(item)) displayConveyorPreset();
   displayResize();
 }
 document.querySelector("#resize-in")!.addEventListener("click", () => adjustSelected(-0.5));
@@ -222,20 +225,40 @@ function renderDevices() {
 }
 renderDevices();
 overview.addEventListener("click", () => selectDevice());
+const conveyorTool = document.querySelector<HTMLFieldSetElement>("#conveyor-tool")!;
 const lengthSelect = document.querySelector<HTMLSelectElement>("#conveyor-length")!;
 const rebuild = document.querySelector<HTMLParagraphElement>("#conveyor-rebuild")!;
+const customLength = new Option();
+customLength.disabled = true;
+function displayConveyorPreset() {
+  const conveyor = sample.devices.find(isPresetConveyor);
+  conveyorTool.hidden = !conveyor;
+  if (!conveyor) return;
+  const { length } = conveyor.equipment.dimensions;
+  if (length === 4 || length === 8) {
+    customLength.remove();
+  } else {
+    customLength.value = String(length);
+    customLength.text = `${length}（自定义）`;
+    lengthSelect.prepend(customLength);
+  }
+  lengthSelect.value = String(length);
+  rebuild.textContent = `当前长度：${length} 米。`;
+}
+displayConveyorPreset();
 lengthSelect.addEventListener("change", () => {
+  const conveyor = sample.devices.find(isPresetConveyor);
   const length = Number(lengthSelect.value);
-  if (length !== 4 && length !== 8) return;
+  if (!conveyor || (length !== 4 && length !== 8) || length === conveyor.equipment.dimensions.length) return;
   sample = SceneDocumentSchema.parse({
     ...sample,
-    devices: sample.devices.map((device) => "equipment" in device && device.id === "conveyor-04"
-      ? { ...device, equipment: { ...device.equipment, dimensions: { ...device.equipment.dimensions, length } } }
+    devices: sample.devices.map((device) => device === conveyor
+      ? { ...conveyor, equipment: { ...conveyor.equipment, dimensions: { ...conveyor.equipment.dimensions, length } } }
       : device),
   });
   cancelGizmo();
   engine?.replaceScene(sample);
-  rebuild.textContent = `当前长度：${length} 米。`;
+  displayConveyorPreset();
   displayResize();
 });
 const gizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, canvas, () => {
@@ -295,13 +318,7 @@ importDraft.addEventListener("change", async () => {
     selectDevice();
     engine?.replaceScene(sample);
     planEditor.restore(next.floorplan);
-    const conveyor = sample.devices.find((device) => device.id === "conveyor-04" && "equipment" in device);
-    document.querySelector<HTMLElement>("#conveyor-tool")!.hidden = !conveyor;
-    if (conveyor && "equipment" in conveyor) {
-      const { length } = conveyor.equipment.dimensions;
-      lengthSelect.value = String(length);
-      rebuild.textContent = `当前长度：${length} 米。`;
-    }
+    displayConveyorPreset();
     snapshotError();
     draftStatus.textContent = `已读取 ${sample.screenId}，共 ${sample.devices.length} 个设备。`;
   } catch (cause) {

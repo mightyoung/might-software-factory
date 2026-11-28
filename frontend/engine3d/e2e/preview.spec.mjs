@@ -475,3 +475,57 @@ test("Studio locally imports and exports a versioned draft and rejects invalid g
   for await (const value of stream) bytes.push(value);
   expect(JSON.parse(Buffer.concat(bytes).toString("utf8"))).toEqual(draft);
 });
+
+async function importPresetDraft(page, kind) {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "场景草稿文件" });
+  const device = {
+    id: "conveyor-04", label: "合成设备", position: [0, 0, 0], state: "normal",
+    equipment: { kind, dimensions: { length: 6, width: 1, height: 1 }, rotationYRad: 0 },
+  };
+  const draft = {
+    snapshotVersion: 1,
+    scene: { schemaVersion: 1, screenId: "preset-draft", devices: [device] },
+    floorplan: { walls: [], zones: [] },
+  };
+  await panel.getByLabel("读取场景草稿").setInputFiles({
+    name: "draft.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(draft)),
+  });
+  await expect(panel.getByRole("status")).toContainText("已读取 preset-draft");
+  return {
+    draft,
+    async exported() {
+      const downloading = page.waitForEvent("download");
+      await panel.getByRole("button", { name: "导出场景草稿" }).click();
+      const stream = await (await downloading).createReadStream();
+      const bytes = [];
+      for await (const value of stream) bytes.push(value);
+      return JSON.parse(Buffer.concat(bytes).toString("utf8"));
+    },
+  };
+}
+
+test("Studio hides the conveyor presets for an imported corridor with the sample conveyor ID", async ({ page }) => {
+  const { draft, exported } = await importPresetDraft(page, "CORRIDOR");
+  await expect(page.getByRole("group", { name: "传送带参数" })).toBeHidden();
+  await page.getByRole("button", { name: "合成设备 · 正常" }).click();
+  await expect(page.getByRole("group", { name: "传送带参数" })).toBeHidden();
+  expect(await exported()).toEqual(draft);
+});
+
+test("Studio preserves a custom conveyor length until a different preset is chosen", async ({ page }) => {
+  const { draft, exported } = await importPresetDraft(page, "CONVEYOR");
+  const tool = page.getByRole("group", { name: "传送带参数" });
+  const length = tool.getByLabel("长度（米）");
+  await expect(tool.getByRole("status")).toContainText("当前长度：6 米");
+  await expect(length).toHaveValue("6");
+  await expect(length.locator("option:checked")).toHaveText(/6.*自定义/);
+  expect(await exported()).toEqual(draft);
+  for (const preset of [4, 8]) {
+    await length.selectOption(String(preset));
+    await expect(tool.getByRole("status")).toContainText(`当前长度：${preset} 米`);
+    const expected = structuredClone(draft);
+    expected.scene.devices[0].equipment.dimensions.length = preset;
+    expect(await exported()).toEqual(expected);
+  }
+});
