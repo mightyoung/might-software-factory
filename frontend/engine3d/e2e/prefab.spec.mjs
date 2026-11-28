@@ -1,0 +1,31 @@
+import { expect, test } from "@playwright/test";
+
+test("authoring saves immutable parametric versions, validates the anchor and restores older selections", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "参数化组件库" });
+  const save = panel.getByRole("button", { name: "保存组件版本" });
+  await save.click();
+  await expect(panel.getByRole("status")).toContainText("版本 1");
+  const v1 = panel.getByRole("button", { name: /· v1$/ });
+  await expect(v1).toHaveAttribute("aria-pressed", "true");
+  await panel.getByLabel("锚点 X（米）").fill("3");
+  await save.click();
+  await expect(panel.getByRole("alert")).toContainText("设备边界");
+  await expect(panel.getByRole("button", { name: /· v2$/ })).toHaveCount(0);
+  await panel.getByLabel("组件长度（米）").fill("8");
+  await panel.getByLabel("预览状态").selectOption("alarm");
+  await save.click();
+  await expect(panel.getByRole("alert")).toBeHidden();
+  await expect(panel.getByRole("status")).toContainText("版本 2");
+  await expect(panel.locator("figcaption")).toContainText("8 × 1 × 1 米 · 告警");
+  await expect(panel.locator("circle")).toHaveAttribute("cx", "3");
+  await v1.focus();
+  await v1.press("Enter");
+  await expect(v1).toBeFocused();
+  await expect(panel.getByLabel("组件长度（米）")).toHaveValue("4");
+  await expect(panel.getByLabel("预览状态")).toHaveValue("normal");
+  await expect(panel.locator("circle")).toHaveAttribute("cx", "2");
+  await page.reload();
+  await expect(panel.getByRole("status")).toHaveText("暂无保存的组件。");
+});

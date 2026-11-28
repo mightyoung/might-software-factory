@@ -27,7 +27,7 @@ test("draws devices, preserves selection during WebGL loss and draws again after
   await conveyor.click();
   await expect(conveyor).toHaveAttribute("aria-pressed", "true");
   const beforeRebuild = await getDraws();
-  await page.getByLabel("长度（米）").selectOption("8");
+  await page.getByLabel("长度（米）", { exact: true }).selectOption("8");
   await expect(page.getByRole("status").filter({ hasText: "当前长度：8 米" })).toBeVisible();
   await expect(conveyor).toHaveAttribute("aria-pressed", "true");
   await expect.poll(getDraws).toBeGreaterThan(beforeRebuild);
