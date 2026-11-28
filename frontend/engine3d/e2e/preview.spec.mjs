@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { syntheticGlb } from "../core/glbFixture.ts";
+import { exporterGlb, syntheticGlb } from "../core/glbFixture.ts";
 
 test("draws devices, preserves selection during WebGL loss and draws again after restore", async ({ page }) => {
   const errors = [];
@@ -286,4 +286,27 @@ test("top-view pointer snaps an orthogonal wall and keyboard builds only simple 
   await expect(editor.locator(".plan-zone")).toHaveAttribute("points", "0,0 40,0 40,30 0,30");
   await expect(editor.locator(".plan-wall")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test("local exporter-shaped GLB honors parent transform without network or texture loads", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.exporterDraws = 0;
+    const draw = WebGL2RenderingContext.prototype.drawElements;
+    WebGL2RenderingContext.prototype.drawElements = function (...args) {
+      if (args[0] === this.TRIANGLES && args[1] === 6 && args[2] === this.UNSIGNED_INT) window.exporterDraws++;
+      return draw.apply(this, args);
+    };
+  });
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  const draws = () => page.evaluate(() => window.exporterDraws);
+  const before = await draws();
+  page.on("request", (request) => network.push(request.url()));
+  await page.getByLabel("选择 GLB 文件").setInputFiles({
+    name: "exporter.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(exporterGlb()),
+  });
+  await expect(page.getByText("exporter.glb：2 个三角面，4 个顶点，3 × 2 × 1 米。")).toBeVisible();
+  await expect.poll(draws).toBeGreaterThan(before);
+  expect(network).toEqual([]);
 });
