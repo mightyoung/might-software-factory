@@ -1,0 +1,175 @@
+import { Color, DirectionalLight, DoubleSide, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { PreviewSlot } from "./PreviewSlot.ts";
+import type { StaticGlb } from "./glbIntake.ts";
+import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
+import { buildSceneObjects } from "./sceneObjects.ts";
+import { resizeFaces, type ResizeFace } from "./equipmentResize.ts";
+import type { DeviceState, ParametricEquipment, SceneDocument } from "../schema/scene.ts";
+
+export type RenderStatus = "ready" | "lost" | "unavailable";
+
+export function mountEngine(
+  canvas: HTMLCanvasElement, sceneDocument: SceneDocument,
+  onStatus: (status: RenderStatus) => void,
+  onFrame?: () => void,
+) {
+  let renderer: WebGLRenderer;
+  try {
+    renderer = new WebGLRenderer({ canvas, antialias: true, alpha: false });
+  } catch {
+    onStatus("unavailable");
+    return null;
+  }
+  const scene = new Scene();
+  scene.background = new Color(0xe6eeec);
+  const camera = new PerspectiveCamera(48, 1, 0.1, overviewFar);
+  const origin = new Vector3();
+  let focusedId: string | undefined;
+  let objects = buildSceneObjects(sceneDocument);
+  const grid = new GridHelper(32, 32, 0x668d86, 0xbaccc8);
+  const key = new DirectionalLight(0xffffff, 2);
+  key.position.set(6, 15, 8);
+  scene.add(objects.group, grid, key, new HemisphereLight(0xf0f9ff, 0xa1b7a7, 2));
+  const preview = new PreviewSlot();
+  // Valid local flat meshes may face away from the fixed preview camera.
+  const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56, side: DoubleSide });
+  let previewMesh: Mesh | null = null;
+  function clearModel() {
+    if (previewMesh) scene.remove(previewMesh);
+    previewMesh = null;
+    preview.clear();
+    objects.group.visible = true;
+  }
+  let frame = 0;
+  let disposed = false;
+  let lost = false;
+  const doc = canvas.ownerDocument;
+  function stop() {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+  }
+  function render() {
+    if (disposed || lost || doc.hidden || frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const { clientWidth: width, clientHeight: height } = canvas;
+      if (!width || !height) return;
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      if (renderer.getPixelRatio() !== ratio) renderer.setPixelRatio(ratio);
+      if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+        renderer.setSize(width, height, false);
+      }
+      camera.aspect = width / height;
+      const device = previewMesh ?? (focusedId === undefined ? undefined : objects.devices.get(focusedId));
+      if (device) fitDeviceCamera(camera, device);
+      else {
+        camera.far = overviewFar;
+        camera.position.set(16, 14, 19);
+        camera.lookAt(origin);
+        camera.updateProjectionMatrix();
+      }
+      renderer.render(scene, camera);
+      onFrame?.();
+    });
+  }
+  function focus(id?: string) {
+    if (disposed) return false;
+    if (id !== undefined && !objects.devices.has(id)) return false;
+    focusedId = id;
+    render();
+    return true;
+  }
+  const lose = (event: Event) => { event.preventDefault(); lost = true; stop(); onStatus("lost"); };
+  const restore = () => { lost = false; render(); onStatus("ready"); };
+  const visibility = () => { if (doc.hidden) stop(); else render(); };
+  const resize = new ResizeObserver(render);
+  resize.observe(canvas);
+  doc.addEventListener("visibilitychange", visibility);
+  canvas.addEventListener("webglcontextlost", lose);
+  canvas.addEventListener("webglcontextrestored", restore);
+  focus();
+  onStatus("ready");
+
+  return {
+    focus,
+    projectedHandles(id: string, { length, width, height }: ParametricEquipment["dimensions"]) {
+      const object = objects.devices.get(id);
+      if (disposed || lost || preview.current || !object) return [];
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return [];
+      object.updateWorldMatrix(true, false);
+      function project(point: Vector3): [number, number, number] {
+        const world = object!.localToWorld(point).project(camera);
+        return [(world.x + 1) * w / 2, (1 - world.y) * h / 2, world.z];
+      }
+      const center: Record<ResizeFace, [number, number, number]> = {
+        "+X": [length / 2, height / 2, 0], "-X": [-length / 2, height / 2, 0],
+        "+Z": [0, height / 2, width / 2], "-Z": [0, height / 2, -width / 2],
+        "+Y": [0, height, 0],
+      };
+      return resizeFaces.flatMap((face) => {
+        const point = new Vector3(...center[face]);
+        const [x, y, depth] = project(point.clone());
+        const axis = face[1] === "X" ? "x" : face[1] === "Y" ? "y" : "z";
+        point[axis] += face[0] === "+" ? 1 : -1;
+        const [endX, endY] = project(point);
+        if (![x, y, depth, endX, endY].every(Number.isFinite) || Math.abs(depth) > 1 ||
+            x < 8 || x > w - 8 || y < 8 || y > h - 8 || Math.hypot(endX - x, endY - y) < 6) return [];
+        return [{ deviceId: id, face, x, y, axis: [endX - x, endY - y] as [number, number] }];
+      });
+    },
+    showModel(model: StaticGlb) {
+      if (disposed) return false;
+      if (model === preview.current) return true;
+      const bounds = model.geometry.boundingBox!;
+      const center = bounds.getCenter(new Vector3());
+      const scale = 6 / Math.max(...model.metrics.dimensions);
+      const mesh = new Mesh(model.geometry, previewMaterial);
+      mesh.scale.setScalar(scale);
+      mesh.position.set(-center.x * scale, -bounds.min.y * scale, -center.z * scale);
+      clearModel();
+      preview.replace(model);
+      previewMesh = mesh;
+      objects.group.visible = false;
+      scene.add(mesh);
+      render();
+      return true;
+    },
+    hideModel(id?: string) {
+      if (disposed) return;
+      clearModel();
+      focus(id);
+    },
+    replaceScene(next: SceneDocument) {
+      if (disposed) return false;
+      const previous = objects;
+      objects = buildSceneObjects(next);
+      scene.remove(previous.group);
+      previous.dispose();
+      objects.group.visible = !preview.current;
+      scene.add(objects.group);
+      render();
+      return true;
+    },
+    setState(id: string, state: DeviceState) {
+      const changed = objects.setState(id, state);
+      if (changed) render();
+      return changed;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      stop();
+      resize.disconnect();
+      doc.removeEventListener("visibilitychange", visibility);
+      canvas.removeEventListener("webglcontextlost", lose);
+      canvas.removeEventListener("webglcontextrestored", restore);
+      clearModel();
+      previewMaterial.dispose();
+      objects.dispose();
+      grid.dispose();
+      scene.clear();
+      renderer.dispose();
+    },
+  };
+}
