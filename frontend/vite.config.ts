@@ -5,6 +5,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
   build: {
+    // Keep the HTTP workbench under its existing gzip limit without moving lazy boundaries.
+    minify: "terser",
+    terserOptions: { compress: { passes: 2 }, maxWorkers: 2 },
     rolldownOptions: {
       output: {
         codeSplitting: {
