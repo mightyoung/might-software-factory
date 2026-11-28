@@ -26,7 +26,8 @@ export function describedByIds(id: string, { hint, error }: { hint?: boolean; er
   return [hint ? `${id}-hint` : null, error ? `${id}-error` : null].filter(Boolean).join(" ") || undefined;
 }
 
-export function ReportField({ id, label, error, hint, required, notWired, children }: ReportFieldProps) {
+export function ReportField({ id, label, error, hint, required, notWired: contextNotWired, children }: ReportFieldProps) {
+  const notWired = import.meta.env.MSF_BROWSER_MODE === undefined ? contextNotWired : import.meta.env.MSF_BROWSER_MODE === "synthetic" && contextNotWired;
   return (
     <div className="report-field">
       <label htmlFor={id}>

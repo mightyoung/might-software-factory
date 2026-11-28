@@ -1,12 +1,12 @@
 import { MAX_STUDIO_BYTES, parseStudioSnapshot, serializeStudioSnapshot } from "../schema/studioSnapshot.ts";
 import { mountFloorplanEditor } from "./floorplanEditor.ts";
 import { mountResizeGizmo } from "./resizeGizmo.ts";
-import { resizeEquipment, type ResizeFace } from "../core/equipmentResize.ts";
+import { resizeEquipment, resizeFaces, type ResizeFace } from "../core/equipmentResize.ts";
 import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
 import { LocalAssetBank } from "../core/LocalAssetBank.ts";
 import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
-import { SceneDocumentSchema } from "../schema/scene.ts";
+import { SceneDocumentSchema, type ParametricEquipment } from "../schema/scene.ts";
 
 let sample = SceneDocumentSchema.parse({
   schemaVersion: 1, screenId: "sample-workshop",
@@ -37,6 +37,7 @@ const messages: Record<RenderStatus, string> = {
   unavailable: "此设备无法使用 WebGL 2。请使用二维设备列表。",
 };
 let updateGizmo = () => {};
+let cancelGizmo = () => {};
 const engine = mountEngine(canvas, sample, (state) => {
   status.textContent = messages[state];
   overview.disabled = state !== "ready";
@@ -127,16 +128,23 @@ function displayInspection() {
 }
 modelUnit.addEventListener("change", displayInspection);
 const selectedParametric = () => sample.devices.find((item) => item.id === selected && "equipment" in item);
+const canResizeFace = (kind: ParametricEquipment["kind"], face: ResizeFace) =>
+  face === "+Y" || (resizeFaces.includes(face) && (kind === "CONVEYOR" || kind === "CORRIDOR"));
 function displayResize() {
   const item = selectedParametric();
   resizeTool.hidden = !item;
   if (!item || !("equipment" in item)) return;
+  for (const option of resizeFace.options) {
+    option.disabled = !canResizeFace(item.equipment.kind, option.value as ResizeFace);
+  }
+  if (!canResizeFace(item.equipment.kind, resizeFace.value as ResizeFace)) resizeFace.value = "+Y";
   const { length, width, height } = item.equipment.dimensions;
   resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
 }
 function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   const item = selectedParametric();
   if (!item || !("equipment" in item)) return;
+  if (!canResizeFace(item.equipment.kind, face)) { displayResize(); return; }
   const change = resizeEquipment(item.equipment, face, delta);
   const [dx, dy, dz] = change.positionDelta;
   const [x, y, z] = item.position;
@@ -148,6 +156,7 @@ function adjustSelected(delta: number, face = resizeFace.value as ResizeFace) {
   if (!updated.success) { resizeResult.textContent = "尺寸调整会超出场景范围。"; return; }
   sample = updated.data;
   closeModel();
+  cancelGizmo();
   engine?.replaceScene(sample);
   engine?.focus(item.id);
   if (item.id === "conveyor-04") { lengthSelect.selectedIndex = change.dimensions.length === 4 ? 0 : change.dimensions.length === 8 ? 1 : -1; rebuild.textContent = `当前长度：${change.dimensions.length} 米。`; }
@@ -224,14 +233,19 @@ lengthSelect.addEventListener("change", () => {
       ? { ...device, equipment: { ...device.equipment, dimensions: { ...device.equipment.dimensions, length } } }
       : device),
   });
+  cancelGizmo();
   engine?.replaceScene(sample);
   rebuild.textContent = `当前长度：${length} 米。`;
   displayResize();
 });
-updateGizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, () => {
+const gizmo = mountResizeGizmo(document.querySelector("#resize-gizmo")!, canvas, () => {
   const item = selectedParametric();
-  return item && "equipment" in item ? engine?.projectedHandles(item.id, item.equipment.dimensions) ?? [] : [];
+  if (!item || !("equipment" in item)) return [];
+  const { kind, dimensions } = item.equipment;
+  return engine?.projectedHandles(item.id, dimensions).filter(({ face }) => canResizeFace(kind, face)) ?? [];
 }, (delta, face, id) => { if (selected === id) adjustSelected(delta, face); });
+updateGizmo = gizmo.update;
+cancelGizmo = gizmo.cancel;
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });

@@ -1,6 +1,7 @@
 export type Point = readonly [number, number];
 export type GridStep = "0.1" | "0.5" | "1";
 export type FloorplanMode = "wall" | "zone";
+export const MAX_FLOORPLAN_ID = 10000;
 export type Wall = { id: number; start: Point; end: Point };
 export type Zone = { id: number; points: readonly Point[]; area: number };
 
@@ -61,8 +62,18 @@ export class FloorplanDraft {
   restore(plan: { walls: Wall[]; zones: Zone[] }) {
     this.walls.splice(0, this.walls.length, ...structuredClone(plan.walls));
     this.zones.splice(0, this.zones.length, ...structuredClone(plan.zones));
-    this.nextId = 1 + Math.max(0, ...this.walls.map((shape) => shape.id), ...this.zones.map((shape) => shape.id));
+    this.nextId = Math.max(0, ...this.walls.map((shape) => shape.id), ...this.zones.map((shape) => shape.id)) % MAX_FLOORPLAN_ID + 1;
     this.cancel();
+  }
+  private allocateId() {
+    const occupied = new Set([...this.walls, ...this.zones].map((shape) => shape.id));
+    // At most occupied.size consecutive IDs can be unavailable.
+    for (let i = 0; i <= occupied.size; i++) {
+      const id = this.nextId;
+      this.nextId = id % MAX_FLOORPLAN_ID + 1;
+      if (!occupied.has(id)) return id;
+    }
+    throw new Error("无法分配平面形状标识。");
   }
   preview(rawMetres: Point, ortho = false): Point {
     if (rawMetres.some((value) => !Number.isFinite(value) || Math.abs(value) > 10))
@@ -82,7 +93,7 @@ export class FloorplanDraft {
       if (this.walls.length >= 100) throw new Error("最多画 100 条墙段。");
       if (this.walls.some(({ start, end }) => same(start, anchor) && same(end, point) || same(start, point) && same(end, anchor)))
         throw new Error("这条墙段已存在。");
-      this.walls.push({ id: this.nextId++, start: anchor, end: point });
+      this.walls.push({ id: this.allocateId(), start: anchor, end: point });
       this.vertices = [point];
     } else {
       if (this.vertices.length >= 60) throw new Error("每个区域最多 60 个顶点。");
@@ -93,7 +104,7 @@ export class FloorplanDraft {
   finishZone(): Zone {
     if (this.mode !== "zone" || this.zones.length >= 20) throw new Error("请选择画区域，最多保留 20 个。");
     const area = validatePolygon(this.vertices);
-    const zone = { id: this.nextId++, points: [...this.vertices], area };
+    const zone = { id: this.allocateId(), points: [...this.vertices], area };
     this.zones.push(zone);
     this.cancel();
     return zone;

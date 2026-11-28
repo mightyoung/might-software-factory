@@ -23,11 +23,12 @@
         <fieldset id="resize-tool" hidden>
           <legend>保持对侧不动地调整尺寸</legend>
           <label for="resize-face">设备局部面</label>
-          <select id="resize-face">
+          <select id="resize-face" aria-describedby="resize-face-help">
             <option value="+X">+X · 长</option><option value="-X">−X · 长</option>
             <option value="+Z">+Z · 宽</option><option value="-Z">−Z · 宽</option>
             <option value="+Y">+Y · 高（底面固定）</option>
           </select>
+          <p id="resize-face-help">传送带和廊道可固定对侧调整长、宽；机械臂和螺旋传送机只支持固定底面调整高度。</p>
           <div><button id="resize-in" type="button">收进 0.5 米</button>
           <button id="resize-out" type="button">伸出 0.5 米</button></div>
           <p id="resize-result" role="status"></p>
@@ -39,7 +40,7 @@
           <select id="model-unit"><option value="m">米（GLB 默认）</option><option value="mm">毫米（明确导入）</option></select>
           <label for="local-model">选择 GLB 文件</label>
           <input id="local-model" type="file" accept=".glb,model/gltf-binary" aria-describedby="model-hint">
-          <p id="model-hint">上限 8 MiB，当前仅支持无纹理静态单网格。文件不会上传。</p>
+          <p id="model-hint">上限 8 MiB，当前最多支持 4 个无纹理静态网格。文件不会上传。</p>
           <p id="model-result" role="status"></p>
           <p id="unit-warning" role="status" hidden></p>
           <p id="model-error" role="alert" hidden></p>

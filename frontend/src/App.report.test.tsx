@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { setTabOpener } from "./routing/router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { navigate, setTabOpener } from "./routing/router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { createSyntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { createSyntheticFindingStore, type SyntheticFindingStore } from "./adapters/syntheticFindingStore";
@@ -250,6 +250,22 @@ describe("READ and CREATE route projections", () => {
 });
 
 describe("未提交草稿的离开保护", () => {
+  const prototype = HTMLDialogElement.prototype;
+  const originals = ["showModal", "close"].map(name => [name, Object.getOwnPropertyDescriptor(prototype, name)] as const);
+  beforeEach(() => {
+    Object.defineProperties(prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
+  });
+
   async function openDirtyDraft() {
     renderAs("demo.manager");
     await screen.findByRole("heading", { name: "隐患台账" });
@@ -260,8 +276,15 @@ describe("未提交草稿的离开保护", () => {
   it("点应用内链接离开先确认：取消则留在原页并保留草稿", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await openDirtyDraft();
-    fireEvent.click(await screen.findByRole("link", { name: "待确认" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("还没有提交"));
+    const destination = await screen.findByRole("link", { name: "待确认" });
+    destination.focus();
+    fireEvent.click(destination);
+    const dialog = await screen.findByRole("alertdialog", { name: "离开当前页面？" });
+    expect(dialog).toHaveTextContent("还没有提交");
+    expect(within(dialog).getByRole("button", { name: "继续编辑" })).toHaveFocus();
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(destination).toHaveFocus();
+    expect(confirm).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(`${T}/safety/findings`);
     expect(screen.getByLabelText(/隐患描述/)).toHaveValue("通道护栏连接件松动");
     confirm.mockRestore();
@@ -271,8 +294,33 @@ describe("未提交草稿的离开保护", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     await openDirtyDraft();
     fireEvent.click(await screen.findByRole("link", { name: "待确认" }));
+    expect(window.location.pathname).toBe(`${T}/safety/findings`);
+    const dialog = await screen.findByRole("alertdialog", { name: "离开当前页面？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认离开" }));
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/inbox`));
     confirm.mockRestore();
+  });
+
+  it("修改键交给浏览器；系统地址切换不受确认阻止且关闭旧确认", async () => {
+    await openDirtyDraft();
+    const destination = await screen.findByRole("link", { name: "待确认" });
+    const wasIntercepted: boolean[] = [];
+    function observe(event: MouseEvent) {
+      wasIntercepted.push(event.defaultPrevented);
+      event.preventDefault(); // jsdom cannot actually open the new browser tab.
+    }
+    document.addEventListener("click", observe, { once: true });
+    fireEvent.click(destination, { ctrlKey: true });
+    expect(wasIntercepted).toEqual([false]);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(location.pathname).toBe(`${T}/safety/findings`);
+
+    fireEvent.click(destination);
+    await screen.findByRole("alertdialog");
+    const next = `${T}/safety/inbox?tag=a&tag=b&empty=`;
+    act(() => navigate(next, true));
+    expect(location.pathname + location.search).toBe(next);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("没有改动、已提交成功或已关闭面板时不询问", async () => {
