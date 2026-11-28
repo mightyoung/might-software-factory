@@ -136,6 +136,14 @@ describe("createHttpSessionAdapter", () => {
       await expect(run({ [P]: () => new ApiError(429, "RATE_LIMITED", null, true, [], 12) })).rejects.toMatchObject({ kind: "rate_limited", retryAfterSeconds: 12 });
     });
 
+    it("keeps only known password request field paths for inline validation", async () => {
+      await expect(run({ [P]: () => new ApiError(400, "INVALID_REQUEST", null, false, [
+        { field: "newPassword", reason: "CodePointSize" },
+        { field: "confirm", reason: "unknown" },
+        { field: "newPassword", reason: "Size" },
+      ]) })).rejects.toMatchObject({ kind: "invalid_request", passwordFields: ["next"] });
+    });
+
     it("tells a wrong current password from a dead session by re-reading the session on 401", async () => {
       const alive = fake({ [P]: () => new ApiError(401, "AUTH_REQUIRED", null, false), "/api/v1/session/bootstrap": () => bootstrap });
       await expect(createHttpSessionAdapter(alive.client).changePassword!("old", "n".repeat(15))).rejects.toMatchObject({ kind: "invalid_credentials" });

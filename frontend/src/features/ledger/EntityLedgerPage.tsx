@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../../api/httpClient";
 import { LedgerTable } from "../../components/LedgerTable";
@@ -7,10 +9,11 @@ import { wallTimeToIso } from "../../domain/time";
 import { tenantPath } from "../../routing/paths";
 import { navigate } from "../../routing/router";
 import type { EntityRoute } from "../../routing/entityPaths";
+import { useAppMode } from "../../mode";
 import { draftOwnerKey } from "../session/draftStash";
 import { EntityLedgerForm } from "./EntityLedgerForm";
 import { ledgerFailure } from "./httpEntityLedger";
-import { permits, valueLabel, UUID, type DefinitionData, type EntityLedgerAdapter, type LedgerCommand, type LedgerDefinition, type LedgerQuery, type LedgerQueryData, type LedgerRecord, type LedgerUse } from "./model";
+import { permits, valueLabel, UUID, type EntityLedgerAdapter, type LedgerCommand, type LedgerDefinition, type LedgerQuery, type LedgerRecord, type LedgerUse } from "./model";
 
 function display(record: LedgerRecord, definition: LedgerDefinition, key: string) {
   const value = record.values[key];
@@ -52,78 +55,99 @@ export function makeQuery(definition: LedgerDefinition, values: QueryValues, pag
   return { filterAST: { operator: "AND", conditions }, page: { number: page }, size };
 }
 
-export function EntityLedgerPage({ adapter, route, tenantId, actorId, identityScope, permissions, onUnauthenticated }: {
+type EntityLedgerPageProps = {
   adapter: EntityLedgerAdapter; route: EntityRoute; tenantId: string; actorId: string; identityScope?: { accountId: string; memberId: string };
   permissions: readonly string[]; onUnauthenticated(): void;
-}) {
+};
+
+export function EntityLedgerPage(props: EntityLedgerPageProps) {
+  const { adapter, route, tenantId, actorId, identityScope, permissions } = props;
+  const mode = useAppMode();
+  const [scope, setScope] = useState(() => ({ adapter, generation: 0 }));
+  if (scope.adapter !== adapter) {
+    setScope({ adapter, generation: scope.generation + 1 });
+    return null;
+  }
+  const key = JSON.stringify([mode, tenantId, actorId, identityScope?.accountId, identityScope?.memberId, route.base, route.page, route.id, [...permissions].sort(), scope.generation]);
+  return <EntityLedgerSession key={key} {...props} />;
+}
+
+function EntityLedgerSession({ adapter, route, tenantId, actorId, identityScope, permissions, onUnauthenticated }: EntityLedgerPageProps) {
   const use: LedgerUse = route.page === "create" ? "CREATE" : route.page === "edit" ? "EDIT" : route.page === "detail" ? "READ"
     : permissions.includes(`${route.entityKey}.read`) ? "READ" : permissions.includes(`${route.entityKey}.create`) ? "CREATE" : "EDIT";
   const requestedPermission = `${route.entityKey}.${use === "READ" ? "read" : use === "CREATE" ? "create" : "update"}`;
-  const [definition, setDefinition] = useState<DefinitionData | null>(null);
-  const [current, setCurrent] = useState<LedgerRecord | null>(null);
-  const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
-  const [attempt, setAttempt] = useState(0); const [command, setCommand] = useState<LedgerCommand | null>(null);
-  const [filters, setFilters] = useState<QueryValues>({}), [applied, setApplied] = useState<QueryValues>({});
-  const [page, setPage] = useState(1), [size, setSize] = useState<20 | 50 | 100>(20);
-  const [result, setResult] = useState<LedgerQueryData | null>(null), [queryError, setQueryError] = useState(""), [querying, setQuerying] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set()); const [queryAttempt, setQueryAttempt] = useState(0);
+  const [client] = useState(createWorkspaceQueryClient);
+  const authorized = permissions.includes(requestedPermission);
+  const [attempt, setAttempt] = useState(0);
+  const [command, setCommand] = useState<LedgerCommand | null>(null);
+  const [filters, setFilters] = useState<QueryValues>();
+  const [applied, setApplied] = useState<QueryValues>({});
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState<20 | 50 | 100>(20);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [queryAttempt, setQueryAttempt] = useState(0);
   const owner = draftOwnerKey(tenantId, actorId);
   const draftKey = JSON.stringify([identityScope?.accountId, identityScope?.memberId, route.base, route.page, route.id, use]);
-  function failed(failure: unknown) { if (failure instanceof ApiError && failure.status === 401) onUnauthenticated(); }
-  useEffect(() => {
-    const controller = new AbortController(); setLoading(true); setError(""); setDefinition(null); setCurrent(null); setResult(null); setCommand(null);
-    if (!permissions.includes(requestedPermission)) { setError("当前没有执行此操作的权限。"); setLoading(false); return; }
-    adapter.definition(use, controller.signal).then(async data => {
-      if (controller.signal.aborted) return;
+  const bootstrap = useQuery({
+    queryKey: ["entity-ledger", use, route.id, attempt],
+    enabled: authorized,
+    queryFn: async ({ signal }) => {
+      const data = await adapter.definition(use, signal);
+      signal.throwIfAborted();
       if (!permits(permissions, data.effectiveActions, data.definition.actions[use === "READ" ? "read" : use === "CREATE" ? "create" : "update"].permission)) throw new ApiError(403, "ACCESS_DENIED", null, false);
       let record: LedgerRecord | null = null;
       if (route.id) {
         if (!permits(permissions, data.effectiveActions, data.definition.actions.read.permission)) throw new ApiError(403, "ACCESS_DENIED", null, false);
-        record = await adapter.record(data.definition, route.id, controller.signal);
+        record = await adapter.record(data.definition, route.id, signal);
         if (use === "EDIT" && !permits(permissions, record.effectiveActions, data.definition.actions.update.permission)) throw new ApiError(403, "ACCESS_DENIED", null, false);
       }
-      if (controller.signal.aborted) return;
-      setDefinition(data); setCurrent(record); setFilters(createEmptyQuery(querySchema(data.definition).queryFields)); setApplied({}); setPage(1); setLoading(false);
-    }).catch(failure => { if (controller.signal.aborted) return; setError(ledgerFailure(failure)); setLoading(false); failed(failure); });
-    return () => controller.abort();
-    // Permissions and adapters are replaced by the app identity boundary.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, route.page, route.id, route.base, use, attempt]);
+      return { definition: data, record };
+    },
+  }, client);
+  const definition = bootstrap.isSuccess ? bootstrap.data.definition : null;
+  const current = bootstrap.isSuccess ? bootstrap.data.record : null;
   const schema = useMemo(() => definition ? querySchema(definition.definition) : null, [definition]);
+  const emptyFilters = useMemo(() => createEmptyQuery(schema?.queryFields ?? []), [schema]);
   const canRead = definition !== null && permits(permissions, definition.effectiveActions, definition.definition.actions.read.permission);
   const canCreate = definition !== null && permits(permissions, definition.effectiveActions, definition.definition.actions.create.permission);
   const canEdit = definition !== null && current !== null && permits(permissions, definition.effectiveActions, definition.definition.actions.update.permission) && permits(permissions, current.effectiveActions, definition.definition.actions.update.permission);
-  useEffect(() => {
-    if (!definition || !canRead || route.page !== "entry" || use !== "READ") return;
-    const controller = new AbortController(); setQuerying(true); setQueryError(""); setSelected(new Set());
-    let query: LedgerQuery;
-    try { query = makeQuery(definition.definition, applied, page, size); }
-    catch (failure) { setQueryError(ledgerFailure(failure)); setQuerying(false); return; }
-    adapter.query(definition.definition, query, controller.signal).then(data => { if (!controller.signal.aborted) { setResult(data); setQuerying(false); } })
-      .catch(failure => { if (!controller.signal.aborted) { setResult(null); setQueryError(ledgerFailure(failure)); setQuerying(false); failed(failure); } });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, definition, canRead, route.page, use, applied, page, size, queryAttempt]);
+  const records = useQuery({
+    queryKey: ["entity-ledger-records", definition?.definition.definitionVersion, attempt, applied, page, size, queryAttempt],
+    enabled: definition !== null && canRead && route.page === "entry" && use === "READ",
+    queryFn: ({ signal }) => {
+      if (!definition) throw new Error("台账定义不可用。");
+      return adapter.query(definition.definition, makeQuery(definition.definition, applied, page, size), signal);
+    },
+  }, client);
+  const failure = bootstrap.error ?? records.error;
+  useEffect(() => { if (failure instanceof ApiError && failure.status === 401) onUnauthenticated(); }, [failure, onUnauthenticated]);
+  const error = !authorized ? "当前没有执行此操作的权限。" : bootstrap.error ? ledgerFailure(bootstrap.error) : "";
+  const result = records.isSuccess ? records.data : null;
+  const queryError = records.error ? ledgerFailure(records.error) : "";
+  const querying = records.isFetching;
+  function reload() {
+    setFilters(undefined); setApplied({}); setPage(1); setSelected(new Set()); setCommand(null); setAttempt(value => value + 1);
+  }
   function go(tail = "") { navigate(tenantPath(tenantId, `${route.base}${tail}`)); }
   const title = definition?.definition.title ?? "通用台账";
-  if (loading) return <section className="ledger-main operational-page entity-ledger-page" role="status">正在加载台账…</section>;
-  if (error || !definition || !schema) return <section className="ledger-main operational-page entity-ledger-page"><h1>{title}</h1><p role="alert">{error || "台账定义不可用。"}</p><button type="button" onClick={() => setAttempt(v => v + 1)}>重新加载</button></section>;
+  if (authorized && bootstrap.isPending) return <section className="ledger-main operational-page entity-ledger-page" role="status">正在加载台账…</section>;
+  if (error || !definition || !schema) return <section className="ledger-main operational-page entity-ledger-page"><h1>{title}</h1><p role="alert">{error || "台账定义不可用。"}</p><button type="button" onClick={reload}>重新加载</button></section>;
   const d = definition.definition;
   return <section className="ledger-main operational-page entity-ledger-page">
     <div className="page-heading"><h1>{d.title}</h1><div>
       {canRead && route.page !== "entry" && <button type="button" className="button button-subtle" onClick={() => go()}>返回台账</button>}
-      {canCreate && (route.page !== "create" || command) && <button type="button" className="button button-primary" onClick={() => { if (route.page === "create") setAttempt(v => v + 1); else go("/create"); }}>{d.actions.create.label}</button>}
+      {canCreate && (route.page !== "create" || command) && <button type="button" className="button button-primary" onClick={() => { if (route.page === "create") reload(); else go("/create"); }}>{d.actions.create.label}</button>}
       {route.page === "detail" && canEdit && <button type="button" className="button button-primary" onClick={() => go(`/records/${current!.id}/edit`)}>{d.actions.update.label}</button>}
     </div></div>
     {command ? <div role="status"><h2>保存成功</h2><p>版本 {command.version}{command.replay ? "（原请求结果）" : ""}</p>{canRead && <button type="button" onClick={() => go(`/records/${command.id}`)}>查看已保存记录</button>}</div>
       : use === "EDIT" && current === null ? <p role="status">当前仅有修改权限，无法浏览或加载档案。</p>
-      : (use === "CREATE" || use === "EDIT") ? <EntityLedgerForm key={draftKey} definition={d} use={use} adapter={adapter} record={current ?? undefined} owner={owner} draftKey={draftKey} onUnauthenticated={onUnauthenticated} onSuccess={setCommand} onRefresh={() => setAttempt(v => v + 1)} />
+      : (use === "CREATE" || use === "EDIT") ? <EntityLedgerForm key={draftKey} definition={d} use={use} adapter={adapter} record={current ?? undefined} owner={owner} draftKey={draftKey} onUnauthenticated={onUnauthenticated} onSuccess={setCommand} onRefresh={reload} />
         : current ? <dl className="operational-facts">{d.layout.detail.map(key => <div key={key}><dt>{d.fields[key]!.label}</dt><dd>{display(current, d, key)}</dd></div>)}</dl>
           : <>
-            <LedgerQueryForm schema={schema} values={filters} onChange={(key, value) => setFilters(previous => ({ ...previous, [key]: value }))} onSearch={() => { setApplied({ ...filters }); setPage(1); setQueryAttempt(v => v + 1); }} onReset={() => { setFilters(createEmptyQuery(schema.queryFields)); setApplied({}); setPage(1); setQueryAttempt(v => v + 1); }} />
+            <LedgerQueryForm schema={schema} values={filters ?? emptyFilters} onChange={(key, value) => setFilters(previous => ({ ...(previous ?? emptyFilters), [key]: value }))} onSearch={() => { setApplied({ ...(filters ?? emptyFilters) }); setPage(1); setSelected(new Set()); setQueryAttempt(v => v + 1); }} onReset={() => { setFilters(undefined); setApplied({}); setPage(1); setSelected(new Set()); setQueryAttempt(v => v + 1); }} />
             {querying && <p role="status">查询中…</p>}{queryError && <p role="alert">{queryError}</p>}
             {result && <><LedgerTable columns={schema.columns} rows={result.records} getKey={row => row.id} selectedIds={selected} onToggleRow={id => setSelected(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onTogglePage={() => setSelected(previous => previous.size === result.records.length ? new Set() : new Set(result.records.map(row => row.id)))} onOpen={row => go(`/records/${row.id}`)} />
-              <div className="table-footer"><span>共 {result.total} 条，第 {result.page} 页</span><div className="pagination-controls"><label className="page-size-select"><span className="visually-hidden">每页条数</span><select aria-label="每页条数" value={size} onChange={event => { setSize(Number(event.target.value) as 20 | 50 | 100); setPage(1); }}>{[20, 50, 100].map(value => <option key={value} value={value}>{value}</option>)}</select></label><button type="button" className="button button-subtle" disabled={page <= 1 || querying} onClick={() => setPage(v => v - 1)}>上一页</button><button type="button" className="button button-subtle" disabled={!result.hasMore || querying} onClick={() => setPage(v => v + 1)}>下一页</button></div></div></>}
+              <div className="table-footer"><span>共 {result.total} 条，第 {result.page} 页</span><div className="pagination-controls"><label className="page-size-select"><span className="visually-hidden">每页条数</span><select aria-label="每页条数" value={size} onChange={event => { setSize(Number(event.target.value) as 20 | 50 | 100); setPage(1); setSelected(new Set()); }}>{[20, 50, 100].map(value => <option key={value} value={value}>{value}</option>)}</select></label><button type="button" className="button button-subtle" disabled={page <= 1 || querying} onClick={() => { setPage(v => v - 1); setSelected(new Set()); }}>上一页</button><button type="button" className="button button-subtle" disabled={!result.hasMore || querying} onClick={() => { setPage(v => v + 1); setSelected(new Set()); }}>下一页</button></div></div></>}
           </>}
   </section>;
 }

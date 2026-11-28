@@ -48,18 +48,27 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
   let dirty = false;
   let importedFile = "";
   let comparisonTimer = 0;
+  let announcementSnapshot: string | null = null;
   let busy = false;
   let settled = univerAPI.getCurrentLifecycleStage() >= univerAPI.Enum.LifecycleStages.Steady;
 
   function post(type: string, extra: Record<string, unknown> = {}) {
     if (parent !== window) parent.postMessage({ channel, type, ...extra }, location.origin);
   }
-  function update() {
+  function update(passive = false) {
     if (document.activeElement !== nameInput) nameInput.value = unit.getName();
-    dirty = JSON.stringify(unit.save()) !== baseline || nameInput.value.trim() !== unit.getName();
-    const contentState = dirty ? "有尚未导出的修改" : `${name}已就绪`;
-    status.textContent = importedFile ? `已导入 ${importedFile}，${contentState}` : contentState;
+    const snapshot = JSON.stringify(unit.save());
+    const pendingRename = nameInput.value.trim() !== unit.getName();
+    dirty = snapshot !== baseline || pendingRename;
+    // A settled comparison still reports dirty state, but must not erase the
+    // export announcement for the exact same document.
+    if (!passive || pendingRename || announcementSnapshot !== snapshot) {
+      announcementSnapshot = null;
+      const contentState = dirty ? "有尚未导出的修改" : `${name}已就绪`;
+      status.textContent = importedFile ? `已导入 ${importedFile}，${contentState}` : contentState;
+    }
     post("state", { dirty });
+    return snapshot;
   }
   function ready() {
     baseline = JSON.stringify(unit.save());
@@ -80,7 +89,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     dirty = true;
     // Internal recalculations may also mutate the snapshot. Compare their settled result.
     window.clearTimeout(comparisonTimer);
-    comparisonTimer = window.setTimeout(update, 80);
+    comparisonTimer = window.setTimeout(() => update(true), 80);
   });
   const lifecycle = univerAPI.addEvent(univerAPI.Event.LifeCycleChanged, ({ stage }) => {
     if (!settled && stage === univerAPI.Enum.LifecycleStages.Steady) {
@@ -105,7 +114,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       showError(`${name}重命名失败，请重试。`);
     }
   }
-  nameInput.addEventListener("input", update);
+  nameInput.addEventListener("input", () => update());
   nameInput.addEventListener("change", rename);
   nameInput.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.isComposing) {
@@ -165,7 +174,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       try {
         const snapshot = unit.save();
         download(snapshot, plainText(snapshot), "text/plain;charset=utf-8", "txt");
-        update();
+        announcementSnapshot = update();
         status.textContent = `已发起 TXT 本机下载，请确认文件已保存。${dirty ? "文档仍有尚未导出为 JSON 的修改。" : ""}`;
       } catch {
         showError("纯文本导出失败，请重试。");
@@ -177,7 +186,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
       const snapshot = unit.save();
       download(snapshot, session.serialize(snapshot), "application/json", "json");
       baseline = JSON.stringify(snapshot);
-      update();
+      announcementSnapshot = update();
       status.textContent = "已发起本机文件下载，请确认文件已保存";
     } catch {
       showError(`${name}导出失败，请重试。`);
@@ -187,7 +196,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     if (event.origin !== location.origin || event.source !== parent || event.data?.channel !== channel) return;
     if (event.data.type === "close-check") {
       if (nameInput.value.trim() !== unit.getName()) rename();
-      update();post("close-state", { dirty });
+      update();post("close-state", { dirty, requestId: event.data.requestId });
     }
     if (event.data.type === "theme" && (event.data.theme === "dark" || event.data.theme === "light")) {
       document.documentElement.dataset.theme = event.data.theme;

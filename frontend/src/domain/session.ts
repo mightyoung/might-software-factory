@@ -62,7 +62,7 @@ export class SessionError extends Error {
   /** Bounded display cooldown; the server decides whether a later manual attempt is allowed. */
   readonly retryAfterSeconds: number | null;
 
-  constructor(kind: SessionFailureKind, retryable = kind === "unavailable", retryAfterSeconds: number | null = null) {
+  constructor(kind: SessionFailureKind, retryable = kind === "unavailable", retryAfterSeconds: number | null = null, readonly passwordFields: readonly ("current" | "next")[] = []) {
     super(kind);
     this.name = "SessionError";
     this.kind = kind;
