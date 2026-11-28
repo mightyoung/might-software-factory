@@ -152,7 +152,7 @@ function Sidebar({
   menu,
   currentRest,
   onRetryMenu,
-  synthetic,
+  synthetic: contextSynthetic,
   collapsed,
 }: {
   collapsed: boolean;
@@ -162,6 +162,7 @@ function Sidebar({
   currentRest: string;
   onRetryMenu: () => void;
 }) {
+  const synthetic = import.meta.env.MSF_BROWSER_MODE === undefined ? contextSynthetic : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   return (
     <aside className="sidebar" id="workspace-sidebar" hidden={collapsed}>
       {menu.status === "ready" ? (
@@ -199,7 +200,8 @@ function Sidebar({
 }
 
 export function AppShell({ session, application, currentRest, menu, onRetryMenu, onLogout, onChangePassword, title, children }: AppShellProps) {
-  const synthetic = useAppMode() === "synthetic";
+  const contextMode = useAppMode();
+  const synthetic = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
   const [officeKind, setOfficeKind] = useState<OfficeEditorKind | null>(null);
   const [collapsed, setCollapsed] = useState(sidebarPreference);
   const [quickNavigation, setQuickNavigation] = useState(false);

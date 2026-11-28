@@ -24,7 +24,8 @@ export function LedgerTable<T>({
   onTogglePage,
   onOpen,
 }: LedgerTableProps<T>) {
-  const demo = useAppMode() === "synthetic";
+  const contextMode = useAppMode();
+  const demo = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
   const selectedCount = rows.filter((row) => selectedIds.has(getKey(row))).length;
   const someSelected = selectedCount > 0 && selectedCount < rows.length;
   const pageSelection = someSelected ? "indeterminate" : selectedCount > 0;
