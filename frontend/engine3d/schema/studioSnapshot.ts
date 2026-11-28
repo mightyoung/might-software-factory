@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { validatePolygon, type FloorplanDraft } from "../core/floorplan.ts";
+import { MAX_FLOORPLAN_ID, validatePolygon, type FloorplanDraft } from "../core/floorplan.ts";
 import { SceneDocumentSchema, type SceneDocument } from "./scene.ts";
 
 export const MAX_STUDIO_BYTES = 256 * 1024;
 const coord = z.number().int().min(-100).max(100);
 const point = z.tuple([coord, coord]);
-const id = z.number().int().min(1).max(10000);
+const id = z.number().int().min(1).max(MAX_FLOORPLAN_ID);
 const schema = z.strictObject({
   snapshotVersion: z.literal(1),
   scene: SceneDocumentSchema,
@@ -16,12 +16,12 @@ const schema = z.strictObject({
 });
 type Snapshot = z.infer<typeof schema>;
 
-export function parseStudioSnapshot(raw: string) {
+function checkBytes(raw: string) {
   if (raw.length > MAX_STUDIO_BYTES || new TextEncoder().encode(raw).length > MAX_STUDIO_BYTES)
     throw new Error("场景文件不得超过 256 KiB。");
-  let input: unknown;
-  try { input = JSON.parse(raw); }
-  catch { throw new Error("场景文件不是有效的 JSON。"); }
+}
+
+function validateSnapshot(input: unknown) {
   const parsed = schema.safeParse(input);
   if (!parsed.success) throw new Error("场景版本、内容或坐标不符合 Studio v1 契约。");
   const value: Snapshot = parsed.data;
@@ -37,11 +37,20 @@ export function parseStudioSnapshot(raw: string) {
     if (a === b || segments.has(key)) throw new Error("墙段为零长或重复。");
     segments.add(key);
   }
-  return { ...value, floorplan: { walls, zones: zones.map((zone) => ({ ...zone, area: validatePolygon(zone.points) })) } };
+  const canonical = JSON.stringify(value);
+  checkBytes(canonical);
+  const data = { ...value, floorplan: { walls, zones: zones.map((zone) => ({ ...zone, area: validatePolygon(zone.points) })) } };
+  return { data, canonical };
+}
+
+export function parseStudioSnapshot(raw: string) {
+  checkBytes(raw);
+  let input: unknown;
+  try { input = JSON.parse(raw); }
+  catch { throw new Error("场景文件不是有效的 JSON。"); }
+  return validateSnapshot(input).data;
 }
 
 export function serializeStudioSnapshot(scene: SceneDocument, floorplan: ReturnType<FloorplanDraft["snapshot"]>): string {
-  const raw = JSON.stringify({ snapshotVersion: 1, scene, floorplan }, null, 2);
-  parseStudioSnapshot(raw);
-  return raw;
+  return validateSnapshot({ snapshotVersion: 1, scene, floorplan }).canonical;
 }

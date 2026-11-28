@@ -4,6 +4,38 @@ import { createSyntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { App } from "./App";
 import { navigate } from "./routing/router";
 
+const namedRouteComponents = vi.hoisted(() => new Map<string, unknown>());
+const registeredRouteComponents = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    lazyRouteComponent: (importer: Parameters<typeof actual.lazyRouteComponent>[0], name?: string) => {
+      const component = actual.lazyRouteComponent(importer, name);
+      if (name) namedRouteComponents.set(name, component);
+      return component;
+    },
+    createRoute: (options: Parameters<typeof actual.createRoute>[0]) => {
+      if ("path" in options && typeof options.path === "string") registeredRouteComponents.set(options.path, options.component);
+      return actual.createRoute(options);
+    },
+  };
+});
+
+it("registers the existing deferred config module as the real TanStack configuration route", () => {
+  const component = namedRouteComponents.get("LedgerConfigPage");
+  expect(component).toBeTypeOf("function");
+  expect(registeredRouteComponents.get("platform/ledger-configurations")).toBe(component);
+  expect(registeredRouteComponents.get("platform/ledgers")).not.toBe(component);
+});
+
+it("registers the permission editor only as its matched TanStack route", () => {
+  const component = namedRouteComponents.get("PermissionConfigRoute");
+  expect(component).toBeTypeOf("function");
+  expect(registeredRouteComponents.get("platform/permissions")).toBe(component);
+  expect(registeredRouteComponents.get("platform/ledger-configurations")).not.toBe(component);
+});
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

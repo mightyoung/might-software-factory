@@ -18,8 +18,13 @@ function setup(revoke = false) {
   return { sessions, admin };
 }
 it("makes a newly granted application and route available in the current session", async () => {
-  const { sessions } = setup();fireEvent.click(await screen.findByLabelText(/查看隐患/));fireEvent.click(screen.getByRole("button", { name: "保存" }));
-  const link = await screen.findByRole("link", { name: "生产安全" });expect(sessions.restore).toHaveBeenCalledTimes(2);
+  const { sessions, admin } = setup();
+  fireEvent.click(await screen.findByLabelText(/查看隐患/));
+  expect(admin.load).toHaveBeenCalledTimes(1);
+  expect(admin.saveRolePermissions).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  const link = await screen.findByRole("link", { name: "生产安全" });
+  expect(sessions.restore).toHaveBeenCalledTimes(2);
   fireEvent.click(link);expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeInTheDocument();
 });
 it("immediately makes the current editor read-only after revoking its management grant", async () => {

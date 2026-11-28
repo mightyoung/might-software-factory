@@ -3,7 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 // MOCK wire integration only. The opt-in Node fixture uses three fixed accounts;
 // it does not prove Java/Flowable authority, HTTPS, PostgreSQL or G6-08 acceptance.
 const findingId = "33333333-3333-4333-8333-333333333333";
-const detailPath = `/t/44444444-4444-4444-8444-444444444444/safety/findings?caseId=${findingId}`;
+const detailQuery = `?caseId=${findingId}&caseId=ignored&tag=%2f&tag=%2F&empty=`;
+const detailPath = "/t/44444444-4444-4444-8444-444444444444/safety/findings" + detailQuery;
 const base = `/api/v1/findings/${findingId}`;
 async function login(page: Page, role: "person" | "safety" | "reporter") {
   await page.goto("/");
@@ -14,6 +15,7 @@ async function login(page: Page, role: "person" | "safety" | "reporter") {
   await expect(page.getByRole("heading", { name: "隐患台账" })).toBeVisible();
   await page.goto(detailPath);
   await expect(page.getByText("MOCK V3：循环补充与两级复核").first()).toBeVisible();
+  expect(new URL(page.url()).search).toBe(detailQuery);
 }
 async function act(page: Page, label: string, text: string, expectedState: string, grade?: string) {
   const panel = page.getByLabel("隐患详情面板");

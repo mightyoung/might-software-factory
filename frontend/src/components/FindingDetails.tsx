@@ -1,8 +1,6 @@
+import { SyntheticFindingFields, SyntheticFindingActions } from "./SyntheticFindingDetails";
 import {
-  findingSourceLabels,
   findingStateLabels,
-  findingUrgencyLabels,
-  getFindingActions,
   workflowCurrentIndex,
   workflowSteps,
   type FindingRecord,
@@ -21,6 +19,8 @@ import { displayPublishedValue, publishedFieldValue, type FindingDefinition } fr
 
 interface FindingDetailsProps {
   definition?: FindingDefinition | null;
+  Fields?: typeof SyntheticFindingFields;
+  Actions?: typeof SyntheticFindingActions;
   finding: FindingRecord | null;
   loading: boolean;
   error: FindingLedgerReadFailureKind | null;
@@ -37,8 +37,9 @@ interface FindingDetailsProps {
   onForbidden?: () => void;
 }
 
-export function FindingDetails({ definition, finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
-  const demo = useAppMode() === "synthetic";
+export function FindingDetailsCore({ Fields, Actions, definition, finding, loading, error, onClose, onRetry, commandAdapter, evidenceAdapter, onCreateRelated, onOpenRelated, onCommandChanged, onUnauthenticated, onForbidden }: FindingDetailsProps) {
+  const contextMode = useAppMode();
+  const demo = (import.meta.env.MSF_BROWSER_MODE ?? contextMode) === "synthetic";
   const noun = demo ? "演示记录" : "记录";
   return (
     <aside className="detail-panel" aria-label="隐患详情面板">
@@ -69,55 +70,7 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
             {definition ? <dl className="detail-list">{definition.layout.detail.map((key) => <div key={key}>
               <dt>{definition.fields[key]!.presentation.label}</dt>
               <dd>{displayPublishedValue(definition.fields[key]!, publishedFieldValue(finding, key))}</dd>
-            </div>)}</dl> : (            <dl className="detail-list">
-              <div>
-                <dt>隐患摘要</dt>
-                <dd>{finding.description}</dd>
-              </div>
-              <div>
-                <dt>所在位置 / 设备</dt>
-                <dd>{finding.location}</dd>
-              </div>
-              <div>
-                <dt>上报时间</dt>
-                <dd>{formatDateTime(finding.reportedAt)}</dd>
-              </div>
-              {finding.foundAt && (
-                <div>
-                  <dt>发现时间</dt>
-                  <dd>
-                    {formatDateTime(finding.foundAt)}
-                    {finding.backfill && <span className="inline-tag">补报</span>}
-                  </dd>
-                </div>
-              )}
-              {finding.source && (
-                <div>
-                  <dt>来源</dt>
-                  <dd>{findingSourceLabels[finding.source]}</dd>
-                </div>
-              )}
-              {finding.urgency && (
-                <div>
-                  <dt>紧急程度</dt>
-                  <dd>{findingUrgencyLabels[finding.urgency]}</dd>
-                </div>
-              )}
-              {finding.interimMeasure && (
-                <div>
-                  <dt>临时措施</dt>
-                  <dd>{finding.interimMeasure}</dd>
-                </div>
-              )}
-              <div>
-                <dt>上报人</dt>
-                <dd>{finding.reporter}</dd>
-              </div>
-              <div>
-                <dt>整改责任人</dt>
-                <dd>{finding.responsible}</dd>
-              </div>
-            </dl>)}
+            </div>)}</dl> : Fields ? <Fields finding={finding} /> : null}
 
                       {finding.relatedFindingId && (
               <p className="detail-related">
@@ -202,22 +155,7 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
             </div>
           )}
 
-          {!commandAdapter && (
-            <>
-              <p className="action-hint" role="note">
-                审批与派单均为本地演示，所有操作暂不可用。正式接入后仍由服务端校验身份、职责、状态、版本、轮次和证据。
-              </p>
-              <div className="detail-actions">
-                {getFindingActions(finding.state).map((action) => (
-                  <button className="button button-disabled" type="button" disabled title={action.reason} key={action.label}>
-                    {action.label}
-                  </button>
-                ))}
-                {finding.state === "CLOSED" && <span className="closed-note">此示例状态不可变更</span>}
-                {finding.state === "NOT_ESTABLISHED" && <span className="closed-note">未成立记录已终止；新证据应创建关联记录</span>}
-              </div>
-            </>
-          )}
+          {!commandAdapter && Actions && <Actions finding={finding} />}
         </>
       )}
       {finding && commandAdapter && (!error || error === "unknown") && (
@@ -234,4 +172,8 @@ export function FindingDetails({ definition, finding, loading, error, onClose, o
       )}
     </aside>
   );
+}
+
+export function FindingDetails({ Fields = SyntheticFindingFields, Actions = SyntheticFindingActions, ...props }: FindingDetailsProps) {
+  return <FindingDetailsCore {...props} Fields={Fields} Actions={Actions} />;
 }
