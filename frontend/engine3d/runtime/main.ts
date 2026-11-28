@@ -50,6 +50,12 @@ let readVersion = 0;
 const modelInput = document.querySelector<HTMLInputElement>("#local-model")!;
 const modelResult = document.querySelector<HTMLParagraphElement>("#model-result")!;
 const modelError = document.querySelector<HTMLParagraphElement>("#model-error")!;
+const wallStatus = document.querySelector<HTMLParagraphElement>("#wall-preview-status")!;
+let wallCount = 0;
+function displayWallStatus() {
+  wallStatus.hidden = !engine || !wallCount || Boolean(inspection);
+  wallStatus.textContent = wallCount ? `三维墙体 ${wallCount} 条，高 3 米，厚 0.2 米。` : "";
+}
 const modelClose = document.querySelector<HTMLButtonElement>("#close-model")!;
 const modelUnit = document.querySelector<HTMLSelectElement>("#model-unit")!;
 const unitWarning = document.querySelector<HTMLParagraphElement>("#unit-warning")!;
@@ -114,6 +120,7 @@ function closeModel() {
   engine?.hideModel(selected);
   inspection = null;
   displayInspection();
+  displayWallStatus();
   modelClose.hidden = true;
   error();
 }
@@ -136,6 +143,7 @@ modelInput.addEventListener("change", async () => {
     if (!rendered) model.dispose();
     inspection = { name: file.name, metrics: model.metrics, rendered: Boolean(rendered) };
     displayInspection();
+    displayWallStatus();
     modelClose.hidden = false;
   } catch (cause) {
     if (mine === readVersion) error(cause instanceof Error && cause.message.startsWith("GLB：")
@@ -189,4 +197,7 @@ window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
 });
 
-mountFloorplanEditor();
+mountFloorplanEditor((snapshot) => {
+  wallCount = engine?.replaceFloorplan(snapshot) ? snapshot.walls.length : 0;
+  displayWallStatus();
+});

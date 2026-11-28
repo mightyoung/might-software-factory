@@ -1,4 +1,5 @@
 import { Color, DirectionalLight, DoubleSide, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { buildFloorplanGeometry, type FloorplanGeometrySnapshot } from "./floorplanGeometry.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 import type { StaticGlb } from "./glbIntake.ts";
 import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
@@ -33,12 +34,14 @@ export function mountEngine(
   const preview = new PreviewSlot();
   // Valid local flat meshes may face away from the fixed preview camera.
   const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56, side: DoubleSide });
+  let floorplan: ReturnType<typeof buildFloorplanGeometry> | null = null;
   let previewMesh: Mesh | null = null;
   function clearModel() {
     if (previewMesh) scene.remove(previewMesh);
     previewMesh = null;
     preview.clear();
     objects.group.visible = true;
+    if (floorplan) floorplan.group.visible = true;
   }
   let frame = 0;
   let disposed = false;
@@ -92,6 +95,16 @@ export function mountEngine(
 
   return {
     focus,
+    replaceFloorplan(snapshot: FloorplanGeometrySnapshot) {
+      if (disposed) return false;
+      const next = buildFloorplanGeometry(snapshot);
+      if (floorplan) { scene.remove(floorplan.group); floorplan.dispose(); }
+      floorplan = next;
+      floorplan.group.visible = !preview.current;
+      scene.add(floorplan.group);
+      render();
+      return true;
+    },
     projectedHandles(id: string, { length, width, height }: ParametricEquipment["dimensions"]) {
       const object = objects.devices.get(id);
       if (disposed || lost || preview.current || !object) return [];
@@ -131,6 +144,7 @@ export function mountEngine(
       preview.replace(model);
       previewMesh = mesh;
       objects.group.visible = false;
+      if (floorplan) floorplan.group.visible = false;
       scene.add(mesh);
       render();
       return true;
@@ -166,6 +180,8 @@ export function mountEngine(
       canvas.removeEventListener("webglcontextrestored", restore);
       clearModel();
       previewMaterial.dispose();
+      floorplan?.dispose();
+      floorplan = null;
       objects.dispose();
       grid.dispose();
       scene.clear();

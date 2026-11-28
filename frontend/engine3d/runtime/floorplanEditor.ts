@@ -1,7 +1,9 @@
 import { FloorplanDraft, polygonArea, type FloorplanMode, type GridStep, type Point } from "../core/floorplan.ts";
 
+import type { FloorplanGeometrySnapshot } from "../core/floorplanGeometry.ts";
+
 const svgNS = "http://www.w3.org/2000/svg";
-export function mountFloorplanEditor() {
+export function mountFloorplanEditor(onWalls: (snapshot: FloorplanGeometrySnapshot) => void) {
   const draft = new FloorplanDraft();
   const map = document.querySelector<SVGSVGElement>("#floorplan-map")!;
   const features = document.querySelector<SVGGElement>("#plan-features")!;
@@ -43,7 +45,11 @@ export function mountFloorplanEditor() {
     }));
   }
   function apply(action: () => void) {
-    try { action(); error.hidden = true; error.textContent = ""; }
+    try {
+      const priorCount = draft.walls.length;
+      action();
+      if (draft.walls.length !== priorCount) onWalls({ walls: draft.walls });
+      error.hidden = true; error.textContent = ""; }
     catch (cause) { error.textContent = cause instanceof Error ? cause.message : "绘制失败。"; error.hidden = false; }
     cursor = null;
     render();
