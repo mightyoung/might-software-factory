@@ -101,6 +101,59 @@ it("sends typed filters and edits using the record's pinned version", async () =
   );
 });
 
+it("keeps draft, selected ledger and filters when cancelling local navigation", async () => {
+  const prototype = HTMLDialogElement.prototype;
+  const previousShow = Object.getOwnPropertyDescriptor(prototype, "showModal");
+  const previousClose = Object.getOwnPropertyDescriptor(prototype, "close");
+  Object.defineProperties(prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
+  const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    const a = adapter();
+    vi.mocked(a.list).mockResolvedValue([ledger, {
+      ...ledger, key: "other", definition: { ...definition, name: "其他台账" },
+    }]);
+    await select(a);
+    const filter = screen.getByLabelText("数量");
+    fireEvent.change(filter, { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    fireEvent.click(await screen.findByRole("button", { name: "新增记录" }));
+    const draft = () => within(screen.getByRole("region", { name: "新增记录" })).getByLabelText("数量（必填）");
+    fireEvent.change(draft(), { target: { value: "17" } });
+    const requestCounts = [a.list, a.query, a.detail].map(fn => vi.mocked(fn).mock.calls.length);
+    for (const name of ["刷新台账", "其他台账", "新增记录", "查看记录", "关闭记录"]) {
+      const trigger = screen.getByRole("button", { name });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const confirmation = await screen.findByRole("alertdialog", { name: "放弃未保存的记录修改？" });
+      const keep = within(confirmation).getByRole("button", { name: "继续编辑" });
+      expect(keep).toHaveFocus();
+      fireEvent.click(keep);
+      expect(trigger).toHaveFocus();
+      expect(draft()).toHaveValue(17);
+      expect(filter).toHaveValue(3);
+      expect(screen.getByRole("button", { name: "采购申请" })).toHaveAttribute("aria-current", "true");
+      expect([a.list, a.query, a.detail].map(fn => vi.mocked(fn).mock.calls.length)).toEqual(requestCounts);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "查看记录" }));
+    const confirmation = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "确认放弃" }));
+    await screen.findByRole("region", { name: "记录详情" });
+    expect(a.detail).toHaveBeenCalledExactlyOnceWith("purchase", "record", expect.any(AbortSignal));
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    for (const write of [a.create, a.update, a.remove]) expect(write).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    nativeConfirm.mockRestore();
+    for (const [name, descriptor] of [["showModal", previousShow], ["close", previousClose]] as const) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
+  }
+});
+
 it("requires accessible confirmation for the current draft and retries only its original deletion", async () => {
   const prototype = HTMLDialogElement.prototype;
   const previousShow = Object.getOwnPropertyDescriptor(prototype, "showModal");
@@ -302,14 +355,37 @@ it("keeps a draft when only its organization changed and discarding is declined"
   const editor = screen.getByRole("region", { name: "新增记录" });
   const organization = within(editor).getByLabelText("所属组织");
   fireEvent.change(organization, { target: { value: "warehouse" } });
+  const prototype = HTMLDialogElement.prototype;
+  const show = Object.getOwnPropertyDescriptor(prototype, "showModal");
+  const close = Object.getOwnPropertyDescriptor(prototype, "close");
+  Object.defineProperties(prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+  });
   const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
   try {
-    fireEvent.click(within(editor).getByRole("button", { name: "关闭记录" }));
-    expect(confirmation).toHaveBeenCalledOnce();
+    const closeRecord = within(editor).getByRole("button", { name: "关闭记录" });
+    closeRecord.focus();
+    fireEvent.click(closeRecord);
+    const dialog = await screen.findByRole("alertdialog", { name: "放弃未保存的记录修改？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "继续编辑" }));
+    expect(confirmation).not.toHaveBeenCalled();
+    expect(a.create).not.toHaveBeenCalled();
     expect(organization).toHaveValue("warehouse");
     expect(organization).toBeInTheDocument();
+    expect(closeRecord).toHaveFocus();
+    fireEvent.click(closeRecord);
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认放弃" }));
+    expect(editor).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "业务台账" })).toHaveFocus();
+    expect(a.create).not.toHaveBeenCalled();
   } finally {
+    cleanup();
     confirmation.mockRestore();
+    for (const [name, descriptor] of [["showModal", show], ["close", close]] as const) {
+      if (descriptor) Object.defineProperty(prototype, name, descriptor);
+      else Reflect.deleteProperty(prototype, name);
+    }
   }
 });
 

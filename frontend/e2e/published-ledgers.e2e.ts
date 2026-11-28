@@ -67,6 +67,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     updatedAt: string;
   } = null;
   let creates = 0;
+  let updates = 0;
   let deletes = 0;
   let refuseDirectory = false;
   let refuseDelete = true;
@@ -102,6 +103,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
       return route.fulfill({ json: {} });
     }
     if (route.request().method() === "PUT") {
+      updates += 1;
       expect(body.expectedVersion).toBe(1);
       record = { ...record!, values: body.values, version: 2 };
     } else {
@@ -158,16 +160,23 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
 
   await page.getByRole("button", { name: "新增记录", exact: true }).click();
   await organization.selectOption("warehouse");
-  const [discardMessage] = await Promise.all([
-    page.waitForEvent("dialog").then(async (dialog) => {
-      const message = dialog.message();
-      await dialog.dismiss();
-      return message;
-    }),
-    closeDraft.click(),
-  ]);
-  expect(discardMessage).toContain("未保存");
+  await closeDraft.click();
+  const organizationDiscard = page.getByRole("alertdialog", { name: "放弃未保存的记录修改？" });
+  await expect(organizationDiscard.getByRole("button", { name: "继续编辑" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(organizationDiscard).toHaveCount(0);
+  await expect(closeDraft).toBeFocused();
+  expect(creates).toBe(0);
   await expect(organization).toHaveValue("warehouse");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(organizationDiscard.getByRole("button", { name: "确认放弃" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(editor).toBeHidden();
+  await expect(page.getByRole("heading", { name: "业务台账", exact: true })).toBeFocused();
+  expect(creates).toBe(0);
+
+  await page.getByRole("button", { name: "新增记录", exact: true }).click();
   await organization.selectOption("org");
   await editor.getByLabel("采购数量（必填）").fill("5");
   await editor.getByRole("checkbox", { name: "已确认" }).focus();
@@ -191,7 +200,29 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await page.getByRole("button", { name: "查看记录" }).click();
   await page.getByRole("button", { name: "编辑草稿" }).click();
   editor = page.getByRole("region", { name: "记录详情", exact: true });
-  await editor.getByLabel("采购数量（必填）").fill("6");
+  const quantity = editor.getByLabel("采购数量（必填）");
+  await quantity.fill("6");
+  const nativeSwitchDialogs: string[] = [];
+  const nativeSwitch = async (dialog: import("@playwright/test").Dialog) => {
+    nativeSwitchDialogs.push(dialog.type());
+    await dialog.dismiss();
+  };
+  page.on("dialog", nativeSwitch);
+  const closeEditor = editor.getByRole("button", { name: "关闭记录" });
+  await closeEditor.focus();
+  await page.keyboard.press("Enter");
+  const discard = page.getByRole("alertdialog", { name: "放弃未保存的记录修改？" });
+  await expect(discard.getByRole("button", { name: "继续编辑" })).toBeFocused();
+  const { violations } = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(violations.map(({ id }) => id)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(discard).toHaveCount(0);
+  await expect(closeEditor).toBeFocused();
+  await expect(quantity).toHaveValue("6");
+  expect(updates).toBe(0);
+  expect(nativeSwitchDialogs).toEqual([]);
+  page.off("dialog", nativeSwitch);
   await editor.getByRole("button", { name: "保存记录" }).click();
   await expect(
     page.getByRole("cell", { name: "6", exact: true }),
@@ -266,4 +297,5 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await expect(page.getByRole("button", { name: "采购申请", exact: true })).toHaveCount(0);
   await expect(page.getByText("共 0 条记录")).toHaveCount(0);
   expect(creates).toBe(1);
+  expect(updates).toBe(1);
 });
