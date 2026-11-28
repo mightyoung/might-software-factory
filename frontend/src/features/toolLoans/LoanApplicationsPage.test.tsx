@@ -226,3 +226,33 @@ it("retries the exact V1 request after a V2 publication while an outcome is unkn
   await waitFor(() => expect(adapter.command).toHaveBeenCalledTimes(2));
   expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(original);
 });
+
+it("exits the stale withdrawal form when the checked record has already been issued", async () => {
+  const { adapter } = setup([row]);
+  const issued = { ...row, version: 2, state: "ISSUED" as const };
+  vi.mocked(adapter.detail).mockResolvedValueOnce(row).mockResolvedValue(issued);
+  vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(409, "VERSION_CONFLICT", null, false));
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "撤销申请" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
+  fireEvent.click(await screen.findByRole("button", { name: "读取最新版本并核对后重新提交" }));
+
+  expect(await screen.findByText("已发放 · 第 2 版")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "撤销申请" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "核对后重试原请求" })).not.toBeInTheDocument();
+  expect(adapter.command).toHaveBeenCalledTimes(1);
+});
+
+it("keeps an ambiguous withdrawal on the original request until its result is known", async () => {
+  const { adapter } = setup([row]);
+  vi.mocked(adapter.command).mockRejectedValueOnce(new ApiError(0, "NETWORK", null, true));
+  fireEvent.click(await screen.findByRole("button", { name: "查看申请" }));
+  fireEvent.click(await screen.findByRole("button", { name: "撤销申请" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
+  expect(await screen.findByText(/此次提交结果尚未确认/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "读取最新版本并核对后重新提交" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "核对后重试原请求" }));
+  await screen.findByRole("heading", { name: "申请详情" });
+  expect(adapter.command).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(adapter.command).mock.calls[1]).toEqual(vi.mocked(adapter.command).mock.calls[0]);
+});
