@@ -55,7 +55,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     definitionVersion: 2,
     definition,
     capabilities,
-    organizations: [{ id: "org", name: "生产部" }],
+    organizations: [{ id: "org", name: "生产部" }, { id: "warehouse", name: "仓库" }],
   };
   let record: null | {
     id: string;
@@ -70,6 +70,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   let updates = 0;
   let deletes = 0;
   let refuseDirectory = false;
+  let refuseDelete = true;
   let firstCreate: unknown;
   const queries: unknown[] = [];
   await page.route("**/api/v1/ledgers**", async (route) => {
@@ -96,6 +97,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     if (path.endsWith("/delete")) {
       expect(path).toBe("/api/v1/ledgers/purchase/records/row-1/delete");
       expect(body).toEqual({ requestId: expect.any(String), expectedVersion: 2 });
+      if (refuseDelete) return route.fulfill({ status: 403, json: { code: "FORBIDDEN" } });
       deletes += 1;
       record = null;
       return route.fulfill({ json: {} });
@@ -150,6 +152,32 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   });
   await page.getByRole("button", { name: "新增记录", exact: true }).click();
   let editor = page.getByRole("region", { name: "新增记录", exact: true });
+  const closeDraft = editor.getByRole("button", { name: "关闭记录" });
+  const organization = editor.getByRole("combobox", { name: "所属组织" });
+  // The untouched false checkbox and unselected organization are both baseline values.
+  await closeDraft.click();
+  await expect(editor).toBeHidden();
+
+  await page.getByRole("button", { name: "新增记录", exact: true }).click();
+  await organization.selectOption("warehouse");
+  await closeDraft.click();
+  const organizationDiscard = page.getByRole("alertdialog", { name: "放弃未保存的记录修改？" });
+  await expect(organizationDiscard.getByRole("button", { name: "继续编辑" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(organizationDiscard).toHaveCount(0);
+  await expect(closeDraft).toBeFocused();
+  expect(creates).toBe(0);
+  await expect(organization).toHaveValue("warehouse");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(organizationDiscard.getByRole("button", { name: "确认放弃" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(editor).toBeHidden();
+  await expect(page.getByRole("heading", { name: "业务台账", exact: true })).toBeFocused();
+  expect(creates).toBe(0);
+
+  await page.getByRole("button", { name: "新增记录", exact: true }).click();
+  await organization.selectOption("org");
   await editor.getByLabel("采购数量（必填）").fill("5");
   await editor.getByRole("checkbox", { name: "已确认" }).focus();
   await page.keyboard.press("Space");
@@ -157,6 +185,7 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
   await page.keyboard.press("Enter");
   await expect(page.getByRole("alert")).toContainText("操作未确认成功");
   await expect(editor.getByLabel("采购数量（必填）")).toBeDisabled();
+  await expect(organization).toBeDisabled();
   await page.evaluate(() => {
     window.history.pushState(null, "", "/t/demo/not-registered");
     window.dispatchEvent(new PopStateEvent("popstate"));
@@ -241,9 +270,24 @@ test("已发布台账提供配置字段查询和草稿增改删", async ({ page 
     await expect(remove).toBeFocused();
     expect(deletes).toBe(0);
   }
+  const ledgerHeading = page.getByRole("heading", { name: "业务台账", exact: true });
   await page.keyboard.press("Enter");
-  await confirmDelete.click();
+  await page.keyboard.press("Tab");
+  await expect(confirmDelete).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("当前授权不允许此操作");
+  await expect(ledgerHeading).toBeFocused();
+  await expect(page.getByText("共 1 条记录")).toBeVisible();
+  expect(deletes).toBe(0);
+
+  refuseDelete = false;
+  await remove.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(confirmDelete).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(page.getByText("共 0 条记录")).toBeVisible();
+  await expect(ledgerHeading).toBeFocused();
   expect(deletes).toBe(1);
   expect(nativeDialogs).toEqual([]);
 

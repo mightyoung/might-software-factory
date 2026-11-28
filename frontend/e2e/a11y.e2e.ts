@@ -371,9 +371,12 @@ test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦�
     const search = modal.getByRole("searchbox", { name: "搜索页面" });
     await expect(search).toBeFocused();
     await scan(page, `快捷导航（${theme}）`);
-    await search.fill("隐患");
-    const result = modal.getByRole("link", { name: "隐患管理" });
-    await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
+    const result = modal.getByRole("link", { name: "隐患管理", exact: true });
+    for (const label of ["生产安全", "隐患管理"]) {
+      await search.fill(label);
+      await expect(modal.getByRole("link")).toHaveCount(1);
+      await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
+    }
     const close = modal.getByRole("button", { name: "关闭" });
     await page.keyboard.press("Shift+Tab");
     await expect(close).toBeFocused();
