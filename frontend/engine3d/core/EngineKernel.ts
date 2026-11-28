@@ -1,4 +1,6 @@
-import { Color, DirectionalLight, GridHelper, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { Color, DirectionalLight, DoubleSide, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { PreviewSlot } from "./PreviewSlot.ts";
+import type { StaticGlb } from "./glbIntake.ts";
 import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
 import { buildSceneObjects } from "./sceneObjects.ts";
 import type { DeviceState, SceneDocument } from "../schema/scene.ts";
@@ -26,6 +28,16 @@ export function mountEngine(
   const key = new DirectionalLight(0xffffff, 2);
   key.position.set(6, 15, 8);
   scene.add(objects.group, grid, key, new HemisphereLight(0xf0f9ff, 0xa1b7a7, 2));
+  const preview = new PreviewSlot();
+  // Valid local flat meshes may face away from the fixed preview camera.
+  const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56, side: DoubleSide });
+  let previewMesh: Mesh | null = null;
+  function clearModel() {
+    if (previewMesh) scene.remove(previewMesh);
+    previewMesh = null;
+    preview.clear();
+    objects.group.visible = true;
+  }
   let frame = 0;
   let disposed = false;
   let lost = false;
@@ -46,7 +58,7 @@ export function mountEngine(
         renderer.setSize(width, height, false);
       }
       camera.aspect = width / height;
-      const device = focusedId === undefined ? undefined : objects.devices.get(focusedId);
+      const device = previewMesh ?? (focusedId === undefined ? undefined : objects.devices.get(focusedId));
       if (device) fitDeviceCamera(camera, device);
       else {
         camera.far = overviewFar;
@@ -77,12 +89,35 @@ export function mountEngine(
 
   return {
     focus,
+    showModel(model: StaticGlb) {
+      if (disposed) return false;
+      if (model === preview.current) return true;
+      const bounds = model.geometry.boundingBox!;
+      const center = bounds.getCenter(new Vector3());
+      const scale = 6 / Math.max(...model.metrics.dimensions);
+      const mesh = new Mesh(model.geometry, previewMaterial);
+      mesh.scale.setScalar(scale);
+      mesh.position.set(-center.x * scale, -bounds.min.y * scale, -center.z * scale);
+      clearModel();
+      preview.replace(model);
+      previewMesh = mesh;
+      objects.group.visible = false;
+      scene.add(mesh);
+      render();
+      return true;
+    },
+    hideModel(id?: string) {
+      if (disposed) return;
+      clearModel();
+      focus(id);
+    },
     replaceScene(next: SceneDocument) {
       if (disposed) return false;
       const previous = objects;
       objects = buildSceneObjects(next);
       scene.remove(previous.group);
       previous.dispose();
+      objects.group.visible = !preview.current;
       scene.add(objects.group);
       render();
       return true;
@@ -100,6 +135,8 @@ export function mountEngine(
       doc.removeEventListener("visibilitychange", visibility);
       canvas.removeEventListener("webglcontextlost", lose);
       canvas.removeEventListener("webglcontextrestored", restore);
+      clearModel();
+      previewMaterial.dispose();
       objects.dispose();
       grid.dispose();
       scene.clear();

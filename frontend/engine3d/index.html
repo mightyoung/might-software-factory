@@ -20,6 +20,15 @@
           <select id="conveyor-length"><option value="4">4</option><option value="8">8</option></select>
           <p id="conveyor-rebuild" role="status">当前长度：4 米。</p>
         </fieldset>
+        <fieldset>
+          <legend>本地 GLB 模型</legend>
+          <label for="local-model">选择 GLB 文件</label>
+          <input id="local-model" type="file" accept=".glb,model/gltf-binary" aria-describedby="model-hint">
+          <p id="model-hint">上限 8 MiB，当前仅支持无纹理静态单网格。文件不会上传。</p>
+          <p id="model-result" role="status"></p>
+          <p id="model-error" role="alert" hidden></p>
+          <button id="close-model" type="button" hidden>返回合成场景</button>
+        </fieldset>
       </section>
       <section aria-labelledby="viewport-title">
         <div class="viewport-heading">
