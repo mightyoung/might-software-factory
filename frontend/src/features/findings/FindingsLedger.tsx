@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import type { ComponentProps } from "react";
 import { mockFindingLedger } from "../../adapters/findingLedger";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   classifyFindingLedgerReadFailure,
   type FindingLedgerAdapter,
@@ -15,6 +15,7 @@ import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
 import { FindingDetailsCore } from "../../components/FindingDetails";
+import { FindingReportFormCore } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
@@ -23,7 +24,7 @@ import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
-import { findingSearchInput, validateFindingSearch, validateFindingState, withFindingState, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
+import { findingSearchInput, validateFindingSearch, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -55,8 +56,6 @@ const firstPage: PageResult<FindingRecord> = {
   total: 0,
   pageCount: 1,
 };
-
-const FindingReportFormCore = lazy(() => import("../../components/FindingReportForm").then(({ FindingReportFormCore }) => ({ default: FindingReportFormCore })));
 
 export function FindingsLedgerCore(props: FindingsLedgerProps) {
   const [scope, setScope] = useState({ adapter: props.adapter, submit: props.submitAdapter, generation: 0 });
@@ -92,7 +91,7 @@ function FindingsLedgerBody({
   const search = delimiter < 0 ? "" : location.slice(delimiter);
   const selectionReady = useRef(!resetInitialSelection);
   // App supplies TanStack's validated match; standalone uses the identical projection.
-  const { standalone, reporting, relatedId, relatedCode, caseId, findingState } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
+  const { standalone, reporting, relatedId, relatedCode, caseId } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
   const relatedTo = reporting && relatedId ? { id: relatedId, code: relatedCode ?? relatedId } : null;
   const selectedFindingId = selectionReady.current ? caseId : null;
   useEffect(() => {
@@ -103,24 +102,13 @@ function FindingsLedgerBody({
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
   const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
   const published = adapter.publishedDefinition === true;
-  function fromRoute() {
-    const values: QueryValues = { ...createEmptyQuery(schema?.queryFields ?? []), ...(findingState && { state: findingState }) };
-    return { status: findingState, draft: values, applied: values };
-  }
-  const [queryState, setQueryState] = useState(fromRoute);
+  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
+  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
-  // Apply a history change before Query observes the old filters or page.
-  if (queryState.status !== findingState) {
-    setQueryState(fromRoute());
-    setPageIndex(1);
-    setSelectedIds(new Set());
-    setRefreshKey(value => value + 1);
-  }
-  const { draft: query, applied: appliedQuery } = queryState;
   const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
   const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
@@ -236,21 +224,21 @@ function FindingsLedgerBody({
   }
 
   function updateQuery(key: string, value: QueryValue) {
-    setQueryState(current => ({ ...current, draft: { ...current.draft, [key]: value } }));
+    setQuery((current) => ({ ...current, [key]: value }));
   }
 
   function runQuery(nextQuery: QueryValues) {
-    const status = validateFindingState(nextQuery.state);
-    const nextSearch = withFindingState(selectedFindingId ? withoutFindingSelection(search) : search, status);
-    setQueryState({ status, draft: nextQuery, applied: nextQuery });
+    setAppliedQuery({ ...nextQuery });
     setPageIndex(1);
     setSelectedIds(new Set());
-    if (nextSearch !== search) navigate(path + nextSearch + window.location.hash);
+    if (selectedFindingId) navigate(path);
     setRefreshKey((value) => value + 1);
   }
 
   function handleReset() {
-    runQuery(createEmptyQuery(schema?.queryFields ?? []));
+    const emptyQuery = createEmptyQuery(schema?.queryFields ?? []);
+    setQuery(emptyQuery);
+    runQuery(emptyQuery);
   }
 
   function openDetail(record: FindingRecord) {
@@ -351,7 +339,6 @@ function FindingsLedgerBody({
       </section>}
 
       {reporting && submitAdapter && (
-        <Suspense fallback={<p role="status">正在载入上报表单…</p>}>
         <FindingReportFormCore
           validateDraft={presentation?.validateDraft}
           adapter={submitAdapter}
@@ -362,7 +349,6 @@ function FindingsLedgerBody({
           draftKey={draftKey}
           {...(relatedTo ? { relatedTo } : {})}
         />
-        </Suspense>
       )}
 
       {selectedFindingId && !reporting && (

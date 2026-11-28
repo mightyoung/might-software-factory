@@ -101,8 +101,14 @@ describe("已登录时的应用路由与导航", () => {
       fireEvent.change(search, { target: { value: "风险管控" } });
       expect(within(modal).queryByRole("link", { name: "风险管控" })).toBeNull();
       expect(within(modal).getByText("没有匹配的页面")).toBeVisible();
-      fireEvent.change(search, { target: { value: "隐患" } });
-      expect(within(modal).getByRole("link", { name: "隐患台账" })).toHaveAttribute("href", `${T}/safety/findings`);
+      // The app title and its current menu label refer to one authorized href.
+      for (const term of ["生产安全", "隐患台账"]) {
+        fireEvent.change(search, { target: { value: term } });
+        const links = within(modal).getAllByRole("link");
+        expect(links).toHaveLength(1);
+        expect(links[0]).toHaveTextContent("隐患台账");
+        expect(links[0]).toHaveAttribute("href", `${T}/safety/findings`);
+      }
       fireEvent.click(within(modal).getByRole("button", { name: "关闭" }));
       expect(screen.queryByRole("dialog", { name: "快捷导航" })).toBeNull();
       expect(home).toHaveFocus();
@@ -425,7 +431,7 @@ describe("修改密码", () => {
     renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
     fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
-    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
     fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
     fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
     fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);
@@ -440,7 +446,7 @@ describe("修改密码", () => {
     renderSignedIn("demo.admin", "/safety/findings", { ...base, changePassword });
     fireEvent.click(await screen.findByRole("button", { name: /演示管理员/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
-    fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old" } });
     fireEvent.change(screen.getByLabelText("新密码"), { target: { value: NEW } });
     fireEvent.change(screen.getByLabelText("再次输入新密码"), { target: { value: NEW } });
     fireEvent.click(screen.getAllByRole("button", { name: "修改密码" }).at(-1)!);

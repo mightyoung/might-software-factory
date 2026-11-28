@@ -1,5 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
+import { randomUuid } from "../../domain/randomUuid";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -8,6 +7,7 @@ import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog"
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
+import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
 import { LedgerViewOrder } from "./LedgerViewOrder";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
@@ -108,36 +108,40 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
+      {definition.workflow ? (
+        <details>
+          <summary>查看流程图</summary>
+          <LedgerWorkflowEditor workflow={definition.workflow} disabled />
+        </details>
+      ) : <p>此版本未保存流程。</p>}
     </div>
   );
 }
 
-type LedgerConfigProps = {
+export function LedgerConfigPage({
+  adapter,
+  canManage,
+  canPublish,
+  onUnauthenticated,
+  active = true,
+}: {
   adapter: LedgerConfigAdapter;
   active?: boolean;
   canManage: boolean;
   canPublish: boolean;
   onUnauthenticated: () => void;
-};
-
-export function LedgerConfigPage(props: LedgerConfigProps) {
-  const [scope, setScope] = useState(() => ({ adapter: props.adapter, generation: 0 }));
-  if (scope.adapter !== props.adapter) {
-    setScope({ adapter: props.adapter, generation: scope.generation + 1 });
-    return null;
-  }
-  return <LedgerConfigSession key={scope.generation} {...props} />;
-}
-
-function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated, active = true }: LedgerConfigProps) {
+}) {
+  const [items, setItems] = useState<ConfigurationSummary[]>([]);
   const [key, setKey] = useState("");
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
+  const [workflowEpoch, setWorkflowEpoch] = useState(0);
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
   const [copySource, setCopySource] = useState<ConfigurationSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [failedAuthorization, setFailedAuthorization] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -148,7 +152,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   useEffect(() => { setPendingSwitch(null); }, [adapter, active]);
   const dirty = snapshot
     ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
-    : Boolean(key || draft.name || draft.fields.length);
+    : Boolean(key || draft.name || draft.fields.length || draft.workflow);
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
   useUnsavedGuard(
@@ -169,46 +173,37 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
         "配置已被其他人更新。你的输入已保留，请重新打开此台账核对最新版本。",
       );
     else if (cause instanceof ApiError && cause.status === 400)
-      setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
+      setError("配置未通过校验，请检查字段标识、名称、列表和查询字段及流程配置。");
     else setError("操作未确认成功，请稍后重试。");
   }
-  const [reads] = useState(createWorkspaceQueryClient);
-  const listKey = ["ledger-config-directory", loadAttempt] as const;
-  const directory = useQuery({
-    queryKey: listKey,
-    enabled: active,
-    queryFn: ({ signal }) => adapter.list(signal),
-  }, reads);
-  const loading = active && (directory.isPending || directory.isFetching);
-  const items = directory.isSuccess && !loading ? directory.data : [];
-  const loadStatus = directory.error instanceof ApiError ? directory.error.status : 0;
-  const denied = loadStatus === 401 || loadStatus === 403;
-  const blocked = denied || (failedAuthorization && (!directory.isSuccess || loading));
-  // A reactivation rechecks authority before revealing a retained loaded draft.
-  const hideDraft = blocked || (loading && (snapshot !== null || copySource !== null));
-  const listError = directory.isError
-    ? loadStatus === 401 ? "登录已失效，请重新登录。"
-      : loadStatus === 403 ? "你没有执行此配置操作的权限。"
-        : "暂时无法读取台账配置，请稍后重试。"
-    : "";
   useEffect(() => {
-    if (denied) setFailedAuthorization(true);
-    else if (directory.isSuccess && !loading) setFailedAuthorization(false);
-  }, [denied, directory.isSuccess, loading]);
-  useEffect(() => {
-    if (loadStatus === 401) onUnauthenticated();
-  }, [directory.error, loadStatus, onUnauthenticated]);
-  useEffect(() => {
-    if (!active) void reads.cancelQueries({ queryKey: ["ledger-config-directory"] });
-  }, [active, reads]);
-  useEffect(() => {
-    lifetime.current += 1;
-    return () => { lifetime.current += 1; };
-  }, []);
+    const controller = new AbortController();
+    const mine = ++lifetime.current;
+    setLoading(true);
+    setLoadFailed(false);
+    setError("");
+    adapter
+      .list(controller.signal)
+      .then((next) => {
+        if (mine === lifetime.current) setItems(next);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted && mine === lifetime.current) {
+          setLoadFailed(true);
+          failed(cause);
+        }
+      })
+      .finally(() => {
+        if (mine === lifetime.current) setLoading(false);
+      });
+    return () => {
+      controller.abort();
+      lifetime.current += 1;
+    };
+  }, [adapter, loadAttempt]); // The adapter is recreated at the identity boundary.
 
   function switchDraft(target: SwitchDraft, confirmed = false) {
-    if (!active || blocked || loading || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
-    if (target.kind === "select" && !items.some(item => item.key === target.item.key)) return;
+    if (!active || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
     if (dirty && !confirmed) {
       setPendingSwitch((current) => current ?? target);
     } else if (target.kind === "select") {
@@ -220,14 +215,14 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     }
   }
   function showSnapshot(next: ConfigurationSnapshot) {
+    setWorkflowEpoch((current) => current + 1);
     setSnapshot(next);
     setDraft(next.definition);
     setCompared(null);
     setCopySource(null);
   }
   function updateDirectory(next: ConfigurationSnapshot) {
-    if (reads.getQueryState(listKey)?.status !== "success") return;
-    reads.setQueryData<ConfigurationSummary[]>(listKey, current => current && [
+    setItems((current) => [
       { ...next, latestVersion: next.version },
       ...current.filter((item) => item.key !== next.key),
     ]);
@@ -252,6 +247,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     }
   }
   function create(source: ConfigurationSnapshot | null) {
+    setWorkflowEpoch((current) => current + 1);
     setKey("");
     setSnapshot(null);
     setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
@@ -290,7 +286,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   function mutate(action: Operation["action"], sourceVersion?: number) {
     const target = key.trim();
     if (
-      blocked || loading || locked || runningOperation.current ||
+      locked || runningOperation.current ||
       !(action === "publish" ? canPublish : canManage) ||
       !target ||
       (action === "publish" && (dirty || !snapshot))
@@ -303,7 +299,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
     const publishedVersion = snapshot?.publishedVersion ?? null;
     // Capture the immutable request at the first explicit action. A retry cannot
     // pick up another ledger, edited draft, new version, or idempotency key.
-    const id = action === "publish" ? null : crypto.randomUUID();
+    const id = action === "publish" ? null : randomUuid();
     void runOperation({
       action, key, version, sourceVersion,
       send: () => action === "save"
@@ -316,7 +312,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
 
   async function runOperation(operation: Operation) {
     const { action, key: operationKey, version, sourceVersion } = operation;
-    if (blocked || loading || busy || runningOperation.current || !(action === "publish" ? canPublish : canManage)) return;
+    if (busy || runningOperation.current || !(action === "publish" ? canPublish : canManage)) return;
     const mine = lifetime.current;
     runningOperation.current = true;
     setBusy(true);
@@ -388,7 +384,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
   }
   return (
     <section className="config-page">
-      {active && !hideDraft && !loading && pendingSwitch && <WorkbenchConfirmDialog
+      {active && pendingSwitch && <WorkbenchConfirmDialog
         title="放弃未保存的修改？"
         description={pendingSwitch.kind === "restore"
           ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
@@ -402,30 +398,31 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
       />}
       <div className="page-heading">
         <h1>台账配置</h1>
-        {canManage && !blocked && (
+        {canManage && (
           <Button
             label="新建台账"
             variant="secondary"
-            isDisabled={locked || loading}
+            isDisabled={locked}
             onClick={() => switchDraft({ kind: "create", source: null })}
           />
         )}
       </div>
       {loading && <p role="status">正在载入配置…</p>}
-      {(listError || (!hideDraft && error)) && <p role="alert">{listError || error}</p>}
-      {directory.isError && loadStatus !== 401 && (
+      {error && <p role="alert">{error}</p>}
+      {loadFailed && (
         <Button
           label="重新载入台账列表"
-          isDisabled={busy}
+          isDisabled={locked}
+
           variant="secondary"
           onClick={() => setLoadAttempt((value) => value + 1)}
         />
       )}
-      {!hideDraft && notice && <p role="status">{notice}</p>}
-      {!hideDraft && copySource && <p role="status">已从台账 {copySource.definition.name}（{copySource.key}）的版本 {copySource.version} 复制配置，请用新标识保存草稿。</p>}
-      {!hideDraft && <div className="config-layout">
+      {notice && <p role="status">{notice}</p>}
+      {copySource && <p role="status">已从台账 {copySource.definition.name}（{copySource.key}）的版本 {copySource.version} 复制配置，请用新标识保存草稿。</p>}
+      <div className="config-layout">
         <nav aria-label="已配置台账" className="config-list">
-          {items.length === 0 && !loading && !directory.isError && (
+          {items.length === 0 && !loading && !loadFailed && (
             <p>暂无台账配置。</p>
           )}
           {items.map((item) => (
@@ -577,6 +574,13 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
               setDraft((current) => ({ ...current, [property]: keys }))
             }
           />
+          {!draft.workflow && <p>尚未保存流程，画布显示的是默认示意。编辑后才会保存流程。</p>}
+          <LedgerWorkflowEditor
+            key={workflowEpoch}
+            workflow={draft.workflow ?? defaultWorkflow()}
+            disabled={!active || !canManage || locked || loading}
+            onChange={(workflow) => setDraft((current) => ({ ...current, workflow }))}
+          />
           <LedgerViewPreview definition={draft} />
           {recovery && (
             <Button
@@ -673,7 +677,7 @@ function LedgerConfigSession({ adapter, canManage, canPublish, onUnauthenticated
             </section>
           )}
         </div>
-      </div>}
+      </div>
     </section>
   );
 }

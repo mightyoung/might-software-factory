@@ -136,15 +136,16 @@ public final class LedgerRuntime {
             return actions.callers().withGuarded(scope,boundary->{
                 var context=execution(actions.authorization().requireCommand(scope,boundary,action(binding,verb.toLowerCase(java.util.Locale.ROOT))));
                 repository.lockIdempotency(binding,context,verb,key);
-                String hash=repository.fingerprint(verb,id,definitionVersion,expected,values);
                 var previous=repository.receipt(binding,context,verb,key);
                 if(previous!=null) {
-                    if(!previous.hash().equals(hash))throw new LedgerException(409,"IDEMPOTENCY_CONFLICT");
+                    if(!repository.matchesReceiptFingerprint(binding,verb,id,definitionVersion,expected,values,previous.hash()))
+                        throw new LedgerException(409,"IDEMPOTENCY_CONFLICT");
                     var current=repository.find(binding,context,previous.result().id(),false);
                     if(verb.equals("CREATE")) prepared(binding,context,values);
                     else requireUpdate(binding,context,current,values);
                     var old=previous.result();return new LedgerContracts.CommandData(old.commandId(),old.id(),old.version(),old.definitionVersion(),old.eventId(),old.occurredAt(),true);
                 }
+                String hash=repository.fingerprint(verb,id,definitionVersion,expected,values);
                 LedgerRepository.Row current=null;Map<String,Object> writeValues;
                 if(verb.equals("CREATE"))writeValues=prepared(binding,context,values);
                 else {

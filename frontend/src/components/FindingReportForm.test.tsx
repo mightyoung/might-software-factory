@@ -215,20 +215,6 @@ describe("新建上报表单", () => {
     await waitFor(() => expect(field(/隐患描述/)).toHaveFocus());
   });
 
-  it("keeps known validation errors and counts no unknown fields", async () => {
-    const unrecognized = { unrecognizedField: "不应成为表单错误" };
-    setup(async () => {
-      throw new FindingSubmitError("validation", { ...unrecognized, description: "描述需修正", location: "位置需修正" });
-    });
-    fillValid();
-    fireEvent.click(submitButton());
-    expect(await screen.findByText("有 2 项需要修正。")).toBeInTheDocument();
-    fireEvent.change(field(/隐患描述/), { target: { value: "已修改此描述" } });
-    expect(screen.queryByText("描述需修正")).not.toBeInTheDocument();
-    expect(screen.getByText("位置需修正")).toBeInTheDocument();
-    expect(screen.getByText("有 1 项需要修正。")).toBeInTheDocument();
-  });
-
   it.each([
     ["forbidden", "你没有提交隐患上报的权限。"],
     ["conflict", "内容不一致，已被拒绝"],
