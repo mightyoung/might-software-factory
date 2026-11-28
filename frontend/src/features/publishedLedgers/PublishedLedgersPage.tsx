@@ -21,6 +21,7 @@ type Editor = {
   definition: LedgerConfiguration;
   values: Values;
   organizationId: string;
+  initial: { values: Values; organizationId: string };
   editing: boolean;
 };
 const display = (value: unknown) =>
@@ -63,10 +64,10 @@ export function PublishedLedgersPage({
   const sending = useRef(false);
   const [uncertain, setUncertain] = useState(false);
   const locked = busy || uncertain;
-  const original = editor?.detail?.record.values;
-  const dirty =
-    !!editor?.editing &&
-    JSON.stringify(editor.values) !== JSON.stringify(original ?? {});
+  const dirty = !!editor?.editing && (
+    editor.organizationId !== editor.initial.organizationId ||
+    JSON.stringify(editor.values) !== JSON.stringify(editor.initial.values)
+  );
   useUnsavedGuard(
     dirty || sending.current || uncertain,
     "当前编辑或操作尚未确认，可在当前标签页返回核对。确定离开吗？",
@@ -102,7 +103,12 @@ export function PublishedLedgersPage({
         );
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) failed(cause);
+        if (!controller.signal.aborted) {
+          // The directory owns visibility; do not leave the old result on a refused refresh.
+          setLedgers([]);
+          setLedger(null);
+          failed(cause);
+        }
       })
       .finally(() => {
         if (mine === generation.current) setLoading(false);
@@ -140,7 +146,7 @@ export function PublishedLedgersPage({
     return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
   }
   function select(next: PublishedLedger) {
-    if (busy || !mayDiscard()) return;
+    if (!mayDiscard()) return;
     setLedger(next);
     setFilters({});
     setEditor(null);
@@ -154,10 +160,8 @@ export function PublishedLedgersPage({
     });
   }
   function create() {
-    if (!ledger || busy || !mayDiscard()) return;
-    setEditor({
-      detail: null,
-      definition: ledger.definition,
+    if (!ledger || !mayDiscard()) return;
+    const initial = {
       values: Object.fromEntries(
         ledger.definition.fields
           .filter((field) => field.type === "boolean")
@@ -165,13 +169,13 @@ export function PublishedLedgersPage({
       ),
       organizationId:
         ledger.organizations.length === 1 ? ledger.organizations[0]!.id : "",
-      editing: true,
-    });
+    };
+    setEditor({ detail: null, definition: ledger.definition, ...initial, initial, editing: true });
     setNotice("");
     setError("");
   }
   async function open(id: string) {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger || !mayDiscard()) return;
     const mine = generation.current;
     setBusy(true);
     setError("");
@@ -184,6 +188,7 @@ export function PublishedLedgersPage({
           definition: detail.definition,
           values: detail.record.values,
           organizationId: detail.record.organizationId,
+          initial: detail.record,
           editing: false,
         });
       }
@@ -497,7 +502,7 @@ export function PublishedLedgersPage({
                         所属组织
                         <select
                           required
-                          disabled={!!editor.detail || !editing || locked}
+                          disabled={!!editor.detail}
                           value={editor.organizationId}
                           onChange={(event) =>
                             setEditor(
