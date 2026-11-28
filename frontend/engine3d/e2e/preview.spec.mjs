@@ -390,3 +390,28 @@ test("a viewport change or same-device rebuild cancels an active resize drag", a
     await expect(size).toHaveText(`长 ${change === "model" ? 8 : 4} · 宽 1 · 高 0.9 米。`);
   }
 });
+
+test("session asset bank registers a valid GLB without upload and deduplicates content", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("status").filter({ hasText: "三维视口已就绪" })).toBeVisible();
+  const network = [];
+  page.on("request", (request) => network.push(request.url()));
+  const picker = page.getByLabel("选择 GLB 文件");
+  const selectFile = (name) => picker.setInputFiles({ name, mimeType: "model/gltf-binary", buffer: Buffer.from(syntheticGlb()) });
+  const bank = page.getByRole("region", { name: "会话模型库" });
+  const register = page.getByRole("button", { name: "加入会话模型库" });
+  await selectFile("asset-a.glb");
+  await register.click();
+  await expect(bank.getByRole("status")).toContainText("模型库共 1 个");
+  await selectFile("renamed.glb");
+  await register.click();
+  await expect(bank.getByRole("status")).toContainText("文件内容相同，沿用 asset-a.glb");
+  await expect(bank.getByRole("button", { name: "预览 renamed.glb" })).toHaveCount(0);
+  await page.getByRole("button", { name: "返回合成场景" }).click();
+  await bank.getByRole("button", { name: "预览 asset-a.glb" }).click();
+  await expect(page.getByText("asset-a.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+  await bank.getByRole("button", { name: "移除 asset-a.glb" }).click();
+  await expect(bank.getByRole("status")).toContainText("已从会话模型库移除");
+  await expect(bank.getByRole("button")).toHaveCount(0);
+  expect(network).toEqual([]);
+});
