@@ -3,6 +3,7 @@ import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useQuery } from "@tanstack/react-query";
 import { tableFeatures, useTable } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { unknownOutcome } from "../toolLoans/model";
 import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
@@ -101,6 +102,7 @@ export function PublishedLedgersPage(props: PageProps) {
 function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: PageProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ ledger: PublishedLedger; detail: RecordDetail } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Query>({
     page: 1,
@@ -114,6 +116,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const [filterError, setFilterError] = useState("");
   const [notice, setNotice] = useState("");
   const recordForm = useRef<HTMLFormElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const restoreDeleteFocus = useRef(false);
   const generation = useRef(0);
   const command = useRef<(() => Promise<unknown>) | null>(null);
   const sending = useRef(false);
@@ -153,6 +157,16 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   }, reads);
   const ledgers = directory.isSuccess ? directory.data : [];
   const ledger = ledgers.find(item => item.key === selectedKey) ?? null;
+  const detail = editor?.detail;
+  const mayDelete = active && !locked && ledger?.capabilities.delete && detail?.capabilities.delete;
+  const deleteConfirmation = mayDelete && pendingDelete?.ledger === ledger && pendingDelete.detail === detail
+    ? pendingDelete : null;
+  useEffect(() => { setPendingDelete(null); }, [active, ledger, detail, mayDelete]);
+  useEffect(() => {
+    if (!restoreDeleteFocus.current) return;
+    restoreDeleteFocus.current = false;
+    if (active) heading.current?.focus();
+  }, [active, deleteConfirmation]);
   const records = useQuery({
     queryKey: ["published-records", ledger?.key, ledger?.definitionVersion, attempt, recordAttempt, query],
     enabled: !!ledger?.capabilities.read,
@@ -273,21 +287,32 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
     setEditor(null);
     setError("");
   }
-  function mutate(action: "save" | "delete") {
-    if (!ledger || !editor || locked || sending.current) return;
-    if (action === "delete" && !window.confirm("删除这条草稿记录吗？")) return;
+  function save() {
+    if (!ledger || !editor || locked || sending.current || deleteConfirmation) return;
     const key = ledger.key;
     const record = editor.detail?.record;
     const requestId = crypto.randomUUID();
     const values = editor.values;
     const organizationId = editor.organizationId;
     const definitionVersion = ledger.definitionVersion;
-    command.current = () => action === "delete"
-      ? adapter.remove(key, record!.id, { requestId, expectedVersion: record!.version })
-      : record
-        ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
-        : adapter.create(key, { requestId, definitionVersion, organizationId, values });
-    void send(action === "delete" ? "草稿已删除。" : "记录已保存。");
+    command.current = () => record
+      ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
+      : adapter.create(key, { requestId, definitionVersion, organizationId, values });
+    void send("记录已保存。");
+  }
+  function requestDelete() {
+    if (mayDelete && ledger && detail && !sending.current && !command.current) {
+      setPendingDelete({ ledger, detail });
+    }
+  }
+  function confirmDelete() {
+    setPendingDelete(null);
+    if (!deleteConfirmation || sending.current || command.current) return;
+    const { ledger: { key }, detail: { record: { id, version } } } = deleteConfirmation;
+    const request = { requestId: crypto.randomUUID(), expectedVersion: version };
+    restoreDeleteFocus.current = true;
+    command.current = () => adapter.remove(key, id, request);
+    void send("草稿已删除。");
   }
   async function send(success: string) {
     const operation = command.current;
@@ -322,8 +347,16 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
   const editing = !!editor?.editing;
   return (
     <section className="published-ledgers">
+      {deleteConfirmation && <WorkbenchConfirmDialog
+        title="删除这条草稿记录？"
+        description="删除后，这条草稿将从台账中移除。"
+        cancelLabel="取消"
+        confirmLabel="确认删除"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+      />}
       <div className="page-heading">
-        <h1>业务台账</h1>
+        <h1 ref={heading} tabIndex={-1}>业务台账</h1>
         <Button
           label="刷新台账"
           variant="secondary"
@@ -504,7 +537,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                     ref={recordForm}
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void mutate("save");
+                      save();
                     }}
                   >
                     <fieldset disabled={locked || !editing}>
@@ -608,7 +641,7 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                           isDisabled={locked || !editor.organizationId}
                           onClick={() => {
                             if (recordForm.current?.reportValidity())
-                              void mutate("save");
+                              save();
                           }}
                         />
                       )}
@@ -631,8 +664,8 @@ function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: 
                         <Button
                           label="删除草稿"
                           variant="secondary"
-                          isDisabled={locked}
-                          onClick={() => void mutate("delete")}
+                          isDisabled={!mayDelete}
+                          onClick={requestDelete}
                         />
                       )}
                     </div>
