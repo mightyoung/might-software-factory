@@ -196,7 +196,7 @@ export function startLocalDocumentSession<Snapshot>(session: LocalDocumentSessio
     if (event.origin !== location.origin || event.source !== parent || event.data?.channel !== channel) return;
     if (event.data.type === "close-check") {
       if (nameInput.value.trim() !== unit.getName()) rename();
-      update();post("close-state", { dirty });
+      update();post("close-state", { dirty, requestId: event.data.requestId });
     }
     if (event.data.type === "theme" && (event.data.theme === "dark" || event.data.theme === "light")) {
       document.documentElement.dataset.theme = event.data.theme;
