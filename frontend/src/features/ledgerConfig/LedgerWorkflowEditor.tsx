@@ -1,3 +1,4 @@
+import { randomUuid } from "../../domain/randomUuid";
 import { Button } from "@astryxdesign/core/Button";
 import { useRef, useState, type PointerEvent } from "react";
 import type { LedgerConfiguration } from "./model";
@@ -23,7 +24,7 @@ export function LedgerWorkflowEditor({
 }: {
   workflow: Workflow;
   disabled: boolean;
-  onChange: (workflow: Workflow) => void;
+  onChange?: (workflow: Workflow) => void;
 }) {
   const [selectedId, setSelectedId] = useState("start");
   const [preview, setPreview] = useState<{
@@ -34,6 +35,7 @@ export function LedgerWorkflowEditor({
   const canvas = useRef<HTMLDivElement>(null);
   const drag = useRef<{
     id: string;
+    pointerId: number;
     x: number;
     y: number;
   } | null>(null);
@@ -64,10 +66,11 @@ export function LedgerWorkflowEditor({
   }
   function update(patch: Partial<Node>, id = selected?.id) {
     if (disabled || !id) return;
-    onChange({ ...workflow, nodes: patchNode(patch, id) });
+    onChange?.({ ...workflow, nodes: patchNode(patch, id) });
   }
   function route(nodes: Node[]) {
-    onChange({
+    onChange?.({
+      ...workflow,
       nodes,
       edges: nodes
         .slice(1)
@@ -81,7 +84,7 @@ export function LedgerWorkflowEditor({
     const before = nodes[position - 1];
     const after = nodes[position];
     const node: Node = {
-      id: "step_" + crypto.randomUUID().replaceAll("-", ""),
+      id: "step_" + randomUuid().replaceAll("-", ""),
       kind: "step",
       label: "办理",
       x: Math.round((before.x + after.x) / 2),
@@ -110,13 +113,14 @@ export function LedgerWorkflowEditor({
   }
   function dragNode(event: PointerEvent<HTMLButtonElement>, commit = false) {
     const current = drag.current;
+    if (!current || current.pointerId !== event.pointerId) return;
     const rect = canvas.current?.getBoundingClientRect();
     const node = workflow.nodes.find((node) => node.id === current?.id);
     if (commit) {
       drag.current = null;
       setPreview(null);
     }
-    if (disabled || !current || !node || !rect?.width || !rect.height) return;
+    if (disabled || !node || !rect?.width || !rect.height) return;
     const dx = event.clientX - current.x;
     const dy = event.clientY - current.y;
     const point = {
@@ -128,6 +132,12 @@ export function LedgerWorkflowEditor({
     } else {
       setPreview({ id: node.id, ...point });
     }
+  }
+
+  function cancelDrag(event?: PointerEvent<HTMLButtonElement>) {
+    if (event && drag.current?.pointerId !== event.pointerId) return;
+    drag.current = null;
+    setPreview(null);
   }
 
   return (
@@ -180,19 +190,18 @@ export function LedgerWorkflowEditor({
             }}
             onPointerDown={(event) => {
               setSelectedId(node.id);
-              if (disabled || event.button !== 0) return;
+              if (disabled || event.button !== 0 || drag.current) return;
               drag.current = {
                 id: node.id,
+                pointerId: event.pointerId,
                 x: event.clientX,
                 y: event.clientY,
               };
               event.currentTarget.setPointerCapture?.(event.pointerId);
             }}
             onPointerMove={dragNode}
-            onPointerCancel={() => {
-              drag.current = null;
-              setPreview(null);
-            }}
+            onPointerCancel={cancelDrag}
+            onLostPointerCapture={cancelDrag}
             onPointerUp={(event) => dragNode(event, true)}
           >
             {node.label || "未命名"}
@@ -254,7 +263,8 @@ export function LedgerWorkflowEditor({
           isDisabled={disabled}
           onClick={() => {
             if (!disabled) {
-              onChange(defaultWorkflow());
+              cancelDrag();
+              onChange?.(defaultWorkflow());
               setSelectedId("start");
             }
           }}

@@ -5,6 +5,10 @@ import { expect, test } from "@playwright/test";
 test("台账配置保存、比较、恢复、独立复制与显式发布支持 Astryx 键盘操作", async ({
   page,
 }) => {
+  // Match plain LAN HTTP, where crypto.getRandomValues works but randomUUID is unavailable.
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+  });
   const editorRequests: string[] = [];
   const permissionReads: string[] = [];
   const configurationReads: string[] = [];
@@ -70,7 +74,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     fields: { key: string; label: string; type: string; required: boolean }[];
     listFields: string[];
     queryFields: string[];
-    workflow?: { nodes: { id: string; kind: string; label: string; x: number; y: number }[]; edges: { from: string; to: string }[] };
+    workflow?: NonNullable<import("../src/features/ledgerConfig/model").LedgerConfiguration["workflow"]>;
   };
   type Snapshot = {
     key: string;
@@ -81,16 +85,10 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     savedAt: string;
     savedBy: string;
   };
-  const legacy: Snapshot = {
-    key: "legacy_ledger", version: 1,
-    definition: { name: "历史台账", fields: [], listFields: [], queryFields: [] },
-    publishedVersion: null, sourceVersion: null,
-    savedAt: "2026-11-19T00:00:00Z", savedBy: "配置员",
-  };
   const versions: Snapshot[] = [];
   let loseNextSaveResponse = false;
   const receipts = new Map<string, { body: unknown; snapshot: Snapshot }>();
-  const histories = new Map<string, Snapshot[]>([["purchase", versions], ["legacy_ledger", [legacy]]]);
+  const histories = new Map<string, Snapshot[]>([["purchase", versions]]);
   const saveAttempts: { key: string; expectedVersion: number }[] = [];
   await page.route("**/api/v1/admin/ledger-configurations**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -122,6 +120,7 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       });
       return;
     }
+    expect(body.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const existing = receipts.get(body.requestId);
     if (existing) {
       expect(body).toEqual(existing.body);
@@ -168,22 +167,13 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await page.goto(settingsPath + "/permissions");
   await expect(page.getByText("暂无角色。")).toBeVisible();
   expect(editorRequests.length).toBeGreaterThan(0);
-  expect(new Set(permissionReads)).toEqual(new Set(["/api/v1/admin/roles", "/api/v1/admin/permissions"]));
-  if (process.env.E2E_PREVIEW) expect(permissionReads).toHaveLength(2);
-  const permissionReadsOnExit = permissionReads.length;
+  expect(permissionReads).toHaveLength(2);
   expect(configurationReads).toEqual([]);
 
   await page.goto(settingsPath + "/ledger-configurations");
-  await expect(page.getByLabel("台账标识")).toBeVisible();
-  expect(new Set(configurationReads)).toEqual(new Set(["/api/v1/admin/ledger-configurations"]));
-  if (process.env.E2E_PREVIEW) expect(configurationReads).toHaveLength(1);
-  expect(permissionReads).toHaveLength(permissionReadsOnExit);
-  await page.getByRole("navigation", { name: "已配置台账" })
-    .getByRole("button").filter({ hasText: "历史台账" }).click();
-  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
-  expect(legacy.definition.workflow).toBeUndefined();
-  await page.getByRole("button", { name: "新建台账", exact: true }).click();
   await page.getByLabel("台账标识").fill("purchase");
+  expect(configurationReads).toEqual(["/api/v1/admin/ledger-configurations"]);
+  expect(permissionReads).toHaveLength(2);
   await page.getByLabel("台账名称").fill("采购申请");
   await page.getByRole("button", { name: "添加字段" }).click();
   await page.getByLabel("字段标识").fill("quantity");
@@ -197,54 +187,55 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 1" }),
   ).toBeVisible();
-  expect(versions[0].definition.workflow?.nodes.map(node => node.kind)).toEqual(["start", "end"]);
-  expect(versions[0].definition.workflow?.edges).toEqual([{ from: "start", to: "end" }]);
-  await page.getByLabel("台账名称").fill("采购申请新版");
-  await page.getByRole("button", { name: "插入办理节点" }).click();
-  await page.getByLabel("节点名称").fill("主管确认");
-  const node = page.getByRole("button", { name: "流程节点 主管确认", exact: true });
-  const originalX = await page.getByLabel("节点横坐标").inputValue();
-  const originalY = await page.getByLabel("节点纵坐标").inputValue();
-  await node.scrollIntoViewIfNeeded();
-  const beforeDrag = await node.boundingBox();
-  expect(beforeDrag).not.toBeNull();
-  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 35, { steps: 5 });
-  await page.mouse.up();
-  await expect(page.getByLabel("节点横坐标")).not.toHaveValue(originalX);
-  await expect(page.getByLabel("节点纵坐标")).not.toHaveValue(originalY);
-  const savedX = Number(await page.getByLabel("节点横坐标").inputValue());
-  const savedY = Number(await page.getByLabel("节点纵坐标").inputValue());
-  await node.focus();
+  expect(versions[0].definition.workflow).toBeUndefined();
+  const canvas = page.getByRole("region", { name: "流程设计", exact: true }).first();
+  await canvas.getByRole("button", { name: "插入办理节点" }).focus();
+  await page.keyboard.press("Enter");
+  await canvas.getByLabel("节点名称").fill("审批");
+  await canvas.getByRole("button", { name: "流程节点 审批" }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
-  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 主管确认 → 完成");
+  await expect(canvas.getByLabel("节点横坐标")).toHaveValue("525");
+  const node = canvas.getByRole("button", { name: "流程节点 审批" });
+  await node.scrollIntoViewIfNeeded();
+  const position = (await node.boundingBox())!;
+  await page.mouse.move(position.x + position.width / 2, position.y + position.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(position.x + position.width / 2, position.y + position.height / 2 + 24, { steps: 3 });
+  await expect(canvas.getByLabel("节点纵坐标")).toHaveValue("500");
+  await page.mouse.up();
+  const dragY = Number(await canvas.getByLabel("节点纵坐标").inputValue());
+  expect(dragY).toBeGreaterThan(500);
+  expect(saveAttempts).toHaveLength(1);
+  await page.getByLabel("台账名称").fill("采购申请新版");
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "已保存草稿版本 2" }),
   ).toBeVisible();
-  const editedFlow = versions[0].definition.workflow!;
-  expect(editedFlow.nodes.find(node => node.kind === "step")).toMatchObject({ label: "主管确认", x: savedX + 25, y: savedY });
-  expect(editedFlow.edges).toHaveLength(2);
-  await page.reload();
-  await page.getByRole("navigation", { name: "已配置台账" })
-    .getByRole("button").filter({ hasText: "采购申请新版" }).click();
-  await page.getByRole("button", { name: "流程节点 主管确认", exact: true }).click();
-  await expect(page.getByLabel("节点横坐标")).toHaveValue(String(savedX + 25));
-  await expect(page.getByLabel("节点纵坐标")).toHaveValue(String(savedY));
+  const workflow = versions[0].definition.workflow!;
+  const approval = workflow.nodes.find(({ label }) => label === "审批")!;
+  expect(approval.id).toMatch(/^step_[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/);
+  expect(approval).toMatchObject({ kind: "step", x: 525, y: dragY });
+  expect(workflow.edges).toEqual([{ from: "start", to: approval.id }, { from: approval.id, to: "end" }]);
   await page.getByRole("button", { name: "比较版本 1", exact: true }).click();
   await expect(page.getByRole("region", { name: "版本比较" })).toContainText(
     "配置内容不同",
   );
+  const comparison = page.getByRole("region", { name: "版本比较" });
+  await expect(comparison.getByText("此版本未保存流程。", { exact: true })).toBeVisible();
+  await comparison.getByText("查看流程图", { exact: true }).click();
+  const readOnly = comparison.getByRole("region", { name: "流程设计" });
+  await readOnly.getByRole("button", { name: "流程节点 审批" }).click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(readOnly.getByLabel("节点横坐标")).toBeDisabled();
+  await expect(readOnly.getByLabel("节点横坐标")).toHaveValue("525");
+  expect(saveAttempts).toHaveLength(2);
   await page.getByRole("button", { name: "恢复版本 1为新草稿" }).click();
   await expect(
     page.getByRole("status").filter({ hasText: "新草稿 3" }),
   ).toBeVisible();
   expect(versions[0].publishedVersion).toBeNull();
-  expect(versions[0].definition.workflow).toEqual(versions.find(version => version.version === 1)!.definition.workflow);
-  await expect(page.getByLabel("办理路径")).toHaveText("登记 → 完成");
-  await expect(page.getByRole("button", { name: "流程节点 主管确认", exact: true })).toHaveCount(0);
+  expect(versions[0].definition.workflow).toBeUndefined();
+  await expect(canvas.getByLabel("节点名称")).toHaveValue("登记");
   await expect(page.getByLabel("台账名称")).toHaveValue("采购申请");
   await page.getByRole("button", { name: "发布当前版本" }).focus();
   await page.keyboard.press("Enter");
@@ -252,17 +243,47 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     page.getByRole("status").filter({ hasText: "已发布版本 3" }),
   ).toBeVisible();
   await page.getByLabel("台账名称").fill("回退后继续编辑");
-  const stay = page.waitForEvent("dialog");
-  await Promise.all([
-    stay.then((dialog) => dialog.dismiss()),
-    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
-  ]);
+  const nativeLeaveDialogs: string[] = [];
+  const nativeLeave = async (dialog: import("@playwright/test").Dialog) => {
+    nativeLeaveDialogs.push(dialog.type());
+    await dialog.dismiss();
+  };
+  page.on("dialog", nativeLeave);
+  const leave = page.getByRole("alertdialog", { name: "离开当前页面？" });
+  const stay = leave.getByRole("button", { name: "继续编辑" });
+  const confirmLeave = leave.getByRole("button", { name: "确认离开" });
+  const home = page.getByRole("link", { name: "MIGHT 工作台首页" });
+  await home.focus();
+  await page.keyboard.press("Enter");
+  await expect(stay).toBeFocused();
+  await expect(leave).toContainText("配置尚未保存");
+  await page.keyboard.press("Escape");
+  await expect(leave).toHaveCount(0);
+  await expect(home).toBeFocused();
   await expect(page.getByLabel("台账名称")).toHaveValue("回退后继续编辑");
-  const leave = page.waitForEvent("dialog");
-  await Promise.all([
-    leave.then((dialog) => dialog.accept()),
-    page.getByRole("link", { name: "MIGHT 工作台首页" }).click(),
-  ]);
+
+  const quick = page.getByRole("dialog", { name: "快捷导航" });
+  await page.keyboard.press("Control+k");
+  const quickTarget = quick.getByRole("link", { name: "生产安全", exact: true });
+  await quickTarget.focus();
+  await page.keyboard.press("Enter");
+  await expect(stay).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(confirmLeave).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(stay).toBeFocused();
+  const { violations } = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(violations.map(({ id }) => id)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(leave).toHaveCount(0);
+  await expect(quick).toBeVisible();
+  await expect(quickTarget).toBeFocused();
+  await page.keyboard.press("Enter");
+  await confirmLeave.click();
+  await expect(quick).toHaveCount(0);
+  expect(nativeLeaveDialogs).toEqual([]);
+  page.off("dialog", nativeLeave);
   await expect(page.locator(".ledger-row").first()).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("heading", { name: "台账配置" })).toBeVisible();
@@ -312,7 +333,6 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       queryFields: ["quantity"],
     },
   });
-  expect(histories.get("purchase_copy")![0].definition.workflow).toEqual(sourceBeforeCopy.find(version => version.version === 1)!.definition.workflow);
   expect(versions).toEqual(sourceBeforeCopy);
   await page.getByRole("navigation", { name: "已配置台账" })
     .getByRole("button", { name: "回退后继续编辑 最新 4 · 已发布 3" }).click();
@@ -350,8 +370,44 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
     ).toBe(true);
   }
   await test.step("独立调整列表与查询顺序，预览只读，保存后重新载入", async () => {
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "新建台账", exact: true }).click();
+    const nativeDialogs: string[] = [];
+    const nativeDialog = async (dialog: import("@playwright/test").Dialog) => {
+      nativeDialogs.push(dialog.type());
+      await dialog.dismiss();
+    };
+    page.on("dialog", nativeDialog);
+    const create = page.getByRole("button", { name: "新建台账", exact: true });
+    const confirmation = page.getByRole("alertdialog", { name: "放弃未保存的修改？" });
+    const keepEditing = confirmation.getByRole("button", { name: "继续编辑" });
+    const discard = confirmation.getByRole("button", { name: "放弃并切换" });
+    const savesBeforeSwitch = saveAttempts.length;
+    for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await create.focus();
+      await page.keyboard.press("Enter");
+      await expect(keepEditing).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(discard).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(keepEditing).toBeFocused();
+      const { violations } = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      expect(violations.map(({ id }) => id)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(confirmation).toBeHidden();
+      await expect(create).toBeFocused();
+      await expect(page.getByLabel("台账名称")).toHaveValue("采购申请副本");
+    }
+    await create.click();
+    await discard.click();
+    await expect(confirmation).toBeHidden();
+    await expect(page.getByLabel("台账名称")).toHaveValue("");
+    expect(nativeDialogs).toEqual([]);
+    expect(saveAttempts).toHaveLength(savesBeforeSwitch);
+    page.off("dialog", nativeDialog);
     await page.getByLabel("台账标识").fill("ordered_purchase");
     await page.getByLabel("台账名称").fill("排序采购验收");
     for (const [key, label, type] of [
@@ -399,6 +455,20 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       await expect(query.getByLabel("已确认（查询预览）")).toBeDisabled();
     };
     await assertPreview();
+    // Coincident positions remain reachable using the node selector; the selected
+    // button is raised on the canvas so pointer users can immediately reposition it.
+    const picker = canvas.getByLabel("选中流程节点");
+    const x = canvas.getByLabel("节点横坐标");
+    await picker.selectOption("end");
+    await x.fill("180");
+    await canvas.getByRole("button", { name: "插入办理节点" }).click();
+    await expect(x).toHaveValue("180");
+    await canvas.getByRole("button", { name: "流程节点 办理" }).click();
+    await x.fill("500");
+    await picker.selectOption("end");
+    await canvas.getByRole("button", { name: "流程节点 完成" }).click();
+    await x.fill("820");
+    await expect(canvas.getByLabel("办理路径")).toHaveText("登记 → 办理 → 完成");
     expect(histories.has("ordered_purchase")).toBe(false);
     await page.getByRole("button", { name: "保存草稿" }).click();
     await expect(page.getByRole("status").filter({ hasText: "已保存草稿版本 1" })).toBeVisible();
@@ -409,12 +479,19 @@ test("台账配置保存、比较、恢复、独立复制与显式发布支持 A
       .getByRole("button").filter({ hasText: "排序采购验收" }).click();
     await assertPreview();
     expect(histories.get("ordered_purchase")![0].publishedVersion).toBeNull();
+    const savedPath = structuredClone(histories.get("ordered_purchase")![0].definition.workflow);
+    expect(savedPath?.nodes.map(({ x }) => x)).toEqual([180, 500, 820]);
+    expect(savedPath?.edges).toHaveLength(2);
     await page.getByRole("button", { name: "发布当前版本" }).click();
     await expect(page.getByRole("status").filter({ hasText: "已发布版本 1" })).toBeVisible();
     await page.reload();
     await page.getByRole("navigation", { name: "已配置台账" })
       .getByRole("button").filter({ hasText: "排序采购验收" }).click();
     await assertPreview();
+    await expect(canvas.getByLabel("办理路径")).toHaveText("登记 → 办理 → 完成");
+    await canvas.getByRole("button", { name: "流程节点 办理" }).click();
+    await expect(canvas.getByLabel("节点横坐标")).toHaveValue("500");
+    expect(histories.get("ordered_purchase")![0].definition.workflow).toEqual(savedPath);
     expect(histories.get("ordered_purchase")![0]).toMatchObject({
       publishedVersion: 1,
       definition: {

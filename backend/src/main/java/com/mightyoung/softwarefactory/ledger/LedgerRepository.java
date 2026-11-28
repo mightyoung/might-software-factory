@@ -195,6 +195,18 @@ final class LedgerRepository {
                 result.commandId(),result.id(),result.version(),hash,result.definitionVersion(),json.writeValueAsString(result),result.occurredAt().atOffset(ZoneOffset.UTC));
         execution.requireCurrent();if(changed!=1)throw new LedgerException(503,"DEPENDENCY_UNAVAILABLE");
     }
+    boolean matchesReceiptFingerprint(LedgerBinding binding,String action,UUID id,String definitionVersion,Long version,
+                                      Map<String,Object> values,String receiptHash) {
+        if(receiptHash.equals(fingerprint(action,id,definitionVersion,version,values)))return true;
+        // The tool V1 EDIT contract gained an optional scope without changing its version.
+        // An omitted/null scope still preserves the current binding; only that old shape can replay.
+        if(!"UPDATE".equals(action) || !"1".equals(definitionVersion)
+                || !"tooling".equals(binding.definition().appKey()) || !"tool".equals(binding.definition().entityKey())
+                || !values.containsKey("custodyScopeId") || values.get("custodyScopeId")!=null)return false;
+        var legacyValues=new LinkedHashMap<>(values);
+        legacyValues.remove("custodyScopeId");
+        return receiptHash.equals(fingerprint(action,id,definitionVersion,version,legacyValues));
+    }
     String fingerprint(String action,UUID recordId,String definitionVersion,Long version,Map<String,Object> values) {
         Map<String,Object> payload=new java.util.TreeMap<>();payload.put("action",action);payload.put("id",recordId);payload.put("definitionVersion",definitionVersion);
         payload.put("expectedVersion",version);payload.put("values",new java.util.TreeMap<>(values));

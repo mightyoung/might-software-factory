@@ -38,6 +38,7 @@
   touch-action: none;
 }
 .workflow-node[aria-pressed="true"] {
+  z-index: 1;
   border-color: var(--petrol);
 }
 .workflow-node:focus-visible {

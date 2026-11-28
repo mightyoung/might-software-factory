@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import type { ComponentProps } from "react";
 import { mockFindingLedger } from "../../adapters/findingLedger";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -107,61 +109,54 @@ function FindingsLedgerBody({
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [loading, setLoading] = useState(true);
-  const [listError, setListError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
   const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
-  const detailController = useRef<AbortController | null>(null);
+  const cancelDetail = useRef<(() => void) | null>(null);
   const showReport = canReport && submitAdapter !== undefined && view === "all";
 
+  const [client] = useState(createWorkspaceQueryClient);
+  const list = useQuery({
+    queryKey: ["finding-list", appMode, path, view, appliedQuery, pageIndex, pageSize, refreshKey],
+    enabled: !standalone,
+    queryFn: ({ signal }) => adapter.list(
+      { query: appliedQuery, page: { index: pageIndex, size: pageSize }, view },
+      { signal },
+    ),
+  }, client);
+  const loading = !standalone && (list.isFetching || list.isPending);
+  const listError = !standalone && list.error ? classifyFindingLedgerReadFailure(list.error) : null;
+  const blockDetail = listError === "unauthenticated" || listError === "forbidden" || (published && listError !== null);
   useEffect(() => {
-    if (standalone) { setLoading(false); return; }
-    let current = true;
-    const controller = new AbortController();
-    setLoading(true);
-    setListError(null);
-    void (async () => {
-      try {
-        const result = await adapter.list(
-          { query: appliedQuery, page: { index: pageIndex, size: pageSize }, view },
-          { signal: controller.signal },
-        );
-        if (!current || controller.signal.aborted) return;
-        setDefinition(result.definition ?? null);
-        setPage(result);
-        setPageIndex(result.page.index);
-      } catch (error) {
-        if (!current || controller.signal.aborted) return;
-        const kind = classifyFindingLedgerReadFailure(error);
-        setListError(kind);
-        if (published) { setDefinition(null); setPage(firstPage); setDetailSnapshot({ record: null, definition: null }); setDetailError(kind); }
-        if (kind === "unauthenticated" || kind === "forbidden") {
-          detailController.current?.abort();
-          setDetailSnapshot({ record: null, definition: null });
-          setDetailError(kind);
-          setDetailLoading(false);
-          setSelectedIds(new Set());
-          setPage(firstPage);
-          navigate(path, true);
-        }
-        if (kind === "unauthenticated") onUnauthenticated?.();
-      } finally {
-        if (!current || controller.signal.aborted) return;
-        setLoading(false);
-      }
-    })();
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view, path, standalone]);
+    if (standalone || !list.data) return;
+    setDefinition(list.data.definition ?? null);
+    setPage(list.data);
+    setPageIndex(list.data.page.index);
+  }, [list.data, standalone]);
+  useEffect(() => {
+    if (!listError) return;
+    if (published) { setDefinition(null); setPage(firstPage); }
+    if (blockDetail) {
+      cancelDetail.current?.();
+      setDetailSnapshot({ record: null, definition: null });
+      setDetailError(listError);
+      setDetailLoading(false);
+    }
+    if (listError === "unauthenticated" || listError === "forbidden") {
+      setSelectedIds(new Set());
+      setPage(firstPage);
+      navigate(path, true);
+    }
+    if (listError === "unauthenticated") onUnauthenticated?.();
+  }, [list.error, listError, path, blockDetail, published, onUnauthenticated]);
 
+  const publishedDetailBlocked = published && blockDetail;
   useEffect(() => {
     let current = true;
+    if (publishedDetailBlocked) return;
     if (!selectedFindingId) {
       setDetailSnapshot({ record: null, definition: null });
       setDetailError(null);
@@ -170,36 +165,43 @@ function FindingsLedgerBody({
         current = false;
       };
     }
-    const controller = new AbortController();
-    detailController.current = controller;
+    const queryKey = ["finding-detail", appMode, selectedFindingId, detailRefreshKey];
+    const cancel = () => {
+      current = false;
+      void client.cancelQueries({ queryKey, exact: true });
+    };
+    cancelDetail.current = cancel;
     // 刷新同一条记录时保留旧内容直到新内容到达（流程命令成功后的提示不会被卸载）；换记录才清空。
     setDetailSnapshot((previous) => previous.record?.id === selectedFindingId ? previous : { record: null, definition: null });
     setDetailError(null);
     setDetailLoading(true);
     void (async () => {
       try {
-        const snapshot = adapter.getDetailSnapshot
-          ? await adapter.getDetailSnapshot(selectedFindingId, { signal: controller.signal })
-          : { record: await adapter.get(selectedFindingId, { signal: controller.signal }), definition: null };
+        const snapshot = await client.fetchQuery({
+          queryKey,
+          queryFn: async ({ signal }) => adapter.getDetailSnapshot
+            ? adapter.getDetailSnapshot(selectedFindingId, { signal })
+            : { record: await adapter.get(selectedFindingId, { signal }), definition: null },
+        });
+        if (!current) return;
         if (published && adapter.getDetailSnapshot && snapshot.record && !snapshot.definition) throw new Error("Missing published detail definition");
-        if (!current || controller.signal.aborted) return;
         setDetailSnapshot(snapshot);
       } catch (error) {
-        if (!current || controller.signal.aborted) return;
+        if (!current) return;
         const kind = classifyFindingLedgerReadFailure(error);
         if (kind !== "unknown") setDetailSnapshot({ record: null, definition: null });
         setDetailError(kind);
         if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
-        if (!current || controller.signal.aborted) return;
+        if (!current) return;
         setDetailLoading(false);
       }
     })();
     return () => {
-      current = false;
-      controller.abort();
+      if (cancelDetail.current === cancel) cancelDetail.current = null;
+      cancel();
     };
-  }, [adapter, detailRefreshKey, selectedFindingId]);
+  }, [adapter, appMode, client, detailRefreshKey, selectedFindingId, publishedDetailBlocked]);
 
   function openReport(related: { id: string; code: string } | null = null) {
     const extra = related ? `&related=${encodeURIComponent(related.id)}&relatedCode=${encodeURIComponent(related.code)}` : "";
@@ -269,7 +271,7 @@ function FindingsLedgerBody({
 
         {demo && presentation && <presentation.Notice view={view} />}
 
-        {schema && (!published || definition) && <LedgerQueryForm
+        {schema && (!published || !listError && definition) && <LedgerQueryForm
           schema={schema}
           values={query}
           onChange={updateQuery}
@@ -354,10 +356,10 @@ function FindingsLedgerBody({
         <FindingDetailsCore
           Fields={presentation?.Fields}
           Actions={presentation?.Actions}
-          definition={detailSnapshot.definition}
-          finding={detail}
-          loading={detailLoading}
-          error={detailError}
+          definition={publishedDetailBlocked ? null : detailSnapshot.definition}
+          finding={publishedDetailBlocked ? null : detail}
+          loading={!publishedDetailBlocked && detailLoading}
+          error={publishedDetailBlocked ? listError : detailError}
           onClose={closeTab}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}

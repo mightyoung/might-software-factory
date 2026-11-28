@@ -1,11 +1,13 @@
+import { randomUuid } from "../../domain/randomUuid";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
-import { ledgerViews, LedgerViewOrder } from "./LedgerViewOrder";
 import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
+import { LedgerViewOrder } from "./LedgerViewOrder";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
   ConfigurationSnapshot,
@@ -21,7 +23,6 @@ const empty = (): LedgerConfiguration => ({
   fields: [],
   listFields: [],
   queryFields: [],
-  workflow: defaultWorkflow(),
 });
 const fieldTypes = {
   text: "文本",
@@ -29,6 +30,11 @@ const fieldTypes = {
   date: "日期",
   boolean: "是/否",
 };
+
+type SwitchDraft =
+  | { kind: "select"; item: ConfigurationSummary }
+  | { kind: "create"; source: ConfigurationSnapshot | null }
+  | { kind: "restore"; version: number };
 
 type Operation = {
   action: "save" | "restore" | "publish";
@@ -38,14 +44,19 @@ type Operation = {
   send: () => Promise<ConfigurationSnapshot>;
 };
 
+const orderedViews = [
+  { property: "listFields", label: "列表字段顺序" },
+  { property: "queryFields", label: "查询字段顺序" },
+] as const;
+
 function ConfigurationOrder({ definition }: { definition: LedgerConfiguration }) {
   return (
     <>
-      {ledgerViews.map(({ property, label }) => (
+      {orderedViews.map(({ property, label }) => (
         <div className="config-order" key={property}>
-          <p>{label}顺序</p>
+          <p>{label}</p>
           {definition[property].length ? (
-            <ol aria-label={label + "顺序"}>
+            <ol aria-label={label}>
               {definition[property].map((key, index) => {
                 const field = definition.fields.find((candidate) => candidate.key === key);
                 return <li key={index}>{field?.label ? `${field.label}（${key}）` : key}</li>;
@@ -99,7 +110,7 @@ function ConfigurationPreview({
       {definition.workflow ? (
         <details>
           <summary>查看流程图</summary>
-          <LedgerWorkflowEditor workflow={definition.workflow} disabled onChange={() => {}} />
+          <LedgerWorkflowEditor workflow={definition.workflow} disabled />
         </details>
       ) : <p>此版本未保存流程。</p>}
     </div>
@@ -122,6 +133,7 @@ export function LedgerConfigPage({
   const [items, setItems] = useState<ConfigurationSummary[]>([]);
   const [key, setKey] = useState("");
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
+  const [workflowEpoch, setWorkflowEpoch] = useState(0);
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
@@ -135,8 +147,11 @@ export function LedgerConfigPage({
   const lifetime = useRef(0);
   const runningOperation = useRef(false);
   const [recovery, setRecovery] = useState<Operation | null>(null);
-  const dirty = Boolean(!snapshot && key) ||
-    JSON.stringify(draft) !== JSON.stringify(snapshot?.definition ?? empty());
+  const [pendingSwitch, setPendingSwitch] = useState<SwitchDraft | null>(null);
+  useEffect(() => { setPendingSwitch(null); }, [adapter, active]);
+  const dirty = snapshot
+    ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
+    : Boolean(key || draft.name || draft.fields.length || draft.workflow);
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
   useUnsavedGuard(
@@ -157,7 +172,7 @@ export function LedgerConfigPage({
         "配置已被其他人更新。你的输入已保留，请重新打开此台账核对最新版本。",
       );
     else if (cause instanceof ApiError && cause.status === 400)
-      setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
+      setError("配置未通过校验，请检查字段标识、名称、列表和查询字段及流程配置。");
     else setError("操作未确认成功，请稍后重试。");
   }
   useEffect(() => {
@@ -186,11 +201,20 @@ export function LedgerConfigPage({
     };
   }, [adapter, loadAttempt]); // The adapter is recreated at the identity boundary.
 
-  function discardAllowed() {
-    if (locked || runningOperation.current) return false;
-    return !dirty || window.confirm("切换会丢弃未保存的配置。确定切换？");
+  function switchDraft(target: SwitchDraft, confirmed = false) {
+    if (!active || locked || runningOperation.current || (target.kind !== "select" && !canManage)) return;
+    if (dirty && !confirmed) {
+      setPendingSwitch((current) => current ?? target);
+    } else if (target.kind === "select") {
+      void select(target.item);
+    } else if (target.kind === "create") {
+      create(target.source);
+    } else {
+      mutate("restore", target.version);
+    }
   }
   function showSnapshot(next: ConfigurationSnapshot) {
+    setWorkflowEpoch((current) => current + 1);
     setSnapshot(next);
     setDraft(next.definition);
     setCompared(null);
@@ -203,7 +227,6 @@ export function LedgerConfigPage({
     ]);
   }
   async function select(item: ConfigurationSummary) {
-    if (!discardAllowed()) return;
     const mine = lifetime.current;
     setBusy(true);
     setError("");
@@ -222,8 +245,8 @@ export function LedgerConfigPage({
       if (mine === lifetime.current) setBusy(false);
     }
   }
-  function create(source: ConfigurationSnapshot | null = null) {
-    if (!discardAllowed()) return;
+  function create(source: ConfigurationSnapshot | null) {
+    setWorkflowEpoch((current) => current + 1);
     setKey("");
     setSnapshot(null);
     setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
@@ -275,7 +298,7 @@ export function LedgerConfigPage({
     const publishedVersion = snapshot?.publishedVersion ?? null;
     // Capture the immutable request at the first explicit action. A retry cannot
     // pick up another ledger, edited draft, new version, or idempotency key.
-    const id = action === "publish" ? null : crypto.randomUUID();
+    const id = action === "publish" ? null : randomUuid();
     void runOperation({
       action, key, version, sourceVersion,
       send: () => action === "save"
@@ -360,6 +383,18 @@ export function LedgerConfigPage({
   }
   return (
     <section className="config-page">
+      {active && pendingSwitch && <WorkbenchConfirmDialog
+        title="放弃未保存的修改？"
+        description={pendingSwitch.kind === "restore"
+          ? "恢复历史版本会替换未保存的修改，并创建新草稿，不会直接发布。"
+          : "切换台账后，当前没有保存的配置修改会丢失。"}
+        confirmLabel={pendingSwitch.kind === "restore" ? "放弃并恢复" : "放弃并切换"}
+        onCancel={() => setPendingSwitch(null)}
+        onConfirm={() => {
+          setPendingSwitch(null);
+          switchDraft(pendingSwitch, true);
+        }}
+      />}
       <div className="page-heading">
         <h1>台账配置</h1>
         {canManage && (
@@ -367,7 +402,7 @@ export function LedgerConfigPage({
             label="新建台账"
             variant="secondary"
             isDisabled={locked}
-            onClick={() => create()}
+            onClick={() => switchDraft({ kind: "create", source: null })}
           />
         )}
       </div>
@@ -395,7 +430,7 @@ export function LedgerConfigPage({
               type="button"
               disabled={locked}
               aria-current={snapshot?.key === item.key ? "true" : undefined}
-              onClick={() => void select(item)}
+              onClick={() => switchDraft({ kind: "select", item })}
             >
               {item.definition.name || item.key}
               <small>
@@ -481,15 +516,18 @@ export function LedgerConfigPage({
                     updateField(index, { required: !field.required })
                   }
                 />
-                {ledgerViews.map(({ property, toggleLabel }) => (
-                  <CheckboxInput
-                    key={property}
-                    label={toggleLabel}
-                    value={draft[property].includes(field.key)}
-                    isDisabled={!canManage || locked || !field.key}
-                    onChange={() => toggleView(property, field.key)}
-                  />
-                ))}
+                <CheckboxInput
+                  label="列表显示"
+                  value={draft.listFields.includes(field.key)}
+                  isDisabled={!canManage || locked || !field.key}
+                  onChange={() => toggleView("listFields", field.key)}
+                />
+                <CheckboxInput
+                  label="允许查询"
+                  value={draft.queryFields.includes(field.key)}
+                  isDisabled={!canManage || locked || !field.key}
+                  onChange={() => toggleView("queryFields", field.key)}
+                />
                 <Button
                   label={`移除字段 ${index + 1}`}
                   variant="secondary"
@@ -535,11 +573,12 @@ export function LedgerConfigPage({
               setDraft((current) => ({ ...current, [property]: keys }))
             }
           />
+          {!draft.workflow && <p>尚未保存流程，画布显示的是默认示意。编辑后才会保存流程。</p>}
           <LedgerWorkflowEditor
-            key={snapshot?.key ?? "new"}
+            key={workflowEpoch}
             workflow={draft.workflow ?? defaultWorkflow()}
-            disabled={!canManage || locked || loading}
-            onChange={(workflow) => setDraft(current => ({ ...current, workflow }))}
+            disabled={!active || !canManage || locked || loading}
+            onChange={(workflow) => setDraft((current) => ({ ...current, workflow }))}
           />
           <LedgerViewPreview definition={draft} />
           {recovery && (
@@ -598,16 +637,13 @@ export function LedgerConfigPage({
                       isDisabled={locked}
                       onClick={() => setCompared(entry)}
                     />
-                    {canManage && <Button label={`复制版本 ${entry.version}为新台账`} variant="secondary" isDisabled={locked} onClick={() => create(entry)} />}
+                    {canManage && <Button label={`复制版本 ${entry.version}为新台账`} variant="secondary" isDisabled={locked} onClick={() => switchDraft({ kind: "create", source: entry })} />}
                     {canManage && (
                       <Button
                         label={`恢复版本 ${entry.version}为新草稿`}
                         variant="secondary"
                         isDisabled={locked}
-                        onClick={() => {
-                          if (discardAllowed())
-                            void mutate("restore", entry.version);
-                        }}
+                        onClick={() => switchDraft({ kind: "restore", version: entry.version })}
                       />
                     )}
                   </li>
@@ -623,9 +659,9 @@ export function LedgerConfigPage({
                   ? "配置内容相同。"
                   : "配置内容不同，可核对下方两份配置。"}
               </p>
-              {ledgerViews.map(({ property, label }) =>
+              {orderedViews.map(({ property, label }) =>
                 JSON.stringify(compared.definition[property]) !== JSON.stringify(draft[property])
-                  ? <p key={property}>{label}顺序已变化。</p> : null,
+                  ? <p key={property}>{label}已变化。</p> : null,
               )}
               <div className="config-comparison">
                 <div>
