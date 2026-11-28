@@ -55,6 +55,17 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Verify bundle graph accounting
+        working-directory: frontend
+        run: node --test tools/measure-bundle-graph.test.mjs
+
+      - name: Verify Astryx upgrade safeguards
+        working-directory: frontend
+        run: |
+          node --test tools/upgrade-astryx.test.mjs
+          npm exec --offline -- astryx theme build src/themes/might/mightTheme.ts --check
+          node tools/generate-astryx-root-tokens.mjs --check
+
       - name: Production build
         working-directory: frontend
         run: npm run build
@@ -62,6 +73,12 @@ jobs:
       - name: Bundle size budget
         working-directory: frontend
         run: npm run check:bundle
+
+      - name: Smoke test the synthetic production build in Chrome
+        working-directory: frontend
+        env:
+          E2E_PREVIEW: synthetic
+        run: npm run e2e
 
   e2e:
     # 浏览器端到端：对着契约模拟服务（不是后端）。使用 runner 自带的 Google Chrome，不下载浏览器。
@@ -81,7 +98,15 @@ jobs:
       - name: Chrome is available
         run: google-chrome --version
 
-      - name: End-to-end tests
+      - name: Build and measure the HTTP production bundle
+        working-directory: frontend
+        env:
+          VITE_API_MODE: http
+        run: npm run build && npm run check:bundle
+
+      - name: HTTP production end-to-end tests
+        env:
+          E2E_PREVIEW: http
         working-directory: frontend
         run: npm run e2e
 

@@ -1,0 +1,370 @@
+openapi: 3.1.0
+info:
+  title: Ledger configuration versions
+  version: 1.0.0
+  description: Tenant-scoped snapshots. Saving and restoring require ledger.configuration.manage.
+    Publishing independently requires ledger.configuration.publish. Use expectedVersion
+    0 for a new definition.
+paths:
+  /api/v1/admin/ledger-configurations:
+    get:
+      operationId: listLedgerConfigurations
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Items'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/admin/ledger-configurations/{key}:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    get:
+      operationId: getLatestConfiguration
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/admin/ledger-configurations/{key}/versions:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    get:
+      operationId: listConfigurationVersions
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Versions'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+    post:
+      operationId: saveConfigurationDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Save'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/admin/ledger-configurations/{key}/restore:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    post:
+      operationId: restoreConfigurationDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Restore'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/admin/ledger-configurations/{key}/publish:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    post:
+      operationId: publishConfigurationVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Publish'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+components:
+  schemas:
+    Field:
+      type: object
+      required:
+      - key
+      - label
+      - type
+      - required
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        label:
+          type: string
+        type:
+          type: string
+          enum:
+          - text
+          - number
+          - date
+          - boolean
+        required:
+          type: boolean
+    Definition:
+      type: object
+      required:
+      - name
+      - fields
+      - listFields
+      - queryFields
+      properties:
+        name:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/Field'
+        listFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
+        queryFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
+        workflow:
+          $ref: '#/components/schemas/Workflow'
+    Workflow:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/WorkflowNode'
+        edges:
+          type: array
+          maxItems: 31
+          items:
+            type: object
+            required: [from, to]
+            properties:
+              from: { type: string }
+              to: { type: string }
+    WorkflowNode:
+      type: object
+      required: [id, kind, label, x, y]
+      properties:
+        id: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$' }
+        kind: { type: string, enum: [start, step, end] }
+        label: { type: string, maxLength: 120 }
+        x: { type: integer, minimum: 0, maximum: 1000 }
+        y: { type: integer, minimum: 0, maximum: 1000 }
+    Snapshot:
+      type: object
+      required:
+      - key
+      - version
+      - publishedVersion
+      - definition
+      - savedAt
+      - sourceVersion
+      - savedBy
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        publishedVersion:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        definition:
+          $ref: '#/components/schemas/Definition'
+        savedAt:
+          type: string
+          format: date-time
+        sourceVersion:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        savedBy:
+          type: string
+          format: uuid
+    Summary:
+      type: object
+      required:
+      - key
+      - latestVersion
+      - publishedVersion
+      - definition
+      - savedAt
+      - sourceVersion
+      - savedBy
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        latestVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        publishedVersion:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        definition:
+          $ref: '#/components/schemas/Definition'
+        savedAt:
+          type: string
+          format: date-time
+        sourceVersion:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        savedBy:
+          type: string
+          format: uuid
+    Items:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Summary'
+    Versions:
+      type: object
+      required:
+      - versions
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Snapshot'
+    Save:
+      type: object
+      required:
+      - requestId
+      - expectedVersion
+      - definition
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+        definition:
+          $ref: '#/components/schemas/Definition'
+    Restore:
+      type: object
+      required:
+      - requestId
+      - expectedVersion
+      - sourceVersion
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        sourceVersion:
+          type: integer
+          format: int64
+          minimum: 1
+    Publish:
+      type: object
+      required:
+      - expectedVersion
+      - version
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedPublishedVersion:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1

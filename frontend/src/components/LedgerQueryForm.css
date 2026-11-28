@@ -1,10 +1,7 @@
 /* Hallmark v2.0.0 · scope: component · theme: shared workspace · signature: semantic query controls */
-/* Critique: align the library field with the common register while keeping its label and focus relationship intact. */
+/* The search input uses the common register colors; the adjacent Astryx clear button shares its focus ring. */
 .ledger-search-field {
-  --color-border-emphasized: var(--field-edge);
-  --color-background-surface: var(--white);
-  --color-text-primary: var(--ink);
-  --color-text-secondary: var(--muted);
+  gap: 4px;
   min-width: 0;
 }
 
@@ -16,6 +13,9 @@
 }
 
 .ledger-search-field .ledger-search-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   min-height: 36px;
   height: 36px;
   padding: 0 8px;

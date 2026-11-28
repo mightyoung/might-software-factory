@@ -1,50 +1,9 @@
-import { matchesQuery, type PageRequest, type PageResult, type QueryValues } from "../domain/ledger";
+import { matchesQuery, type PageResult } from "../domain/ledger";
 import { findingLedgerSchema } from "../features/findings/schema";
 import type { FindingRecord, FindingState } from "../domain/finding";
-import type { FindingDefinition } from "./findingDefinition";
 
-export type FindingView = "all" | "confirmation" | "acceptance";
-
-export interface FindingReadOptions {
-  /** Cancellation signal for the current UI read; it does not imply a transport or route. */
-  signal?: AbortSignal;
-}
-
-export type FindingLedgerAccessFailureKind = "unauthenticated" | "forbidden";
-export type FindingLedgerReadFailureKind = FindingLedgerAccessFailureKind | "unknown";
-
-/** Semantic UI boundary only. A future transport must map documented server behavior explicitly. */
-export class FindingLedgerAccessError extends Error {
-  constructor(readonly kind: FindingLedgerAccessFailureKind) {
-    super(`Finding ledger read ${kind}`);
-    this.name = "FindingLedgerAccessError";
-  }
-}
-
-export function classifyFindingLedgerReadFailure(error: unknown): FindingLedgerReadFailureKind {
-  return error instanceof FindingLedgerAccessError ? error.kind : "unknown";
-}
-
-export interface FindingListRequest {
-  query: QueryValues;
-  page: PageRequest;
-  view: FindingView;
-}
-
-export interface FindingDetailSnapshot {
-  record: FindingRecord | null;
-  definition: FindingDefinition | null;
-}
-
-/** UI-facing seam only. No HTTP route or server payload is implied by this type. */
-export interface FindingLedgerAdapter {
-  /** Present only for the real HTTP definition consumer, never inferred from failures. */
-  readonly publishedDefinition?: true;
-  list(input: FindingListRequest, options?: FindingReadOptions): Promise<PageResult<FindingRecord> & { definition?: FindingDefinition }>;
-  get(id: string, options?: FindingReadOptions): Promise<FindingRecord | null>;
-  /** Published transports return the current detail definition with its record in one result. */
-  getDetailSnapshot?(id: string, options?: FindingReadOptions): Promise<FindingDetailSnapshot>;
-}
+export * from "./findingLedgerContract";
+import type { FindingView, FindingListRequest, FindingLedgerAdapter } from "./findingLedgerContract";
 
 /** 合成数据的内部标识，形态与契约的 UUID 一致，但明显是演示值。 */
 export function syntheticFindingId(sequence: number): string {
@@ -55,7 +14,7 @@ const demoHistory = (at: string, title: string, note: string) => [{ at, title, n
 
 export const syntheticFindings: readonly FindingRecord[] = [
   {
-    id: syntheticFindingId(1),
+    id: /* @__PURE__ */ syntheticFindingId(1),
     code: "DEMO-HZ-001",
     description: "搬运区域隔离设施损坏",
     location: "演示工房 A · 搬运区",
@@ -65,10 +24,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "待分派",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-29 09:14", "发现上报", "合成样例；流程尚待一人确认。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-29 09:14", "发现上报", "合成样例；流程尚待一人确认。"),
   },
   {
-    id: syntheticFindingId(2),
+    id: /* @__PURE__ */ syntheticFindingId(2),
     code: "DEMO-HZ-002",
     description: "设备防护罩固定件松动",
     location: "演示工房 B · 设备 03",
@@ -78,10 +37,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "待分派",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-28 16:05", "一人确认", "合成样例；现处于安全部门确认节点。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-28 16:05", "一人确认", "合成样例；现处于安全部门确认节点。"),
   },
   {
-    id: syntheticFindingId(3),
+    id: /* @__PURE__ */ syntheticFindingId(3),
     code: "DEMO-HZ-003",
     description: "通道临时堆放周转物料",
     location: "演示仓库 · 东侧通道",
@@ -91,10 +50,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "待分派",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-27 13:30", "安全确认", "合成样例；等待安全部门分派整改任务。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-27 13:30", "安全确认", "合成样例；等待安全部门分派整改任务。"),
   },
   {
-    id: syntheticFindingId(4),
+    id: /* @__PURE__ */ syntheticFindingId(4),
     code: "DEMO-HZ-004",
     description: "作业点防护标识需要补充",
     location: "演示产线 01 · 工位 4",
@@ -104,10 +63,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "示例处理人甲",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-27 09:10", "整改处理中", "合成样例；未提交真实整改证据。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-27 09:10", "整改处理中", "合成样例；未提交真实整改证据。"),
   },
   {
-    id: syntheticFindingId(5),
+    id: /* @__PURE__ */ syntheticFindingId(5),
     code: "DEMO-HZ-005",
     description: "防护设施维护后等待复核",
     location: "演示工房 A · 设备 06",
@@ -117,10 +76,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "示例处理人乙",
     riskLabel: "待专业评估",
     round: 2,
-    history: demoHistory("2026-10-28 17:20", "提交验收", "合成样例第二轮；等待安全部门验收。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-28 17:20", "提交验收", "合成样例第二轮；等待安全部门验收。"),
   },
   {
-    id: syntheticFindingId(6),
+    id: /* @__PURE__ */ syntheticFindingId(6),
     code: "DEMO-HZ-006",
     description: "测试点位围挡已按样例完成复核",
     location: "演示工房 C · 测试点",
@@ -130,10 +89,10 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "示例处理人丙",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-26 16:45", "示例流程结束", "仅为流程展示，不代表现场风险已消除。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-26 16:45", "示例流程结束", "仅为流程展示，不代表现场风险已消除。"),
   },
   {
-    id: syntheticFindingId(7),
+    id: /* @__PURE__ */ syntheticFindingId(7),
     code: "DEMO-HZ-007",
     description: "工具柜附近地面物品待整理",
     location: "演示仓库 · 工具柜旁",
@@ -143,7 +102,7 @@ export const syntheticFindings: readonly FindingRecord[] = [
     responsible: "示例处理人甲",
     riskLabel: "待专业评估",
     round: 1,
-    history: demoHistory("2026-10-24 10:25", "派发整改", "合成样例；没有实际通知书或派单记录。"),
+    history: /* @__PURE__ */ demoHistory("2026-10-24 10:25", "派发整改", "合成样例；没有实际通知书或派单记录。"),
   },
 ];
 

@@ -8,11 +8,15 @@ import { applicationPath } from "../routing/entityPaths";
 type BootstrapResponse = components["schemas"]["SessionBootstrapResponse"];
 type MenuResponse = components["schemas"]["ApplicationMenuResponse"];
 const UI_PERMISSIONS: Readonly<Record<string, string>> = {
+  "ledger.directory.open": "ledger.directory.open",
   "finding.read": "safety.finding.read",
   "finding.create": "safety.finding.report",
   "equipment.read": "equipment.overview.read",
   "platform.permission.read": "platform.permission.read",
   "platform.permission.manage": "platform.permission.manage",
+  "ledger.configuration.read": "ledger.configuration.read",
+  "ledger.configuration.manage": "ledger.configuration.manage",
+  "ledger.configuration.publish": "ledger.configuration.publish",
 };
 const LEGACY_ENTRY: Readonly<Record<string, string>> = { safety: "safety/", equipment: "equipment/", platform: "platform/" };
 const KEY = /^[a-z][a-z0-9_-]{0,63}$/;

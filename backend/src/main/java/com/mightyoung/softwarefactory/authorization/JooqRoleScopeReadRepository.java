@@ -96,6 +96,11 @@ public final class JooqRoleScopeReadRepository implements RoleScopeReadRepositor
             Set<UUID> positionIds,
             Set<UUID> groupIds,
             String permissionCode) {
+        // Generated ledger permissions keep a stable resource type and action across ledger keys.
+        if (permissionCode.startsWith("ledger.record.")) {
+            return findActiveActionScopes(tenantId, memberId, organizationIds, positionIds, groupIds,
+                    "ledger_record", permissionCode.substring(permissionCode.lastIndexOf('.') + 1), permissionCode);
+        }
         // Permission codes are "<resource_type>.<action>"; this keeps finding.read unchanged and lets any
         // catalogued permission resolve its scopes through the same persisted grants.
         int dot = permissionCode.indexOf('.');

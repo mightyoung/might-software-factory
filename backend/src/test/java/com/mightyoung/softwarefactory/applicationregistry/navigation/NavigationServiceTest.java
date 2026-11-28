@@ -45,7 +45,7 @@ class NavigationServiceTest {
     @Test void issueOnlyKeeperGetsItsApplicationAndNodeWithoutCatalogRead() {
         var context=session();
         var contribution=new com.mightyoung.softwarefactory.tooling.ToolLedgerConfiguration().toolingApplication();
-        var contributed=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        var contributed=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution), tenant -> List.of());
         when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
         when(permissions.has(context,"tool_loan.issue")).thenReturn(true);
         assertThat(contributed.bootstrap().applications()).extracting(NavigationService.ApplicationEntry::id).containsExactly("tooling");
@@ -185,7 +185,7 @@ class NavigationServiceTest {
         var context=session();
         var contribution=new ApplicationContribution("tooling","工装",List.of(new ApplicationContribution.Node(
                 "tools","工装台账","apps/tooling/entities/tool","tool",List.of("tool.read","tool.create","tool.update"))));
-        var dynamic=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution));
+        var dynamic=new NavigationService(resolver,sessions,applications,reads,actions,permissions,manager,List.of(contribution), tenant -> List.of());
         when(applications.findCurrent(context.tenantId(),"tooling")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
         when(permissions.has(context,"tool.create")).thenReturn(true);
         assertThat(dynamic.bootstrap().permissions()).containsExactly("tool.create");
@@ -198,6 +198,30 @@ class NavigationServiceTest {
 
     private FindingReadAuthorizationSnapshot snapshot(CurrentTenantContext c, Set<UUID> scope,long memberEpoch) {
         return new FindingReadAuthorizationSnapshot(c.actorId(),c.accountId(),"HUMAN","ACTIVE","ACTIVE","ACTIVE","ACTIVE",2,memberEpoch,scope);
+    }
+
+    @Test void recordCreatorSeesDirectoryOnlyForPublishedLedgerInEnabledPlatform() {
+        var context = session();
+        var dynamic = new NavigationService(resolver, sessions, applications, reads, actions, permissions, manager,
+                List.of(), tenant -> tenant.equals(context.tenantId()) ? List.of("receipts") : List.of());
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"ledger.record.unpublished.read")).thenReturn(true);
+        assertThat(dynamic.bootstrap().applications()).isEmpty();
+        when(permissions.has(context,"ledger.record.receipts.create")).thenReturn(true);
+        assertThat(dynamic.menu("platform").nodes()).containsExactly(
+                new NavigationService.MenuNode("ledgers","业务台账","platform/ledgers","ledger.directory.open"));
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(false,2)));
+        assertThat(dynamic.bootstrap().applications()).isEmpty();
+    }
+
+    @Test void ledgerPublisherCanOpenConfigurationWithoutPermissionAdministration() {
+        var context = session();
+        when(applications.findCurrent(context.tenantId(),"platform")).thenReturn(Optional.of(new TenantApplicationState(true,1)));
+        when(permissions.has(context,"ledger.configuration.publish")).thenReturn(true);
+        assertThat(service.bootstrap().applications()).extracting(NavigationService.ApplicationEntry::entryPath)
+                .containsExactly("platform/ledger-configurations");
+        assertThat(service.menu("platform").nodes()).extracting(NavigationService.MenuNode::permission)
+                .containsExactly("ledger.configuration.publish");
     }
 
     @Test void configurablePermissionsDriveApplicationsAndMenuNodes() {

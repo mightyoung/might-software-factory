@@ -30,6 +30,7 @@ public final class NavigationService {
         NodeDef(String application,String id,String label,String path,String permission) {this(application,id,label,path,List.of(permission));}
     }
     /** Capability permissions surfaced for presentation only (e.g. enabling edit controls). */
+    private static final String LEDGER_DIRECTORY = "ledger.directory.open";
     private static final String FINDING_CREATE = "finding.create";
     private static final List<String> PLATFORM_EXTRAS = List.of("platform.permission.manage");
 
@@ -39,7 +40,11 @@ public final class NavigationService {
     private static final List<NodeDef> NODES = List.of(
             new NodeDef("safety", "findings", "隐患管理", "safety/findings", "finding.read"),
             new NodeDef("equipment", "overview", "设备管理", "equipment/overview", "equipment.read"),
-            new NodeDef("platform", "permissions", "权限配置", "platform/permissions", "platform.permission.read"));
+            new NodeDef("platform", "permissions", "权限配置", "platform/permissions", "platform.permission.read"),
+            new NodeDef("platform", "ledger-configurations", "台账配置", "platform/ledger-configurations",
+                    List.of("ledger.configuration.read", "ledger.configuration.manage", "ledger.configuration.publish")),
+            new NodeDef("platform", "ledgers", "业务台账", "platform/ledgers", LEDGER_DIRECTORY));
+    private final PublishedLedgerKeys ledgers;
     private final List<AppDef> apps;
     private final List<NodeDef> nodes;
     private final SessionContextResolver resolver;
@@ -54,13 +59,14 @@ public final class NavigationService {
             TenantApplicationReadRepository applications, EntityReadAccessPolicy reads,
             FindingWorkflowAuthorizationRepository actions, EffectivePermissions permissions,
             PlatformTransactionManager manager) {
-        this(resolver,sessions,applications,reads,actions,permissions,manager,List.of());
+        this(resolver,sessions,applications,reads,actions,permissions,manager,List.of(), tenant -> List.of());
     }
     @org.springframework.beans.factory.annotation.Autowired
     public NavigationService(SessionContextResolver resolver, CurrentSessionService sessions,
             TenantApplicationReadRepository applications, EntityReadAccessPolicy reads,
             FindingWorkflowAuthorizationRepository actions, EffectivePermissions permissions,
-            PlatformTransactionManager manager,List<ApplicationContribution> contributions) {
+            PlatformTransactionManager manager,List<ApplicationContribution> contributions, PublishedLedgerKeys ledgers) {
+        this.ledgers = ledgers;
         var allApps=new ArrayList<>(APPS);var allNodes=new ArrayList<>(NODES);
         for(var contribution:contributions) {
             if(allApps.stream().anyMatch(app->app.id().equals(contribution.appKey())))throw new IllegalArgumentException("Duplicate application contribution");
@@ -160,6 +166,13 @@ public final class NavigationService {
     }
 
     private boolean hasNodePermission(CurrentTenantContext context, String permission) {
+        if (LEDGER_DIRECTORY.equals(permission)) {
+            for (String key : ledgers.publishedKeys(context.tenantId())) {
+                String prefix = "ledger.record." + key + ".";
+                if (permissions.has(context, prefix + "read") || permissions.has(context, prefix + "create")) return true;
+            }
+            return false;
+        }
         if ("finding.read".equals(permission)) {
             var grant = reads.resolveEntityReadGrant(context, "finding").orElse(null);
             return grant != null && context.tenantId().equals(grant.tenantId()) && !grant.organizationIds().isEmpty();

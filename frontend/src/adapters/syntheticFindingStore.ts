@@ -113,4 +113,4 @@ export function createSyntheticFindingStore(options: SyntheticFindingStoreOption
   return { ledger, submit };
 }
 
-export const syntheticFindingStore: SyntheticFindingStore = createSyntheticFindingStore();
+export const syntheticFindingStore: SyntheticFindingStore = /* @__PURE__ */ createSyntheticFindingStore();

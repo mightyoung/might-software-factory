@@ -107,6 +107,84 @@ test("查询框可用键盘清除编号并保留状态与日期条件", async ({
   ]);
 });
 
+test.describe("通用台账触屏查询", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 900 } });
+
+  test("从通用台账触摸清除搜索项，保留其它筛选并等待明确提交", async ({ page }) => {
+    const path = "apps/inventory/entities/widget";
+    const permission = "widget.read";
+    await page.route("**/api/v1/session/bootstrap", async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) { await route.fulfill({ response }); return; }
+      const body = await response.json();
+      body.data.applications.push({ id: "inventory", name: "库存", entryPath: path });
+      body.data.permissions.push(permission);
+      body.data.canonicalPermissions?.push(permission);
+      await route.fulfill({ response, json: body });
+    });
+    const operation = "/api/v1/apps/inventory/entities/widget";
+    const meta = { traceId: "test" };
+    const queryShape = { nullable: false, selectable: true, sortable: true, maxLength: 36, enumValues: [] };
+    await page.route(`**${operation}/definition?use=READ`, (route) => route.fulfill({
+      json: {
+        meta,
+        data: {
+          use: "READ", effectiveActions: [permission],
+          definition: {
+            appKey: "inventory", entityKey: "widget", definitionVersion: "1", title: "通用物品",
+            fields: {
+              code: { label: "编号", type: "TEXT", nullable: false, valueLabels: {} },
+              state: { label: "状态", type: "ENUM", nullable: false, valueLabels: { NORMAL: "正常" } },
+            },
+            inputFields: {}, references: {},
+            querySchema: {
+              key: "widget", schemaVersion: "1", idField: "id", defaultFields: ["code", "state"],
+              fields: {
+                id: { ...queryShape, type: "UUID", operators: ["EQ"] },
+                code: { ...queryShape, type: "TEXT", operators: ["CONTAINS"] },
+                state: { ...queryShape, type: "ENUM", operators: ["EQ"], enumValues: ["NORMAL"] },
+              },
+            },
+            layout: { list: ["code", "state"], detail: ["code"], create: [], edit: [], query: ["code", "state"] },
+            actions: {
+              read: { label: "查看", permission },
+              create: { label: "新增", permission: "widget.create" },
+              update: { label: "修改", permission: "widget.update" },
+            },
+          },
+        },
+      },
+    }));
+    const filters: unknown[] = [];
+    await page.route(`**${operation}/query`, (route) => {
+      filters.push(route.request().postDataJSON().query.filterAST);
+      return route.fulfill({ json: { meta, data: { records: [], page: 1, size: 20, total: 0, hasMore: false } } });
+    });
+
+    await signIn(page);
+    await page.getByRole("link", { name: "库存" }).click();
+    await expect(page.getByRole("heading", { name: "通用物品" })).toBeVisible();
+    await expect(page.getByText("共 0 条，第 1 页")).toBeVisible();
+    await page.getByRole("combobox", { name: "主题" }).selectOption("dark");
+    const search = page.getByRole("searchbox", { name: "编号" });
+    const status = page.getByRole("combobox", { name: "状态", exact: true });
+    await search.fill("WG-01");
+    await status.selectOption("NORMAL");
+    const clear = page.getByRole("button", { name: "清除 编号", exact: true });
+    await expect(clear).toBeVisible();
+    await scan(page, "通用台账触屏清除");
+    await clear.tap();
+    await expect(search).toHaveValue("");
+    await expect(search).toBeFocused();
+    await expect(status).toHaveValue("NORMAL");
+    await expect(clear).toHaveCount(0);
+    expect(filters).toHaveLength(1);
+    await search.press("Enter");
+    await expect.poll(() => filters.length).toBe(2);
+    expect(filters[1]).toMatchObject({ conditions: [{ field: "state", operator: "EQ", value: "NORMAL" }] });
+  });
+});
+
 test("查询和重置可由键盘激活并在两种主题保持可访问", async ({ page }) => {
   await signIn(page);
   const firstCode = (await page.locator(".ledger-row").first().locator("td").nth(1).textContent())!.trim();
@@ -170,4 +248,171 @@ test("键盘：改密对话框的焦点陷阱在真实浏览器里成立，Esc �
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(menuButton).toBeFocused();
+});
+
+test("权限勾选、切换角色与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
+  // Test-owned admin contract projection; this checks UI interaction, not server authorization.
+  const permissionCodes = ["finding.read", "platform.permission.read", "platform.permission.manage"];
+  await page.route("**/api/v1/session/bootstrap", async route => {
+    const response = await route.fetch();
+    if (!response.ok()) { await route.fulfill({ response }); return; }
+    const body = await response.json();
+    body.data.permissions = [...new Set([...body.data.permissions, ...permissionCodes])];
+    body.data.applications.push({ id: "platform", name: "系统设置", entryPath: "platform/permissions" });
+    await route.fulfill({ response, json: body });
+  });
+  await page.route("**/api/v1/applications/platform/menu", route => route.fulfill({ json: { data: {
+    schemaVersion: 1, applicationId: "platform", title: "系统设置",
+    nodes: [{ id: "permissions", label: "权限配置", path: "platform/permissions", permission: "platform.permission.read" }],
+    permissions: permissionCodes, authorization: { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: 1 },
+  } } }));
+  await page.route("**/api/v1/admin/permissions", route => route.fulfill({ json: { items: [
+    { code: "finding.read", application: "safety", label: "查看隐患" },
+    { code: "risk.read", application: "safety", label: "查看风险管控" },
+  ] } }));
+  await page.route("**/api/v1/admin/roles", route => route.fulfill({ json: { roles: [
+    { id: "ui-role", code: "reporter", name: "上报人", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
+    { id: "ui-role-reviewer", code: "reviewer", name: "安全员", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
+  ] } }));
+  const writes: string[] = [];
+  const nativeDialogs: string[] = [];
+  page.on("dialog", async dialog => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
+  page.on("request", request => {
+    if (request.method() === "PUT" && request.url().includes("/api/v1/admin/")) writes.push(request.url());
+  });
+  await signIn(page);
+  await page.goto(new URL(page.url()).pathname.replace("safety/findings", "platform/permissions"));
+  await expect(page.getByRole("heading", { name: "上报人" })).toBeVisible();
+  const permission = page.getByRole("checkbox", { name: "查看风险管控" });
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  const otherRole = page.getByRole("button", { name: /^安全员/ });
+  const backToReporter = page.getByRole("button", { name: /^上报人/ });
+  const confirmation = page.getByRole("alertdialog", { name: "放弃未保存的权限修改？" });
+  const cancelSwitch = confirmation.getByRole("button", { name: "继续编辑" });
+  const confirmSwitch = confirmation.getByRole("button", { name: "放弃并切换" });
+  for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(save).toBeDisabled();
+    await permission.focus();
+    await page.keyboard.press("Space");
+    await expect(permission).toBeChecked();
+    await expect(save).toBeEnabled();
+    await scan(page, `权限配置（${theme}）`);
+    await otherRole.focus();
+    await page.keyboard.press("Enter");
+    await expect(cancelSwitch).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirmSwitch).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancelSwitch).toBeFocused();
+    await scan(page, `切换角色确认（${theme}）`);
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toBeFocused();
+    await expect(permission).toBeChecked();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("Enter");
+    await confirmSwitch.focus();
+    await page.keyboard.press("Enter");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await expect(save).toBeDisabled();
+    await backToReporter.click();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await permission.focus();
+    await page.keyboard.press("Space");
+    await expect(permission).toBeChecked();
+    const discard = page.getByRole("button", { name: "放弃修改" });
+    await discard.focus();
+    await page.keyboard.press("Enter");
+    await expect(permission).not.toBeChecked();
+    await expect(save).toBeDisabled();
+  }
+  expect(writes).toEqual([]);
+  expect(nativeDialogs).toEqual([]);
+});
+
+test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦点", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(page);
+  const heading = page.getByRole("heading", { name: "隐患台账" });
+  const nav = page.getByRole("navigation", { name: "生产安全导航" });
+  await expect(heading).toBeVisible();
+  await expect(nav).toBeVisible();
+  await page.getByRole("button", { name: "收起导航" }).click();
+  await expect(nav).toHaveCount(0);
+  await page.reload();
+  await expect(heading).toBeVisible();
+  const expand = page.getByRole("button", { name: "展开导航" });
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(nav).toHaveCount(0);
+  await expand.click();
+  await expect(nav).toBeVisible();
+
+  for (const [theme, shortcut, width] of [
+    ["light", "Control+k", 1440], ["dark", "Meta+k", 1440],
+    ["light", "Control+k", 390], ["dark", "Meta+k", 390],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
+      `${theme} 主题不应出现页面级横向滚动`).toBe(false);
+    const trigger = page.getByRole("button", { name: "快捷导航" });
+    await trigger.focus();
+    await page.keyboard.press(shortcut);
+    const modal = page.getByRole("dialog", { name: "快捷导航" });
+    const search = modal.getByRole("searchbox", { name: "搜索页面" });
+    await expect(search).toBeFocused();
+    await scan(page, `快捷导航（${theme}）`);
+    const result = modal.getByRole("link", { name: "隐患管理", exact: true });
+    for (const label of ["生产安全", "隐患管理"]) {
+      await search.fill(label);
+      await expect(modal.getByRole("link")).toHaveCount(1);
+      await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
+    }
+    const close = modal.getByRole("button", { name: "关闭" });
+    await page.keyboard.press("Shift+Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(result).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  }
+});
+
+test("编译后的 Astryx 品牌变量在明暗主题保持同源", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-astryx-theme", "might");
+  const accent: string[] = [];
+  for (const theme of ["light", "dark"] as const) {
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(html).toHaveAttribute("data-theme", theme);
+    const result = await html.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        accent: style.getPropertyValue("--color-accent").trim(),
+        petrol: style.getPropertyValue("--petrol").trim(),
+        ink: style.getPropertyValue("--color-text-primary").trim(),
+        legacyInk: style.getPropertyValue("--ink").trim(),
+      };
+    });
+    expect(result.petrol).not.toBe("");
+    expect(result.accent).toBe(result.petrol);
+    expect(result.ink).toBe(result.legacyInk);
+    accent.push(result.accent);
+    await scan(page, `Astryx 登录页（${theme}）`);
+  }
+  expect(accent[0]).not.toBe(accent[1]);
 });

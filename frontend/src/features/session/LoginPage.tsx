@@ -1,6 +1,6 @@
 import { ThemeSelector } from "../theme/ThemeProvider";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DEMO_ACCOUNTS } from "../../adapters/sessionAdapter";
+import { DemoLoginAccounts } from "./DemoLoginAccounts";
 import { SessionError } from "../../domain/session";
 import { useSession, type SessionState } from "./SessionProvider";
 
@@ -22,7 +22,7 @@ function failureMessage(error: unknown): string {
   return "账号或密码不正确。";
 }
 
-export function LoginPage({ notice }: { notice: Notice }) {
+export function LoginPageCore({ notice, DemoAccounts }: { notice: Notice; DemoAccounts?: typeof DemoLoginAccounts }) {
   const { login, requiresTenantCode } = useSession();
   const [tenantCode, setTenantCode] = useState("");
   const [username, setUsername] = useState("");
@@ -145,34 +145,16 @@ export function LoginPage({ notice }: { notice: Notice }) {
             </button>
           </form>
 
-          {!requiresTenantCode && (
-          <aside className="login-demo" aria-label="合成演示说明">
-            <p>
-              <strong>合成演示：</strong>
-              账号只认下列演示账号，密码任意非空即可。这不是真实认证，不提供任何安全保证，刷新页面后需重新登录。
-            </p>
-            <ul>
-              {Object.entries(DEMO_ACCOUNTS).map(([name, account]) => (
-                <li key={name}>
-                  <button
-                    type="button"
-                    className="login-demo-fill"
-                    onClick={() => {
-                      setUsername(name);
-                      usernameRef.current?.focus();
-                    }}
-                    disabled={pending}
-                  >
-                    {name}
-                  </button>
-                  <span>{account.description}</span>
-                </li>
-              ))}
-            </ul>
-          </aside>
-          )}
+          {!requiresTenantCode && DemoAccounts && <DemoAccounts pending={pending} onSelect={(name) => {
+            setUsername(name);
+            usernameRef.current?.focus();
+          }} />}
         </section>
       </div>
     </main>
   );
+}
+
+export function LoginPage({ notice }: { notice: Notice }) {
+  return <LoginPageCore notice={notice} DemoAccounts={DemoLoginAccounts} />;
 }

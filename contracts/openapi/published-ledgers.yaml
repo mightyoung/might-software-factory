@@ -1,0 +1,466 @@
+openapi: 3.1.0
+info:
+  title: Published ledger records
+  version: 1.0.0
+  description: Create, query and maintain draft business records under the published
+    ledger definition. Each record retains its original definition version. Writes
+    require a request ID and the current action grant.
+paths:
+  /api/v1/ledgers:
+    get:
+      operationId: listPublishedLedgers
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Items'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/ledgers/{key}:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    get:
+      operationId: getPublishedLedger
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ledger'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/ledgers/{key}/records:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    post:
+      operationId: createDraftRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Create'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/ledgers/{key}/records/query:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    post:
+      operationId: queryLedgerRecords
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Query'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/ledgers/{key}/records/{id}:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getLedgerRecord
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+    put:
+      operationId: updateDraftRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Update'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+  /api/v1/ledgers/{key}/records/{id}/delete:
+    parameters:
+    - name: key
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-z][a-z0-9_]{0,63}$
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: deleteDraftRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Delete'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+        default:
+          description: Request rejected
+          content:
+            application/json:
+              schema:
+                $ref: ./platform-admin.yaml#/components/schemas/ErrorResponse
+components:
+  schemas:
+    Definition:
+      type: object
+      required:
+      - name
+      - fields
+      - listFields
+      - queryFields
+      properties:
+        name:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: ./ledger-configurations.yaml#/components/schemas/Field
+        listFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
+        queryFields:
+          type: array
+          items:
+            type: string
+            pattern: ^[a-z][a-z0-9_]{0,63}$
+    Capabilities:
+      type: object
+      required:
+      - read
+      - create
+      - update
+      - delete
+      properties:
+        read:
+          type: boolean
+        create:
+          type: boolean
+        update:
+          type: boolean
+        delete:
+          type: boolean
+    Organization:
+      type: object
+      required:
+      - id
+      - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    Ledger:
+      type: object
+      required:
+      - key
+      - definitionVersion
+      - definition
+      - capabilities
+      - organizations
+      properties:
+        key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        definitionVersion:
+          type: integer
+          minimum: 1
+        definition:
+          $ref: '#/components/schemas/Definition'
+        capabilities:
+          $ref: '#/components/schemas/Capabilities'
+        organizations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Organization'
+    Items:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ledger'
+    Record:
+      type: object
+      required:
+      - id
+      - key
+      - definitionVersion
+      - organizationId
+      - values
+      - version
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        definitionVersion:
+          type: integer
+          minimum: 1
+        organizationId:
+          type: string
+          format: uuid
+        values:
+          type: object
+          additionalProperties:
+            type:
+            - string
+            - number
+            - boolean
+            - 'null'
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Detail:
+      type: object
+      required:
+      - record
+      - definition
+      - capabilities
+      properties:
+        record:
+          $ref: '#/components/schemas/Record'
+        definition:
+          $ref: '#/components/schemas/Definition'
+        capabilities:
+          $ref: '#/components/schemas/Capabilities'
+    Filter:
+      type: object
+      required:
+      - field
+      - operator
+      - value
+      properties:
+        field:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        operator:
+          type: string
+          enum:
+          - eq
+          - contains
+          - gte
+          - lte
+        value:
+          type:
+          - string
+          - number
+          - boolean
+    Sort:
+      type: object
+      required:
+      - field
+      - direction
+      properties:
+        field:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,63}$
+        direction:
+          type: string
+          enum:
+          - asc
+          - desc
+    Query:
+      type: object
+      required:
+      - page
+      - size
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Filter'
+        sort:
+          $ref: '#/components/schemas/Sort'
+    Page:
+      type: object
+      required:
+      - records
+      - page
+      - size
+      - total
+      - hasMore
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/Record'
+        page:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+    Create:
+      type: object
+      required:
+      - requestId
+      - definitionVersion
+      - organizationId
+      - values
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        definitionVersion:
+          type: integer
+          minimum: 1
+        organizationId:
+          type: string
+          format: uuid
+        values:
+          type: object
+          additionalProperties:
+            type:
+            - string
+            - number
+            - boolean
+            - 'null'
+    Update:
+      type: object
+      required:
+      - requestId
+      - expectedVersion
+      - values
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          minimum: 1
+        values:
+          type: object
+          additionalProperties:
+            type:
+            - string
+            - number
+            - boolean
+            - 'null'
+    Delete:
+      type: object
+      required:
+      - requestId
+      - expectedVersion
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          minimum: 1

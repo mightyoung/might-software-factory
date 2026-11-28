@@ -1,20 +1,23 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { syntheticPresentation } from "./adapters/syntheticPresentation";
+import type { ComponentProps } from "react";
+import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
+import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
+import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
-import { FindingsLedger } from "./features/findings/FindingsLedger";
-import { FindingReportForm } from "./components/FindingReportForm";
-import { LoginPage } from "./features/session/LoginPage";
-import { SessionProvider, useSession } from "./features/session/SessionProvider";
+import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
+import { FindingReportFormCore } from "./components/FindingReportForm";
+import { LoginPageCore } from "./features/session/LoginPage";
+import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
-import { navigate, useLocation } from "./routing/router";
+import { navigate, RouteLeaveProvider, useLocation } from "./routing/router";
+import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
-import { PermissionConfigPage } from "./features/platform/PermissionConfigPage";
 import type { PermissionAdminAdapter } from "./adapters/permissionAdmin";
-import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
-import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import type { FindingLedgerAdapter } from "./adapters/findingLedger";
 import type { FindingCommandAdapter } from "./adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "./adapters/findingEvidence";
@@ -24,6 +27,10 @@ import type { LoanFactory } from "./features/toolLoans/model";
 import { parseEntityRoute } from "./routing/entityPaths";
 import { EntityLedgerPage } from "./features/ledger/EntityLedgerPage";
 import type { EntityLedgerFactory } from "./features/ledger/model";
+
+const PermissionConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.PermissionConfigPage })));
+const PublishedLedgersPage = lazy(() => import("./features/publishedLedgers/PublishedLedgersPage"));
+const LedgerConfigPage = lazy(() => import("./features/platform/LedgerConfigPage").then(module => ({ default: module.LedgerConfigPage })));
 
 /** 台账读取与上报提交的一对适配器；合成实现共享内存数据，HTTP 实现各自走服务端。 */
 export interface FindingStore {
@@ -51,11 +58,8 @@ interface PlaceholderPage {
   description: string;
 }
 
-interface PermissionsPage {
-  kind: "permissions";
-  title: string;
-  description: string;
-}
+type SettingsKind = "permissions" | "ledger-configurations" | "published-ledgers";
+type SettingsPage = { [Kind in SettingsKind]: { kind: Kind; title: string } }[SettingsKind];
 
 interface RouteDef {
   /** 不含租户前缀的应用内路径。 */
@@ -63,10 +67,17 @@ interface RouteDef {
   application: ApplicationId;
   /** 仅用于界面呈现的权限摘要判断；服务端对每个请求仍须最终鉴权。 */
   permission: string;
-  page: LedgerPage | PlaceholderPage | PermissionsPage;
+  page: LedgerPage | PlaceholderPage | SettingsPage;
 }
 
 const ROUTES: readonly RouteDef[] = [
+  { rest: "platform/ledgers", application: "platform", permission: "ledger.directory.open", page: { kind: "published-ledgers", title: "业务台账" } },
+  {
+    rest: "platform/ledger-configurations",
+    application: "platform",
+    permission: "ledger.configuration.read",
+    page: { kind: "ledger-configurations", title: "台账配置" },
+  },
   {
     rest: "safety/findings",
     application: "safety",
@@ -107,9 +118,11 @@ const ROUTES: readonly RouteDef[] = [
     rest: "platform/permissions",
     application: "platform",
     permission: "platform.permission.read",
-    page: { kind: "permissions", title: "权限配置", description: "按角色配置可使用的功能权限。" },
+    page: { kind: "permissions", title: "权限配置" },
   },
 ];
+
+const workspaceRoutes = createWorkspaceRouteMatcher(ROUTES);
 
 function applicationOfPath(rest: string): ApplicationId | null {
   const entity = parseEntityRoute(rest);
@@ -156,25 +169,44 @@ function StatusPage({ title, description, note }: { title: string; description: 
 }
 
 /** A create-only member never mounts the ledger or a detail-read action. */
-function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: FindingSubmitAdapter; draftKey: string; onUnauthenticated: () => void }) {
+function FindingReportPage({ adapter, draftKey, onUnauthenticated, presentation }: { adapter: FindingSubmitAdapter; draftKey: string; onUnauthenticated: () => void; presentation?: typeof syntheticPresentation.finding }) {
   const [open, setOpen] = useState(true);
   return <section className="ledger-main">
     <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
     <p>可上报你有权提交的隐患。</p>
-    {open && <FindingReportForm adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
+    {open && <FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
   </section>;
 }
 
+// Browser traversal cannot be cancelled reliably. Retain the editor in memory
+// after its first visit, only within this authorized AppShell identity.
+function RetainedRoute({ active, children, loading }: { active: boolean; children: ReactNode; loading: string }) {
+  const [visited, setVisited] = useState(active);
+  useLayoutEffect(() => {
+    if (active) setVisited(true);
+  }, [active]);
+  if (!active && !visited) return null;
+  return (
+    <div hidden={!active}>
+      <Suspense fallback={<p role="status">{loading}</p>}>
+        {children}
+      </Suspense>
+    </div>
+  );
+}
+
 interface AppAdapterFactories {
+  demoPresentation?: typeof syntheticPresentation;
   createFindingStore: () => FindingStore;
   createPermissionAdmin: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
   createLoans?: LoanFactory;
 }
 
-function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans }: AppAdapterFactories) {
+function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans, demoPresentation }: AppAdapterFactories) {
   const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
-  const mode = useAppMode();
+  const contextMode = useAppMode();
+  const mode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
@@ -191,18 +223,22 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const parsed = parsePath(pathname);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
-  const entityRoute = parseEntityRoute(parsed.rest);
+  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
+  const { route, entityRoute } = tenantMatches
+    ? workspaceRoutes.match(session.tenant.id, parsed.rest)
+    : { route: undefined, entityRoute: null };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
   const redirect = session ? canonicalTarget(session, location) : null;
-  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
-  const route = tenantMatches ? ROUTES.find((candidate) => candidate.rest === parsed.rest) : undefined;
   const pathApplication = tenantMatches ? applicationOfPath(parsed.rest) : null;
   const authorizedApplication =
     session && pathApplication && session.applications.some((app) => app.id === pathApplication) ? pathApplication : null;
   const shellApplication = redirect ? null : authorizedApplication;
   const menu = useAppMenu(shellApplication);
-  const canReadRoute = session !== null && route !== undefined && hasPermission(session, route.permission);
+  const canReadRoute = session !== null && route !== undefined && (
+    hasPermission(session, route.permission) || (route.page.kind === "ledger-configurations" &&
+      ["ledger.configuration.manage", "ledger.configuration.publish"].some(code => hasPermission(session, code)))
+  );
   const canReportHere = session !== null && route?.rest === "safety/findings" && hasPermission(session, "safety.finding.report");
   const reportOnly = canReportHere && !canReadRoute;
   // Do not consume the reset at /login or an intermediate canonical redirect. Never
@@ -238,13 +274,27 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       </div>
     );
   }
-  if (state.status === "signedOut") return <LoginPage notice={state.notice} />;
-  if (!session || redirect || selectionResetTarget) return null;
+  if (state.status === "signedOut") return <LoginPageCore notice={state.notice} DemoAccounts={demoPresentation?.LoginAccounts} />;
+  if (!session) return null;
+  // A same-identity canonical replace is not a session boundary.
+  const routingTransition = Boolean(redirect || selectionResetTarget);
+
+  const canManageLedgerConfig = hasPermission(session, "ledger.configuration.manage");
+  const canPublishLedgerConfig = hasPermission(session, "ledger.configuration.publish");
+  const platformHttp = mode === "http" && session.applications.some(app => app.id === "platform");
+  const activeLedgerPage = !routingTransition && authorizedApplication === "platform" && canReadRoute ? route?.page.kind : undefined;
+  const isConfigOpen = activeLedgerPage === "ledger-configurations";
+  const isRecordsOpen = activeLedgerPage === "published-ledgers";
+  const canKeepLedgerConfig = platformHttp &&
+    (hasPermission(session, "ledger.configuration.read") || canManageLedgerConfig || canPublishLedgerConfig);
 
   let title: string;
   let content: ReactNode;
 
-  if (!tenantMatches) {
+  if (routingTransition) {
+    title = "";
+    content = null;
+  } else if (!tenantMatches) {
     title = "无权访问";
     content = (
       <StatusPage
@@ -292,11 +342,12 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     );
   } else if (reportOnly) {
     title = "隐患上报";
-    content = <FindingReportPage adapter={findingStore.submit} draftKey={draftOwnerKey(session.tenant.id, session.actor.id)} onUnauthenticated={expire} />;
+    content = <FindingReportPage presentation={demoPresentation?.finding} adapter={findingStore.submit} draftKey={draftOwnerKey(session.tenant.id, session.actor.id)} onUnauthenticated={expire} />;
   } else if (route.page.kind === "ledger") {
     title = route.page.title;
     content = (
       <FindingsLedger
+        presentation={demoPresentation?.finding}
         key={route.page.view}
         view={route.page.view}
         title={route.page.title}
@@ -312,15 +363,20 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
         onUnauthenticated={expire}
       />
     );
+  } else if (route.page.kind === "published-ledgers" || route.page.kind === "ledger-configurations") {
+    title = route.page.title;
+    content = mode !== "http" ? <StatusPage title="需连接后端" description={route.page.kind === "published-ledgers" ? "请连接后端后使用业务台账。" : "请连接后端后配置台账。"} /> : null;
   } else if (route.page.kind === "permissions") {
     title = route.page.title;
     content = (
-      <PermissionConfigPage
-        adapter={permissionAdmin}
-        onPermissionsChanged={refresh}
-        canManage={hasPermission(session, "platform.permission.manage")}
-        onUnauthenticated={expire}
-      />
+      <Suspense fallback={<p role="status">正在载入权限配置…</p>}>
+        <PermissionConfigPage
+          adapter={permissionAdmin}
+          onPermissionsChanged={refresh}
+          canManage={hasPermission(session, "platform.permission.manage")}
+          onUnauthenticated={expire}
+        />
+      </Suspense>
     );
   } else {
     title = route.page.title;
@@ -347,36 +403,65 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       title={title}
     >
       {content}
+      {canKeepLedgerConfig && (
+        <RetainedRoute active={isConfigOpen} loading="正在载入配置页面…">
+          <LedgerConfigPage active={isConfigOpen} canManage={canManageLedgerConfig} canPublish={canPublishLedgerConfig} onUnauthenticated={expire} />
+        </RetainedRoute>
+      )}
+      {platformHttp && hasPermission(session, "ledger.directory.open") && (
+        <RetainedRoute active={isRecordsOpen} loading="正在载入业务台账…">
+          <PublishedLedgersPage active={isRecordsOpen} onUnauthenticated={expire} />
+        </RetainedRoute>
+      )}
     </AppShell>
   );
 }
 
-export function App({
+export function AppCore({
   sessionAdapter,
-  findingStore = syntheticFindingStore,
   createFindingStore,
   createPermissionAdmin,
   createEntityLedger,
   createLoans,
-  mode = "synthetic",
+  demoPresentation,
+  mode,
 }: {
-  sessionAdapter?: SessionAdapter;
-  /** 固定的适配器对（测试、合成演示）。 */
-  findingStore?: FindingStore;
-  /** 每个登录身份新建一对适配器；提供时优先于 findingStore。 */
-  createFindingStore?: () => FindingStore;
-  /** 每个登录身份新建的权限配置适配器；缺省为内存合成实现。 */
-  createPermissionAdmin?: () => PermissionAdminAdapter;
+  sessionAdapter: SessionAdapter;
+  /** 每个登录身份新建适配器。 */
+  createFindingStore: () => FindingStore;
+  /** 每个登录身份新建的权限配置适配器。 */
+  createPermissionAdmin: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
   createLoans?: LoanFactory;
-  /** 运行模式；决定界面是否标注演示。默认 synthetic。 */
-  mode?: AppMode;
+  /** 运行模式决定界面是否标注演示。 */
+  mode: AppMode;
+  demoPresentation?: typeof syntheticPresentation;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore ?? (() => findingStore)} createPermissionAdmin={createPermissionAdmin ?? createSyntheticPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        <RouteLeaveProvider>
+          <AppRouter demoPresentation={demoPresentation} createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        </RouteLeaveProvider>
       </SessionProvider>
     </ModeProvider>
   );
+}
+
+type AppProps = Partial<ComponentProps<typeof AppCore>> & {
+  findingStore?: FindingStore;
+};
+
+/** Embeddable demo defaults; the production entry supplies its mode's adapters directly. */
+export function App({
+  sessionAdapter = syntheticSessionAdapter,
+  findingStore = syntheticFindingStore,
+  createFindingStore = () => findingStore,
+  createPermissionAdmin = createSyntheticPermissionAdmin,
+  mode = "synthetic",
+  demoPresentation = syntheticPresentation,
+  ...props
+}: AppProps) {
+  return <AppCore {...props} demoPresentation={demoPresentation} mode={mode} sessionAdapter={sessionAdapter}
+    createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} />;
 }
