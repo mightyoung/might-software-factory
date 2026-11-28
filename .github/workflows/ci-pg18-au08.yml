@@ -1,0 +1,43 @@
+name: AU-08 isolated tooling acceptance
+
+on:
+  push:
+    # Never run acceptance from a PR, fork, dev/main, deployment or self-hosted runner.
+    branches: [codex/au08-dev-overlay-20261125]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pg18-au08-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  au08:
+    if: github.repository == 'mightyoung/might-software-factory'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Verify checkout-side AU-08 guards
+        run: python3 -B -m unittest discover -s tools/d2-authz -p 'test_*.py' -v
+      - name: Package current backend without hitting any database
+        run: ./mvnw -B -ntp -pl backend -am -DskipTests package
+      - name: Run the V1 to V2 acceptance in one disposable database
+        run: |
+          python3 -m venv "$RUNNER_TEMP/au08-venv"
+          "$RUNNER_TEMP/au08-venv/bin/python" -m pip --disable-pip-version-check install 'requests==2.32.5' 'psycopg2-binary==2.9.11'
+          "$RUNNER_TEMP/au08-venv/bin/python" -B tools/d2-authz/hosted_run.py
+      - name: Upload only the checked and cleaned acceptance summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: au08-verified-summary
+          path: artifacts/au08/result.json
+          if-no-files-found: error
+          retention-days: 7
