@@ -596,7 +596,7 @@
 }
 
 .sidebar[hidden] { display: none; }
-.quick-navigation {
+.workbench-dialog {
   width: min(30rem, calc(100% - 2rem));
   max-height: calc(100% - 2rem);
   overflow: auto;
@@ -606,10 +606,10 @@
   background: var(--paper);
   color: var(--ink);
 }
-.quick-navigation::backdrop { background: rgb(0 0 0 / 45%); }
-.quick-navigation h2 { margin-top: 0; font-size: 1.1rem; }
+.workbench-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.workbench-dialog h2 { margin-top: 0; font-size: 1.1rem; }
 .quick-navigation input { width: 100%; padding: 0.6rem; }
 .quick-navigation ul { list-style: none; padding: 0; max-height: 15rem; overflow: auto; }
 .quick-navigation a { display: block; padding: 0.5rem; color: inherit; }
-.quick-navigation :is(a, button, input):focus-visible { outline: 2px solid var(--petrol); outline-offset: 2px; }
+.workbench-dialog :is(a, button, input):focus-visible { outline: 2px solid var(--petrol); outline-offset: 2px; }
 @media (max-width: 760px) { .topbar-right { flex-wrap: wrap; } }

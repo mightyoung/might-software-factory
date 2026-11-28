@@ -50,7 +50,7 @@ function QuickNavigation({ session, menu, onClose }: Pick<AppShellProps, "sessio
   const results = [...pages].filter(([path, label]) =>
     label.toLocaleLowerCase().includes(term) || applicationNames.get(path)?.toLocaleLowerCase().includes(term),
   );
-  return <dialog ref={dialog} className="quick-navigation" aria-labelledby="quick-navigation-title"
+  return <dialog ref={dialog} className="workbench-dialog quick-navigation" aria-labelledby="quick-navigation-title"
     onCancel={event => { event.preventDefault(); onClose(); }}
     onKeyDown={event => {
       if (event.key !== "Tab") return;
