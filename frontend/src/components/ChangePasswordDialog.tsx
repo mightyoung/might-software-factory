@@ -68,6 +68,12 @@ export function ChangePasswordDialog({ onSubmit, onClose }: ChangePasswordDialog
         setErrors({ current: "当前密码不正确" });
         setCurrent("");
         currentRef.current?.focus();
+      } else if (kind === "invalid_request" && error instanceof SessionError && error.passwordFields.length) {
+        const fields: PasswordChangeErrors = {};
+        for (const field of error.passwordFields) {
+          fields[field] = field === "current" ? "当前密码格式不符合要求" : FAILURE_MESSAGE.invalid_request;
+        }
+        setErrors(fields);
       } else if (kind === "rate_limited") {
         const seconds = error instanceof SessionError ? (error.retryAfterSeconds ?? 5) : 5;
         setBlockedUntil(Date.now() + seconds * 1000);

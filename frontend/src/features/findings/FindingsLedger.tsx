@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import type { ComponentProps } from "react";
 import { mockFindingLedger } from "../../adapters/findingLedger";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,16 +14,17 @@ import { useAppMode } from "../../mode";
 import type { FindingCommandAdapter } from "../../adapters/findingCommands";
 import type { FindingEvidenceAdapter } from "../../adapters/findingEvidence";
 import type { FindingSubmitAdapter } from "../../adapters/findingSubmit";
-import { FindingDetails } from "../../components/FindingDetails";
-import { FindingReportForm } from "../../components/FindingReportForm";
+import { FindingDetailsCore } from "../../components/FindingDetails";
+import { FindingReportFormCore } from "../../components/FindingReportForm";
 import { LedgerQueryForm } from "../../components/LedgerQueryForm";
 import { LedgerTable } from "../../components/LedgerTable";
 import { createEmptyQuery, type PageResult, type QueryValue, type QueryValues } from "../../domain/ledger";
 import type { FindingRecord } from "../../domain/finding";
 import { toggleRow, toggleVisibleRows } from "../../domain/selection";
-import { findingLedgerSchema } from "./schema";
+import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
+import { findingSearchInput, validateFindingSearch, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -29,10 +32,12 @@ interface FindingsLedgerProps {
   synthetic?: boolean;
   /** Clear a previous security context's URL selection, while preserving cold deep links. */
   resetInitialSelection?: boolean;
+  routeSearch?: FindingSearch;
   view: FindingView;
   title: string;
   description: string;
   adapter: FindingLedgerAdapter;
+  presentation?: typeof syntheticFindingPresentation;
   /** 提供上报端口且 canReport 为 true 时才显示“新建上报”（仅台账视图）。入口显隐只是呈现，服务端仍须鉴权。 */
   submitAdapter?: FindingSubmitAdapter;
   /** 提供时详情显示真实可用的流程操作；缺省为演示用的禁用按钮。 */
@@ -63,10 +68,12 @@ export function FindingsLedgerCore(props: FindingsLedgerProps) {
 
 function FindingsLedgerBody({
   resetInitialSelection = false,
+  routeSearch,
   view,
   title,
   description,
   adapter,
+  presentation,
   synthetic,
   submitAdapter,
   commandAdapter,
@@ -75,91 +82,80 @@ function FindingsLedgerBody({
   draftKey,
   onUnauthenticated,
 }: FindingsLedgerProps) {
-  const appMode=useAppMode();
-  const demo=synthetic??appMode==="synthetic";
-  const noun = demo ? "演示记录" : "记录";
+  const contextMode = useAppMode();
+  const appMode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
+  const demo = import.meta.env.MSF_BROWSER_MODE === undefined ? synthetic ?? appMode === "synthetic" : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   const location = useLocation();
-  const [path, search = ""] = location.split("?");
+  const delimiter = location.indexOf("?");
+  const path = delimiter < 0 ? location : location.slice(0, delimiter);
+  const search = delimiter < 0 ? "" : location.slice(delimiter);
   const selectionReady = useRef(!resetInitialSelection);
-  const params = new URLSearchParams(search);
-  // tab=1：详情 / 新建上报在独立标签页里整页展示，不再占用台账右侧面板。
-  const standalone = params.get("tab") === "1";
-  const reporting = standalone && params.get("report") === "1";
-  const relatedId = params.get("related");
-  const relatedTo = reporting && relatedId ? { id: relatedId, code: params.get("relatedCode") ?? relatedId } : null;
-  const selectedFindingId = selectionReady.current ? params.get("caseId") : null;
+  // App supplies TanStack's validated match; standalone uses the identical projection.
+  const { standalone, reporting, relatedId, relatedCode, caseId } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
+  const relatedTo = reporting && relatedId ? { id: relatedId, code: relatedCode ?? relatedId } : null;
+  const selectedFindingId = selectionReady.current ? caseId : null;
   useEffect(() => {
     if (selectionReady.current) return;
     selectionReady.current = true;
-    const parameters = new URLSearchParams(search);
-    parameters.delete("caseId");
-    const suffix = parameters.toString();
-    navigate(`${path}${suffix ? `?${suffix}` : ""}`, true);
+    navigate(path + withoutFindingSelection(search), true);
   }, [path, search]);
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
-  const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : findingLedgerSchema, [definition]);
+  const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
   const published = adapter.publishedDefinition === true;
-  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
-  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(findingLedgerSchema.queryFields));
+  const [query, setQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
+  const [appliedQuery, setAppliedQuery] = useState<QueryValues>(() => createEmptyQuery(presentation?.schema.queryFields ?? []));
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState<PageResult<FindingRecord>>(firstPage);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [loading, setLoading] = useState(true);
-  const [listError, setListError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detailSnapshot, setDetailSnapshot] = useState<FindingDetailSnapshot>({ record: null, definition: null });
   const detail = detailSnapshot.record;
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<FindingLedgerReadFailureKind | null>(null);
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
-  const detailController = useRef<AbortController | null>(null);
+  const cancelDetail = useRef<(() => void) | null>(null);
   const showReport = canReport && submitAdapter !== undefined && view === "all";
 
+  const [client] = useState(createWorkspaceQueryClient);
+  const list = useQuery({
+    queryKey: ["finding-list", appMode, path, view, appliedQuery, pageIndex, pageSize, refreshKey],
+    enabled: !standalone,
+    queryFn: ({ signal }) => adapter.list(
+      { query: appliedQuery, page: { index: pageIndex, size: pageSize }, view },
+      { signal },
+    ),
+  }, client);
+  const loading = !standalone && (list.isFetching || list.isPending);
+  const listError = !standalone && list.error ? classifyFindingLedgerReadFailure(list.error) : null;
+  const blockDetail = listError === "unauthenticated" || listError === "forbidden" || (published && listError !== null);
   useEffect(() => {
-    if (standalone) { setLoading(false); return; }
-    let current = true;
-    const controller = new AbortController();
-    setLoading(true);
-    setListError(null);
-    void (async () => {
-      try {
-        const result = await adapter.list(
-          { query: appliedQuery, page: { index: pageIndex, size: pageSize }, view },
-          { signal: controller.signal },
-        );
-        if (!current || controller.signal.aborted) return;
-        setDefinition(result.definition ?? null);
-        setPage(result);
-        setPageIndex(result.page.index);
-      } catch (error) {
-        if (!current || controller.signal.aborted) return;
-        const kind = classifyFindingLedgerReadFailure(error);
-        setListError(kind);
-        if (published) { setDefinition(null); setPage(firstPage); setDetailSnapshot({ record: null, definition: null }); setDetailError(kind); }
-        if (kind === "unauthenticated" || kind === "forbidden") {
-          detailController.current?.abort();
-          setDetailSnapshot({ record: null, definition: null });
-          setDetailError(kind);
-          setDetailLoading(false);
-          setSelectedIds(new Set());
-          setPage(firstPage);
-          navigate(path, true);
-        }
-        if (kind === "unauthenticated") onUnauthenticated?.();
-      } finally {
-        if (!current || controller.signal.aborted) return;
-        setLoading(false);
-      }
-    })();
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [adapter, appliedQuery, pageIndex, pageSize, refreshKey, view, path, standalone]);
+    if (standalone || !list.data) return;
+    setDefinition(list.data.definition ?? null);
+    setPage(list.data);
+    setPageIndex(list.data.page.index);
+  }, [list.data, standalone]);
+  useEffect(() => {
+    if (!listError) return;
+    if (published) { setDefinition(null); setPage(firstPage); }
+    if (blockDetail) {
+      cancelDetail.current?.();
+      setDetailSnapshot({ record: null, definition: null });
+      setDetailError(listError);
+      setDetailLoading(false);
+    }
+    if (listError === "unauthenticated" || listError === "forbidden") {
+      setSelectedIds(new Set());
+      setPage(firstPage);
+      navigate(path, true);
+    }
+    if (listError === "unauthenticated") onUnauthenticated?.();
+  }, [list.error, listError, path, blockDetail, published, onUnauthenticated]);
 
+  const publishedDetailBlocked = published && blockDetail;
   useEffect(() => {
     let current = true;
+    if (publishedDetailBlocked) return;
     if (!selectedFindingId) {
       setDetailSnapshot({ record: null, definition: null });
       setDetailError(null);
@@ -168,36 +164,43 @@ function FindingsLedgerBody({
         current = false;
       };
     }
-    const controller = new AbortController();
-    detailController.current = controller;
+    const queryKey = ["finding-detail", appMode, selectedFindingId, detailRefreshKey];
+    const cancel = () => {
+      current = false;
+      void client.cancelQueries({ queryKey, exact: true });
+    };
+    cancelDetail.current = cancel;
     // 刷新同一条记录时保留旧内容直到新内容到达（流程命令成功后的提示不会被卸载）；换记录才清空。
     setDetailSnapshot((previous) => previous.record?.id === selectedFindingId ? previous : { record: null, definition: null });
     setDetailError(null);
     setDetailLoading(true);
     void (async () => {
       try {
-        const snapshot = adapter.getDetailSnapshot
-          ? await adapter.getDetailSnapshot(selectedFindingId, { signal: controller.signal })
-          : { record: await adapter.get(selectedFindingId, { signal: controller.signal }), definition: null };
+        const snapshot = await client.fetchQuery({
+          queryKey,
+          queryFn: async ({ signal }) => adapter.getDetailSnapshot
+            ? adapter.getDetailSnapshot(selectedFindingId, { signal })
+            : { record: await adapter.get(selectedFindingId, { signal }), definition: null },
+        });
+        if (!current) return;
         if (published && adapter.getDetailSnapshot && snapshot.record && !snapshot.definition) throw new Error("Missing published detail definition");
-        if (!current || controller.signal.aborted) return;
         setDetailSnapshot(snapshot);
       } catch (error) {
-        if (!current || controller.signal.aborted) return;
+        if (!current) return;
         const kind = classifyFindingLedgerReadFailure(error);
         if (kind !== "unknown") setDetailSnapshot({ record: null, definition: null });
         setDetailError(kind);
         if (kind === "unauthenticated") onUnauthenticated?.();
       } finally {
-        if (!current || controller.signal.aborted) return;
+        if (!current) return;
         setDetailLoading(false);
       }
     })();
     return () => {
-      current = false;
-      controller.abort();
+      if (cancelDetail.current === cancel) cancelDetail.current = null;
+      cancel();
     };
-  }, [adapter, detailRefreshKey, selectedFindingId]);
+  }, [adapter, appMode, client, detailRefreshKey, selectedFindingId, publishedDetailBlocked]);
 
   function openReport(related: { id: string; code: string } | null = null) {
     const extra = related ? `&related=${encodeURIComponent(related.id)}&relatedCode=${encodeURIComponent(related.code)}` : "";
@@ -233,7 +236,7 @@ function FindingsLedgerBody({
   }
 
   function handleReset() {
-    const emptyQuery = createEmptyQuery(schema.queryFields);
+    const emptyQuery = createEmptyQuery(schema?.queryFields ?? []);
     setQuery(emptyQuery);
     runQuery(emptyQuery);
   }
@@ -265,24 +268,9 @@ function FindingsLedgerBody({
           )}
         </div>
 
-        {demo && (
-        <div className="demo-notice" role="note">
-          <span className="notice-mark" aria-hidden="true">i</span>
-          <p>
-            当前使用<strong>合成演示数据</strong>，只供浏览字段、列表和流程节点；不代表真实企业、人员、事件或审批结果。
-          </p>
-        </div>
-        )}
+        {demo && presentation && <presentation.Notice view={view} />}
 
-        {demo && view !== "all" && (
-          <p className="view-scope-note">
-            {view === "confirmation"
-              ? `展示处于两级确认节点的${noun}，不代表具体成员已获待办授权。`
-              : `展示处于验收节点的${noun}，不代表已提交真实整改证据。`}
-          </p>
-        )}
-
-        {(!published || definition) && <LedgerQueryForm
+        {schema && (!published || !listError && definition) && <LedgerQueryForm
           schema={schema}
           values={query}
           onChange={updateQuery}
@@ -305,7 +293,7 @@ function FindingsLedgerBody({
               </button>
             </div>
           )}
-          {!loading && !listError && (
+          {!loading && !listError && schema && (
             <LedgerTable
               columns={schema.columns}
               rows={page.items}
@@ -351,7 +339,8 @@ function FindingsLedgerBody({
       </section>}
 
       {reporting && submitAdapter && (
-        <FindingReportForm
+        <FindingReportFormCore
+          validateDraft={presentation?.validateDraft}
           adapter={submitAdapter}
           onClose={closeTab}
           onSubmitted={handleSubmitted}
@@ -363,11 +352,13 @@ function FindingsLedgerBody({
       )}
 
       {selectedFindingId && !reporting && (
-        <FindingDetails
-          definition={detailSnapshot.definition}
-          finding={detail}
-          loading={detailLoading}
-          error={detailError}
+        <FindingDetailsCore
+          Fields={presentation?.Fields}
+          Actions={presentation?.Actions}
+          definition={publishedDetailBlocked ? null : detailSnapshot.definition}
+          finding={publishedDetailBlocked ? null : detail}
+          loading={!publishedDetailBlocked && detailLoading}
+          error={publishedDetailBlocked ? listError : detailError}
           onClose={closeTab}
           onRetry={() => setDetailRefreshKey((value) => value + 1)}
           commandAdapter={commandAdapter}
@@ -390,6 +381,6 @@ type Props = Omit<ComponentProps<typeof FindingsLedgerCore>, "adapter"> & {
   adapter?: ComponentProps<typeof FindingsLedgerCore>["adapter"];
 };
 
-export function FindingsLedger({ adapter = mockFindingLedger, ...props }: Props) {
-  return <FindingsLedgerCore {...props} adapter={adapter} />;
+export function FindingsLedger({ adapter = mockFindingLedger, presentation = syntheticFindingPresentation, ...props }: Props) {
+  return <FindingsLedgerCore {...props} adapter={adapter} presentation={presentation} />;
 }
