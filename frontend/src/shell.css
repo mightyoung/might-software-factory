@@ -594,3 +594,22 @@
 .sidebar :is(a, button):active {
   background: var(--rule);
 }
+
+.sidebar[hidden] { display: none; }
+.workbench-dialog {
+  width: min(30rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  overflow: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: var(--ink);
+}
+.workbench-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.workbench-dialog h2 { margin-top: 0; font-size: 1.1rem; }
+.quick-navigation input { width: 100%; padding: 0.6rem; }
+.quick-navigation ul { list-style: none; padding: 0; max-height: 15rem; overflow: auto; }
+.quick-navigation a { display: block; padding: 0.5rem; color: inherit; }
+.workbench-dialog :is(a, button, input):focus-visible { outline: 2px solid var(--petrol); outline-offset: 2px; }
+@media (max-width: 760px) { .topbar-right { flex-wrap: wrap; } }

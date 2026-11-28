@@ -1,17 +1,21 @@
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { useQuery } from "@tanstack/react-query";
+import { tableFeatures, useTable } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog";
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { unknownOutcome } from "../toolLoans/model";
+import { createWorkspaceQueryClient } from "../../api/workspaceQueryClient";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type { LedgerConfiguration } from "../ledgerConfig/model";
 import { createPublishedLedgerAdapter } from "./model";
 import type {
+  LedgerRecord,
   PublishedLedger,
   PublishedLedgerAdapter,
   Query,
   RecordDetail,
-  RecordPage,
   Values,
 } from "./model";
 import "./published-ledgers.css";
@@ -21,6 +25,7 @@ type Editor = {
   definition: LedgerConfiguration;
   values: Values;
   organizationId: string;
+  initial: { values: Values; organizationId: string };
   editing: boolean;
 };
 const display = (value: unknown) =>
@@ -32,19 +37,75 @@ const display = (value: unknown) =>
         : "否"
       : String(value);
 
-export function PublishedLedgersPage({
-  adapter,
-  onUnauthenticated,
-  active = true,
-}: {
+const publishedTableFeatures = tableFeatures({});
+const getRecordId = (record: LedgerRecord) => record.id;
+
+function PublishedRecordsTable({ definition, rows, locked, onOpen }: {
+  definition: LedgerConfiguration;
+  rows: readonly LedgerRecord[];
+  locked: boolean;
+  onOpen(id: string): void;
+}) {
+  const columns = useMemo(() => definition.listFields.map((key) => ({
+    id: key,
+    header: definition.fields.find((field) => field.key === key)?.label ?? key,
+    accessorFn: (record: LedgerRecord) => display(record.values[key]),
+  })), [definition]);
+  const data = useMemo(() => [...rows], [rows, columns]);
+  const table = useTable({ features: publishedTableFeatures, columns, data, getRowId: getRecordId });
+  const visibleColumns = table.getAllLeafColumns();
+
+  return (
+    <div className="published-table">
+      <table>
+        <caption>{definition.name}记录</caption>
+        <thead>
+          <tr>
+            {visibleColumns.map((column) => (
+              <th key={column.id} scope="col">{String(column.columnDef.header)}</th>
+            ))}
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((record) => (
+            <tr key={record.id}>
+              {visibleColumns.map((column) => (
+                <td key={column.id}>{record.getValue<string>(column.id)}</td>
+              ))}
+              <td>
+                <Button label="查看记录" variant="secondary" isDisabled={locked} onClick={() => onOpen(record.id)} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+type PageProps = {
   adapter: PublishedLedgerAdapter;
   active?: boolean;
   onUnauthenticated(): void;
-}) {
-  const [ledgers, setLedgers] = useState<PublishedLedger[]>([]);
-  const [ledger, setLedger] = useState<PublishedLedger | null>(null);
-  const [result, setResult] = useState<RecordPage | null>(null);
+};
+
+export function PublishedLedgersPage(props: PageProps) {
+  const [scope, setScope] = useState(() => ({ adapter: props.adapter, generation: 0 }));
+  if (scope.adapter !== props.adapter) {
+    setScope({ adapter: props.adapter, generation: scope.generation + 1 });
+    return null;
+  }
+  return <PublishedLedgersSession key={scope.generation} {...props} />;
+}
+
+function PublishedLedgersSession({ adapter, onUnauthenticated, active = true }: PageProps) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ ledger: PublishedLedger; detail: RecordDetail } | null>(null);
+  const [pendingDiscard, setPendingDiscard] = useState<{
+    editor: Editor; directory: PublishedLedger[] | undefined; opener: Element | null; proceed: () => void;
+  } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Query>({
     page: 1,
@@ -52,99 +113,104 @@ export function PublishedLedgersPage({
     filters: [],
   });
   const [attempt, setAttempt] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [querying, setQuerying] = useState(false);
+  const [recordAttempt, setRecordAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [filterError, setFilterError] = useState("");
   const [notice, setNotice] = useState("");
   const recordForm = useRef<HTMLFormElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusAfterConfirmation = useRef<Element | boolean | null>(null);
   const generation = useRef(0);
   const command = useRef<(() => Promise<unknown>) | null>(null);
   const sending = useRef(false);
   const [uncertain, setUncertain] = useState(false);
   const locked = busy || uncertain;
-  const original = editor?.detail?.record.values;
-  const dirty =
-    !!editor?.editing &&
-    JSON.stringify(editor.values) !== JSON.stringify(original ?? {});
+  const dirty = !!editor?.editing && (
+    editor.organizationId !== editor.initial.organizationId ||
+    JSON.stringify(editor.values) !== JSON.stringify(editor.initial.values)
+  );
   useUnsavedGuard(
     dirty || sending.current || uncertain,
     "当前编辑或操作尚未确认，可在当前标签页返回核对。确定离开吗？",
     active,
   );
-  function failed(cause: unknown) {
+  function failureMessage(cause: unknown) {
     const status = cause instanceof ApiError ? cause.status : 0;
-    if (status === 401) {
-      onUnauthenticated();
-      return;
-    }
+    if (status === 401) return "";
     // Denial of this attempt does not confirm an earlier uncertain result.
     if (status === 403)
-      setError("当前授权不允许此操作，" + (uncertain ? "原结果未确认。" : "请刷新台账核对权限。"));
-    else if (status === 409)
-      setError("记录或台账定义已更新。输入已保留，请重新打开记录核对。");
-    else if (status === 400 || status === 422)
-      setError("请检查必填字段、数值、日期和所属组织。");
-    else setError("操作未确认成功。请重试，写入重试会沿用原请求标识。");
+      return "当前授权不允许此操作，" + (uncertain ? "原结果未确认。" : "请刷新台账核对权限。");
+    if (status === 409)
+      return "记录或台账定义已更新。输入已保留，请重新打开记录核对。";
+    if (status === 400 || status === 422)
+      return "请检查必填字段、数值、日期和所属组织。";
+    return "操作未确认成功。请重试，写入重试会沿用原请求标识。";
   }
+  function failed(cause: unknown) {
+    if (cause instanceof ApiError && cause.status === 401) onUnauthenticated();
+    else setError(failureMessage(cause));
+  }
+  // AppShell remounts its children on identity changes. Scope this client to
+  // this mounted HTTP page and adapter rather than sharing readable data globally.
+  const [reads] = useState(createWorkspaceQueryClient);
+  const directory = useQuery({
+    queryKey: ["published-ledgers", attempt],
+    queryFn: ({ signal }) => adapter.list(signal),
+  }, reads);
+  const ledgers = directory.isSuccess ? directory.data : [];
+  const ledger = ledgers.find(item => item.key === selectedKey) ?? null;
+  const detail = editor?.detail;
+  const mayDelete = active && !locked && ledger?.capabilities.delete && detail?.capabilities.delete;
+  const deleteConfirmation = mayDelete && pendingDelete?.ledger === ledger && pendingDelete.detail === detail
+    ? pendingDelete : null;
+  useEffect(() => { setPendingDelete(null); }, [active, ledger, detail, mayDelete]);
+  const discardConfirmation = active && !locked && pendingDiscard?.editor === editor
+    && pendingDiscard.directory === directory.data ? pendingDiscard : null;
+  useEffect(() => { setPendingDiscard(null); }, [active, editor, directory.data, locked]);
   useEffect(() => {
-    const controller = new AbortController();
-    const mine = ++generation.current;
-    setLoading(true);
-    setError("");
-    adapter
-      .list(controller.signal)
-      .then((items) => {
-        if (mine !== generation.current) return;
-        setLedgers(items);
-        setLedger(
-          (current) => items.find((item) => item.key === current?.key) ?? null,
-        );
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) failed(cause);
-      })
-      .finally(() => {
-        if (mine === generation.current) setLoading(false);
-      });
+    const opener = focusAfterConfirmation.current;
+    focusAfterConfirmation.current = null;
+    if (active && (opener === true || opener && (!opener.isConnected || opener.matches(":disabled,[aria-disabled=true]"))))
+      heading.current?.focus();
+  }, [active, deleteConfirmation, discardConfirmation]);
+  const records = useQuery({
+    queryKey: ["published-records", ledger?.key, ledger?.definitionVersion, attempt, recordAttempt, query],
+    enabled: !!ledger?.capabilities.read,
+    queryFn: ({ signal }) => adapter.query(ledger!.key, query, signal),
+  }, reads);
+  const result = records.isSuccess ? records.data : null;
+  const loading = directory.isPending;
+  const querying = records.isFetching;
+  useEffect(() => {
+    generation.current += 1;
     return () => {
-      controller.abort();
       generation.current += 1;
+      void reads.cancelQueries({ queryKey: ["published-record-detail"] });
     };
-  }, [adapter, attempt]);
+  }, [reads, attempt]);
+  const readFailure = directory.error ?? records.error;
+  const readError = readFailure ? failureMessage(readFailure) : "";
   useEffect(() => {
-    if (!ledger?.capabilities.read) {
-      setResult(null);
-      return;
-    }
-    const controller = new AbortController();
-    setQuerying(true);
-    setError("");
-    adapter
-      .query(ledger.key, query, controller.signal)
-      .then((next) => {
-        if (!controller.signal.aborted) setResult(next);
-      })
-      .catch((cause) => {
-        if (!controller.signal.aborted) {
-          setResult(null);
-          failed(cause);
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setQuerying(false);
-      });
-    return () => controller.abort();
-  }, [adapter, ledger, query, attempt]);
-  function mayDiscard() {
-    return !locked && !sending.current && (!dirty || window.confirm("当前记录有未保存的修改，继续吗？"));
+    if (directory.error) setSelectedKey(null);
+    if (readFailure instanceof ApiError && readFailure.status === 401) onUnauthenticated();
+  }, [directory.error, readFailure, onUnauthenticated]);
+  function discardThen(proceed: () => void) {
+    if (!active || locked || sending.current || deleteConfirmation || discardConfirmation) return;
+    if (dirty && editor) setPendingDiscard({ editor, directory: directory.data, opener: document.activeElement, proceed });
+    else proceed();
+  }
+  function confirmDiscard() {
+    setPendingDiscard(null);
+    if (!discardConfirmation || sending.current) return;
+    focusAfterConfirmation.current = discardConfirmation.opener;
+    discardConfirmation.proceed();
   }
   function select(next: PublishedLedger) {
-    if (busy || !mayDiscard()) return;
-    setLedger(next);
+    setSelectedKey(next.key);
     setFilters({});
+    setFilterError("");
     setEditor(null);
-    setResult(null);
     setNotice("");
     setError("");
     setQuery({
@@ -154,10 +220,8 @@ export function PublishedLedgersPage({
     });
   }
   function create() {
-    if (!ledger || busy || !mayDiscard()) return;
-    setEditor({
-      detail: null,
-      definition: ledger.definition,
+    if (!ledger) return;
+    const initial = {
       values: Object.fromEntries(
         ledger.definition.fields
           .filter((field) => field.type === "boolean")
@@ -165,25 +229,29 @@ export function PublishedLedgersPage({
       ),
       organizationId:
         ledger.organizations.length === 1 ? ledger.organizations[0]!.id : "",
-      editing: true,
-    });
+    };
+    setEditor({ detail: null, definition: ledger.definition, ...initial, initial, editing: true });
     setNotice("");
     setError("");
   }
   async function open(id: string) {
-    if (!ledger || busy || !mayDiscard()) return;
+    if (!ledger) return;
     const mine = generation.current;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const detail = await adapter.detail(ledger.key, id);
+      const detail = await reads.fetchQuery({
+        queryKey: ["published-record-detail", ledger.key, id],
+        queryFn: ({ signal }) => adapter.detail(ledger.key, id, signal),
+      });
       if (mine === generation.current) {
         setEditor({
           detail,
           definition: detail.definition,
           values: detail.record.values,
           organizationId: detail.record.organizationId,
+          initial: detail.record,
           editing: false,
         });
       }
@@ -202,7 +270,7 @@ export function PublishedLedgersPage({
       const value = filters[field.key];
       if (!value) continue;
       if (field.type === "number" && !Number.isFinite(Number(value))) {
-        setError("查询数值格式无效。");
+        setFilterError("查询数值格式无效。");
         return;
       }
       next.push({
@@ -216,10 +284,13 @@ export function PublishedLedgersPage({
               : value,
       });
     }
+    setFilterError("");
     setQuery((current) => ({ ...current, filters: next, page: 1 }));
+    // Explicit submission always reads again, even when the filter key is unchanged.
+    setRecordAttempt(value => value + 1);
   }
   function refreshRecords() {
-    setQuery((current) => ({ ...current }));
+    setRecordAttempt(value => value + 1);
   }
   function endTracking() {
     if (sending.current || !uncertain || !window.confirm(
@@ -230,21 +301,32 @@ export function PublishedLedgersPage({
     setEditor(null);
     setError("");
   }
-  function mutate(action: "save" | "delete") {
-    if (!ledger || !editor || locked || sending.current) return;
-    if (action === "delete" && !window.confirm("删除这条草稿记录吗？")) return;
+  function save() {
+    if (!ledger || !editor || locked || sending.current || deleteConfirmation || discardConfirmation) return;
     const key = ledger.key;
     const record = editor.detail?.record;
     const requestId = crypto.randomUUID();
     const values = editor.values;
     const organizationId = editor.organizationId;
     const definitionVersion = ledger.definitionVersion;
-    command.current = () => action === "delete"
-      ? adapter.remove(key, record!.id, { requestId, expectedVersion: record!.version })
-      : record
-        ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
-        : adapter.create(key, { requestId, definitionVersion, organizationId, values });
-    void send(action === "delete" ? "草稿已删除。" : "记录已保存。");
+    command.current = () => record
+      ? adapter.update(key, record.id, { requestId, expectedVersion: record.version, values })
+      : adapter.create(key, { requestId, definitionVersion, organizationId, values });
+    void send("记录已保存。");
+  }
+  function requestDelete() {
+    if (mayDelete && ledger && detail && !discardConfirmation && !sending.current && !command.current) {
+      setPendingDelete({ ledger, detail });
+    }
+  }
+  function confirmDelete() {
+    setPendingDelete(null);
+    if (!deleteConfirmation || sending.current || command.current) return;
+    const { ledger: { key }, detail: { record: { id, version } } } = deleteConfirmation;
+    const request = { requestId: crypto.randomUUID(), expectedVersion: version };
+    focusAfterConfirmation.current = true;
+    command.current = () => adapter.remove(key, id, request);
+    void send("草稿已删除。");
   }
   async function send(success: string) {
     const operation = command.current;
@@ -262,6 +344,7 @@ export function PublishedLedgersPage({
       setUncertain(false);
       setNotice(success);
       setQuery((current) => ({ ...current, page: 1 }));
+      refreshRecords();
     } catch (cause) {
       if (mine !== generation.current) return;
       // The ledger command service checks the exact receipt before the version.
@@ -278,22 +361,37 @@ export function PublishedLedgersPage({
   const editing = !!editor?.editing;
   return (
     <section className="published-ledgers">
+      {deleteConfirmation && <WorkbenchConfirmDialog
+        title="删除这条草稿记录？"
+        description="删除后，这条草稿将从台账中移除。"
+        cancelLabel="取消"
+        confirmLabel="确认删除"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+      />}
+      {discardConfirmation && <WorkbenchConfirmDialog
+        title="放弃未保存的记录修改？"
+        description="当前记录的未保存修改将丢失。"
+        confirmLabel="确认放弃"
+        onCancel={() => setPendingDiscard(null)}
+        onConfirm={confirmDiscard}
+      />}
       <div className="page-heading">
-        <h1>业务台账</h1>
+        <h1 ref={heading} tabIndex={-1}>业务台账</h1>
         <Button
           label="刷新台账"
           variant="secondary"
           isDisabled={locked || loading}
-          onClick={() => {
-            if (mayDiscard()) {
-              setEditor(null);
-              setAttempt((value) => value + 1);
-            }
-          }}
+          onClick={() => discardThen(() => {
+            setEditor(null);
+            setError("");
+            setFilterError("");
+            setAttempt((value) => value + 1);
+          })}
         />
       </div>
       {loading && <p role="status">正在读取已发布台账…</p>}
-      {error && <p role="alert">{error}</p>}
+      {(readError || filterError || error) && <p role="alert">{[readError, filterError, error].filter(Boolean).join(" ")}</p>}
       {uncertain && (
         <div className="published-actions">
           <Button label="重试原操作" isDisabled={busy} onClick={() => void send("原操作已确认。")} />
@@ -311,7 +409,7 @@ export function PublishedLedgersPage({
               key={item.key}
               aria-current={ledger?.key === item.key ? "true" : undefined}
               disabled={locked}
-              onClick={() => select(item)}
+              onClick={() => discardThen(() => select(item))}
             >
               {item.definition.name}
             </button>
@@ -326,7 +424,7 @@ export function PublishedLedgersPage({
                   <Button
                     label="新增记录"
                     isDisabled={locked || loading}
-                    onClick={create}
+                    onClick={() => discardThen(create)}
                   />
                 )}
               </div>
@@ -390,42 +488,12 @@ export function PublishedLedgersPage({
                   {result && (
                     <>
                       <p>共 {result.total} 条记录</p>
-                      <div className="published-table">
-                        <table>
-                          <caption>{ledger.definition.name}记录</caption>
-                          <thead>
-                            <tr>
-                              {ledger.definition.listFields.map((key) => (
-                                <th key={key} scope="col">
-                                  {ledger.definition.fields.find(
-                                    (field) => field.key === key,
-                                  )?.label ?? key}
-                                </th>
-                              ))}
-                              <th scope="col">操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {result.records.map((record) => (
-                              <tr key={record.id}>
-                                {ledger.definition.listFields.map((key) => (
-                                  <td key={key}>
-                                    {display(record.values[key])}
-                                  </td>
-                                ))}
-                                <td>
-                                  <Button
-                                    label="查看记录"
-                                    variant="secondary"
-                                    isDisabled={locked}
-                                    onClick={() => void open(record.id)}
-                                  />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <PublishedRecordsTable
+                        definition={ledger.definition}
+                        rows={result.records}
+                        locked={locked}
+                        onOpen={(id) => discardThen(() => { void open(id); })}
+                      />
                       {result.total === 0 && <p>没有符合条件的记录。</p>}
                       <div className="published-actions">
                         <Button
@@ -473,9 +541,7 @@ export function PublishedLedgersPage({
                       label="关闭记录"
                       variant="secondary"
                       isDisabled={locked}
-                      onClick={() => {
-                        if (mayDiscard()) setEditor(null);
-                      }}
+                      onClick={() => discardThen(() => setEditor(null))}
                     />
                   </div>
                   {editor.detail && (
@@ -488,7 +554,7 @@ export function PublishedLedgersPage({
                     ref={recordForm}
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void mutate("save");
+                      save();
                     }}
                   >
                     <fieldset disabled={locked || !editing}>
@@ -497,7 +563,7 @@ export function PublishedLedgersPage({
                         所属组织
                         <select
                           required
-                          disabled={!!editor.detail || !editing || locked}
+                          disabled={!!editor.detail}
                           value={editor.organizationId}
                           onChange={(event) =>
                             setEditor(
@@ -592,7 +658,7 @@ export function PublishedLedgersPage({
                           isDisabled={locked || !editor.organizationId}
                           onClick={() => {
                             if (recordForm.current?.reportValidity())
-                              void mutate("save");
+                              save();
                           }}
                         />
                       )}
@@ -615,8 +681,8 @@ export function PublishedLedgersPage({
                         <Button
                           label="删除草稿"
                           variant="secondary"
-                          isDisabled={locked}
-                          onClick={() => void mutate("delete")}
+                          isDisabled={!mayDelete}
+                          onClick={requestDelete}
                         />
                       )}
                     </div>
