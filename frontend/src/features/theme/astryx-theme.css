@@ -1,25 +1,3 @@
-/* Hallmark v2.0.0 · app · Astryx component tokens bound to the shared platform palette */
-/* Critique: use the library's real button states while keeping the existing page hierarchy. */
-:root {
-  --color-accent: var(--petrol);
-  --color-on-accent: var(--white);
-  --color-text-accent: var(--petrol);
-  --color-accent-muted: var(--tint);
-  --color-neutral: var(--surface-soft);
-  --color-background-surface: var(--white);
-  --color-background-body: var(--paper);
-  --color-text-primary: var(--ink);
-  --color-text-secondary: var(--muted);
-  --color-text-disabled: var(--disabled-ink);
-  --color-border: var(--rule);
-  --font-family-body: var(--body-face);
-  --font-family-heading: var(--body-face);
-  --font-family-code: var(--mono);
-  --radius-element: 3px;
-  --focus-outline-color: var(--focus);
-  --focus-outline-offset: 3px;
-}
-
 .theme-selector {
   display: inline-flex;
   align-items: center;

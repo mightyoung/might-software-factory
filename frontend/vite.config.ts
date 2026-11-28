@@ -2,9 +2,18 @@ import react from "@vitejs/plugin-react";
 import { loadEnv } from "vite";
 import { configDefaults, defineConfig } from "vitest/config";
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => ({
+  // The browser entry fixes its transport for the lifetime of the page. Propagate
+  // it into leaf UI branches so each release omits the other mode's presentation.
+  // Development and embedded component tests retain the runtime mode provider.
+  define: command === "build" ? {
+    "import.meta.env.MSF_BROWSER_MODE": JSON.stringify(loadEnv(mode, ".", "").VITE_API_MODE === "http" ? "http" : "synthetic"),
+  } : {},
   plugins: [react()],
   build: {
+    // Keep the HTTP workbench under its existing gzip limit without moving lazy boundaries.
+    minify: "terser",
+    terserOptions: { compress: { passes: 2 }, maxWorkers: 2 },
     rolldownOptions: {
       output: {
         codeSplitting: {
