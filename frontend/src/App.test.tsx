@@ -31,10 +31,11 @@ describe("已登录时的应用路由与导航", () => {
   beforeEach(() => setPath("/safety/findings"));
 
   it("旧的无租户路径被规范化为带租户前缀的路径，并保留查询串", async () => {
-    renderSignedIn("demo.manager", "/safety/findings?caseId=00000000-0000-4000-8000-000000000001");
+    const query = "?caseId=00000000-0000-4000-8000-000000000001&caseId=ignored&tag=%2f&tag=%2F&empty=&q=a+b";
+    renderSignedIn("demo.manager", "/safety/findings" + query);
     expect(await screen.findByRole("heading", { name: "隐患台账" })).toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
-    expect(window.location.search).toBe("?caseId=00000000-0000-4000-8000-000000000001");
+    expect(window.location.search).toBe(query);
   });
 
   it("根路径进入第一个有权应用的入口", async () => {
@@ -55,6 +56,67 @@ describe("已登录时的应用路由与导航", () => {
     expect(screen.getByRole("heading", { name: "设备管理" })).toBeInTheDocument();
     expect(window.location.pathname).toBe(`${T}/equipment/overview`);
     expect(await screen.findByRole("link", { name: "设备概览" })).toBeInTheDocument();
+  });
+
+  it("只保存侧栏折叠偏好，重新打开工作台时仍生效", async () => {
+    const key = "might.sidebar.collapsed";
+    localStorage.removeItem(key);
+    try {
+      const first = renderSignedIn("demo.manager");
+      const nav = await screen.findByRole("navigation", { name: "安全管理导航" });
+      expect(nav).toBeVisible();
+      const collapse = screen.getByRole("button", { name: "收起导航" });
+      expect(collapse).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(collapse);
+      expect(screen.queryByRole("navigation", { name: "安全管理导航" })).toBeNull();
+      expect(localStorage.getItem(key)).toBe("1");
+      first.unmount();
+
+      renderSignedIn("demo.manager");
+      const expand = await screen.findByRole("button", { name: "展开导航" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(expand);
+      expect(await screen.findByRole("navigation", { name: "安全管理导航" })).toBeVisible();
+      expect(localStorage.getItem(key)).toBe("0");
+    } finally {
+      localStorage.removeItem(key);
+    }
+  });
+
+  it("快捷导航只能搜索当前会话实际可见的页面", async () => {
+    // jsdom has no native modal API. Playwright separately verifies real focus containment.
+    const dialog = HTMLDialogElement.prototype;
+    const showModal = dialog.showModal;
+    const close = dialog.close;
+    dialog.showModal = function () { this.setAttribute("open", ""); };
+    dialog.close = function () { this.removeAttribute("open"); };
+    try {
+      renderSignedIn("demo.safety");
+      const home = await screen.findByRole("link", { name: "隐患台账" });
+      home.focus();
+      fireEvent.keyDown(home, { key: "k", ctrlKey: true });
+      const modal = screen.getByRole("dialog", { name: "快捷导航" });
+      const search = within(modal).getByRole("searchbox", { name: "搜索页面" });
+      expect(search).toHaveFocus();
+      fireEvent.change(search, { target: { value: "风险管控" } });
+      expect(within(modal).queryByRole("link", { name: "风险管控" })).toBeNull();
+      expect(within(modal).getByText("没有匹配的页面")).toBeVisible();
+      // The app title and its current menu label refer to one authorized href.
+      for (const term of ["生产安全", "隐患台账"]) {
+        fireEvent.change(search, { target: { value: term } });
+        const links = within(modal).getAllByRole("link");
+        expect(links).toHaveLength(1);
+        expect(links[0]).toHaveTextContent("隐患台账");
+        expect(links[0]).toHaveAttribute("href", `${T}/safety/findings`);
+      }
+      fireEvent.click(within(modal).getByRole("button", { name: "关闭" }));
+      expect(screen.queryByRole("dialog", { name: "快捷导航" })).toBeNull();
+      expect(home).toHaveFocus();
+    } finally {
+      cleanup();
+      dialog.showModal = showModal;
+      dialog.close = close;
+    }
   });
 
   it("支持浏览器历史后退与前进恢复导航", async () => {
@@ -327,7 +389,7 @@ describe("security-context URL selection lifetime", () => {
     second.ledger.get = vi.fn(second.ledger.get);
     let current = first;
     const adapter: SessionAdapter = { ...base, restore: async () => firstSession, login: async () => { current = second; return secondSession; } };
-    setPath(`${T}/safety/findings?caseId=00000000-0000-4000-8000-000000000001`);
+    setPath(`${T}/safety/findings?tag=%2f&caseId=00000000-0000-4000-8000-000000000001&tag=%2F&%63aseId=second&empty=&q=a+b`);
     render(<App sessionAdapter={adapter} createFindingStore={() => current} />);
     await screen.findByRole("heading", { name: "登录" });
     await waitFor(() => expect(window.location.pathname).toBe("/login"));
@@ -335,7 +397,7 @@ describe("security-context URL selection lifetime", () => {
     fillAndSubmit("second", "password");
     await screen.findByRole("heading", { name: "隐患台账" });
     await waitFor(() => expect(window.location.pathname).toBe(`${T}/safety/findings`));
-    expect(window.location.search).not.toContain("caseId");
+    expect(window.location.search).toBe("?tag=%2f&tag=%2F&empty=&q=a+b");
     expect(second.ledger.get).not.toHaveBeenCalled();
     expect(screen.queryByRole("complementary", { name: "隐患详情面板" })).not.toBeInTheDocument();
   });
@@ -344,11 +406,13 @@ describe("security-context URL selection lifetime", () => {
     const { createSyntheticFindingStore } = await import("./adapters/syntheticFindingStore");
     const store = createSyntheticFindingStore(); store.ledger.get = vi.fn(store.ledger.get);
     const id = "00000000-0000-4000-8000-000000000001";
-    setPath(`/safety/findings?caseId=${id}`);
+    const query = `?caseId=${id}&caseId=ignored&tag=%2f&tag=%2F&empty=`;
+    setPath("/safety/findings" + query);
     render(<App sessionAdapter={createSyntheticSessionAdapter({ signedInAs: "demo.safety" })} findingStore={store} />);
     await screen.findByRole("complementary", { name: "隐患详情面板" });
     await waitFor(() => expect(store.ledger.get).toHaveBeenCalledWith(id, expect.objectContaining({ signal: expect.any(AbortSignal) })));
-    expect(window.location.search).toBe(`?caseId=${id}`);
+    expect(vi.mocked(store.ledger.get).mock.calls.every(([selected]) => selected === id)).toBe(true);
+    expect(window.location.search).toBe(query);
   });
 });
 

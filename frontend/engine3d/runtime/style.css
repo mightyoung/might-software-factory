@@ -34,3 +34,9 @@ fieldset p { overflow-wrap: anywhere; }
 #resize-gizmo { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .resize-handle { position: absolute; transform: translate(-50%, -50%); width: 16px; height: 16px; border: 2px solid #674400; border-radius: 50%; background: #ffcb45; pointer-events: auto; cursor: grab; touch-action: none; }
 .resize-handle:active { cursor: grabbing; }
+
+#snapshot-import { max-width: 100%; }
+#video-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .7rem; }
+#video-slots article { border: 1px solid #aac3bd; border-radius: .5rem; padding: .5rem; }
+#video-slots h3 { margin: 0; font-size: 1rem; }
+#video-slots video { width: 100%; aspect-ratio: 16/9; background: #123b35; display: block; margin: .4rem 0; }

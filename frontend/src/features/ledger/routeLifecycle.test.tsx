@@ -35,7 +35,7 @@ it("does not expose a stale edit form before its route definition arrives, retai
   expect(input.editMounts).toBe(0);
   expect(screen.queryByLabelText("编号 *")).not.toBeInTheDocument();
   await act(async () => { resolve(data("EDIT")); });
-  expect(screen.getByLabelText("编号 *")).toHaveValue("immediate edit");
+  expect(await screen.findByLabelText("编号 *")).toHaveValue("immediate edit");
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   await screen.findByRole("heading", { name: "保存成功" });
   expect(a.update).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ code: "immediate edit" }), expect.any(String));
@@ -52,5 +52,5 @@ it("does not show record A while the route for record B is loading", async () =>
   await act(async () => { navigate(`/t/t/apps/inventory/entities/widget/records/${OTHER_ID}`); });
   expect(screen.queryByText("record A")).not.toBeInTheDocument();expect(screen.queryByRole("button", { name: "修改物品" })).not.toBeInTheDocument();
   await act(async () => { resolve({ ...RECORD, id: OTHER_ID, values: { ...RECORD.values, code: "record B" } }); });
-  expect(screen.getByText("record B")).toBeInTheDocument();expect(screen.queryByText("record A")).not.toBeInTheDocument();
+  expect(await screen.findByText("record B")).toBeInTheDocument();expect(screen.queryByText("record A")).not.toBeInTheDocument();
 });

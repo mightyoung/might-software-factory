@@ -9,6 +9,7 @@ import com.mightyoung.softwarefactory.identity.CurrentTenantContext;
 import com.mightyoung.softwarefactory.identity.SessionContextResolver;
 import com.mightyoung.softwarefactory.tenancy.TenantApplicationReadRepository;
 import com.mightyoung.softwarefactory.tenancy.TenantApplicationState;
+import java.sql.SQLException;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
@@ -76,6 +77,49 @@ class RuntimeLedgerReadPostgresTest {
             status.setRollbackOnly();
             return null;
         });
+    }
+
+    @Test void uncommittedAndRolledBackPublicationLeaveThePreviouslyPublishedLedgerVisible() throws SQLException {
+        var revised = new Definition("采购新版", initial.fields(), initial.listFields(), initial.queryFields(), initial.workflow());
+        tx.executeWithoutResult(status -> {
+            configurations.save(tenant, member, key, new SaveRequest(UUID.randomUUID(), 0L, initial));
+            configurations.publish(tenant, member, key, new PublishRequest(1L, 1L, null));
+            configurations.save(tenant, member, key, new SaveRequest(UUID.randomUUID(), 1L, revised));
+        });
+
+        // An independent observer uses an unbound connection while the writer's transaction is still open.
+        try (var connection = source.getConnection()) {
+            connection.setAutoCommit(false);
+            var observerDb = DSL.using(connection, SQLDialect.POSTGRES);
+            var observerReads = new JooqRuntimeLedgerReadRepository(observerDb, json);
+            observerDb.execute("set local statement_timeout = '5s'");
+            var observerPid = observerDb.fetchValue("select pg_backend_pid()");
+            tx.executeWithoutResult(status -> {
+                assertThat(db.fetchValue("select pg_backend_pid()")).isNotEqualTo(observerPid);
+                var attempted = configurations.publish(tenant, member, key, new PublishRequest(2L, 2L, 1L));
+                assertThat(attempted.publishedVersion()).isEqualTo(2L);
+                assertThat(reads.published(tenant, key).definition()).isEqualTo(revised);
+                assertThat(observerReads.published(tenant, key)).isEqualTo(new Published(key, 1, initial));
+                status.setRollbackOnly();
+            });
+            connection.commit();
+            assertThat(observerReads.published(tenant, key)).isEqualTo(new Published(key, 1, initial));
+            assertThat(observerDb.fetch("select version from public.ledger_configuration_publication"
+                    + " where tenant_id=? and configuration_key=?", tenant, key).getValues(0, Long.class))
+                    .containsExactly(1L);
+            var versions = configurations.versions(tenant, key);
+            assertThat(versions).extracting(Snapshot::version).containsExactly(2L, 1L);
+            assertThat(versions.getFirst().publishedVersion()).isEqualTo(1L);
+            connection.commit();
+
+            tx.executeWithoutResult(status ->
+                    configurations.publish(tenant, member, key, new PublishRequest(2L, 2L, 1L)));
+            assertThat(observerReads.published(tenant, key)).isEqualTo(new Published(key, 2, revised));
+            assertThat(observerDb.fetch("select version from public.ledger_configuration_publication"
+                    + " where tenant_id=? and configuration_key=? order by version", tenant, key).getValues(0, Long.class))
+                    .containsExactly(1L, 2L);
+            connection.rollback();
+        }
     }
 
     @Test void authorizedEmptyQueryValidatesNormallyAndCannotRevealAnyExistingRecord() {

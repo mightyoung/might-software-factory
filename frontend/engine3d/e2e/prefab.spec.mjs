@@ -64,3 +64,55 @@ test("placing successive versions renders new devices without upgrading existing
   await expect(page.locator("#selection")).toContainText("v1 · 长 4 米");
   await expect(page.locator("#resize-tool")).toBeHidden();
 });
+
+test("draft reload preserves prefab values without stale pins or reused instance IDs", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "参数化组件库" });
+  const save = panel.getByRole("button", { name: "保存组件版本" });
+  const place = panel.getByRole("button", { name: "放入合成场景" });
+  const input = page.getByLabel("读取场景草稿");
+  async function exportDraft() {
+    const pending = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出场景草稿" }).click();
+    const chunks = [];
+    for await (const chunk of await (await pending).createReadStream()) chunks.push(chunk);
+    return Buffer.concat(chunks);
+  }
+  const importDraft = (buffer) => input.setInputFiles({ name: "prefabs.json", mimeType: "application/json", buffer });
+  const devices = () => page.locator("#devices");
+
+  await save.click();
+  await panel.getByLabel("放置 X（米）").fill("2");
+  await place.click();
+  const firstPin = devices().getByRole("button", { name: "标准输送带 · 正常 · conveyor-standard · v1" });
+  await expect(firstPin).toBeVisible();
+  const before = await exportDraft();
+  const first = JSON.parse(before).scene.devices.find(({ id }) => id === "prefab-instance-1");
+  expect(first).toMatchObject({ label: "标准输送带", position: [2, 0, 0] });
+
+  await importDraft(Buffer.from("{}"));
+  await expect(page.locator("#snapshot-error")).toBeVisible();
+  await expect(firstPin).toBeVisible();
+  expect(await exportDraft()).toEqual(before);
+
+  await page.reload();
+  await expect(firstPin).toHaveCount(0);
+  await expect(place).toBeDisabled();
+  await importDraft(before);
+  await expect(page.locator("#snapshot-status")).toContainText("已读取");
+  await expect(devices().getByRole("button", { name: "标准输送带 · 正常", exact: true })).toBeVisible();
+  await expect(firstPin).toHaveCount(0);
+  await expect(place).toBeDisabled();
+
+  await panel.getByLabel("组件标识").fill("second-conveyor");
+  await panel.getByLabel("组件名称").fill("第二条输送带");
+  await panel.getByLabel("组件长度（米）").fill("8");
+  await save.click();
+  await place.click();
+  await expect(devices().getByRole("button", { name: "第二条输送带 · 正常 · second-conveyor · v1" })).toBeVisible();
+  const after = JSON.parse(await exportDraft()).scene.devices;
+  expect(after.find(({ id }) => id === "prefab-instance-1")).toEqual(first);
+  expect(after.filter(({ id }) => id.startsWith("prefab-instance-")).map(({ id }) => id))
+    .toEqual(["prefab-instance-1", "prefab-instance-2"]);
+  expect(after.find(({ id }) => id === "prefab-instance-2")).toMatchObject({ label: "第二条输送带", equipment: { dimensions: { length: 8 } } });
+});

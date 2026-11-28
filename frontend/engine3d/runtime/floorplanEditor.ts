@@ -86,4 +86,14 @@ export function mountFloorplanEditor(onWalls: (snapshot: FloorplanGeometrySnapsh
   close.addEventListener("click", () => apply(() => { draft.finishZone(); }));
   document.querySelector("#plan-cancel")!.addEventListener("click", () => apply(() => draft.cancel()));
   render();
+  return {
+    snapshot: () => draft.snapshot(),
+    restore(plan: Parameters<FloorplanDraft["restore"]>[0]) {
+      draft.restore(plan);
+      onWalls({ walls: draft.walls });
+      error.hidden = true;
+      cursor = null;
+      render();
+    },
+  };
 }
