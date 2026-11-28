@@ -58,6 +58,33 @@ afterEach(() => {
 });
 
 describe("LedgerConfigPage", () => {
+  it("guards workflow-only changes and resets local selection when reloading the same version", async () => {
+    const api = adapter();
+    render(<LedgerConfigPage adapter={api} canManage canPublish onUnauthenticated={vi.fn()} />);
+    const entry = await screen.findByRole("button", { name: /采购申请/ });
+    fireEvent.click(entry);
+    await waitFor(() => expect(screen.getByLabelText("台账名称")).toHaveValue("采购申请"));
+    const editor = within(await screen.findByRole("region", { name: "流程设计" }));
+    await waitFor(() => expect(editor.getByRole("button", { name: "插入办理节点" })).not.toBeDisabled());
+    fireEvent.click(editor.getByRole("button", { name: "插入办理节点" }));
+    expect(editor.getByLabelText("节点名称")).toHaveValue("办理");
+    fireEvent.click(entry);
+    const confirmation = () => screen.queryByRole("alertdialog", { name: "放弃未保存的修改？" });
+    const cancel = await screen.findByRole("button", { name: "继续编辑" });
+    fireEvent.click(cancel);
+    await waitFor(() => expect(confirmation()).not.toBeInTheDocument());
+    expect(editor.getByLabelText("节点名称")).toHaveValue("办理");
+    expect(api.versions).toHaveBeenCalledTimes(1);
+    expect(api.save).not.toHaveBeenCalled();
+    fireEvent.click(entry);
+    const discard = await screen.findByRole("button", { name: "放弃并切换" });
+    fireEvent.click(discard);
+    await waitFor(() => expect(confirmation()).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("节点名称")).toHaveValue("登记"));
+    expect(api.versions).toHaveBeenCalledTimes(2);
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
   it("copies a saved historical version into an independent first draft", async () => {
     const api = adapter();
     const historical = {

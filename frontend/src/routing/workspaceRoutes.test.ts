@@ -23,3 +23,15 @@ it("matches all four generic ledger routes but preserves validation of business 
     expect(routes.match("tenant", base + tail).entityRoute).toBeNull();
   }
 });
+
+it("validates only the known finding deep-link fields without coercing first values", () => {
+  const router = match();
+  const raw = "?tab=1&tab=0&report=1&caseId=0012&caseId=ignored&related=old&relatedCode=%E4%B8%AD+%E6%96%87&x=%2f&x=%2F";
+  expect(router.findingSearch("东区", "safety/findings", raw)).toEqual({
+    standalone: true, reporting: true, caseId: "0012", relatedId: "old", relatedCode: "中 文",
+  });
+  expect(router.findingSearch("东区", "safety/findings", "?tab=01&report=1&caseId=&relatedCode=")).toEqual({
+    standalone: false, reporting: false, caseId: "", relatedId: null, relatedCode: "",
+  });
+  expect(router.findingSearch("东区", "safety/Findings", raw)).toBeUndefined();
+});

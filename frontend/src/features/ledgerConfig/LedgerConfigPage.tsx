@@ -1,3 +1,4 @@
+import { randomUuid } from "../../domain/randomUuid";
 import { Button } from "@astryxdesign/core/Button";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -5,6 +6,7 @@ import { WorkbenchConfirmDialog } from "../../components/WorkbenchConfirmDialog"
 import { useUnsavedGuard } from "../../components/useUnsavedGuard";
 import { createHttpLedgerConfig } from "./model";
 import { LedgerViewPreview } from "./LedgerViewPreview";
+import { defaultWorkflow, LedgerWorkflowEditor } from "./LedgerWorkflowEditor";
 import { LedgerViewOrder } from "./LedgerViewOrder";
 import { ApiError, createHttpClient } from "../../api/httpClient";
 import type {
@@ -105,6 +107,12 @@ function ConfigurationPreview({
         </tbody>
       </table>
       <ConfigurationOrder definition={definition} />
+      {definition.workflow ? (
+        <details>
+          <summary>查看流程图</summary>
+          <LedgerWorkflowEditor workflow={definition.workflow} disabled />
+        </details>
+      ) : <p>此版本未保存流程。</p>}
     </div>
   );
 }
@@ -125,6 +133,7 @@ export function LedgerConfigPage({
   const [items, setItems] = useState<ConfigurationSummary[]>([]);
   const [key, setKey] = useState("");
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot | null>(null);
+  const [workflowEpoch, setWorkflowEpoch] = useState(0);
   const [draft, setDraft] = useState<LedgerConfiguration>(empty);
   const [history, setHistory] = useState<ConfigurationSnapshot[]>([]);
   const [compared, setCompared] = useState<ConfigurationSnapshot | null>(null);
@@ -142,7 +151,7 @@ export function LedgerConfigPage({
   useEffect(() => { setPendingSwitch(null); }, [adapter, active]);
   const dirty = snapshot
     ? JSON.stringify(draft) !== JSON.stringify(snapshot.definition)
-    : Boolean(key || draft.name || draft.fields.length);
+    : Boolean(key || draft.name || draft.fields.length || draft.workflow);
   const protectingOperation = runningOperation.current || recovery !== null;
   const locked = busy || recovery !== null;
   useUnsavedGuard(
@@ -163,7 +172,7 @@ export function LedgerConfigPage({
         "配置已被其他人更新。你的输入已保留，请重新打开此台账核对最新版本。",
       );
     else if (cause instanceof ApiError && cause.status === 400)
-      setError("配置未通过校验，请检查字段标识、名称以及列表和查询字段。");
+      setError("配置未通过校验，请检查字段标识、名称、列表和查询字段及流程配置。");
     else setError("操作未确认成功，请稍后重试。");
   }
   useEffect(() => {
@@ -205,6 +214,7 @@ export function LedgerConfigPage({
     }
   }
   function showSnapshot(next: ConfigurationSnapshot) {
+    setWorkflowEpoch((current) => current + 1);
     setSnapshot(next);
     setDraft(next.definition);
     setCompared(null);
@@ -236,6 +246,7 @@ export function LedgerConfigPage({
     }
   }
   function create(source: ConfigurationSnapshot | null) {
+    setWorkflowEpoch((current) => current + 1);
     setKey("");
     setSnapshot(null);
     setDraft(source ? { ...structuredClone(source.definition), name: source.definition.name + "副本" } : empty());
@@ -287,7 +298,7 @@ export function LedgerConfigPage({
     const publishedVersion = snapshot?.publishedVersion ?? null;
     // Capture the immutable request at the first explicit action. A retry cannot
     // pick up another ledger, edited draft, new version, or idempotency key.
-    const id = action === "publish" ? null : crypto.randomUUID();
+    const id = action === "publish" ? null : randomUuid();
     void runOperation({
       action, key, version, sourceVersion,
       send: () => action === "save"
@@ -561,6 +572,13 @@ export function LedgerConfigPage({
             onChange={(property, keys) =>
               setDraft((current) => ({ ...current, [property]: keys }))
             }
+          />
+          {!draft.workflow && <p>尚未保存流程，画布显示的是默认示意。编辑后才会保存流程。</p>}
+          <LedgerWorkflowEditor
+            key={workflowEpoch}
+            workflow={draft.workflow ?? defaultWorkflow()}
+            disabled={!active || !canManage || locked || loading}
+            onChange={(workflow) => setDraft((current) => ({ ...current, workflow }))}
           />
           <LedgerViewPreview definition={draft} />
           {recovery && (

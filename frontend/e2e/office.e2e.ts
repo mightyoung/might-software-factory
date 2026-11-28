@@ -240,3 +240,42 @@ test("作业指导书可导出中文多段落 TXT，关闭前仍提醒保存完�
   await dialog.getByRole("button", { name: "关闭文档" }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("Office 关闭检查超时后保留会话，重试忽略迟到的干净响应", async ({ page }) => {
+  await page.route("**/office/index.html?*", route => route.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html><input aria-label="模拟未导出内容"><script>
+      const channel = "might-office-v1";
+      let oldId;
+      addEventListener("message", ({ origin, source, data }) => {
+        if (origin !== location.origin || source !== parent || data?.channel !== channel || data.type !== "close-check") return;
+        if (oldId === undefined) { oldId = data.requestId; document.querySelector("input").dataset.checked = "true"; return; }
+        parent.postMessage({ channel, type: "close-state", dirty: false, requestId: oldId }, location.origin);
+        setTimeout(() => parent.postMessage({ channel, type: "close-state", dirty: true, requestId: data.requestId }, location.origin), 150);
+      });
+      document.querySelector("input").addEventListener("input", () => parent.postMessage({ channel, type: "ready" }, location.origin), { once: true });
+    </script>`,
+  }));
+  await signIn(page);
+  const open = page.getByRole("button", { name: "在线表格" });
+  await open.click();
+  const office = page.getByRole("dialog", { name: "在线表格" });
+  const close = office.getByRole("button", { name: "关闭表格" });
+  const input = office.frameLocator("iframe").getByRole("textbox", { name: "模拟未导出内容" });
+  await input.fill("仍在编辑");
+  await expect(office.getByText("正在加载在线工作簿编辑器…")).toHaveCount(0);
+  await close.click();
+  const timeout = page.getByRole("alertdialog", { name: "无法确认是否有未导出的修改" });
+  await expect(timeout.getByRole("button", { name: "继续编辑" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(close).toBeFocused();
+  await expect(input).toHaveValue("仍在编辑");
+  await expect(input).toHaveAttribute("data-checked", "true");
+
+  await close.click();
+  const dirty = page.getByRole("alertdialog", { name: "丢弃未导出的修改？" });
+  await expect(dirty.getByRole("button", { name: "继续编辑" })).toBeFocused();
+  await dirty.getByRole("button", { name: "丢弃并关闭" }).click();
+  await expect(office).toHaveCount(0);
+  await expect(open).toBeFocused();
+});

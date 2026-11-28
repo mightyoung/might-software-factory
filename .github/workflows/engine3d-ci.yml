@@ -1,0 +1,26 @@
+name: 3D engine CI
+on:
+  pull_request:
+    paths: ["frontend/engine3d/**", ".github/workflows/engine3d-ci.yml"]
+  push:
+    branches: [dev, main]
+    paths: ["frontend/engine3d/**", ".github/workflows/engine3d-ci.yml"]
+permissions:
+  contents: read
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend/engine3d
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test && npm run build && npm run check:bundle
+      - run: npm run e2e
