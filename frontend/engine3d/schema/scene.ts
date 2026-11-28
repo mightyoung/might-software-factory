@@ -3,10 +3,15 @@ import { z } from "zod";
 const stableId = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 const coordinate = z.number().finite().min(-1000).max(1000);
 const size = z.number().finite().min(0.05).max(100);
-const dimension = z.number().finite().min(0.2);
+export const equipmentDimensionLimits = { min: 0.2, length: 36, width: 12, height: 12 } as const;
+const dimension = z.number().finite().min(equipmentDimensionLimits.min);
 export const parametricEquipmentSchema = z.strictObject({
   kind: z.enum(["CONVEYOR", "CORRIDOR", "ROBOT_ARM", "SPIRAL_CONVEYOR"]),
-  dimensions: z.strictObject({ length: dimension.max(36), width: dimension.max(12), height: dimension.max(12) }),
+  dimensions: z.strictObject({
+    length: dimension.max(equipmentDimensionLimits.length),
+    width: dimension.max(equipmentDimensionLimits.width),
+    height: dimension.max(equipmentDimensionLimits.height),
+  }),
   rotationYRad: z.number().finite().min(-Math.PI * 2).max(Math.PI * 2).default(0),
 });
 const base = {

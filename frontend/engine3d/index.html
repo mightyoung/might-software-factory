@@ -20,12 +20,28 @@
           <select id="conveyor-length"><option value="4">4</option><option value="8">8</option></select>
           <p id="conveyor-rebuild" role="status">当前长度：4 米。</p>
         </fieldset>
+        <fieldset id="resize-tool" hidden>
+          <legend>保持对侧不动地调整尺寸</legend>
+          <label for="resize-face">设备局部面</label>
+          <select id="resize-face" aria-describedby="resize-face-help">
+            <option value="+X">+X · 长</option><option value="-X">−X · 长</option>
+            <option value="+Z">+Z · 宽</option><option value="-Z">−Z · 宽</option>
+            <option value="+Y">+Y · 高（底面固定）</option>
+          </select>
+          <p id="resize-face-help">传送带和廊道可固定对侧调整长、宽；机械臂和螺旋传送机只支持固定底面调整高度。</p>
+          <div><button id="resize-in" type="button">收进 0.5 米</button>
+          <button id="resize-out" type="button">伸出 0.5 米</button></div>
+          <p id="resize-result" role="status"></p>
+        </fieldset>
         <fieldset>
           <legend>本地 GLB 模型</legend>
+          <label for="model-unit">模型源单位</label>
+          <select id="model-unit"><option value="m">米（GLB 默认）</option><option value="mm">毫米（明确导入）</option></select>
           <label for="local-model">选择 GLB 文件</label>
           <input id="local-model" type="file" accept=".glb,model/gltf-binary" aria-describedby="model-hint">
           <p id="model-hint">上限 8 MiB，当前仅支持无纹理静态单网格。文件不会上传。</p>
           <p id="model-result" role="status"></p>
+          <p id="unit-warning" role="status" hidden></p>
           <p id="model-error" role="alert" hidden></p>
           <button id="close-model" type="button" hidden>返回合成场景</button>
         </fieldset>

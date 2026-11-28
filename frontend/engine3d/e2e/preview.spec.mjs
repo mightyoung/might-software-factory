@@ -200,3 +200,56 @@ test("a valid flat GLB with its front face away from the camera still writes pix
   await expect(page.getByText(/reverse-facing-flat.glb：1 个三角面/)).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.flatPixels)).toBeGreaterThan(50);
 });
+
+test("keyboard face resizing and explicit GLB units work in the isolated editor", async ({ page }) => {
+  await page.goto("/");
+  const robot = page.getByRole("button", { name: "机械臂 06 · 预警" });
+  await robot.focus();
+  await page.keyboard.press("Enter");
+  const tool = page.getByRole("group", { name: "保持对侧不动地调整尺寸" });
+  await expect(tool.getByRole("status")).toHaveText("长 2 · 宽 1.8 · 高 2.2 米。");
+  await tool.getByLabel("设备局部面").selectOption("+Y");
+  await tool.getByRole("button", { name: "伸出 0.5 米" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(tool.getByRole("status")).toHaveText("长 2 · 宽 1.8 · 高 2.7 米。");
+  await expect(robot).toHaveAttribute("aria-pressed", "true");
+
+  const source = page.getByLabel("模型源单位");
+  const picker = page.getByLabel("选择 GLB 文件");
+  await picker.setInputFiles({ name: "two-unit.glb", mimeType: "model/gltf-binary", buffer: Buffer.from(syntheticGlb()) });
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+  await source.selectOption("mm");
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，0.002 × 0.002 × 0.002 米。")).toBeVisible();
+  await source.selectOption("m");
+  await expect(page.getByText("two-unit.glb：4 个三角面，4 个顶点，2 × 2 × 2 米。")).toBeVisible();
+});
+
+test("only rectangular equipment exposes horizontal anchored resizing", async ({ page }) => {
+  await page.goto("/");
+  const tool = page.getByRole("group", { name: "保持对侧不动地调整尺寸" });
+  const face = tool.getByLabel("设备局部面");
+  const horizontal = ["+X", "-X", "+Z", "-Z"];
+  for (const [rectangle, irregular] of [
+    ["传送带 04 · 正常", "机械臂 06 · 预警"],
+    ["廊道 05 · 正常", "螺旋传送机 07 · 正常"],
+  ]) {
+    await page.getByRole("button", { name: rectangle }).click();
+    for (const value of horizontal) await expect(face.locator(`option[value="${value}"]`)).toBeEnabled();
+    await face.selectOption("-Z");
+
+    const device = page.getByRole("button", { name: irregular });
+    await device.click();
+    for (const value of horizontal) await expect(face.locator(`option[value="${value}"]`)).toBeDisabled();
+    await expect(face.locator('option[value="+Y"]')).toBeEnabled();
+    await expect(face).toHaveValue("+Y");
+    const before = await tool.getByRole("status").textContent();
+    // Even a programmatic stale selection must not alter the device.
+    await face.evaluate((select) => { select.value = "+X"; });
+    await tool.getByRole("button", { name: "伸出 0.5 米" }).click();
+    await expect(tool.getByRole("status")).toHaveText(before);
+    await expect(face).toHaveValue("+Y");
+    await tool.getByRole("button", { name: "伸出 0.5 米" }).click();
+    await expect(tool.getByRole("status")).not.toHaveText(before);
+    await expect(device).toHaveAttribute("aria-pressed", "true");
+  }
+});

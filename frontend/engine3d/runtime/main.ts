@@ -1,6 +1,8 @@
-import { MAX_GLB_BYTES, openStaticGlb } from "../core/glbIntake.ts";
+import { resizeEquipment, resizeFaces, type ResizeFace } from "../core/equipmentResize.ts";
+import { inspectPreviewUnits, type SourceUnit } from "../core/modelUnits.ts";
+import { MAX_GLB_BYTES, openStaticGlb, type StaticGlb } from "../core/glbIntake.ts";
 import { mountEngine, type RenderStatus } from "../core/EngineKernel.ts";
-import { SceneDocumentSchema } from "../schema/scene.ts";
+import { SceneDocumentSchema, type ParametricEquipment } from "../schema/scene.ts";
 
 let sample = SceneDocumentSchema.parse({
   schemaVersion: 1, screenId: "sample-workshop",
@@ -44,6 +46,60 @@ const modelInput = document.querySelector<HTMLInputElement>("#local-model")!;
 const modelResult = document.querySelector<HTMLParagraphElement>("#model-result")!;
 const modelError = document.querySelector<HTMLParagraphElement>("#model-error")!;
 const modelClose = document.querySelector<HTMLButtonElement>("#close-model")!;
+const modelUnit = document.querySelector<HTMLSelectElement>("#model-unit")!;
+const unitWarning = document.querySelector<HTMLParagraphElement>("#unit-warning")!;
+const resizeTool = document.querySelector<HTMLFieldSetElement>("#resize-tool")!;
+const resizeResult = document.querySelector<HTMLParagraphElement>("#resize-result")!;
+const resizeFace = document.querySelector<HTMLSelectElement>("#resize-face")!;
+let inspection: { name: string; metrics: StaticGlb["metrics"]; rendered: boolean } | null = null;
+function displayInspection() {
+  const unit: SourceUnit = modelUnit.value === "mm" ? "mm" : "m";
+  if (!inspection) { modelResult.textContent = ""; unitWarning.hidden = true; return; }
+  const { name, metrics: { vertices, triangles, dimensions }, rendered } = inspection;
+  const report = inspectPreviewUnits(dimensions, unit);
+  const sizes = report.meters.map((v) => Number(v.toFixed(6))).join(" × ");
+  modelResult.textContent = `${name}：${triangles} 个三角面，${vertices} 个顶点，${sizes} 米。${rendered ? "" : "当前只能查看模型数据。"}`;
+  unitWarning.textContent = report.checkUnits ? "最大边超过 500 米。请核对源单位，系统不会自动换算。" : "";
+  unitWarning.hidden = !report.checkUnits;
+}
+modelUnit.addEventListener("change", displayInspection);
+const selectedParametric = () => sample.devices.find((item) => item.id === selected && "equipment" in item);
+const canResizeFace = (kind: ParametricEquipment["kind"], face: ResizeFace) =>
+  face === "+Y" || (resizeFaces.includes(face) && (kind === "CONVEYOR" || kind === "CORRIDOR"));
+function displayResize() {
+  const item = selectedParametric();
+  resizeTool.hidden = !item;
+  if (!item || !("equipment" in item)) return;
+  for (const option of resizeFace.options) {
+    option.disabled = !canResizeFace(item.equipment.kind, option.value as ResizeFace);
+  }
+  if (!canResizeFace(item.equipment.kind, resizeFace.value as ResizeFace)) resizeFace.value = "+Y";
+  const { length, width, height } = item.equipment.dimensions;
+  resizeResult.textContent = `长 ${length} · 宽 ${width} · 高 ${height} 米。`;
+}
+function adjustSelected(delta: number) {
+  const item = selectedParametric();
+  if (!item || !("equipment" in item)) return;
+  const face = resizeFace.value as ResizeFace;
+  if (!canResizeFace(item.equipment.kind, face)) { displayResize(); return; }
+  const change = resizeEquipment(item.equipment, face, delta);
+  const [dx, dy, dz] = change.positionDelta;
+  const [x, y, z] = item.position;
+  const updated = SceneDocumentSchema.safeParse({
+    ...sample, devices: sample.devices.map((device) => device.id === item.id
+      ? { ...item, position: [x + dx, y + dy, z + dz],
+        equipment: { ...item.equipment, dimensions: change.dimensions } } : device),
+  });
+  if (!updated.success) { resizeResult.textContent = "尺寸调整会超出场景范围。"; return; }
+  sample = updated.data;
+  closeModel();
+  engine?.replaceScene(sample);
+  engine?.focus(item.id);
+  if (item.id === "conveyor-04") { lengthSelect.selectedIndex = change.dimensions.length === 4 ? 0 : change.dimensions.length === 8 ? 1 : -1; rebuild.textContent = `当前长度：${change.dimensions.length} 米。`; }
+  displayResize();
+}
+document.querySelector("#resize-in")!.addEventListener("click", () => adjustSelected(-0.5));
+document.querySelector("#resize-out")!.addEventListener("click", () => adjustSelected(+0.5));
 function error(message = "") {
   modelError.textContent = message;
   modelError.hidden = !message;
@@ -51,7 +107,8 @@ function error(message = "") {
 function closeModel() {
   readVersion++;
   engine?.hideModel(selected);
-  modelResult.textContent = "";
+  inspection = null;
+  displayInspection();
   modelClose.hidden = true;
   error();
 }
@@ -72,8 +129,8 @@ modelInput.addEventListener("change", async () => {
     const model = openStaticGlb(bytes);
     const rendered = engine?.showModel(model);
     if (!rendered) model.dispose();
-    const { triangles, vertices, dimensions } = model.metrics;
-    modelResult.textContent = `${file.name}：${triangles} 个三角面，${vertices} 个顶点，${dimensions.map((v) => Number(v.toFixed(3))).join(" × ")} 米。${rendered ? "" : "当前只能查看模型数据。"}`;
+    inspection = { name: file.name, metrics: model.metrics, rendered: Boolean(rendered) };
+    displayInspection();
     modelClose.hidden = false;
   } catch (cause) {
     if (mine === readVersion) error(cause instanceof Error && cause.message.startsWith("GLB：")
@@ -85,6 +142,7 @@ function selectDevice(device?: typeof sample.devices[number]) {
   for (const [id, button] of buttons) button.setAttribute("aria-pressed", String(id === device?.id));
   selected = device?.id;
   closeModel();
+  displayResize();
 }
 for (const device of sample.devices) {
   const row = document.createElement("li");
@@ -111,6 +169,7 @@ lengthSelect.addEventListener("change", () => {
   });
   engine?.replaceScene(sample);
   rebuild.textContent = `当前长度：${length} 米。`;
+  displayResize();
 });
 window.addEventListener("pagehide", (event) => {
   if (!event.persisted) { readVersion++; engine?.dispose(); }
