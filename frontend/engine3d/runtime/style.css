@@ -1,0 +1,19 @@
+:root { font: 16px/1.5 system-ui, sans-serif; color: #182e2c; background: #edf3f1; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1200px; padding: 1.5rem; margin: auto; }
+header p { margin: .3rem 0; }
+h1, h2 { margin: 0; }
+h2 { font-size: 1.1rem; }
+.workspace { display: grid; grid-template-columns: minmax(13rem, 1fr) minmax(0, 3fr); gap: 1rem; margin-top: 1rem; }
+section { min-width: 0; border: 1px solid #a9bfba; background: #fff; padding: 1rem; border-radius: .5rem; }
+.viewport-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+ul { list-style: none; padding: 0; }
+li { margin: .45rem 0; }
+button { background: #f2f7f6; border: 1px solid #658d85; border-radius: .35rem; padding: .5rem .65rem; color: #182e2c; font: inherit; cursor: pointer; }
+button[aria-pressed="true"] { color: white; background: #255c55; }
+button:focus-visible { outline: 2px solid #255c55; outline-offset: 2px; }
+button:disabled { cursor: default; opacity: .65; }
+canvas { display: block; width: 100%; height: clamp(18rem, 50vw, 32rem); border: 1px solid #a9bfba; border-radius: .35rem; }
+canvas[hidden] { display: none; }
+@media (max-width: 650px) { .workspace { grid-template-columns: 1fr; } main { padding: 1rem; } }
