@@ -250,7 +250,7 @@ test("键盘：改密对话框的焦点陷阱在真实浏览器里成立，Esc �
   await expect(menuButton).toBeFocused();
 });
 
-test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
+test("权限勾选、切换角色与放弃修改支持键盘及双主题窄屏", async ({ page }) => {
   // Test-owned admin contract projection; this checks UI interaction, not server authorization.
   const permissionCodes = ["finding.read", "platform.permission.read", "platform.permission.manage"];
   await page.route("**/api/v1/session/bootstrap", async route => {
@@ -272,8 +272,14 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   ] } }));
   await page.route("**/api/v1/admin/roles", route => route.fulfill({ json: { roles: [
     { id: "ui-role", code: "reporter", name: "上报人", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
+    { id: "ui-role-reviewer", code: "reviewer", name: "安全员", active: true, memberCount: 1, permissionCodes: ["finding.read"], version: "1" },
   ] } }));
   const writes: string[] = [];
+  const nativeDialogs: string[] = [];
+  page.on("dialog", async dialog => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().includes("/api/v1/admin/")) writes.push(request.url());
   });
@@ -282,6 +288,11 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
   await expect(page.getByRole("heading", { name: "上报人" })).toBeVisible();
   const permission = page.getByRole("checkbox", { name: "查看风险管控" });
   const save = page.getByRole("button", { name: "保存", exact: true });
+  const otherRole = page.getByRole("button", { name: /^安全员/ });
+  const backToReporter = page.getByRole("button", { name: /^上报人/ });
+  const confirmation = page.getByRole("alertdialog", { name: "放弃未保存的权限修改？" });
+  const cancelSwitch = confirmation.getByRole("button", { name: "继续编辑" });
+  const confirmSwitch = confirmation.getByRole("button", { name: "放弃并切换" });
   for (const [theme, width] of [["light", 1440], ["dark", 390]] as const) {
     await page.setViewportSize({ width, height: 900 });
     await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
@@ -291,6 +302,32 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
     await expect(permission).toBeChecked();
     await expect(save).toBeEnabled();
     await scan(page, `权限配置（${theme}）`);
+    await otherRole.focus();
+    await page.keyboard.press("Enter");
+    await expect(cancelSwitch).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirmSwitch).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancelSwitch).toBeFocused();
+    await scan(page, `切换角色确认（${theme}）`);
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toBeFocused();
+    await expect(permission).toBeChecked();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await page.keyboard.press("Enter");
+    await confirmSwitch.focus();
+    await page.keyboard.press("Enter");
+    await expect(confirmation).toHaveCount(0);
+    await expect(otherRole).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await expect(save).toBeDisabled();
+    await backToReporter.click();
+    await expect(backToReporter).toHaveAttribute("aria-current", "true");
+    await expect(permission).not.toBeChecked();
+    await permission.focus();
+    await page.keyboard.press("Space");
+    await expect(permission).toBeChecked();
     const discard = page.getByRole("button", { name: "放弃修改" });
     await discard.focus();
     await page.keyboard.press("Enter");
@@ -298,4 +335,84 @@ test("权限勾选与放弃修改支持键盘及双主题窄屏", async ({ page 
     await expect(save).toBeDisabled();
   }
   expect(writes).toEqual([]);
+  expect(nativeDialogs).toEqual([]);
+});
+
+test("侧栏折叠刷新保留，快捷导航在双主题支持完整键盘焦点", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(page);
+  const heading = page.getByRole("heading", { name: "隐患台账" });
+  const nav = page.getByRole("navigation", { name: "生产安全导航" });
+  await expect(heading).toBeVisible();
+  await expect(nav).toBeVisible();
+  await page.getByRole("button", { name: "收起导航" }).click();
+  await expect(nav).toHaveCount(0);
+  await page.reload();
+  await expect(heading).toBeVisible();
+  const expand = page.getByRole("button", { name: "展开导航" });
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(nav).toHaveCount(0);
+  await expand.click();
+  await expect(nav).toBeVisible();
+
+  for (const [theme, shortcut, width] of [
+    ["light", "Control+k", 1440], ["dark", "Meta+k", 1440],
+    ["light", "Control+k", 390], ["dark", "Meta+k", 390],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
+      `${theme} 主题不应出现页面级横向滚动`).toBe(false);
+    const trigger = page.getByRole("button", { name: "快捷导航" });
+    await trigger.focus();
+    await page.keyboard.press(shortcut);
+    const modal = page.getByRole("dialog", { name: "快捷导航" });
+    const search = modal.getByRole("searchbox", { name: "搜索页面" });
+    await expect(search).toBeFocused();
+    await scan(page, `快捷导航（${theme}）`);
+    const result = modal.getByRole("link", { name: "隐患管理", exact: true });
+    for (const label of ["生产安全", "隐患管理"]) {
+      await search.fill(label);
+      await expect(modal.getByRole("link")).toHaveCount(1);
+      await expect(result).toHaveAttribute("href", /\/t\/[^/]+\/safety\/findings$/);
+    }
+    const close = modal.getByRole("button", { name: "关闭" });
+    await page.keyboard.press("Shift+Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(search).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(result).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(modal).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  }
+});
+
+test("编译后的 Astryx 品牌变量在明暗主题保持同源", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-astryx-theme", "might");
+  const accent: string[] = [];
+  for (const theme of ["light", "dark"] as const) {
+    await page.getByRole("combobox", { name: "主题" }).selectOption(theme);
+    await expect(html).toHaveAttribute("data-theme", theme);
+    const result = await html.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        accent: style.getPropertyValue("--color-accent").trim(),
+        petrol: style.getPropertyValue("--petrol").trim(),
+        ink: style.getPropertyValue("--color-text-primary").trim(),
+        legacyInk: style.getPropertyValue("--ink").trim(),
+      };
+    });
+    expect(result.petrol).not.toBe("");
+    expect(result.accent).toBe(result.petrol);
+    expect(result.ink).toBe(result.legacyInk);
+    accent.push(result.accent);
+    await scan(page, `Astryx 登录页（${theme}）`);
+  }
+  expect(accent[0]).not.toBe(accent[1]);
 });

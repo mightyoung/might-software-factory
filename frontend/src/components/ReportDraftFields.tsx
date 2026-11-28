@@ -37,7 +37,8 @@ export interface ReportDraftFieldsProps {
 }
 
 
-export function ReportDraftFields({ idPrefix,draft,errors,disabled,live,urgencies:allowedUrgencies,definition=null,organization,now,update,fieldRef }:ReportDraftFieldsProps) {
+export function ReportDraftFields({ idPrefix,draft,errors,disabled,live: contextLive,urgencies:allowedUrgencies,definition=null,organization,now,update,fieldRef }:ReportDraftFieldsProps) {
+  const live = import.meta.env.MSF_BROWSER_MODE === undefined ? contextLive : import.meta.env.MSF_BROWSER_MODE === "http";
   const ids = {
     source: `${idPrefix}-source`,
     foundAt: `${idPrefix}-foundAt`,

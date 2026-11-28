@@ -5,13 +5,17 @@ export function mountSyntheticVideo() {
   const cards = document.querySelector<HTMLElement>("#video-slots")!;
   const status = document.querySelector<HTMLElement>("#video-status")!;
   const now = () => performance.now();
-  const observed = new Map<string, boolean>();
+  const observed = new Map<string, { visible: boolean; sync: () => void }>();
+  let suspended = false;
+  const active = () => !document.hidden && !suspended;
   const observer = new IntersectionObserver((records) => {
     for (const record of records) {
       const id = (record.target as HTMLElement).dataset.slot!;
-      if (!observed.has(id)) continue;
-      observed.set(id, record.isIntersecting);
-      slots.setVisible(id, record.isIntersecting && !document.hidden, now());
+      const entry = observed.get(id);
+      if (!entry) continue;
+      entry.visible = record.isIntersecting;
+      slots.setVisible(id, entry.visible && active(), now());
+      entry.sync();
     }
   }, { threshold: 0.1 });
   const render = () => {
@@ -22,7 +26,8 @@ export function mountSyntheticVideo() {
     const source = document.createElement("canvas");
     source.width = 320;
     source.height = 180;
-    const ctx = source.getContext("2d")!;
+    const ctx = source.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D is unavailable");
     const card = document.createElement("article");
     card.dataset.slot = id;
     const title = document.createElement("h3");
@@ -46,17 +51,36 @@ export function mountSyntheticVideo() {
       ctx.font = "18px system-ui";
       ctx.fillText(`SYNTHETIC ${id}`, 16, 36);
     };
-    draw();
     const stream = source.captureStream(12);
     video.srcObject = stream;
-    const loop = window.setInterval(draw, 84);
+    let raf: number | null = null;
+    let last = -Infinity;
+    const visible = () => {
+      if (!active() || !observed.get(id)?.visible) return false;
+      const { left, right, top, bottom } = card.getBoundingClientRect();
+      return right > 0 && bottom > 0 && left < window.innerWidth && top < window.innerHeight;
+    };
+    const sync = () => {
+      if (visible()) {
+        if (raf === null) raf = window.requestAnimationFrame(tick);
+      } else if (raf !== null) {
+        window.cancelAnimationFrame(raf);
+        raf = null;
+      }
+    };
+    function tick(time: number) {
+      raf = null;
+      if (!visible()) return;
+      if (time - last >= 1000 / 12) { draw(); last = time; }
+      raf = window.requestAnimationFrame(tick);
+    }
     cards.append(card);
-    observed.set(id, true);
+    observed.set(id, { visible: false, sync });
     observer.observe(card);
     return () => {
       observer.unobserve(card);
       observed.delete(id);
-      window.clearInterval(loop);
+      sync();
       video.srcObject = null;
       for (const track of stream.getTracks()) track.stop();
       card.remove();
@@ -74,17 +98,24 @@ export function mountSyntheticVideo() {
     button.onclick = () => {
       try {
         slots.open(id, now());
-        if (document.hidden) slots.setVisible(id, false, now());
+        if (!active() || !observed.get(id)?.visible) slots.setVisible(id, false, now());
         render();
       } catch { status.textContent = "当前浏览器无法启动合成视频。"; }
     };
     gallery.append(button);
   }
   const interval = window.setInterval(() => { slots.sweep(now()); render(); }, 1000);
-  document.addEventListener("visibilitychange", () => {
-    for (const [id, visible] of observed) slots.setVisible(id, visible && !document.hidden, now());
-  });
+  function syncVisibility() {
+    for (const [id, entry] of observed) {
+      slots.setVisible(id, entry.visible && active(), now());
+      entry.sync();
+    }
+  }
+  document.addEventListener("visibilitychange", syncVisibility);
+  window.addEventListener("pageshow", () => { suspended = false; syncVisibility(); });
   window.addEventListener("pagehide", (event) => {
+    suspended = true;
+    syncVisibility();
     if (!event.persisted) { window.clearInterval(interval); observer.disconnect(); slots.closeAll(); }
   });
   render();
