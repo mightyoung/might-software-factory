@@ -100,8 +100,14 @@ describe("已登录时的应用路由与导航", () => {
       fireEvent.change(search, { target: { value: "风险管控" } });
       expect(within(modal).queryByRole("link", { name: "风险管控" })).toBeNull();
       expect(within(modal).getByText("没有匹配的页面")).toBeVisible();
-      fireEvent.change(search, { target: { value: "隐患" } });
-      expect(within(modal).getByRole("link", { name: "隐患台账" })).toHaveAttribute("href", `${T}/safety/findings`);
+      // The app title and its current menu label refer to one authorized href.
+      for (const term of ["生产安全", "隐患台账"]) {
+        fireEvent.change(search, { target: { value: term } });
+        const links = within(modal).getAllByRole("link");
+        expect(links).toHaveLength(1);
+        expect(links[0]).toHaveTextContent("隐患台账");
+        expect(links[0]).toHaveAttribute("href", `${T}/safety/findings`);
+      }
       fireEvent.click(within(modal).getByRole("button", { name: "关闭" }));
       expect(screen.queryByRole("dialog", { name: "快捷导航" })).toBeNull();
       expect(home).toHaveFocus();
