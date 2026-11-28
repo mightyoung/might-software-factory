@@ -1,4 +1,5 @@
 import { Color, DirectionalLight, GridHelper, HemisphereLight, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
 import { buildSceneObjects } from "./sceneObjects.ts";
 import type { DeviceState, SceneDocument } from "../schema/scene.ts";
 
@@ -17,8 +18,9 @@ export function mountEngine(
   }
   const scene = new Scene();
   scene.background = new Color(0xe6eeec);
-  const camera = new PerspectiveCamera(48, 1, 0.1, 3000);
-  const target = new Vector3();
+  const camera = new PerspectiveCamera(48, 1, 0.1, overviewFar);
+  const origin = new Vector3();
+  let focusedId: string | undefined;
   let objects = buildSceneObjects(sceneDocument);
   const grid = new GridHelper(32, 32, 0x668d86, 0xbaccc8);
   const key = new DirectionalLight(0xffffff, 2);
@@ -44,18 +46,21 @@ export function mountEngine(
         renderer.setSize(width, height, false);
       }
       camera.aspect = width / height;
-      camera.updateProjectionMatrix();
+      const device = focusedId === undefined ? undefined : objects.devices.get(focusedId);
+      if (device) fitDeviceCamera(camera, device);
+      else {
+        camera.far = overviewFar;
+        camera.position.set(16, 14, 19);
+        camera.lookAt(origin);
+        camera.updateProjectionMatrix();
+      }
       renderer.render(scene, camera);
     });
   }
   function focus(id?: string) {
     if (disposed) return false;
-    const object = id ? objects.devices.get(id) : undefined;
-    if (id && !object) return false;
-    target.set(0, 0, 0);
-    if (object) target.copy(object.position);
-    camera.position.copy(target).add(new Vector3(...(object ? [6, 5, 7] : [16, 14, 19])));
-    camera.lookAt(target);
+    if (id !== undefined && !objects.devices.has(id)) return false;
+    focusedId = id;
     render();
     return true;
   }
