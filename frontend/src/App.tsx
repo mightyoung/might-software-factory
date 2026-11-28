@@ -1,3 +1,4 @@
+import { syntheticPresentation } from "./adapters/syntheticPresentation";
 import type { ComponentProps } from "react";
 import { syntheticFindingStore } from "./adapters/syntheticFindingStore";
 import { createSyntheticPermissionAdmin } from "./adapters/syntheticPermissionAdmin";
@@ -5,13 +6,14 @@ import { syntheticSessionAdapter } from "./adapters/sessionAdapter";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "./components/AppShell";
 import { FindingsLedgerCore as FindingsLedger } from "./features/findings/FindingsLedger";
-import { FindingReportForm } from "./components/FindingReportForm";
-import { LoginPage } from "./features/session/LoginPage";
+import { FindingReportFormCore } from "./components/FindingReportForm";
+import { LoginPageCore } from "./features/session/LoginPage";
 import { SessionProviderWithAdapter as SessionProvider, useSession } from "./features/session/SessionProvider";
 import { useAppMenu } from "./features/session/useAppMenu";
 import { hasPermission, type ApplicationId, type SessionBootstrap } from "./domain/session";
 import { LOGIN_PATH, loginPathWithNext, parsePath, safeNextPath, tenantPath } from "./routing/paths";
 import { navigate, useLocation } from "./routing/router";
+import { createWorkspaceRouteMatcher } from "./routing/workspaceRoutes";
 import { draftOwnerKey } from "./features/session/draftStash";
 import { ModeProvider, useAppMode, type AppMode } from "./mode";
 import type { SessionAdapter } from "./adapters/sessionAdapter";
@@ -120,6 +122,8 @@ const ROUTES: readonly RouteDef[] = [
   },
 ];
 
+const workspaceRoutes = createWorkspaceRouteMatcher(ROUTES);
+
 function applicationOfPath(rest: string): ApplicationId | null {
   const entity = parseEntityRoute(rest);
   if (entity) return entity.appKey;
@@ -165,12 +169,12 @@ function StatusPage({ title, description, note }: { title: string; description: 
 }
 
 /** A create-only member never mounts the ledger or a detail-read action. */
-function FindingReportPage({ adapter, draftKey, onUnauthenticated }: { adapter: FindingSubmitAdapter; draftKey: string; onUnauthenticated: () => void }) {
+function FindingReportPage({ adapter, draftKey, onUnauthenticated, presentation }: { adapter: FindingSubmitAdapter; draftKey: string; onUnauthenticated: () => void; presentation?: typeof syntheticPresentation.finding }) {
   const [open, setOpen] = useState(true);
   return <section className="ledger-main">
     <div className="page-heading"><h1>隐患上报</h1>{!open && <button type="button" className="button button-primary" onClick={() => setOpen(true)}>新建上报</button>}</div>
     <p>可上报你有权提交的隐患。</p>
-    {open && <FindingReportForm adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
+    {open && <FindingReportFormCore validateDraft={presentation?.validateDraft} adapter={adapter} draftKey={draftKey} onClose={() => setOpen(false)} onSubmitted={() => {}} onUnauthenticated={onUnauthenticated} />}
   </section>;
 }
 
@@ -192,15 +196,17 @@ function RetainedRoute({ active, children, loading }: { active: boolean; childre
 }
 
 interface AppAdapterFactories {
+  demoPresentation?: typeof syntheticPresentation;
   createFindingStore: () => FindingStore;
   createPermissionAdmin: () => PermissionAdminAdapter;
   createEntityLedger?: EntityLedgerFactory;
   createLoans?: LoanFactory;
 }
 
-function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans }: AppAdapterFactories) {
+function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedger, createLoans, demoPresentation }: AppAdapterFactories) {
   const { state, logout, refresh, expire, canChangePassword, changePassword } = useSession();
-  const mode = useAppMode();
+  const contextMode = useAppMode();
+  const mode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
   const location = useLocation();
   const { pathname } = splitLocation(location);
   const session = state.status === "signedIn" ? state.session : null;
@@ -217,12 +223,13 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
   const parsed = parsePath(pathname);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const loanAdapter = useMemo(() => createLoans?.() ?? null, [identityKey]);
-  const entityRoute = parseEntityRoute(parsed.rest);
+  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
+  const { route, entityRoute } = tenantMatches
+    ? workspaceRoutes.match(session.tenant.id, parsed.rest)
+    : { route: undefined, entityRoute: null };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const entityAdapter = useMemo(() => entityRoute && createEntityLedger ? createEntityLedger(entityRoute.appKey, entityRoute.entityKey) : null, [identityKey, entityRoute?.appKey, entityRoute?.entityKey]);
   const redirect = session ? canonicalTarget(session, location) : null;
-  const tenantMatches = session !== null && parsed.tenantId === session.tenant.id;
-  const route = tenantMatches ? ROUTES.find((candidate) => candidate.rest === parsed.rest) : undefined;
   const pathApplication = tenantMatches ? applicationOfPath(parsed.rest) : null;
   const authorizedApplication =
     session && pathApplication && session.applications.some((app) => app.id === pathApplication) ? pathApplication : null;
@@ -267,7 +274,7 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
       </div>
     );
   }
-  if (state.status === "signedOut") return <LoginPage notice={state.notice} />;
+  if (state.status === "signedOut") return <LoginPageCore notice={state.notice} DemoAccounts={demoPresentation?.LoginAccounts} />;
   if (!session) return null;
   // A same-identity canonical replace is not a session boundary.
   const routingTransition = Boolean(redirect || selectionResetTarget);
@@ -335,11 +342,12 @@ function AppRouter({ createFindingStore, createPermissionAdmin, createEntityLedg
     );
   } else if (reportOnly) {
     title = "隐患上报";
-    content = <FindingReportPage adapter={findingStore.submit} draftKey={draftOwnerKey(session.tenant.id, session.actor.id)} onUnauthenticated={expire} />;
+    content = <FindingReportPage presentation={demoPresentation?.finding} adapter={findingStore.submit} draftKey={draftOwnerKey(session.tenant.id, session.actor.id)} onUnauthenticated={expire} />;
   } else if (route.page.kind === "ledger") {
     title = route.page.title;
     content = (
       <FindingsLedger
+        presentation={demoPresentation?.finding}
         key={route.page.view}
         view={route.page.view}
         title={route.page.title}
@@ -415,6 +423,7 @@ export function AppCore({
   createPermissionAdmin,
   createEntityLedger,
   createLoans,
+  demoPresentation,
   mode,
 }: {
   sessionAdapter: SessionAdapter;
@@ -426,11 +435,12 @@ export function AppCore({
   createLoans?: LoanFactory;
   /** 运行模式决定界面是否标注演示。 */
   mode: AppMode;
+  demoPresentation?: typeof syntheticPresentation;
 }) {
   return (
     <ModeProvider value={mode}>
       <SessionProvider adapter={sessionAdapter}>
-        <AppRouter createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
+        <AppRouter demoPresentation={demoPresentation} createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} createEntityLedger={createEntityLedger} createLoans={createLoans} />
       </SessionProvider>
     </ModeProvider>
   );
@@ -447,8 +457,9 @@ export function App({
   createFindingStore = () => findingStore,
   createPermissionAdmin = createSyntheticPermissionAdmin,
   mode = "synthetic",
+  demoPresentation = syntheticPresentation,
   ...props
 }: AppProps) {
-  return <AppCore {...props} mode={mode} sessionAdapter={sessionAdapter}
+  return <AppCore {...props} demoPresentation={demoPresentation} mode={mode} sessionAdapter={sessionAdapter}
     createFindingStore={createFindingStore} createPermissionAdmin={createPermissionAdmin} />;
 }
