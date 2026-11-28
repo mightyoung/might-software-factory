@@ -24,6 +24,7 @@ import { toggleRow, toggleVisibleRows } from "../../domain/selection";
 import { syntheticFindingPresentation } from "../../adapters/syntheticPresentation";
 import { findingSchemaFromDefinition, type FindingDefinition } from "../../adapters/findingDefinition";
 import { findingReadFailureMessage } from "./readFailureMessage";
+import { findingSearchInput, validateFindingSearch, withoutFindingSelection, type FindingSearch } from "../../routing/findingSearch";
 import { closeCurrentTab, navigate, openInNewTab, useLocation } from "../../routing/router";
 
 interface FindingsLedgerProps {
@@ -31,6 +32,7 @@ interface FindingsLedgerProps {
   synthetic?: boolean;
   /** Clear a previous security context's URL selection, while preserving cold deep links. */
   resetInitialSelection?: boolean;
+  routeSearch?: FindingSearch;
   view: FindingView;
   title: string;
   description: string;
@@ -66,6 +68,7 @@ export function FindingsLedgerCore(props: FindingsLedgerProps) {
 
 function FindingsLedgerBody({
   resetInitialSelection = false,
+  routeSearch,
   view,
   title,
   description,
@@ -83,22 +86,18 @@ function FindingsLedgerBody({
   const appMode = import.meta.env.MSF_BROWSER_MODE ?? contextMode;
   const demo = import.meta.env.MSF_BROWSER_MODE === undefined ? synthetic ?? appMode === "synthetic" : import.meta.env.MSF_BROWSER_MODE === "synthetic";
   const location = useLocation();
-  const [path, search = ""] = location.split("?");
+  const delimiter = location.indexOf("?");
+  const path = delimiter < 0 ? location : location.slice(0, delimiter);
+  const search = delimiter < 0 ? "" : location.slice(delimiter);
   const selectionReady = useRef(!resetInitialSelection);
-  const params = new URLSearchParams(search);
-  // tab=1：详情 / 新建上报在独立标签页里整页展示，不再占用台账右侧面板。
-  const standalone = params.get("tab") === "1";
-  const reporting = standalone && params.get("report") === "1";
-  const relatedId = params.get("related");
-  const relatedTo = reporting && relatedId ? { id: relatedId, code: params.get("relatedCode") ?? relatedId } : null;
-  const selectedFindingId = selectionReady.current ? params.get("caseId") : null;
+  // App supplies TanStack's validated match; standalone uses the identical projection.
+  const { standalone, reporting, relatedId, relatedCode, caseId } = routeSearch ?? validateFindingSearch(findingSearchInput(search));
+  const relatedTo = reporting && relatedId ? { id: relatedId, code: relatedCode ?? relatedId } : null;
+  const selectedFindingId = selectionReady.current ? caseId : null;
   useEffect(() => {
     if (selectionReady.current) return;
     selectionReady.current = true;
-    const parameters = new URLSearchParams(search);
-    parameters.delete("caseId");
-    const suffix = parameters.toString();
-    navigate(`${path}${suffix ? `?${suffix}` : ""}`, true);
+    navigate(path + withoutFindingSelection(search), true);
   }, [path, search]);
   const [definition, setDefinition] = useState<FindingDefinition | null>(null);
   const schema = useMemo(() => definition ? findingSchemaFromDefinition(definition) : presentation?.schema ?? null, [definition, presentation]);
