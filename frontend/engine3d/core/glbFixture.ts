@@ -14,6 +14,37 @@ export function syntheticGlb(change?: (json: Record<string, any>, bin: DataView)
     ],
   };
   change?.(json, new DataView(bin));
+  return encodeGlb(json, bin);
+}
+
+export function exporterGlb(change?: (json: Record<string, any>, bin: DataView) => void): ArrayBuffer {
+  const bin = new ArrayBuffer(108);
+  new Float32Array(bin, 0, 24).set([
+    0, 0, 0, 0, 1, 0,
+    1, 0, 0, 0, 1, 0,
+    0, 2, 0, 0, 1, 0,
+    0, 0, 3, 0, 1, 0,
+  ]);
+  new Uint16Array(bin, 96, 6).set([0, 1, 2, 0, 3, 1]);
+  const json = {
+    asset: { version: "2.0" }, scene: 0, scenes: [{ nodes: [0] }],
+    nodes: [{ rotation: [0, Math.SQRT1_2, 0, Math.SQRT1_2], children: [1] }, { mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0 }] }],
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.2, 0.5, 0.8, 1], metallicFactor: 0.1, roughnessFactor: 0.6 } }],
+    buffers: [{ byteLength: 108 }],
+    bufferViews: [{ buffer: 0, byteLength: 96, byteStride: 24, target: 34962 },
+      { buffer: 0, byteOffset: 96, byteLength: 12, target: 34963 }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 4, type: "VEC3", min: [0, 0, 0], max: [1, 2, 3] },
+      { bufferView: 0, byteOffset: 12, componentType: 5126, count: 4, type: "VEC3" },
+      { bufferView: 1, componentType: 5123, count: 6, type: "SCALAR" },
+    ],
+  };
+  change?.(json, new DataView(bin));
+  return encodeGlb(json, bin);
+}
+
+function encodeGlb(json: unknown, bin: ArrayBuffer): ArrayBuffer {
   const encoded = new TextEncoder().encode(JSON.stringify(json));
   const jsonLength = Math.ceil(encoded.length / 4) * 4;
   const data = new ArrayBuffer(28 + jsonLength + bin.byteLength);

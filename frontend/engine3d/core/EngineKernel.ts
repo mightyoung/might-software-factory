@@ -1,7 +1,8 @@
-import { Color, DirectionalLight, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { Color, DirectionalLight, DoubleSide, GridHelper, HemisphereLight, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { buildFloorplanGeometry, type FloorplanGeometrySnapshot } from "./floorplanGeometry.ts";
 import { PreviewSlot } from "./PreviewSlot.ts";
 import type { StaticGlb } from "./glbIntake.ts";
+import { fitDeviceCamera, overviewFar } from "./cameraFocus.ts";
 import { buildSceneObjects } from "./sceneObjects.ts";
 import { resizeFaces, type ResizeFace } from "./equipmentResize.ts";
 import type { DeviceState, ParametricEquipment, SceneDocument } from "../schema/scene.ts";
@@ -22,15 +23,17 @@ export function mountEngine(
   }
   const scene = new Scene();
   scene.background = new Color(0xe6eeec);
-  const camera = new PerspectiveCamera(48, 1, 0.1, 3000);
-  const target = new Vector3();
+  const camera = new PerspectiveCamera(48, 1, 0.1, overviewFar);
+  const origin = new Vector3();
+  let focusedId: string | undefined;
   let objects = buildSceneObjects(sceneDocument);
   const grid = new GridHelper(32, 32, 0x668d86, 0xbaccc8);
   const key = new DirectionalLight(0xffffff, 2);
   key.position.set(6, 15, 8);
   scene.add(objects.group, grid, key, new HemisphereLight(0xf0f9ff, 0xa1b7a7, 2));
   const preview = new PreviewSlot();
-  const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56 });
+  // Valid local flat meshes may face away from the fixed preview camera.
+  const previewMaterial = new MeshStandardMaterial({ color: 0x247c72, roughness: 0.56, side: DoubleSide });
   let floorplan: ReturnType<typeof buildFloorplanGeometry> | null = null;
   let previewMesh: Mesh | null = null;
   function clearModel() {
@@ -60,19 +63,22 @@ export function mountEngine(
         renderer.setSize(width, height, false);
       }
       camera.aspect = width / height;
-      camera.updateProjectionMatrix();
+      const device = previewMesh ?? (focusedId === undefined ? undefined : objects.devices.get(focusedId));
+      if (device) fitDeviceCamera(camera, device);
+      else {
+        camera.far = overviewFar;
+        camera.position.set(16, 14, 19);
+        camera.lookAt(origin);
+        camera.updateProjectionMatrix();
+      }
       renderer.render(scene, camera);
       onFrame?.();
     });
   }
   function focus(id?: string) {
     if (disposed) return false;
-    const object = id ? objects.devices.get(id) : undefined;
-    if (id && !object) return false;
-    target.set(0, 0, 0);
-    if (object) target.copy(object.position);
-    camera.position.copy(target).add(new Vector3(...(object ? [6, 5, 7] : [16, 14, 19])));
-    camera.lookAt(target);
+    if (id !== undefined && !objects.devices.has(id)) return false;
+    focusedId = id;
     render();
     return true;
   }
@@ -140,9 +146,6 @@ export function mountEngine(
       objects.group.visible = false;
       if (floorplan) floorplan.group.visible = false;
       scene.add(mesh);
-      target.set(0, model.metrics.dimensions[1] * scale / 2, 0);
-      camera.position.copy(target).add(new Vector3(8, 6, 9));
-      camera.lookAt(target);
       render();
       return true;
     },
