@@ -29,6 +29,13 @@ it("registers the existing deferred config module as the real TanStack configura
   expect(registeredRouteComponents.get("platform/ledgers")).not.toBe(component);
 });
 
+it("registers the permission editor only as its matched TanStack route", () => {
+  const component = namedRouteComponents.get("PermissionConfigRoute");
+  expect(component).toBeTypeOf("function");
+  expect(registeredRouteComponents.get("platform/permissions")).toBe(component);
+  expect(registeredRouteComponents.get("platform/ledger-configurations")).not.toBe(component);
+});
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

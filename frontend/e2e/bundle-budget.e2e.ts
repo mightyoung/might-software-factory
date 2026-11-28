@@ -81,14 +81,52 @@ test("HTTP 已登录默认页和业务台账深链接分别满足冷启动预算
     landing.on("request", request => {
       const pathname = new URL(request.url()).pathname;
       if (pathname === "/api/v1/ledgers" || pathname.startsWith("/api/v1/admin/ledger-configurations")
+        || /^\/api\/v1\/admin\/(?:permissions|roles)$/.test(pathname)
         || /(?:PublishedLedgersPage|LedgerConfigPage|PermissionConfigPage)-/.test(pathname)) deniedReads.push(pathname);
     });
-    for (const route of ["ledgers", "ledger-configurations"]) {
+    for (const route of ["ledgers", "ledger-configurations", "permissions"]) {
       await landing.goto(`${tenantPath}/platform/${route}`);
       await expect(landing.getByRole("heading", { name: "无权访问" })).toBeVisible();
       await landing.waitForLoadState("networkidle");
       expect(deniedReads).toEqual([]);
     }
+
+    // The shared settings chunk is allowed for configuration, not its role API.
+    const configOnly = await ledgerContext.newPage();
+    const configGrants: string[] = [];
+    const roleReads: string[] = [];
+    configOnly.on("request", request => {
+      const path = new URL(request.url()).pathname;
+      if (/^\/api\/v1\/admin\/(?:permissions|roles)$/.test(path)) roleReads.push(path);
+    });
+    await configOnly.route("**/api/v1/session/bootstrap", async route => {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      const body = await response.json();
+      body.data.permissions = configGrants;
+      body.data.canonicalPermissions = configGrants;
+      body.data.applications = [{ id: "platform", name: "系统设置", entryPath: "platform/ledger-configurations" }];
+      return route.fulfill({ response, json: body });
+    });
+    await configOnly.route("**/api/v1/applications/platform/menu", route => route.fulfill({
+      json: { data: { schemaVersion: 1, applicationId: "platform", title: "系统设置",
+        permissions: configGrants, authorization: { tenantAuthEpoch: 1, memberAuthEpoch: 1, applicationVersion: 1 }, nodes: configGrants.map(permission =>
+          ({ id: "ledger-config", label: "台账配置", path: "platform/ledger-configurations", permission })) } },
+    }));
+    await configOnly.route("**/api/v1/admin/ledger-configurations", route => route.fulfill({ json: { items: [] } }));
+    await configOnly.goto(`${tenantPath}/platform/permissions`);
+    await expect(configOnly.getByRole("heading", { name: "无权访问" })).toBeVisible();
+    await configOnly.waitForLoadState("networkidle");
+    expect(roleReads).toEqual([]);
+    configGrants.push("ledger.configuration.read");
+    await configOnly.goto(`${tenantPath}/platform/ledger-configurations`);
+    await expect(configOnly.getByRole("heading", { name: "台账配置" })).toBeVisible();
+    await configOnly.waitForLoadState("networkidle");
+    await configOnly.goto(`${tenantPath}/platform/permissions`);
+    await expect(configOnly.getByRole("heading", { name: "无权访问" })).toBeVisible();
+    await configOnly.waitForLoadState("networkidle");
+    expect(roleReads).toEqual([]);
+    await configOnly.close();
 
     const ledger = await ledgerContext.newPage();
     const permissions = ["ledger.directory.open"];
